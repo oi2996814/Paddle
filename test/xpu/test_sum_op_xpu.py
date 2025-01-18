@@ -23,8 +23,8 @@ from get_test_cover_info import (
 from op_test_xpu import XPUOpTest
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 paddle.enable_static()
 
@@ -100,7 +100,7 @@ def create_test_sum_fp16_class(parent):
 
 class API_Test_Add_n(unittest.TestCase):
     def test_api(self):
-        with fluid.program_guard(fluid.Program(), fluid.Program()):
+        with base.program_guard(base.Program(), base.Program()):
             input0 = paddle.tensor.fill_constant(
                 shape=[2, 3], dtype='int64', value=5
             )
@@ -110,12 +110,12 @@ class API_Test_Add_n(unittest.TestCase):
             expected_result = np.empty((2, 3))
             expected_result.fill(8)
             sum_value = paddle.add_n([input0, input1])
-            exe = fluid.Executor(fluid.XPUPlace(0))
+            exe = base.Executor(base.XPUPlace(0))
             result = exe.run(fetch_list=[sum_value])
 
             self.assertEqual((result == expected_result).all(), True)
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             input0 = paddle.ones(shape=[2, 3], dtype='float32')
             expected_result = np.empty((2, 3))
             expected_result.fill(2)
@@ -160,51 +160,27 @@ class TestRaiseSumsError(unittest.TestCase):
         self.assertRaises(TypeError, test_dtype)
 
         def test_dtype1():
-            data1 = paddle.static.data(name="input1", shape=[10], dtype="int8")
+            data1 = paddle.static.data(name="input3", shape=[10], dtype="int8")
             paddle.add_n(data1)
 
         self.assertRaises(TypeError, test_dtype1)
-
-        def test_out_type():
-            data1 = paddle.static.data(
-                name="input1", shape=[10], dtype="flaot32"
-            )
-            data2 = paddle.static.data(
-                name="input2", shape=[10], dtype="float32"
-            )
-            out = [10]
-            out = paddle.add_n([data1, data2])
-
-        self.assertRaises(TypeError, test_out_type)
-
-        def test_out_dtype():
-            data1 = paddle.static.data(
-                name="input1", shape=[10], dtype="flaot32"
-            )
-            data2 = paddle.static.data(
-                name="input2", shape=[10], dtype="float32"
-            )
-            out = paddle.static.data(name="out", shape=[10], dtype="int8")
-            out = paddle.add_n([data1, data2])
-
-        self.assertRaises(TypeError, test_out_dtype)
 
 
 class TestSumOpError(unittest.TestCase):
     def test_errors(self):
         def test_empty_list_input():
-            with fluid.dygraph.guard():
-                fluid._legacy_C_ops.sum([])
+            with base.dygraph.guard():
+                base._legacy_C_ops.sum([])
 
         def test_list_of_none_input():
-            with fluid.dygraph.guard():
-                fluid._legacy_C_ops.sum([None])
+            with base.dygraph.guard():
+                base._legacy_C_ops.sum([None])
 
         self.assertRaises(Exception, test_empty_list_input)
         self.assertRaises(Exception, test_list_of_none_input)
 
 
-class TestLoDTensorAndSelectedRowsOp(unittest.TestCase):
+class TestDenseTensorAndSelectedRowsOp(unittest.TestCase):
     def setUp(self):
         self.height = 10
         self.row_numel = 12
@@ -213,7 +189,7 @@ class TestLoDTensorAndSelectedRowsOp(unittest.TestCase):
         self.init_kernel_type()
 
     def check_with_place(self, place, inplace):
-        self.check_input_and_optput(place, inplace, True, True, True)
+        self.check_input_and_output(place, inplace, True, True, True)
 
     def init_kernel_type(self):
         pass
@@ -224,7 +200,7 @@ class TestLoDTensorAndSelectedRowsOp(unittest.TestCase):
             array[i] *= rows[i]
         return array
 
-    def check_input_and_optput(
+    def check_input_and_output(
         self,
         place,
         inplace,

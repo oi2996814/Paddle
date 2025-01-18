@@ -19,7 +19,7 @@ import numpy as np
 import parameterized as param
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 
 @param.parameterized_class(
@@ -67,11 +67,16 @@ class TestCastGradComp(unittest.TestCase):
 
         actual = actual(self.primal, self.cotangent)
         desired = desired(self.primal, self.cotangent)
-        from paddle.fluid.data_feeder import _PADDLE_DTYPE_2_NUMPY_DTYPE
+        from paddle.base.data_feeder import _PADDLE_PIR_DTYPE_2_NUMPY_DTYPE
 
-        self.assertEqual(
-            _PADDLE_DTYPE_2_NUMPY_DTYPE[actual[0].dtype], desired.dtype
-        )
+        if actual[0].dtype in _PADDLE_PIR_DTYPE_2_NUMPY_DTYPE.keys():
+            TO_NUMPY_DTYPE = _PADDLE_PIR_DTYPE_2_NUMPY_DTYPE
+        else:
+            from paddle.base.data_feeder import _PADDLE_DTYPE_2_NUMPY_DTYPE
+
+            TO_NUMPY_DTYPE = _PADDLE_DTYPE_2_NUMPY_DTYPE
+
+        self.assertEqual(TO_NUMPY_DTYPE[actual[0].dtype], desired.dtype)
         np.testing.assert_allclose(
             actual=actual[0],
             desired=desired,

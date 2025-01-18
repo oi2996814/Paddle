@@ -19,8 +19,8 @@
 
 #include "paddle/fluid/framework/new_executor/interpreter/dependency_builder.h"
 #include "paddle/fluid/framework/new_executor/new_executor_defs.h"
-#include "paddle/fluid/platform/device_context.h"
-#include "paddle/fluid/platform/device_event.h"
+#include "paddle/phi/core/platform/device_context.h"
+#include "paddle/phi/core/platform/device_event.h"
 
 namespace paddle {
 namespace framework {
@@ -31,18 +31,15 @@ enum DownstreamRunType { kDirectRun, kEventRun };
 class ContextManager {
  public:
   using DeviceContextMap =
-      std::map<Place,
-               std::shared_future<std::unique_ptr<platform::DeviceContext>>>;
+      std::map<Place, std::shared_future<std::unique_ptr<phi::DeviceContext>>>;
 
   static ContextManager& Instance() {
     static ContextManager* ctx_manager = new ContextManager;
     return *ctx_manager;
   }
 
-  std::shared_future<std::unique_ptr<platform::DeviceContext>> Get(
-      const std::string& type,
-      const platform::Place& place,
-      int stream_priority) {
+  std::shared_future<std::unique_ptr<phi::DeviceContext>> Get(
+      const std::string& type, const phi::Place& place, int stream_priority) {
     std::lock_guard<std::mutex> lk(ctx_mtx_);
     VLOG(6) << "Get dev_ctx for " << type << " - " << place;
 
@@ -67,8 +64,8 @@ class ContextManager {
 
 class StreamAnalyzer {
  public:
-  using DeviceContext = platform::DeviceContext;
-  using Place = platform::Place;
+  using DeviceContext = phi::DeviceContext;
+  using Place = phi::Place;
 
   explicit StreamAnalyzer(const Place& place) : place_(place) {
     event_info_ = std::make_shared<
@@ -79,12 +76,17 @@ class StreamAnalyzer {
 
   void ConstructEvents(std::vector<Instruction>* instructions);
 
-  platform::DeviceContext* ParseDeviceContext(
-      const OpFuncNode& op_func_node) const;
+  phi::DeviceContext* ParseDeviceContext(const OpFuncNode& op_func_node) const;
 
   platform::DeviceType GetWaiterType(const Instruction& instr) const;
 
   void ShareEventInfoFrom(const StreamAnalyzer& src);
+
+  void SetForceEventsToWaitInfo(
+      std::unordered_map<std::string, std::shared_ptr<EventInter>>*
+          program_force_events_to_wait) {
+    program_force_events_to_wait_ = program_force_events_to_wait;
+  }
 
   std::shared_ptr<
       std::map<const DeviceContext*, std::map<size_t, std::set<size_t>>>>
@@ -114,22 +116,24 @@ class StreamAnalyzer {
   std::shared_ptr<
       std::map<const DeviceContext*, std::map<size_t, std::set<size_t>>>>
       event_info_;
+  std::unordered_map<std::string, std::shared_ptr<EventInter>>*
+      program_force_events_to_wait_;  // not owned
 };
 
 /// ======================== ///
 ///        For new ir        ///
 /// ======================== ///
-class NewIrStreamAnalyzer {
+class PirStreamAnalyzer {
  public:
-  using DeviceContext = platform::DeviceContext;
-  using Place = platform::Place;
+  using DeviceContext = phi::DeviceContext;
+  using Place = phi::Place;
 
-  explicit NewIrStreamAnalyzer(const Place& place) : place_(place) {
+  explicit PirStreamAnalyzer(const Place& place) : place_(place) {
     event_info_ = std::make_shared<
         std::map<const DeviceContext*, std::map<size_t, std::set<size_t>>>>();
   }
 
-  ~NewIrStreamAnalyzer() {}
+  ~PirStreamAnalyzer() {}
 
   void ConstructEvents(
       const std::vector<std::unique_ptr<paddle::framework::InstructionBase>>&
@@ -138,7 +142,13 @@ class NewIrStreamAnalyzer {
   platform::DeviceType GetWaiterType(
       const paddle::framework::InstructionBase* instr) const;
 
-  void ShareEventInfoFrom(const NewIrStreamAnalyzer& src);
+  void ShareEventInfoFrom(const PirStreamAnalyzer& src);
+
+  void SetForceEventsToWaitInfo(
+      std::unordered_map<std::string, std::shared_ptr<EventInter>>*
+          program_force_events_to_wait) {
+    program_force_events_to_wait_ = program_force_events_to_wait;
+  }
 
   std::shared_ptr<
       std::map<const DeviceContext*, std::map<size_t, std::set<size_t>>>>
@@ -157,7 +167,7 @@ class NewIrStreamAnalyzer {
           event_info) const;
 
   void ShrinkEventInfo(
-      const NewIrDependencyBuilder& dependency_builder,
+      const PirDependencyBuilder& dependency_builder,
       std::map<const DeviceContext*, std::map<size_t, std::set<size_t>>>*
           event_info_map) const;
 
@@ -166,6 +176,8 @@ class NewIrStreamAnalyzer {
   std::shared_ptr<
       std::map<const DeviceContext*, std::map<size_t, std::set<size_t>>>>
       event_info_;
+  std::unordered_map<std::string, std::shared_ptr<EventInter>>*
+      program_force_events_to_wait_;  // not owned
 };
 
 }  // namespace interpreter

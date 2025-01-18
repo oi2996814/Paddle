@@ -12,25 +12,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+import copy
 import enum
-from typing import Any, Callable, Dict, List, Optional
+import os
+from typing import Any, Callable
 
 import numpy as np
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core, framework
-from paddle.fluid.executor import global_scope
-from paddle.fluid.framework import (
+from paddle.base import core, framework
+from paddle.base.executor import global_scope
+from paddle.base.framework import (
     IrGraph,
     IrNode,
     Operator,
     OpProtoHolder,
-    convert_np_dtype_to_dtype_,
+    convert_np_dtype_to_proto_type,
 )
+from paddle.static.log_helper import get_logger
 from paddle.static.quantization import (
     QuantizationFreezePass,
     QuantizationTransformPass,
+)
+
+LOGLEVEL = os.environ.get("PADDLE_TEST_LOGLEVEL", "INFO").upper()
+logging = get_logger(
+    __name__, LOGLEVEL, fmt='%(asctime)s-%(levelname)s: %(message)s'
 )
 
 
@@ -41,9 +50,9 @@ class TensorConfig:
 
     def __init__(
         self,
-        lod: Optional[List[List[int]]] = None,
-        data_gen: Optional[Callable[..., np.array]] = None,
-        shape: Optional[List[List[int]]] = None,
+        lod: list[list[int]] | None = None,
+        data_gen: Callable[..., np.array] | None = None,
+        shape: list[list[int]] | None = None,
     ):
         '''
         shape: The shape of the tensor.
@@ -74,8 +83,8 @@ class TensorConfig:
 
 
 class VarType(enum.Enum):
-    LOD_TENSOR = 1
-    LOD_TENSOR_ARRAY = 2
+    DENSE_TENSOR = 1
+    DENSE_TENSOR_ARRAY = 2
     STEP_SCOPES = 3
 
 
@@ -85,11 +94,11 @@ class OpConfig:
     def __init__(
         self,
         type: str,
-        inputs: Dict[str, List[str]],
-        outputs: Dict[str, List[str]],
-        attrs: Dict[str, Any] = None,
-        outputs_var_type: Dict[str, VarType] = None,
-        outputs_dtype: Dict[str, np.dtype] = None,
+        inputs: dict[str, list[str]],
+        outputs: dict[str, list[str]],
+        attrs: dict[str, Any] | None = None,
+        outputs_var_type: dict[str, VarType] | None = None,
+        outputs_dtype: dict[str, np.dtype] | None = None,
         **kwargs,
     ):
         self.type = type
@@ -111,16 +120,14 @@ class OpConfig:
 _OP_WITHOUT_KERNEL_SET = {
     'feed',
     'fetch',
-    'recurrent',
     'go',
-    'rnn_memory_helper_grad',
     'conditional_block',
+    'static_pylayer',
     'while',
     'send',
     'recv',
     'listen_and_serv',
     'fl_listen_and_serv',
-    'ncclInit',
     'select',
     'checkpoint_notify',
     'gen_bkcl_id',
@@ -130,13 +137,9 @@ _OP_WITHOUT_KERNEL_SET = {
     'c_comm_init',
     'c_sync_calc_stream',
     'c_sync_comm_stream',
-    'queue_generator',
-    'dequeue',
-    'enqueue',
     'heter_listen_and_serv',
     'c_wait_comm',
     'c_wait_compute',
-    'copy_cross_scope',
 }
 
 
@@ -145,11 +148,11 @@ class BlockConfig:
 
     def __init__(
         self,
-        ops: List[OpConfig],
-        vars: List[str],
-        vars_dtype: Dict[str, np.dtype] = None,
-        vars_var_type: Dict[str, VarType] = None,
-        vars_lod_level: Dict[str, int] = None,
+        ops: list[OpConfig],
+        vars: list[str],
+        vars_dtype: dict[str, np.dtype] | None = None,
+        vars_var_type: dict[str, VarType] | None = None,
+        vars_lod_level: dict[str, int] | None = None,
     ):
         self.ops = ops
         self.vars = vars
@@ -160,7 +163,7 @@ class BlockConfig:
     def fill_block_desc(self, block_desc):
         for name in self.vars:
             var_desc = block_desc.var(name.encode())
-            var_desc.set_type(core.VarDesc.VarType.LOD_TENSOR)
+            var_desc.set_type(core.VarDesc.VarType.DENSE_TENSOR)
             if (
                 self.vars_lod_level is not None
                 and name in self.vars_lod_level.keys()
@@ -170,15 +173,16 @@ class BlockConfig:
                 self.vars_var_type is not None
                 and name in self.vars_var_type.keys()
             ):
-                if self.vars_var_type[name] == VarType.LOD_TENSOR_ARRAY:
-                    var_desc.set_type(core.VarDesc.VarType.LOD_TENSOR_ARRAY)
+                if self.vars_var_type[name] == VarType.DENSE_TENSOR_ARRAY:
+                    var_desc.set_type(core.VarDesc.VarType.DENSE_TENSOR_ARRAY)
                 elif self.vars_var_type[name] == VarType.STEP_SCOPES:
                     var_desc.set_type(core.VarDesc.VarType.STEP_SCOPES)
                     continue
-            var_desc.set_dtype(convert_np_dtype_to_dtype_(np.float32))
+
+            var_desc.set_dtype(convert_np_dtype_to_proto_type(np.float32))
             if self.vars_dtype is not None and name in self.vars_dtype.keys():
                 var_desc.set_dtype(
-                    convert_np_dtype_to_dtype_(self.vars_dtype[name])
+                    convert_np_dtype_to_proto_type(self.vars_dtype[name])
                 )
 
         for op_config in self.ops:
@@ -202,30 +206,32 @@ class BlockConfig:
                     if block_desc.has_var_recursive(v.encode()):
                         continue
                     var_desc = block_desc.var(v.encode())
-                    var_desc.set_type(core.VarDesc.VarType.LOD_TENSOR)
+                    var_desc.set_type(core.VarDesc.VarType.DENSE_TENSOR)
                     if (
                         op_config.outputs_var_type is not None
                         and v in op_config.outputs_var_type.keys()
                     ):
                         if (
                             op_config.outputs_var_type[v]
-                            == VarType.LOD_TENSOR_ARRAY
+                            == VarType.DENSE_TENSOR_ARRAY
                         ):
                             var_desc.set_type(
-                                core.VarDesc.VarType.LOD_TENSOR_ARRAY
+                                core.VarDesc.VarType.DENSE_TENSOR_ARRAY
                             )
                         elif (
                             op_config.outputs_var_type[v] == VarType.STEP_SCOPES
                         ):
                             var_desc.set_type(core.VarDesc.VarType.STEP_SCOPES)
                             continue
-                    var_desc.set_dtype(convert_np_dtype_to_dtype_(np.float32))
+                    var_desc.set_dtype(
+                        convert_np_dtype_to_proto_type(np.float32)
+                    )
                     if (
                         op_config.outputs_dtype is not None
                         and v in op_config.outputs_dtype.keys()
                     ):
                         var_desc.set_dtype(
-                            convert_np_dtype_to_dtype_(
+                            convert_np_dtype_to_proto_type(
                                 op_config.outputs_dtype[v]
                             )
                         )
@@ -236,17 +242,23 @@ class BlockConfig:
 
 
 class ProgramConfig:
-    '''A config builder for generating a Program.'''
+    '''A config builder for generating a Program.
+    input_type : (np.dtype, default=None), the inputs will be casted to input_type before
+                fed into TRT engine. If set to None, no casting will be performed.
+    no_cast_list : (list[str], default=None), specify the tensors that will skip the casting
+    '''
 
     def __init__(
         self,
-        ops: List[OpConfig],
-        weights: Dict[str, TensorConfig],
-        inputs: Dict[str, TensorConfig],
-        outputs: List[str],
+        ops: list[OpConfig],
+        weights: dict[str, TensorConfig],
+        inputs: dict[str, TensorConfig],
+        outputs: list[str],
+        input_type: np.dtype | None = None,
+        no_cast_list: list[str] | None = None,
     ):
         self.ops = ops
-        # if no weight need to save, we create a place_holder to help seriazlie params.
+        # if no weight need to save, we create a place_holder to help serialize params.
         if not weights:
 
             def generate_weight():
@@ -259,6 +271,9 @@ class ProgramConfig:
             self.weights = weights
         self.inputs = inputs
         self.outputs = outputs
+        self.input_type = input_type
+        self.no_cast_list = [] if no_cast_list is None else no_cast_list
+        self.supported_cast_type = [np.float32, np.float16]
 
     def __repr__(self):
         log_str = ''
@@ -272,150 +287,227 @@ class ProgramConfig:
             log_str += '[' + t + ': ' + str(v) + ']'
         for t, v in self.weights.items():
             log_str += '[' + t + ': ' + str(v) + ']'
-
+        log_str += f"['input_type': {self.input_type}]"
         return log_str
 
-    def set_input_type(self, type: np.dtype):
-        for inp in self.inputs.values():
-            inp.convert_type_inplace(type)
-        for weight in self.weights.values():
-            weight.convert_type_inplace(type)
+    def set_input_type(self, _type: np.dtype) -> None:
+        assert (
+            _type in self.supported_cast_type or _type is None
+        ), "PaddleTRT only supports FP32 / FP16 IO"
+
+        ver = paddle.inference.get_trt_compile_version()
+        trt_version = ver[0] * 1000 + ver[1] * 100 + ver[2] * 10
+        if trt_version < 8600:
+            logging.info("set_input_type is ignored for TRT version < 8600")
+            return
+
+        self.input_type = _type
+
+    def get_feed_data(self) -> dict[str, dict[str, Any]]:
+        feed_data = {}
+        for name, tensor_config in self.inputs.items():
+            data = tensor_config.data
+            # Cast to target input_type
+            if (
+                self.input_type is not None
+                and name not in self.no_cast_list
+                and data.dtype in self.supported_cast_type
+            ):
+                data = data.astype(self.input_type)
+            # Truncate FP32 tensors to FP16 precision for FP16 test stability
+            if data.dtype == np.float32 and name not in self.no_cast_list:
+                data = data.astype(np.float16).astype(np.float32)
+
+            feed_data[name] = {
+                'data': data,
+                'lod': tensor_config.lod,
+            }
+        return feed_data
+
+    def _cast(self) -> None:
+        if self.input_type is None:
+            return
+        for name, inp in self.inputs.items():
+            if name in self.no_cast_list:
+                continue
+            if inp.dtype not in self.supported_cast_type:
+                continue
+            inp.convert_type_inplace(self.input_type)
+        for name, weight in self.weights.items():
+            if name in self.no_cast_list:
+                continue
+            if weight.dtype not in self.supported_cast_type:
+                continue
+            weight.convert_type_inplace(self.input_type)
         return self
 
-    def get_input_type(self) -> np.dtype:
-        return next(iter(self.inputs.values())).dtype
+
+def convert_to_dynamic_shape(dynamic_shape, name):
+    if dynamic_shape.min_input_shape == {}:
+        return tuple(dynamic_shape.min_input_shape)
+    min_shape = tuple(dynamic_shape.min_input_shape[name])
+    opt_shape = tuple(dynamic_shape.opt_input_shape[name])
+    max_shape = tuple(dynamic_shape.max_input_shape[name])
+    result_shape = []
+    for i in range(len(min_shape)):
+        if min_shape[i] == opt_shape[i] == max_shape[i]:
+            result_shape.append(min_shape[i])
+        else:
+            result_shape.append(-1)
+    return tuple(result_shape)
 
 
-def create_fake_model(program_config):
+def create_fake_model(program_config, run_pir=False, dynamic_shape=None):
     '''Create a Paddle model(in memory) according to the given config.'''
+    program_config = copy.deepcopy(program_config)
+    program_config._cast()
     paddle.enable_static()
-    main_program_desc = core.ProgramDesc()
-    util_program = fluid.Program()
-    main_block_desc = main_program_desc.block(0)
+    with paddle.pir_utils.OldIrGuard():
+        main_program_desc = core.ProgramDesc()
+        # util_program = base.Program()
+        util_program = paddle.static.Program()
+        main_block_desc = main_program_desc.block(0)
 
-    var_desc = main_block_desc.var(b"feed")
-    var_desc.set_type(core.VarDesc.VarType.FEED_MINIBATCH)
-    var_desc.set_persistable(True)
-
-    index = 0
-    for name, tensor_config in program_config.inputs.items():
-        var_desc = main_block_desc.var(name.encode())
-        var_desc.set_type(core.VarDesc.VarType.LOD_TENSOR)
-        var_desc.set_dtype(convert_np_dtype_to_dtype_(tensor_config.dtype))
-        var_desc.set_shape(tensor_config.shape)
-        var_desc.set_need_check_feed(True)
-        if tensor_config.lod is not None:
-            var_desc.set_lod_level(len(tensor_config.lod))
-        op_desc = main_block_desc._prepend_op()
-        op_desc.set_type("feed")
-        op_desc.set_input('X', ["feed"])
-        op_desc.set_output('Out', [name])
-        op_desc._set_attr("col", index)
-        index = index + 1
-
-    save_var_map = {}
-    for name, tensor_config in program_config.weights.items():
-        var_desc = main_block_desc.var(name.encode())
-        var_desc.set_type(core.VarDesc.VarType.LOD_TENSOR)
-        var_desc.set_dtype(convert_np_dtype_to_dtype_(tensor_config.dtype))
-        var_desc.set_shape(tensor_config.shape)
+        var_desc = main_block_desc.var(b"feed")
+        var_desc.set_type(core.VarDesc.VarType.FEED_MINIBATCH)
         var_desc.set_persistable(True)
 
-        save_var_map[name] = util_program.global_block().create_parameter(
-            dtype=tensor_config.dtype,
-            shape=tensor_config.shape,
-            type=core.VarDesc.VarType.LOD_TENSOR,
-            name=name,
-            initializer=paddle.nn.initializer.Assign(tensor_config.data),
-        )
-    in_vars = []
-    for name in sorted(save_var_map.keys()):
-        in_vars.append(save_var_map[name])
-
-    out_var = util_program.global_block().create_var(
-        type=core.VarDesc.VarType.RAW, name="out_var_0"
-    )
-    out_var.desc.set_persistable(True)
-    util_program.global_block().append_op(
-        type='save_combine',
-        inputs={'X': in_vars},
-        outputs={'Y': out_var},
-        attrs={'file_path': '', 'save_to_memory': True},
-    )
-    for op_config in program_config.ops:
-        op_desc = main_block_desc.append_op()
-        op_desc.set_type(op_config.type)
-        # canonicalize scalar attrs
-        if OpProtoHolder.instance().has_op_proto(op_config.type):
-            proto = OpProtoHolder.instance().get_op_proto(op_config.type)
-            canonicalized_attrs = framework.canonicalize_attrs(
-                op_config.attrs, proto
+        index = 0
+        for name, tensor_config in program_config.inputs.items():
+            var_desc = main_block_desc.var(name.encode())
+            var_desc.set_type(core.VarDesc.VarType.DENSE_TENSOR)
+            var_desc.set_dtype(
+                convert_np_dtype_to_proto_type(tensor_config.dtype)
             )
-        else:
-            canonicalized_attrs = op_config.attrs
-
-        for name, values in op_config.inputs.items():
-            op_desc.set_input(name, values)
-        for name, values in canonicalized_attrs.items():
-            if name == 'sub_block':
-                sub_block_desc = main_program_desc.append_block(main_block_desc)
-                values.fill_block_desc(sub_block_desc)
-                op_desc._set_attr(name, sub_block_desc)
+            if dynamic_shape is not None:
+                dynamic_shape_copy = convert_to_dynamic_shape(
+                    dynamic_shape, name
+                )
+                var_desc.set_shape(dynamic_shape_copy)
             else:
-                op_desc._set_attr(name, values)
-        for name, values in op_config.outputs.items():
-            op_desc.set_output(name, values)
-            for v in values:
-                if main_block_desc.has_var_recursive(v.encode()):
-                    continue
-                var_desc = main_block_desc.var(v.encode())
-                var_desc.set_type(core.VarDesc.VarType.LOD_TENSOR)
-                if (
-                    op_config.outputs_var_type is not None
-                    and v in op_config.outputs_var_type.keys()
-                ):
-                    if (
-                        op_config.outputs_var_type[v]
-                        == VarType.LOD_TENSOR_ARRAY
-                    ):
-                        var_desc.set_type(core.VarDesc.VarType.LOD_TENSOR_ARRAY)
-                    elif op_config.outputs_var_type[v] == VarType.STEP_SCOPES:
-                        var_desc.set_type(core.VarDesc.VarType.STEP_SCOPES)
-                        continue
-                var_desc.set_dtype(convert_np_dtype_to_dtype_(np.float32))
-                if (
-                    op_config.outputs_dtype is not None
-                    and v in op_config.outputs_dtype.keys()
-                ):
-                    var_desc.set_dtype(
-                        convert_np_dtype_to_dtype_(op_config.outputs_dtype[v])
+                var_desc.set_shape(tensor_config.shape)
+            var_desc.set_need_check_feed(True)
+            if tensor_config.lod is not None:
+                var_desc.set_lod_level(len(tensor_config.lod))
+            op_desc = main_block_desc._prepend_op()
+            op_desc.set_type("feed")
+            op_desc.set_input('X', ["feed"])
+            op_desc.set_output('Out', [name])
+            op_desc._set_attr("col", index)
+            index = index + 1
+
+        save_var_map = {}
+        for name, tensor_config in program_config.weights.items():
+            var_desc = main_block_desc.var(name.encode())
+            var_desc.set_type(core.VarDesc.VarType.DENSE_TENSOR)
+            var_desc.set_dtype(
+                convert_np_dtype_to_proto_type(tensor_config.dtype)
+            )
+            var_desc.set_shape(tensor_config.shape)
+            var_desc.set_persistable(True)
+
+            save_var_map[name] = util_program.global_block().create_parameter(
+                dtype=tensor_config.dtype,
+                shape=tensor_config.shape,
+                type=core.VarDesc.VarType.DENSE_TENSOR,
+                name=name,
+                initializer=paddle.nn.initializer.Assign(tensor_config.data),
+            )
+        in_vars = []
+        for name in sorted(save_var_map.keys()):
+            in_vars.append(save_var_map[name])
+
+        out_var = util_program.global_block().create_var(
+            type=core.VarDesc.VarType.RAW, name="out_var_0"
+        )
+        out_var.desc.set_persistable(True)
+        if not run_pir:
+            util_program.global_block().append_op(
+                type='save_combine',
+                inputs={'X': in_vars},
+                outputs={'Y': out_var},
+                attrs={'file_path': '', 'save_to_memory': True},
+            )
+        for op_config in program_config.ops:
+            op_desc = main_block_desc.append_op()
+            op_desc.set_type(op_config.type)
+            # canonicalize scalar attrs
+            if OpProtoHolder.instance().has_op_proto(op_config.type):
+                proto = OpProtoHolder.instance().get_op_proto(op_config.type)
+                canonicalized_attrs = framework.canonicalize_attrs(
+                    op_config.attrs, proto
+                )
+            else:
+                canonicalized_attrs = op_config.attrs
+
+            for name, values in op_config.inputs.items():
+                op_desc.set_input(name, values)
+            for name, values in canonicalized_attrs.items():
+                if name == 'sub_block':
+                    sub_block_desc = main_program_desc.append_block(
+                        main_block_desc
                     )
-        if op_config.type not in _OP_WITHOUT_KERNEL_SET:
-            op_desc.infer_var_type(main_block_desc)
-            op_desc.infer_shape(main_block_desc)
-        op_desc.check_attrs()
+                    values.fill_block_desc(sub_block_desc)
+                    op_desc._set_attr(name, sub_block_desc)
+                else:
+                    op_desc._set_attr(name, values)
+            for name, values in op_config.outputs.items():
+                op_desc.set_output(name, values)
+                for v in values:
+                    if main_block_desc.has_var_recursive(v.encode()):
+                        continue
+                    var_desc = main_block_desc.var(v.encode())
+                    var_desc.set_type(core.VarDesc.VarType.DENSE_TENSOR)
+                    if (
+                        op_config.outputs_var_type is not None
+                        and v in op_config.outputs_var_type.keys()
+                    ):
+                        if (
+                            op_config.outputs_var_type[v]
+                            == VarType.DENSE_TENSOR_ARRAY
+                        ):
+                            var_desc.set_type(
+                                core.VarDesc.VarType.DENSE_TENSOR_ARRAY
+                            )
+                        elif (
+                            op_config.outputs_var_type[v] == VarType.STEP_SCOPES
+                        ):
+                            var_desc.set_type(core.VarDesc.VarType.STEP_SCOPES)
+                            continue
+                    if run_pir:
+                        var_desc.set_dtype(
+                            convert_np_dtype_to_proto_type(tensor_config.dtype)
+                        )
+                    else:
+                        var_desc.set_dtype(
+                            convert_np_dtype_to_proto_type(np.float32)
+                        )
+                    if (
+                        op_config.outputs_dtype is not None
+                        and v in op_config.outputs_dtype.keys()
+                    ):
+                        var_desc.set_dtype(
+                            convert_np_dtype_to_proto_type(
+                                op_config.outputs_dtype[v]
+                            )
+                        )
+            if op_config.type not in _OP_WITHOUT_KERNEL_SET:
+                op_desc.infer_var_type(main_block_desc)
+                op_desc.infer_shape(main_block_desc)
+            op_desc.check_attrs()
 
-    for index, name in enumerate(program_config.outputs):
-        var_desc = main_block_desc.var(b"fetch")
-        var_desc.set_type(core.VarDesc.VarType.FETCH_LIST)
-        var_desc.set_need_check_feed(True)
-        op_desc = main_block_desc.append_op()
-        op_desc.set_type("fetch")
-        op_desc.set_input('X', [name])
-        op_desc.set_output('Out', ["fetch"])
-        op_desc._set_attr("col", index)
+        for index, name in enumerate(program_config.outputs):
+            var_desc = main_block_desc.var(b"fetch")
+            var_desc.set_type(core.VarDesc.VarType.FETCH_LIST)
+            var_desc.set_need_check_feed(True)
+            op_desc = main_block_desc.append_op()
+            op_desc.set_type("fetch")
+            op_desc.set_input('X', [name])
+            op_desc.set_output('Out', ["fetch"])
+            op_desc._set_attr("col", index)
+        util_program._sync_with_cpp()
 
-    model = main_program_desc.serialize_to_string()
-
-    util_program._sync_with_cpp()
-    place = fluid.CPUPlace()
-    executor = fluid.Executor(place)
-    scope = fluid.Scope()
-    with fluid.scope_guard(scope):
-        executor.run(util_program)
-        params = scope.find_var("out_var_0").get_bytes()
-
-    return model, params
+    return main_program_desc, util_program
 
 
 def create_quant_model(

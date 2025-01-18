@@ -12,8 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Literal
+
 from paddle.incubate.nn import functional as F
 from paddle.nn import Layer
+
+if TYPE_CHECKING:
+    from paddle import Tensor
 
 
 class FusedDropoutAdd(Layer):
@@ -44,25 +51,33 @@ class FusedDropoutAdd(Layer):
     Examples:
         .. code-block:: python
 
-            # required: gpu
-            import paddle
-            from paddle.incubate.nn.layer.fused_dropout_add import FusedDropoutAdd
+            >>> # doctest: +REQUIRES(env:GPU)
+            >>> import paddle
+            >>> paddle.device.set_device('gpu')
+            >>> from paddle.incubate.nn.layer.fused_dropout_add import FusedDropoutAdd
 
-            x = paddle.to_tensor([[1,2,3], [4,5,6]], dtype="float32")
-            y = paddle.to_tensor([[1,2,3], [4,5,6]], dtype="float32")
+            >>> x = paddle.to_tensor([[1,2,3], [4,5,6]], dtype="float32")
+            >>> y = paddle.to_tensor([[1,2,3], [4,5,6]], dtype="float32")
 
-            m = FusedDropoutAdd(p=0.5)
+            >>> m = FusedDropoutAdd(p=0.5)
 
-            out = m(x, y)
+            >>> out = m(x, y)
     """
 
-    def __init__(self, p=0.5, mode="upscale_in_train", name=None):
+    def __init__(
+        self,
+        p: float = 0.5,
+        mode: Literal[
+            'upscale_in_train', 'downscale_in_infer'
+        ] = "upscale_in_train",
+        name: str | None = None,
+    ) -> None:
         super().__init__()
         self.p = p
         self.mode = mode
         self.name = name
 
-    def forward(self, x, y):
+    def forward(self, x: Tensor, y: Tensor) -> Tensor:
         out = F.fused_dropout_add(
             x,
             y,
@@ -73,6 +88,6 @@ class FusedDropoutAdd(Layer):
         )
         return out
 
-    def extra_repr(self):
+    def extra_repr(self) -> str:
         name_str = f', name={self.name}' if self.name else ''
         return f'p={self.p}, mode={self.mode}{name_str}'

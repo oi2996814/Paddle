@@ -26,19 +26,19 @@ void GatherNdKernel(const Context &ctx,
                     const DenseTensor &index,
                     DenseTensor *out) {
   ctx.template Alloc<T>(out);
-  if (x.numel() == 0) return;
-
+  if (x.numel() == 0 || out->numel() == 0) return;
+  if (index.dims()[0] == 0 && index.numel() == 0) return;
   auto index_type = index.dtype();
   bool index_type_match =
       index_type == phi::DataType::INT32 || index_type == phi::DataType::INT64;
-  PADDLE_ENFORCE_EQ(
-      index_type_match,
-      true,
-      phi::errors::InvalidArgument("Index holds the wrong type, it holds [%s],"
-                                   "but desires to be [%s] or [%s]",
-                                   index_type,
-                                   phi::DataType::INT32,
-                                   phi::DataType::INT64));
+  PADDLE_ENFORCE_EQ(index_type_match,
+                    true,
+                    common::errors::InvalidArgument(
+                        "Index holds the wrong type, it holds [%s],"
+                        "but desires to be [%s] or [%s]",
+                        index_type,
+                        phi::DataType::INT32,
+                        phi::DataType::INT64));
   if (index_type == phi::DataType::INT32) {
     phi::funcs::CPUGatherNd<T, int>(ctx, x, index, out);
   } else if (index_type == phi::DataType::INT64) {
@@ -52,10 +52,13 @@ PD_REGISTER_KERNEL(gather_nd,
                    CPU,
                    ALL_LAYOUT,
                    phi::GatherNdKernel,
+                   bool,
                    float,
                    double,
-                   int64_t,
                    int,
+                   int8_t,
+                   int64_t,
                    int16_t,
-                   bool,
-                   uint8_t) {}
+                   uint8_t,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}

@@ -50,14 +50,14 @@ class CopyMatrixRowsFunctor<phi::GPUContext, T> {
     auto dst_dims = dst->dims();
     PADDLE_ENFORCE_EQ(src_dims.size(),
                       2,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The source tensor must be a matrix with rank 2, but "
                           "got the source tensor rank is %lu. "
                           "Please check the rank of the source tensor",
                           src_dims.size()));
     PADDLE_ENFORCE_EQ(dst_dims.size(),
                       2,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The destination tensor must be a matrix with rank, "
                           "but got the destination tensor rank is %lu. "
                           "Please check the rank of the destination tensor",
@@ -65,7 +65,7 @@ class CopyMatrixRowsFunctor<phi::GPUContext, T> {
     PADDLE_ENFORCE_EQ(
         src_dims[1],
         dst_dims[1],
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The width of the source tensor and the destination tensor must be "
             "same. But got %lu != %lu.Please check the rank of the source "
             "tensor",
@@ -93,10 +93,10 @@ class CopyMatrixRowsFunctor<phi::GPUContext, T> {
 template class CopyMatrixRowsFunctor<phi::GPUContext, float>;
 template class CopyMatrixRowsFunctor<phi::GPUContext, double>;
 
-template class LoDTensor2BatchFunctor<phi::GPUContext, float>;
-template class LoDTensor2BatchFunctor<phi::GPUContext, double>;
-template class Batch2LoDTensorFunctor<phi::GPUContext, float>;
-template class Batch2LoDTensorFunctor<phi::GPUContext, double>;
+template class DenseTensor2BatchFunctor<phi::GPUContext, float>;
+template class DenseTensor2BatchFunctor<phi::GPUContext, double>;
+template class Batch2DenseTensorFunctor<phi::GPUContext, float>;
+template class Batch2DenseTensorFunctor<phi::GPUContext, double>;
 
 }  // namespace funcs
 }  // namespace phi

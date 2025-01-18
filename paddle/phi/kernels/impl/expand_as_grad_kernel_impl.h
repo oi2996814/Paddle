@@ -55,7 +55,7 @@ void ExpandAsGradKernel(const Context& context,
     return;
   }
 
-  auto vec_in_dims = phi::vectorize<int>(x_dims);
+  auto vec_in_dims = common::vectorize<int>(x_dims);
   auto diff = target_shape.size() - vec_in_dims.size();
   vec_in_dims.insert(vec_in_dims.begin(), diff, 1);
   std::vector<int> repeat_times(vec_in_dims.size());
@@ -116,10 +116,19 @@ void ExpandAsGradKernel(const Context& context,
       ExpandAsBackward<Context, T, 6>(
           context, out_grad, reshape_dims_vec, reduce_dims_vec, in_grad);
       break;
+    case 7:
+      ExpandAsBackward<Context, T, 7>(
+          context, out_grad, reshape_dims_vec, reduce_dims_vec, in_grad);
+      break;
+    case 8:
+      ExpandAsBackward<Context, T, 8>(
+          context, out_grad, reshape_dims_vec, reduce_dims_vec, in_grad);
+      break;
     default:
       PADDLE_THROW(errors::InvalidArgument(
-          "Only support tensor with rank being between 1 and 6. But "
+          "Only support tensor with rank being between 1 and %d. But "
           "received tensor's rank = %d.",
+          MAX_RANK_SUPPORTED,
           dims));
   }
 }

@@ -289,20 +289,20 @@ TEST(math_function, gemv) {
   GemvTest<double>(7, 9, true);
 }
 
-TEST(math_funciton, set_constant) {
+TEST(math_function, set_constant) {
   phi::DenseTensor t;
   auto* dev_ctx =
       phi::DeviceContextPool::Instance().GetByPlace(phi::CPUPlace());
   t.Resize({10, 10});
   dev_ctx->template Alloc<int>(&t);
-  phi::funcs::set_constant(*dev_ctx, &t, 10);
+  phi::funcs::set_constant(*dev_ctx, &t, static_cast<int>(10));
   for (int64_t i = 0; i < t.numel(); ++i) {
-    PADDLE_ENFORCE_EQ(
-        10,
-        t.data<int>()[i],
-        phi::errors::InvalidArgument("Each value of input tensor should be 10, "
-                                     "but received %d.",
-                                     t.data<int>()[i]));
+    PADDLE_ENFORCE_EQ(10,
+                      t.data<int>()[i],
+                      common::errors::InvalidArgument(
+                          "Each value of input tensor should be 10, "
+                          "but received %d.",
+                          t.data<int>()[i]));
   }
 }
 

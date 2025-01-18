@@ -13,9 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import unittest
 from functools import partial
-from typing import List
 
 import numpy as np
 from program_config import ProgramConfig, TensorConfig
@@ -65,7 +66,7 @@ class TrtConvertLeakyReluTest(TrtLayerAutoScanTest):
 
     def sample_predictor_configs(
         self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
+    ) -> tuple[paddle_infer.Config, list[int], float]:
         def generate_dynamic_shape(attrs):
             if self.input_dim == 2:
                 self.dynamic_shape.min_input_shape = {"input_data": [1, 8]}
@@ -113,7 +114,7 @@ class TrtConvertLeakyReluTest(TrtLayerAutoScanTest):
             attrs, False
         ), (1e-3, 1e-3)
         self.trt_param.precision = paddle_infer.PrecisionType.Int8
-        program_config.set_input_type(np.int8)
+        program_config.set_input_type(np.float32)
         yield self.create_inference_config(), generate_trt_nodes_num(
             attrs, False
         ), (1e-3, 1e-3)
@@ -131,7 +132,7 @@ class TrtConvertLeakyReluTest(TrtLayerAutoScanTest):
             attrs, True
         ), (1e-3, 1e-3)
         self.trt_param.precision = paddle_infer.PrecisionType.Int8
-        program_config.set_input_type(np.int8)
+        program_config.set_input_type(np.float32)
         yield self.create_inference_config(), generate_trt_nodes_num(
             attrs, True
         ), (1e-3, 1e-3)

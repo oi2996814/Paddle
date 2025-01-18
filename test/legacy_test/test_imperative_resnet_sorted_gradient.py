@@ -19,9 +19,8 @@ from test_imperative_base import new_program_scope
 from test_imperative_resnet import ResNet
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
-from paddle.fluid.dygraph.base import to_variable
+from paddle import base
+from paddle.base import core
 
 batch_size = 8
 train_parameters = {
@@ -54,14 +53,14 @@ def optimizer_setting(params, parameter_list=None):
         base_lr = params["lr"]
         lr = []
         lr = [base_lr * (0.1**i) for i in range(len(bd) + 1)]
-        if fluid.in_dygraph_mode():
+        if base.in_dygraph_mode():
             optimizer = paddle.optimizer.SGD(
                 learning_rate=0.01, parameters=parameter_list
             )
         else:
             optimizer = paddle.optimizer.SGD(learning_rate=0.01)
         # TODO(minqiyang): Add learning rate scheduler support to dygraph mode
-        #  optimizer = fluid.optimizer.Momentum(
+        #  optimizer = base.optimizer.Momentum(
         #  learning_rate=params["lr"],
         #  learning_rate=paddle.optimizer.lr.piecewise_decay(
         #  boundaries=bd, values=lr),
@@ -77,8 +76,8 @@ class TestDygraphResnetSortGradient(unittest.TestCase):
 
         batch_size = train_parameters["batch_size"]
         batch_num = 10
-        with fluid.dygraph.guard():
-            fluid.set_flags({'FLAGS_sort_sum_gradient': True})
+        with base.dygraph.guard():
+            base.set_flags({'FLAGS_sort_sum_gradient': True})
             paddle.seed(seed)
             paddle.framework.random._manual_program_seed(seed)
 
@@ -112,8 +111,8 @@ class TestDygraphResnetSortGradient(unittest.TestCase):
                     .reshape(batch_size, 1)
                 )
 
-                img = to_variable(dy_x_data)
-                label = to_variable(y_data)
+                img = paddle.to_tensor(dy_x_data)
+                label = paddle.to_tensor(y_data)
                 label.stop_gradient = True
 
                 out = resnet(img)
@@ -137,9 +136,9 @@ class TestDygraphResnetSortGradient(unittest.TestCase):
                         np_array = np.array(
                             param._grad_ivar().value().get_tensor()
                         )
-                        dy_grad_value[
-                            param.name + core.grad_var_suffix()
-                        ] = np_array
+                        dy_grad_value[param.name + core.grad_var_suffix()] = (
+                            np_array
+                        )
 
                 optimizer.minimize(avg_loss)
                 resnet.clear_gradients()
@@ -152,10 +151,10 @@ class TestDygraphResnetSortGradient(unittest.TestCase):
             paddle.seed(seed)
             paddle.framework.random._manual_program_seed(seed)
 
-            exe = fluid.Executor(
-                fluid.CPUPlace()
+            exe = base.Executor(
+                base.CPUPlace()
                 if not core.is_compiled_with_cuda()
-                else fluid.CUDAPlace(0)
+                else base.CUDAPlace(0)
             )
 
             resnet = ResNet()
@@ -196,7 +195,7 @@ class TestDygraphResnetSortGradient(unittest.TestCase):
                     )
 
             out = exe.run(
-                fluid.default_startup_program(),
+                base.default_startup_program(),
                 fetch_list=static_param_name_list,
             )
 
@@ -220,7 +219,7 @@ class TestDygraphResnetSortGradient(unittest.TestCase):
                 fetch_list.extend(static_param_name_list)
                 fetch_list.extend(static_grad_name_list)
                 out = exe.run(
-                    fluid.default_main_program(),
+                    base.default_main_program(),
                     feed={"pixel": static_x_data, "label": y_data},
                     fetch_list=fetch_list,
                 )

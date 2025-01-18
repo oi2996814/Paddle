@@ -12,16 +12,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import json
 import warnings
+from typing import TYPE_CHECKING, TypedDict
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
+
+if TYPE_CHECKING:
+    from typing_extensions import NotRequired
+
+    class _Kernel(TypedDict):
+        enable: bool
+        tuning_range: list[int] | tuple[int, int]
+
+    class _Layout(TypedDict):
+        enable: bool
+
+    class _Dataloader(TypedDict):
+        enable: bool
+        tuning_steps: int
+
+    class _ConfigKernel(TypedDict):
+        kernel: NotRequired[_Kernel]
+        layout: NotRequired[_Layout]
+        dataloader: NotRequired[_Dataloader]
+
 
 __all__ = ['set_config']
 
 
-def set_config(config=None):
+def set_config(config: _ConfigKernel | str | None = None) -> None:
     r"""
     Set the configuration for kernel, layout and dataloader auto-tuning.
 
@@ -34,7 +57,7 @@ def set_config(config=None):
 
     2. layout: When it is enabled, the best data layout such as NCHW or NHWC will be
     determined based on the device and data type. When the origin layout setting is
-    not best, layout transformation will be automaticly performed to improve model
+    not best, layout transformation will be automatically performed to improve model
     performance. Layout auto-tuning only supports dygraph mode currently. Tuning
     parameters are as follows:
 
@@ -56,29 +79,29 @@ def set_config(config=None):
     Examples:
         .. code-block:: python
 
-            import paddle
-            import json
+            >>> import paddle
+            >>> import json
 
-            # config is a dict.
-            config = {
-                "kernel": {
-                    "enable": True,
-                    "tuning_range": [1, 5],
-                },
-                "layout": {
-                    "enable": True,
-                },
-                "dataloader": {
-                    "enable": True,
-                }
-            }
-            paddle.incubate.autotune.set_config(config)
+            >>> # config is a dict.
+            >>> config = {
+            ...     "kernel": {
+            ...         "enable": True,
+            ...         "tuning_range": [1, 5],
+            ...     },
+            ...     "layout": {
+            ...         "enable": True,
+            ...     },
+            ...     "dataloader": {
+            ...         "enable": True,
+            ...     }
+            >>> }
+            >>> paddle.incubate.autotune.set_config(config) # type: ignore[arg-type]
 
-            # config is the path of json file.
-            config_json = json.dumps(config)
-            with open('config.json', 'w') as json_file:
-                json_file.write(config_json)
-            paddle.incubate.autotune.set_config('config.json')
+            >>> # config is the path of json file.
+            >>> config_json = json.dumps(config)
+            >>> with open('config.json', 'w') as json_file:
+            ...     json_file.write(config_json)
+            >>> paddle.incubate.autotune.set_config('config.json')
 
     """
     if config is None:
@@ -136,10 +159,10 @@ def set_config(config=None):
                 )
     if "dataloader" in config_dict:
         dataloader_config = config_dict["dataloader"]
-        use_autoune = False
+        use_autotune = False
         if "enable" in dataloader_config:
             if isinstance(dataloader_config['enable'], bool):
-                use_autoune = dataloader_config['enable']
+                use_autotune = dataloader_config['enable']
             else:
                 warnings.warn(
                     "The auto-tuning configuration of the dataloader is incorrect."
@@ -148,11 +171,11 @@ def set_config(config=None):
         if "tuning_steps" in dataloader_config:
             if isinstance(dataloader_config['tuning_steps'], int):
                 paddle.io.reader.set_autotune_config(
-                    use_autoune, dataloader_config['tuning_steps']
+                    use_autotune, dataloader_config['tuning_steps']
                 )
             else:
                 warnings.warn(
                     "The auto-tuning configuration of the dataloader is incorrect."
                     "The `tuning_steps` should be int. Use default parameter instead."
                 )
-                paddle.io.reader.set_autotune_config(use_autoune)
+                paddle.io.reader.set_autotune_config(use_autotune)

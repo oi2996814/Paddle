@@ -28,6 +28,7 @@ void EmbeddingGradKernel(const Context& ctx,
                          const DenseTensor& out_grad,
                          int64_t padding_idx,
                          DenseTensor* weight_grad) {
+  using XPUType = typename XPUTypeTrait<T>::Type;
   DDim table_dim;
   table_dim = weight.dims();
 
@@ -35,11 +36,15 @@ void EmbeddingGradKernel(const Context& ctx,
   auto d_output_t = &out_grad;
   auto d_table_t = weight_grad;
 
+  if (std::getenv("XPU_CDNN_CLUSTER_PARALLEL") != nullptr) {
+    ctx.Wait();
+  }
+
   int64_t ids_numel = ids_t->numel();
   PADDLE_ENFORCE_EQ(
       ids_numel <= std::numeric_limits<int32_t>::max(),
       true,
-      phi::errors::OutOfRange(
+      common::errors::OutOfRange(
           "Number of ids greater than int32_t::max , please check "
           "number of ids in LookupTableV2GradXPUKernel."));
 
@@ -62,14 +67,15 @@ void EmbeddingGradKernel(const Context& ctx,
   int ym = static_cast<int>(ids_numel);
   int n = d_table_t->dims()[1];
 
-  int r = xpu::embedding_grad<T, int64_t>(dev_ctx.x_context(),
-                                          d_output_data,
-                                          ids_data,
-                                          d_table_data,
-                                          xm,
-                                          n,
-                                          ym,
-                                          padding_idx);
+  int r = xpu::embedding_grad<XPUType, int64_t>(
+      dev_ctx.x_context(),
+      reinterpret_cast<const XPUType*>(d_output_data),
+      ids_data,
+      reinterpret_cast<XPUType*>(d_table_data),
+      xm,
+      n,
+      ym,
+      padding_idx);
   PADDLE_ENFORCE_XDNN_SUCCESS(r, "embedding_grad");
 }
 
@@ -106,8 +112,8 @@ void EmbeddingSparseGradKernel(const Context& ctx,
                        sizeof(int64_t) * input.numel());
     ids = CopyIdsToVector<int, int64_t>(ids_cpu);
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
-        "emebdding input only support int32 and int64"));
+    PADDLE_THROW(common::errors::Unimplemented(
+        "embedding input only support int32 and int64"));
   }
 
   auto ids_num = static_cast<int64_t>(input.numel());
@@ -132,7 +138,7 @@ void EmbeddingSparseGradKernel(const Context& ctx,
       flatten_to_2d(d_output_dims, d_output_dims.size() - 1);
   PADDLE_ENFORCE_EQ(d_table_value->dims(),
                     d_output_dims_2d,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "ShapeError: The shape of lookup_table@Grad and "
                         "output@Grad should be same. "
                         "But received lookup_table@Grad's shape = [%s], "
@@ -148,8 +154,13 @@ void EmbeddingSparseGradKernel(const Context& ctx,
 }
 }  // namespace phi
 
-PD_REGISTER_KERNEL(
-    embedding_grad, XPU, ALL_LAYOUT, phi::EmbeddingGradKernel, float) {}
+PD_REGISTER_KERNEL(embedding_grad,
+                   XPU,
+                   ALL_LAYOUT,
+                   phi::EmbeddingGradKernel,
+                   float,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}
 PD_REGISTER_KERNEL(embedding_sparse_grad,
                    XPU,
                    ALL_LAYOUT,

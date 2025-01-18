@@ -34,7 +34,7 @@ void RepeatsTensor2IndexTensor(const Context& ctx,
   for (int i = 0; i < repeats.dims()[0]; i++) {
     PADDLE_ENFORCE_GE(repeats_data[i],
                       0,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "repeats must grater or equal than 0, but got %d",
                           repeats_data[i]));
     index_size += repeats_data[i];
@@ -45,7 +45,7 @@ void RepeatsTensor2IndexTensor(const Context& ctx,
     std::fill_n(index_vec.begin() + offset, repeats_data[i], i);
     offset += repeats_data[i];
   }
-  index->Resize(phi::make_ddim({index_size}));
+  index->Resize(common::make_ddim({index_size}));
 
   phi::TensorFromVector<RepeatsT>(index_vec, ctx, index);
 }

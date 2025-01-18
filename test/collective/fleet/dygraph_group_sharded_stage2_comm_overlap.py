@@ -69,13 +69,15 @@ class RandomDataset(paddle.io.Dataset):
 def optimizer_setting(model, use_pure_fp16, opt_group=False):
     clip = paddle.nn.ClipGradByGlobalNorm(clip_norm=1.0)
     optimizer = paddle.optimizer.AdamW(
-        parameters=[
-            {
-                "params": model.parameters(),
-            }
-        ]
-        if opt_group
-        else model.parameters(),
+        parameters=(
+            [
+                {
+                    "params": model.parameters(),
+                }
+            ]
+            if opt_group
+            else model.parameters()
+        ),
         learning_rate=0.001,
         weight_decay=0.00001,
         grad_clip=clip,
@@ -96,7 +98,9 @@ def train_mlp(
     test_minimize=False,
 ):
     if sharding_stage != "dp":
-        group = paddle.distributed.new_group([0, 1], backend="nccl")
+        group = paddle.distributed.new_group(
+            [0, 1], backend="bkcl" if paddle.is_compiled_with_xpu() else "nccl"
+        )
     if opt_group:
         optimizer = optimizer_setting(
             model=model, use_pure_fp16=use_pure_fp16, opt_group=opt_group
@@ -138,7 +142,7 @@ def train_mlp(
     )
 
     if sharding_stage == 2:
-        model.to(device="gpu")
+        model.to(device="xpu" if paddle.is_compiled_with_xpu() else "gpu")
 
     for eop in range(epoch):
         model.train()
@@ -164,7 +168,10 @@ def train_mlp(
             optimizer.step()
             optimizer.clear_grad()
 
-    paddle.device.cuda.synchronize()
+    if paddle.is_compiled_with_xpu():
+        paddle.device.xpu.synchronize()
+    else:
+        paddle.device.cuda.synchronize()
 
     if save_model:
         return model, optimizer
@@ -199,7 +206,10 @@ def test_dp_stage2():
     )
     for i in range(len(dp_params)):
         np.testing.assert_allclose(
-            dp_params[i].numpy(), stage2_params[i].numpy(), rtol=1e-6
+            dp_params[i].numpy(),
+            stage2_params[i].numpy(),
+            rtol=1e-6,
+            atol=1e-8 if paddle.is_compiled_with_xpu() else 0,
         )
 
     # stage2 accumulate grad
@@ -221,7 +231,10 @@ def test_dp_stage2():
     )
     for i in range(len(dp_params)):
         np.testing.assert_allclose(
-            dp_params[i].numpy(), stage2_params[i].numpy(), rtol=1e-6
+            dp_params[i].numpy(),
+            stage2_params[i].numpy(),
+            rtol=1e-6,
+            atol=1e-8 if paddle.is_compiled_with_xpu() else 0,
         )
 
     # save/load model
@@ -245,7 +258,6 @@ def test_dp_stage2():
 
     # check optimizer.minimize() error
     train_mlp(mlp7, sharding_stage=2, test_minimize=True)
-    return
 
 
 if __name__ == '__main__':

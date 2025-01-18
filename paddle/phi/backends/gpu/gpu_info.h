@@ -41,7 +41,7 @@ int GetGPURuntimeVersion(int id);
 //! Get the driver version of the ith GPU
 int GetGPUDriverVersion(int id);
 
-//! Wheter the current device support TensorCore
+//! Whether the current device support TensorCore
 bool TensorCoreAvailable();
 
 //! Get the MultiProcessors of the ith GPU.
@@ -57,7 +57,7 @@ int GetGPUMaxThreadsPerBlock(int id);
 int GetCurrentDeviceId();
 
 //! Get the maximum GridDim size for GPU buddy allocator.
-std::array<int, 3> GetGpuMaxGridDimSize(int);
+std::array<unsigned int, 3> GetGpuMaxGridDimSize(int);
 
 std::pair<int, int> GetGpuStreamPriorityRange();
 

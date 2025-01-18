@@ -1,13 +1,13 @@
 #!/bin/bash
-  
+
 # Copyright (c) 2022 PaddlePaddle Authors. All Rights Reserved.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -37,7 +37,7 @@ do
         do
             echo "Testcase: opt: ${opt}, onchip: ${onchip}, rts: ${rts}"
             echo "paddle.distributed.fleet.launch test with IPUs..."
-            python3.7 -m paddle.distributed.launch \
+            python3.8 -m paddle.distributed.launch \
             --devices=8 \
             ipu \
             --hosts=localhost \
@@ -50,12 +50,12 @@ do
 
             echo "paddle normal test with CPU..."
             export POPLAR_IPUMODEL=1
-            python3.7 test_dist_data_parallel_ipu.py ${opt} cpu_res.txt > cpu.log
+            python3.8 test_dist_data_parallel_ipu.py ${opt} cpu_res.txt > cpu.log
             unset POPLAR_IPUMODEL
             echo "paddle normal test with CPU...Done"
 
             echo "Compare results..."
-            python3.7 -c """${allclose_script}"""
+            python3.8 -c """${allclose_script}"""
             if [ $? -eq 0 ];then
             echo "Compare results...Done"
             else

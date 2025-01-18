@@ -16,9 +16,7 @@ limitations under the License. */
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 #include "paddle/fluid/inference/tensorrt/engine.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 class ElementwiseaddTransposeOpConverter : public OpConverter {
  public:
   void operator()(const framework::proto::OpDesc& op,
@@ -33,23 +31,19 @@ class ElementwiseaddTransposeOpConverter : public OpConverter {
     int axis = PADDLE_GET_CONST(int, op_desc.GetAttr("axis"));
     std::vector<int> output_shape =
         PADDLE_GET_CONST(std::vector<int>, op_desc.GetAttr("output_shape"));
-    if (engine_->with_dynamic_shape()) {
-      plugin::ElementwiseAddTransposePluginDynamic* plugin =
-          new plugin::ElementwiseAddTransposePluginDynamic(axis, output_shape);
-      nvinfer1::ILayer* elementwise_layer =
-          engine_->AddDynamicPlugin(inputs.data(), 2, plugin);
-      std::vector<std::string> output_names;
-      output_names.emplace_back(op_desc.Output("Out").front());
-      RreplenishLayerAndOutput(elementwise_layer,
-                               "fuse_elementwiseadd_transpose",
-                               output_names,
-                               test_mode);
-    }
+    plugin::ElementwiseAddTransposePluginDynamic* plugin =
+        new plugin::ElementwiseAddTransposePluginDynamic(axis, output_shape);
+    nvinfer1::ILayer* elementwise_layer =
+        engine_->AddDynamicPlugin(inputs.data(), 2, plugin);
+    std::vector<std::string> output_names;
+    output_names.emplace_back(op_desc.Output("Out").front());
+    ReplenishLayerAndOutput(elementwise_layer,
+                            "fuse_elementwiseadd_transpose",
+                            output_names,
+                            test_mode);
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 REGISTER_TRT_OP_CONVERTER(fuse_eleadd_transpose,
                           ElementwiseaddTransposeOpConverter);

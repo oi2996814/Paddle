@@ -24,7 +24,7 @@ paddle.enable_static()
 from dist_fleet_sparse_embedding_ctr import fake_ctr_reader
 from test_dist_fleet_base import TestFleetBase
 
-from paddle import fluid
+from paddle import base
 
 
 @unittest.skip(reason="Skip unstable ut, need paddle sync mode fix")
@@ -134,7 +134,7 @@ class TestDistMnistAsync2x2WithDecay(TestFleetBase):
         )
 
 
-class TestDistMnistAsync2x2WithUnifrom(TestFleetBase):
+class TestDistMnistAsync2x2WithUniform(TestFleetBase):
     def _setup_config(self):
         self._mode = "async"
         self._reader = "pyreader"
@@ -185,7 +185,7 @@ class TestDistMnistAsync2x2WithGauss(TestFleetBase):
                 batch_size(int): the size of mini-batch for training
                 lr(float): learning rate of training
             Returns:
-                avg_cost: LoDTensor of cost.
+                avg_cost: DenseTensor of cost.
             """
             dnn_input_dim, lr_input_dim = 10, 10
 
@@ -193,19 +193,16 @@ class TestDistMnistAsync2x2WithGauss(TestFleetBase):
                 name="dnn_data",
                 shape=[-1, 1],
                 dtype="int64",
-                lod_level=1,
             )
             lr_data = paddle.static.data(
                 name="lr_data",
                 shape=[-1, 1],
                 dtype="int64",
-                lod_level=1,
             )
             label = paddle.static.data(
                 name="click",
                 shape=[-1, 1],
                 dtype="int64",
-                lod_level=0,
             )
 
             datas = [dnn_data, lr_data, label]
@@ -218,7 +215,7 @@ class TestDistMnistAsync2x2WithGauss(TestFleetBase):
                 input=dnn_data,
                 size=[dnn_input_dim, dnn_layer_dims[0]],
                 is_test=inference,
-                param_attr=fluid.ParamAttr(
+                param_attr=base.ParamAttr(
                     name="deep_embedding", initializer=init
                 ),
             )
@@ -231,10 +228,10 @@ class TestDistMnistAsync2x2WithGauss(TestFleetBase):
                     x=dnn_out,
                     size=dim,
                     activation="relu",
-                    weight_attr=fluid.ParamAttr(
+                    weight_attr=base.ParamAttr(
                         initializer=paddle.nn.initializer.Constant(value=0.01)
                     ),
-                    name='dnn-fc-%d' % i,
+                    name=f'dnn-fc-{i}',
                 )
                 dnn_out = fc
 
@@ -243,7 +240,7 @@ class TestDistMnistAsync2x2WithGauss(TestFleetBase):
                 input=lr_data,
                 size=[lr_input_dim, 1],
                 is_test=inference,
-                param_attr=fluid.ParamAttr(
+                param_attr=base.ParamAttr(
                     name="wide_embedding",
                     initializer=paddle.nn.initializer.Constant(value=0.01),
                 ),
@@ -260,15 +257,15 @@ class TestDistMnistAsync2x2WithGauss(TestFleetBase):
 
         reader = paddle.batch(fake_ctr_reader(), batch_size=4)
         datas, predict = net()
-        exe = fluid.Executor(fluid.CPUPlace())
-        feeder = fluid.DataFeeder(place=fluid.CPUPlace(), feed_list=datas)
-        exe.run(fluid.default_startup_program())
+        exe = base.Executor(base.CPUPlace())
+        feeder = base.DataFeeder(place=base.CPUPlace(), feed_list=datas)
+        exe.run(base.default_startup_program())
 
         paddle.distributed.io.load_persistables(exe, model_file)
 
         for batch_id, data in enumerate(reader()):
             score = exe.run(
-                fluid.default_main_program(),
+                base.default_main_program(),
                 feed=feeder.feed(data),
                 fetch_list=[predict],
             )

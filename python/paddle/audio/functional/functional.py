@@ -12,16 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # Modified from librosa(https://github.com/librosa/librosa)
+from __future__ import annotations
+
 import math
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Literal, TypeVar
 
 import paddle
 from paddle import Tensor
+from paddle.base.framework import Variable
+from paddle.pir import Value
+
+if TYPE_CHECKING:
+    _TensorOrFloat = TypeVar("_TensorOrFloat", Tensor, float)
 
 
-def hz_to_mel(
-    freq: Union[Tensor, float], htk: bool = False
-) -> Union[Tensor, float]:
+def hz_to_mel(freq: _TensorOrFloat, htk: bool = False) -> _TensorOrFloat:
     """Convert Hz to Mels.
 
     Args:
@@ -34,16 +39,16 @@ def hz_to_mel(
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            val = 3.0
-            htk_flag = True
-            mel_paddle_tensor = paddle.audio.functional.hz_to_mel(
-                paddle.to_tensor(val), htk_flag)
+            >>> val = 3.0
+            >>> htk_flag = True
+            >>> mel_paddle_tensor = paddle.audio.functional.hz_to_mel(
+            ...     paddle.to_tensor(val), htk_flag)
     """
 
     if htk:
-        if isinstance(freq, Tensor):
+        if isinstance(freq, (Tensor, Variable, Value)):
             return 2595.0 * paddle.log10(1.0 + freq / 700.0)
         else:
             return 2595.0 * math.log10(1.0 + freq / 700.0)
@@ -60,7 +65,7 @@ def hz_to_mel(
     min_log_mel = (min_log_hz - f_min) / f_sp  # same (Mels)
     logstep = math.log(6.4) / 27.0  # step size for log region
 
-    if isinstance(freq, Tensor):
+    if isinstance(freq, (Tensor, Variable, Value)):
         target = (
             min_log_mel + paddle.log(freq / min_log_hz + 1e-10) / logstep
         )  # prevent nan with 1e-10
@@ -75,9 +80,7 @@ def hz_to_mel(
     return mels
 
 
-def mel_to_hz(
-    mel: Union[float, Tensor], htk: bool = False
-) -> Union[float, Tensor]:
+def mel_to_hz(mel: _TensorOrFloat, htk: bool = False) -> _TensorOrFloat:
     """Convert mel bin numbers to frequencies.
 
     Args:
@@ -90,13 +93,13 @@ def mel_to_hz(
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            val = 3.0
-            htk_flag = True
-            mel_paddle_tensor = paddle.audio.functional.mel_to_hz(
-                paddle.to_tensor(val), htk_flag)
-
+            >>> val = 3.0
+            >>> htk_flag = True
+            >>> mel_paddle_tensor = paddle.audio.functional.mel_to_hz(
+            ...     paddle.to_tensor(val), htk_flag)
+            ...
     """
     if htk:
         return 700.0 * (10.0 ** (mel / 2595.0) - 1.0)
@@ -108,7 +111,7 @@ def mel_to_hz(
     min_log_hz = 1000.0  # beginning of log region (Hz)
     min_log_mel = (min_log_hz - f_min) / f_sp  # same (Mels)
     logstep = math.log(6.4) / 27.0  # step size for log region
-    if isinstance(mel, Tensor):
+    if isinstance(mel, (Tensor, Variable, Value)):
         target = min_log_hz * paddle.exp(logstep * (mel - min_log_mel))
         mask = (mel > min_log_mel).astype(mel.dtype)
         freqs = target * mask + freqs * (
@@ -142,15 +145,15 @@ def mel_frequencies(
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            n_mels = 64
-            f_min = 0.5
-            f_max = 10000
-            htk_flag = True
+            >>> n_mels = 64
+            >>> f_min = 0.5
+            >>> f_max = 10000
+            >>> htk_flag = True
 
-            paddle_mel_freq = paddle.audio.functional.mel_frequencies(
-                n_mels, f_min, f_max, htk_flag, 'float64')
+            >>> paddle_mel_freq = paddle.audio.functional.mel_frequencies(
+            ...     n_mels, f_min, f_max, htk_flag, 'float64')
     """
     # 'Center freqs' of mel bands - uniformly spaced between limits
     min_mel = hz_to_mel(f_min, htk=htk)
@@ -174,11 +177,11 @@ def fft_frequencies(sr: int, n_fft: int, dtype: str = 'float32') -> Tensor:
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            sr = 16000
-            n_fft = 128
-            fft_freq = paddle.audio.functional.fft_frequencies(sr, n_fft)
+            >>> sr = 16000
+            >>> n_fft = 128
+            >>> fft_freq = paddle.audio.functional.fft_frequencies(sr, n_fft)
     """
     return paddle.linspace(0, float(sr) / 2, int(1 + n_fft // 2), dtype=dtype)
 
@@ -188,9 +191,9 @@ def compute_fbank_matrix(
     n_fft: int,
     n_mels: int = 64,
     f_min: float = 0.0,
-    f_max: Optional[float] = None,
+    f_max: float | None = None,
     htk: bool = False,
-    norm: Union[str, float] = 'slaney',
+    norm: Literal['slaney'] | float = 'slaney',
     dtype: str = 'float32',
 ) -> Tensor:
     """Compute fbank matrix.
@@ -211,11 +214,11 @@ def compute_fbank_matrix(
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            n_mfcc = 23
-            n_mels = 51
-            paddle_dct = paddle.audio.functional.create_dct(n_mfcc, n_mels)
+            >>> sr = 23
+            >>> n_fft = 51
+            >>> fbank = paddle.audio.functional.compute_fbank_matrix(sr, n_fft)
     """
 
     if f_max is None:
@@ -260,7 +263,7 @@ def power_to_db(
     spect: Tensor,
     ref_value: float = 1.0,
     amin: float = 1e-10,
-    top_db: Optional[float] = 80.0,
+    top_db: float | None = 80.0,
 ) -> Tensor:
     """Convert a power spectrogram (amplitude squared) to decibel (dB) units. The function computes the scaling `10 * log10(x / ref)` in a numerically stable way.
 
@@ -276,11 +279,11 @@ def power_to_db(
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            val = 3.0
-            decibel_paddle = paddle.audio.functional.power_to_db(
-                paddle.to_tensor(val))
+            >>> val = 3.0
+            >>> decibel_paddle = paddle.audio.functional.power_to_db(
+            ...     paddle.to_tensor(val))
     """
     if amin <= 0:
         raise Exception("amin must be strictly positive")
@@ -303,7 +306,7 @@ def power_to_db(
 def create_dct(
     n_mfcc: int,
     n_mels: int,
-    norm: Optional[str] = 'ortho',
+    norm: Literal['ortho'] | None = 'ortho',
     dtype: str = 'float32',
 ) -> Tensor:
     """Create a discrete cosine transform(DCT) matrix.
@@ -311,7 +314,7 @@ def create_dct(
     Args:
         n_mfcc (int): Number of mel frequency cepstral coefficients.
         n_mels (int): Number of mel filterbanks.
-        norm (Optional[str], optional): Normalizaiton type. Defaults to 'ortho'.
+        norm (Optional[str], optional): Normalization type. Defaults to 'ortho'.
         dtype (str, optional): The data type of the return matrix. Defaults to 'float32'.
 
     Returns:
@@ -320,10 +323,10 @@ def create_dct(
     Examples:
         .. code-block:: python
 
-            import paddle
-            n_mfcc = 23
-            n_mels = 257
-            dct = paddle.audio.functional.create_dct(n_mfcc, n_mels)
+            >>> import paddle
+            >>> n_mfcc = 23
+            >>> n_mels = 257
+            >>> dct = paddle.audio.functional.create_dct(n_mfcc, n_mels)
     """
     n = paddle.arange(n_mels, dtype=dtype)
     k = paddle.arange(n_mfcc, dtype=dtype).unsqueeze(1)

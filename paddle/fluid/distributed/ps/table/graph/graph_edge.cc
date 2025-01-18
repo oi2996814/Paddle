@@ -13,10 +13,8 @@
 // limitations under the License.
 
 #include "paddle/fluid/distributed/ps/table/graph/graph_edge.h"
-
 #include <cstring>
-namespace paddle {
-namespace distributed {
+namespace paddle::distributed {
 
 void GraphEdgeBlob::add_edge(int64_t id, float weight = 1) {
   id_arr.push_back(id);
@@ -24,7 +22,8 @@ void GraphEdgeBlob::add_edge(int64_t id, float weight = 1) {
 
 void WeightedGraphEdgeBlob::add_edge(int64_t id, float weight = 1) {
   id_arr.push_back(id);
-  weight_arr.push_back(weight);
+#ifdef PADDLE_WITH_CUDA
+  weight_arr.push_back((half)weight);
+#endif
 }
-}  // namespace distributed
-}  // namespace paddle
+}  // namespace paddle::distributed

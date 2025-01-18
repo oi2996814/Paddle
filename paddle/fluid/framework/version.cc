@@ -16,8 +16,7 @@ limitations under the License. */
 
 #include <sstream>
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 bool IsProgramVersionSupported(int64_t version) {
   /* So far, all old versions of phi::DenseTensor are supported in the
@@ -39,13 +38,13 @@ bool IsTensorVersionSupported(uint32_t version) {
 
 std::string DumpVersion(const int64_t version) {
   std::stringstream buffer;
-  const int major = version / MAJOR_COEFF;
-  const int minor = (version - major * MAJOR_COEFF) / MINOR_COEFF;
-  const int patch =
-      (version - major * MAJOR_COEFF - minor * MINOR_COEFF) / PATCH_COEFF;
+  const int major = static_cast<int>(version / MAJOR_COEFF);
+  const int minor =
+      static_cast<int>((version - major * MAJOR_COEFF) / MINOR_COEFF);
+  const int patch = static_cast<int>(
+      (version - major * MAJOR_COEFF - minor * MINOR_COEFF) / PATCH_COEFF);
   buffer << major << "." << minor << "." << patch;
   return buffer.str();
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

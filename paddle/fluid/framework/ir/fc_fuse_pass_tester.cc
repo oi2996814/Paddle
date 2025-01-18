@@ -17,16 +17,14 @@
 #include "paddle/fluid/framework/ir/fc_fuse_pass.h"
 #include "paddle/fluid/framework/ir/pass_tester_helper.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 void AddVarToScope(Scope* param_scope,
                    const std::string& name,
                    const DDim& dims) {
   auto* tensor = param_scope->Var(name)->GetMutable<phi::DenseTensor>();
   tensor->Resize(dims);
-  tensor->mutable_data<float>(platform::CPUPlace());
+  tensor->mutable_data<float>(phi::CPUPlace());
 }
 
 Scope* CreateParamScope() {
@@ -71,35 +69,33 @@ TEST(FCFusePass, basic) {
   auto pass = PassRegistry::Instance().Get("fc_fuse_pass");
   pass->Set("use_gpu", new bool(true));
   graph->Set("__param_scope__", CreateParamScope());
-  int num_nodes_before = graph->Nodes().size();
+  int num_nodes_before = static_cast<int>(graph->Nodes().size());
   int num_mul_nodes_before = GetNumOpNodes(graph, "mul");
   VLOG(3) << DebugString(graph);
 
   graph.reset(pass->Apply(graph.release()));
-  int num_nodes_after = graph->Nodes().size();
+  int num_nodes_after = static_cast<int>(graph->Nodes().size());
   int num_fc_nodes_after = GetNumOpNodes(graph, "fc");
   VLOG(3) << DebugString(graph);
 
   PADDLE_ENFORCE_EQ(num_nodes_before,
                     num_nodes_after + 6,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "num_nodes_before=%d, num_nodes_after=%d.",
                         num_nodes_before,
                         num_nodes_after));
   PADDLE_ENFORCE_EQ(num_fc_nodes_after,
                     2,
-                    platform::errors::InvalidArgument("num_fc_nodes_after=%d.",
-                                                      num_fc_nodes_after));
+                    common::errors::InvalidArgument("num_fc_nodes_after=%d.",
+                                                    num_fc_nodes_after));
   PADDLE_ENFORCE_EQ(num_mul_nodes_before,
                     num_fc_nodes_after,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "num_mul_nodes_before=%d, num_fc_nodes_after=%d.",
                         num_mul_nodes_before,
                         num_fc_nodes_after));
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 USE_PASS(fc_fuse_pass);

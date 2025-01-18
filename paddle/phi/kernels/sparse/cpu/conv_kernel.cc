@@ -19,8 +19,7 @@ limitations under the License. */
 #include "paddle/phi/kernels/funcs/blas/blas.h"
 #include "paddle/phi/kernels/sparse/cpu/conv.h"
 
-namespace phi {
-namespace sparse {
+namespace phi::sparse {
 
 /**
  * x: (N, D, H, W, C)
@@ -47,16 +46,17 @@ void Conv3dCooCPUKernel(const CPUContext& dev_ctx,
   const auto& x_dims = x.dims();
   const bool is2D = x_dims.size() == 4 ? true : false;
   const auto& kernel_dims = kernel.dims();
-  int kernel_size = is2D ? kernel_dims[0] * kernel_dims[1]
-                         : kernel_dims[0] * kernel_dims[1] * kernel_dims[2];
+  int kernel_size =
+      static_cast<int>(is2D ? kernel_dims[0] * kernel_dims[1]
+                            : kernel_dims[0] * kernel_dims[1] * kernel_dims[2]);
 
   int count_tmp = is2D ? 4 : 5;
   std::vector<int> out_dims_vec(count_tmp, 1);
-  DDim out_dims = make_ddim(out_dims_vec);
+  DDim out_dims = common::make_ddim(out_dims_vec);
 
   std::vector<int> kernel_sizes(kernel_dims.size());
   for (int i = 0; i < kernel_dims.size(); i++) {
-    kernel_sizes[i] = kernel_dims[i];
+    kernel_sizes[i] = static_cast<int>(kernel_dims[i]);
   }
 
   std::vector<int> subm_paddings(paddings), subm_strides(strides);
@@ -69,8 +69,10 @@ void Conv3dCooCPUKernel(const CPUContext& dev_ctx,
 
   phi::funcs::sparse::GetOutShape(
       x_dims, kernel_sizes, subm_paddings, dilations, subm_strides, &out_dims);
-  const int in_channels = is2D ? kernel_dims[2] : kernel_dims[3];
-  const int out_channels = is2D ? kernel_dims[3] : kernel_dims[4];
+  const int in_channels =
+      static_cast<int>(is2D ? kernel_dims[2] : kernel_dims[3]);
+  const int out_channels =
+      static_cast<int>(is2D ? kernel_dims[3] : kernel_dims[4]);
 
   // Second algorithm:
   // https://pdfs.semanticscholar.org/5125/a16039cabc6320c908a4764f32596e018ad3.pdf
@@ -112,7 +114,7 @@ void Conv3dCooCPUKernel(const CPUContext& dev_ctx,
 
     UpdateRulebookAndOutIndex<T, CPUContext, IntT>(
         dev_ctx, x, kernel_size, out_channels, out_dims, &tmp_rulebook, out);
-    n = tmp_rulebook.dims()[1];
+    n = static_cast<int>(tmp_rulebook.dims()[1]);
     rulebook_ptr = tmp_rulebook.data<IntT>();
 
     phi::funcs::sparse::SaveToTable(
@@ -134,7 +136,7 @@ void Conv3dCooCPUKernel(const CPUContext& dev_ctx,
   Gather<T, IntT>(
       x.values().data<T>(), rulebook_ptr + n, n, in_channels, in_features_ptr);
 
-  // 3. call gemm for every werght
+  // 3. call gemm for every weight
   auto blas = phi::funcs::GetBlas<CPUContext, T>(dev_ctx);
   int offset = 0;
   for (int i = 0; i < kernel_size; i++) {
@@ -203,8 +205,7 @@ void Conv3dCooKernel(const Context& dev_ctx,
                                                                counter);
                                }));
 }
-}  // namespace sparse
-}  // namespace phi
+}  // namespace phi::sparse
 
 PD_REGISTER_KERNEL(
     conv3d_coo, CPU, ALL_LAYOUT, phi::sparse::Conv3dCooKernel, float, double) {

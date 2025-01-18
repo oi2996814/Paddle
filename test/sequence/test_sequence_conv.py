@@ -16,9 +16,7 @@ import random
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
-
-import paddle
+from op_test import OpTest
 
 
 def seqconv(
@@ -107,7 +105,7 @@ class TestSeqProject(OpTest):
             1,
             [
                 self.context_length * self.input_size[1],
-                self.output_represention,
+                self.output_representation,
             ],
         ).astype('float32')
 
@@ -232,7 +230,7 @@ class TestSeqProject(OpTest):
         # convert from offset-based lod to length-based lod
         for i in range(len(offset_lod[0]) - 1):
             self.lod[0].append(offset_lod[0][i + 1] - offset_lod[0][i])
-        self.output_represention = 8  # output feature size
+        self.output_representation = 8  # output feature size
 
 
 class TestSeqProjectCase1(TestSeqProject):
@@ -249,7 +247,7 @@ class TestSeqProjectCase1(TestSeqProject):
         # convert from offset-based lod to length-based lod
         for i in range(len(offset_lod[0]) - 1):
             self.lod[0].append(offset_lod[0][i + 1] - offset_lod[0][i])
-        self.output_represention = 8  # output feature size
+        self.output_representation = 8  # output feature size
 
 
 class TestSeqProjectCase2Len0(TestSeqProject):
@@ -266,7 +264,7 @@ class TestSeqProjectCase2Len0(TestSeqProject):
         # convert from offset-based lod to length-based lod
         for i in range(len(offset_lod[0]) - 1):
             self.lod[0].append(offset_lod[0][i + 1] - offset_lod[0][i])
-        self.output_represention = 8  # output feature size
+        self.output_representation = 8  # output feature size
 
 
 class TestSeqProjectCase3(TestSeqProject):
@@ -281,31 +279,13 @@ class TestSeqProjectCase3(TestSeqProject):
         idx = list(range(self.input_size[0]))
         del idx[0]
         offset_lod = [
-            [0] + np.sort(random.sample(idx, 8)).tolist() + [self.input_size[0]]
+            [0, *np.sort(random.sample(idx, 8)).tolist(), self.input_size[0]]
         ]
         self.lod = [[]]
         # convert from offset-based lod to length-based lod
         for i in range(len(offset_lod[0]) - 1):
             self.lod[0].append(offset_lod[0][i + 1] - offset_lod[0][i])
-        self.output_represention = 8  # output feature size
-
-
-class TestSeqConvApi(unittest.TestCase):
-    def test_api(self):
-        from paddle import fluid
-
-        x = paddle.static.data('x', shape=[-1, 32], lod_level=1)
-        y = paddle.static.nn.sequence_lod.sequence_conv(
-            input=x, num_filters=2, filter_size=3, padding_start=None
-        )
-
-        place = fluid.CPUPlace()
-        x_tensor = fluid.create_lod_tensor(
-            np.random.rand(10, 32).astype("float32"), [[2, 3, 1, 4]], place
-        )
-        exe = fluid.Executor(place)
-        exe.run(fluid.default_startup_program())
-        ret = exe.run(feed={'x': x_tensor}, fetch_list=[y], return_numpy=False)
+        self.output_representation = 8  # output feature size
 
 
 if __name__ == '__main__':

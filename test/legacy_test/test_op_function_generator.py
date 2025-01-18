@@ -18,15 +18,7 @@ import numpy as np
 
 import paddle
 import paddle.nn.functional as F
-from paddle import _legacy_C_ops, fluid
-
-
-class TestTracedLayer(paddle.nn.Layer):
-    def __init__(self, name_scope):
-        super().__init__(name_scope)
-
-    def forward(self, input):
-        return _legacy_C_ops.relu(input)
+from paddle import _legacy_C_ops, base
 
 
 class TestVariable(unittest.TestCase):
@@ -36,11 +28,11 @@ class TestVariable(unittest.TestCase):
         self.array = np.random.uniform(0.1, 1, self.shape).astype(self.dtype)
 
     def test_elementwise_add(self):
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             a = np.random.uniform(0.1, 1, self.shape).astype(self.dtype)
             b = np.random.uniform(0.1, 1, self.shape).astype(self.dtype)
-            x = fluid.dygraph.to_variable(a)
-            y = fluid.dygraph.to_variable(b)
+            x = paddle.to_tensor(a)
+            y = paddle.to_tensor(b)
             x.stop_gradient = False
 
             res1 = paddle.add(x, y)
@@ -49,11 +41,11 @@ class TestVariable(unittest.TestCase):
             np.testing.assert_array_equal(res1.numpy(), res2.numpy())
 
     def test_elementwise_mul(self):
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             a = np.random.uniform(0.1, 1, self.shape).astype(self.dtype)
             b = np.random.uniform(0.1, 1, self.shape).astype(self.dtype)
-            x = fluid.dygraph.to_variable(a)
-            y = fluid.dygraph.to_variable(b)
+            x = paddle.to_tensor(a)
+            y = paddle.to_tensor(b)
 
             res1 = paddle.multiply(x, y)
             res2 = _legacy_C_ops.elementwise_mul(x, y)
@@ -61,9 +53,9 @@ class TestVariable(unittest.TestCase):
             np.testing.assert_array_equal(res1.numpy(), res2.numpy())
 
     def test_relu(self):
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             a = np.random.uniform(-1, 1, self.shape).astype(self.dtype)
-            x = fluid.dygraph.to_variable(a)
+            x = paddle.to_tensor(a)
 
             res1 = F.relu(x)
             res2 = _legacy_C_ops.relu(x)
@@ -71,11 +63,11 @@ class TestVariable(unittest.TestCase):
             np.testing.assert_array_equal(res1.numpy(), res2.numpy())
 
     def test_trace_backward(self):
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             a = np.random.uniform(0.1, 1, self.shape).astype(self.dtype)
             b = np.random.uniform(0.1, 1, self.shape).astype(self.dtype)
-            x = fluid.dygraph.to_variable(a)
-            y = fluid.dygraph.to_variable(b)
+            x = paddle.to_tensor(a)
+            y = paddle.to_tensor(b)
             x.stop_gradient = False
             y.stop_gradient = False
             x.retain_grads()

@@ -14,8 +14,8 @@
 
 #include "paddle/phi/kernels/index_select_grad_kernel.h"
 
-#include "gflags/gflags.h"
 #include "glog/logging.h"
+#include "paddle/common/flags.h"
 #include "paddle/phi/backends/gpu/gpu_info.h"
 #include "paddle/phi/backends/gpu/gpu_launch_config.h"
 #include "paddle/phi/backends/gpu/gpu_primitives.h"
@@ -23,7 +23,7 @@
 #include "paddle/phi/core/utils/data_type.h"
 #include "paddle/phi/kernels/funcs/math_function.h"
 
-DECLARE_bool(cudnn_deterministic);
+COMMON_DECLARE_bool(cudnn_deterministic);
 
 namespace phi {
 
@@ -36,11 +36,15 @@ __global__ void index_select_grad_cuda_kernel(const T* output_grad,
                                               int64_t N,
                                               int64_t stride,
                                               int64_t size,
-                                              int64_t delta) {
+                                              int64_t delta,
+                                              int64_t dim_size) {
   CUDA_KERNEL_LOOP_TYPE(idx, N, int64_t) {
     int64_t pre_idx = idx / (stride * size);
     int64_t dim_idx = idx % (stride * size) / stride;
     IndexT src_dim_idx = index[dim_idx];
+    if (src_dim_idx < 0) {
+      src_dim_idx += dim_size;
+    }
     int64_t input_idx =
         idx + (delta * pre_idx + src_dim_idx - dim_idx) * stride;
     phi::CudaAtomicAdd(&input_grad[input_idx], output_grad[idx]);
@@ -60,7 +64,7 @@ void IndexSelectGradKernel(const Context& ctx,
   auto input_dim = x_grad->dims();
   auto output_dim = out_grad.dims();
   dim = dim >= 0 ? dim : dim + input_dim.size();
-  auto stride_dim = phi::stride(input_dim);
+  auto stride_dim = common::stride(input_dim);
   int64_t stride = stride_dim[dim];
   int64_t size = output_dim[dim];
   int64_t delta = input_dim[dim] - size;
@@ -70,7 +74,7 @@ void IndexSelectGradKernel(const Context& ctx,
       index_type == phi::DataType::INT64 || index_type == phi::DataType::INT32;
   PADDLE_ENFORCE_EQ(index_type_match,
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Input(Index) holds the wrong type, it holds %s, but "
                         "desires to be %s or %s",
                         index_type,
@@ -108,7 +112,8 @@ void IndexSelectGradKernel(const Context& ctx,
                                              out_nums,
                                              stride,
                                              size,
-                                             delta);
+                                             delta,
+                                             input_dim[dim]);
   } else {
     const int* index_data = index.data<int>();
     index_select_grad_cuda_kernel<T, int>
@@ -118,7 +123,8 @@ void IndexSelectGradKernel(const Context& ctx,
                                              out_nums,
                                              stride,
                                              size,
-                                             delta);
+                                             delta,
+                                             input_dim[dim]);
   }
 }
 
@@ -132,5 +138,7 @@ PD_REGISTER_KERNEL(index_select_grad,
                    double,
                    phi::dtype::float16,
                    phi::dtype::bfloat16,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>,
                    int,
                    int64_t) {}

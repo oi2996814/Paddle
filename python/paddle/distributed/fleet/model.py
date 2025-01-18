@@ -20,8 +20,11 @@ from .meta_parallel import (
     PipelineLayer,
     PipelineParallel,
     PipelineParallelWithInterleave,
+    PipelineParallelWithInterleaveFthenB,
+    SegmentParallel,
     ShardingParallel,
     TensorParallel,
+    VPPFhenBInBalancedMemory,
 )
 
 _grad_scalar = None
@@ -32,7 +35,7 @@ def distributed_model(model):
     Return distributed data parallel model (Only work in dygraph mode)
 
     Args:
-        model (Layer): the user-defind model which inherits Layer.
+        model (Layer): the user-defined model which inherits Layer.
 
     Returns:
         distributed data parallel model which inherits Layer.
@@ -41,44 +44,40 @@ def distributed_model(model):
 
         .. code-block:: python
 
-            import paddle
-            import paddle.nn as nn
-            from paddle.distributed import fleet
+            >>> import paddle
+            >>> import paddle.nn as nn
+            >>> from paddle.distributed import fleet
 
-            class LinearNet(nn.Layer):
-                def __init__(self):
-                    super().__init__()
-                    self._linear1 = nn.Linear(10, 10)
-                    self._linear2 = nn.Linear(10, 1)
+            >>> class LinearNet(nn.Layer):
+            ...     def __init__(self):
+            ...         super().__init__()
+            ...         self._linear1 = nn.Linear(10, 10)
+            ...         self._linear2 = nn.Linear(10, 1)
+            ...     def forward(self, x):
+            ...         return self._linear2(self._linear1(x))
 
-                def forward(self, x):
-                    return self._linear2(self._linear1(x))
+            >>> # 1. initialize fleet environment
+            >>> fleet.init(is_collective=True)
 
-            # 1. initialize fleet environment
-            fleet.init(is_collective=True)
+            >>> # 2. create layer & optimizer
+            >>> layer = LinearNet()
+            >>> loss_fn = nn.MSELoss()
+            >>> adam = paddle.optimizer.Adam(
+            ...     learning_rate=0.001, parameters=layer.parameters())
 
-            # 2. create layer & optimizer
-            layer = LinearNet()
-            loss_fn = nn.MSELoss()
-            adam = paddle.optimizer.Adam(
-                learning_rate=0.001, parameters=layer.parameters())
+            >>> # 3. get data_parallel model using fleet
+            >>> adam = fleet.distributed_optimizer(adam)
+            >>> dp_layer = fleet.distributed_model(layer)
 
-            # 3. get data_parallel model using fleet
-            adam = fleet.distributed_optimizer(adam)
-            dp_layer = fleet.distributed_model(layer)
-
-            # 4. run layer
-            inputs = paddle.randn([10, 10], 'float32')
-            outputs = dp_layer(inputs)
-            labels = paddle.randn([10, 1], 'float32')
-            loss = loss_fn(outputs, labels)
-
-            print("loss:", loss.numpy())
-
-            loss.backward()
-
-            adam.step()
-            adam.clear_grad()
+            >>> # 4. run layer
+            >>> inputs = paddle.randn([10, 10], 'float32')
+            >>> outputs = dp_layer(inputs)
+            >>> labels = paddle.randn([10, 1], 'float32')
+            >>> loss = loss_fn(outputs, labels)
+            >>> print("loss:", loss.numpy())
+            >>> loss.backward()
+            >>> adam.step()
+            >>> adam.clear_grad()
 
 
     """
@@ -88,19 +87,29 @@ def distributed_model(model):
     if paddle.distributed.get_world_size() <= 1:
         return model
 
-    amp_enable = False
     strategy = fleet_env._user_defined_strategy
     if strategy.amp:
-        amp_enable = True
-        amp_level = "O2" if strategy.amp_configs['use_pure_fp16'] else "O1"
-        if amp_level.upper() == "O2":
+        level = (
+            "O2"
+            if strategy.amp_configs['use_pure_fp16']
+            or strategy.amp_configs['use_pure_bf16']
+            else "O1"
+        )
+
+        if level == "O2":
             model = paddle.amp.decorate(
                 models=model,
                 optimizers=None,
                 level="O2",
                 master_weight=None,
                 save_dtype=None,
+                dtype=(
+                    "float16"
+                    if strategy.amp_configs['use_pure_fp16']
+                    else "bfloat16"
+                ),
             )
+
         init_loss_scaling = strategy.amp_configs['init_loss_scaling']
         incr_ratio = strategy.amp_configs['incr_ratio']
         decr_ratio = strategy.amp_configs['decr_ratio']
@@ -134,18 +143,6 @@ def distributed_model(model):
     if fleet_env._hcg.get_parallel_mode() == ParallelMode.SHARDING_PARALLEL:
         model = ShardingParallel(model, fleet_env._hcg, strategy=strategy)
     elif fleet_env._hcg.get_parallel_mode() == ParallelMode.DATA_PARALLEL:
-        # NOTE (JZ-LIANG) init parameters broadcast within sharding group
-        # normally it should be done inside DataParallel
-        if fleet_env.sharding_degree > 1:
-            from paddle.distributed.fleet.utils.hybrid_parallel_util import (
-                broadcast_sharding_parameters,
-            )
-
-            assert (
-                fleet_env.sharding_degree
-                == fleet_env._hcg.get_sharding_parallel_world_size()
-            )
-            broadcast_sharding_parameters(model, fleet_env._hcg)
         model = paddle.DataParallel(
             model,
             comm_buffer_size=strategy.fuse_grad_size_in_MB,
@@ -153,6 +150,8 @@ def distributed_model(model):
             find_unused_parameters=strategy.find_unused_parameters,
             group=fleet_env._hcg.get_data_parallel_group(),
         )
+    elif fleet_env._hcg.get_parallel_mode() == ParallelMode.SEGMENT_PARALLEL:
+        model = SegmentParallel(model, fleet_env._hcg, strategy=strategy)
     elif fleet_env._hcg.get_parallel_mode() == ParallelMode.TENSOR_PARALLEL:
         model = TensorParallel(model, fleet_env._hcg, strategy=strategy)
     elif fleet_env._hcg.get_parallel_mode() == ParallelMode.PIPELINE_PARALLEL:
@@ -163,9 +162,27 @@ def distributed_model(model):
             # 1f1b pipeline
             model = PipelineParallel(model, fleet_env._hcg, strategy=strategy)
         else:
-            # interleave pipeline
-            model = PipelineParallelWithInterleave(
-                model, fleet_env._hcg, strategy=strategy
-            )
+            accumulate_steps = strategy.pipeline_configs['accumulate_steps']
+            pp_degree = fleet_env._hcg.get_pipe_parallel_world_size()
+            if accumulate_steps >= 2 * pp_degree:
+                # interleave pipeline
+                model = PipelineParallelWithInterleave(
+                    model, fleet_env._hcg, strategy=strategy
+                )
+            elif pp_degree <= accumulate_steps < 2 * pp_degree:
+                if strategy.hybrid_configs[
+                    "pp_configs"
+                ].best_unbalanced_scheduler:
+                    model = VPPFhenBInBalancedMemory(
+                        model, fleet_env._hcg, strategy=strategy
+                    )
+                else:
+                    model = PipelineParallelWithInterleaveFthenB(
+                        model, fleet_env._hcg, strategy=strategy
+                    )
+            else:
+                raise ValueError(
+                    f"The accumulate_steps({accumulate_steps}) should be greater than or equal to pp_degree({pp_degree})"
+                )
 
     return model

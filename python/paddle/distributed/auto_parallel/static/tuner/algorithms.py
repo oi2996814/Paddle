@@ -17,8 +17,10 @@ import logging
 from abc import ABC, abstractmethod
 
 from ..utils import get_logger, is_recompute_op
-from .trial import OptimizationTunerTrial as Trial
-from .trial import TrialStatus
+from .trial import (
+    OptimizationTunerTrial as Trial,
+    TrialStatus,
+)
 
 
 class AlgorithmBase(ABC):
@@ -56,7 +58,7 @@ class AlgorithmBase(ABC):
         Collect the model static info (from programs) that could be used to
         pruning candidate trials and saving tuning time. For instance,
         model info like number of model parameters and activation memory could be
-        used to prune candidated trial and decide the next trial.
+        used to prune candidate trial and decide the next trial.
         """
         pass
 
@@ -119,9 +121,7 @@ class ShardingStageAlgorithm(AlgorithmBase):
         if stage_range:
             assert set(stage_range).issubset(
                 {0, 1, 2, 3}
-            ), "Sharding Stage should belong into range within 0 - 3 but got {}.".format(
-                stage_range
-            )
+            ), f"Sharding Stage should belong into range within 0 - 3 but got {stage_range}."
             stage_range.sort(reverse=True)
         else:
             stage_range = list(range(self._max_stage + 1)).sort(reverse=True)
@@ -156,7 +156,7 @@ class ShardingStageAlgorithm(AlgorithmBase):
 
 
 @register_algor("recompute")
-class ReccomputeCheckpointAlgorithm(AlgorithmBase):
+class RecomputeCheckpointAlgorithm(AlgorithmBase):
     def __init__(self, config):
         super().__init__(config)
         self._changed_configs = ["recompute"]
@@ -199,9 +199,7 @@ class ReccomputeCheckpointAlgorithm(AlgorithmBase):
                 new_strategy = copy.deepcopy(self._config.dist_strategy)
                 recompute = new_strategy.recompute
                 recompute.no_recompute_segments.extend(new_no_recompute)
-                name = "trial-recompute-part-segments-idx{}".format(
-                    self._trial_idx
-                )
+                name = f"trial-recompute-part-segments-idx{self._trial_idx}"
                 return Trial(new_strategy, name, self.changed_configs)
         else:
             return Trial(None, None, None, status=TrialStatus.STOPPED)

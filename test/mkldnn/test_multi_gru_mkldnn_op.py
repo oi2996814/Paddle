@@ -15,7 +15,7 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 from test_fusion_gru_op import ACTIVATION, fusion_gru
 
 
@@ -203,7 +203,9 @@ class TestMultiGruMkldnnOp(OpTest):
             self.attrs['Shift_data'] = shift_data
 
     def test_check_output(self):
-        self.check_output(check_dygraph=False, atol=self.error_margin)
+        self.check_output(
+            check_dygraph=False, atol=self.error_margin, check_pir_onednn=True
+        )
 
 
 class TestMultiGruMkldnnOpNoBias(TestMultiGruMkldnnOp):

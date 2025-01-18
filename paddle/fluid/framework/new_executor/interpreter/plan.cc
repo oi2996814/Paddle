@@ -16,19 +16,18 @@
 
 #include "paddle/fluid/framework/program_desc.h"
 
-namespace paddle {
-namespace framework {
-namespace interpreter {
+namespace paddle::framework::interpreter {
 
 Plan::Plan(const std::vector<std::shared_ptr<Job>>& job_list,
-           const std::unordered_map<std::string, ProgramDesc*>& type_to_program)
+           const std::unordered_map<std::string, std::shared_ptr<ProgramDesc>>&
+               type_to_program)
     : job_list_(job_list),
       type_to_program_(type_to_program),
       micro_batch_num_(1) {
   for (size_t i = 0; i < job_list_.size(); ++i) {
     const auto& job = job_list_[i];
     PADDLE_ENFORCE(type_to_program_.find(job->Type()) != type_to_program_.end(),
-                   phi::errors::InvalidArgument(
+                   common::errors::InvalidArgument(
                        "The %d-th job (type:%s, micro_batch_id:%d) has no "
                        "corresponding Program.",
                        i,
@@ -39,16 +38,56 @@ Plan::Plan(const std::vector<std::shared_ptr<Job>>& job_list,
   }
 }
 
+Plan::Plan(
+    const std::vector<std::shared_ptr<Job>>& job_list,
+    const std::unordered_map<std::string, std::shared_ptr<::pir::Program>>&
+        type_to_ir_program)
+    : job_list_(job_list),
+      type_to_ir_program_(type_to_ir_program),
+      micro_batch_num_(1) {
+  for (size_t i = 0; i < job_list_.size(); ++i) {
+    const auto& job = job_list_[i];
+    PADDLE_ENFORCE(
+        type_to_ir_program_.find(job->Type()) != type_to_ir_program_.end(),
+        common::errors::InvalidArgument(
+            "The %d-th job (type:%s, micro_batch_id:%d) has no "
+            "corresponding Program.",
+            i,
+            job->Type(),
+            job->MicroBatchId()));
+
+    micro_batch_num_ = std::max(micro_batch_num_, job->MicroBatchId() + 1);
+  }
+}
+
 const std::vector<std::shared_ptr<Job>>& Plan::JobList() const {
   return job_list_;
 }
 
-const ProgramDesc* Plan::Program(const std::string& job_type) const {
+const std::vector<std::string> Plan::JobTypes() const {
+  std::vector<std::string> res;
+  res.reserve(type_to_program_.size());
+  for (auto const& kv : type_to_ir_program_) {
+    res.emplace_back(kv.first);
+  }
+  return res;
+}
+
+const std::shared_ptr<ProgramDesc> Plan::Program(
+    const std::string& job_type) const {
   return type_to_program_.at(job_type);
+}
+
+std::shared_ptr<::pir::Program> Plan::IrProgram(
+    const std::string& job_type) const {
+  return type_to_ir_program_.at(job_type);
+}
+
+void Plan::SetIrProgram(const std::string& job_type,
+                        std::shared_ptr<::pir::Program> ir_prog) {
+  type_to_ir_program_[job_type] = ir_prog;
 }
 
 int64_t Plan::MicroBatchNum() const { return micro_batch_num_; }
 
-}  // namespace interpreter
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::interpreter

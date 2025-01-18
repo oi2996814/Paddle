@@ -34,10 +34,10 @@
 namespace paddle {
 namespace distributed {
 
-DECLARE_int32(pserver_timeout_ms);
-DECLARE_int32(pserver_connect_timeout_ms);
-DECLARE_uint64(total_fl_client_size);
-DECLARE_uint32(coordinator_wait_all_clients_max_time);
+PD_DECLARE_int32(pserver_timeout_ms);
+PD_DECLARE_int32(pserver_connect_timeout_ms);
+PD_DECLARE_uint64(total_fl_client_size);
+PD_DECLARE_uint32(coordinator_wait_all_clients_max_time);
 
 using CoordinatorServiceFunc =
     std::function<int32_t(const CoordinatorReqMessage& request,
@@ -81,7 +81,7 @@ class CoordinatorServiceHandle {
     lck.unlock();
     VLOG(0) << "last_round_total_fl_clients_num: "
             << last_round_total_fl_clients_num
-            << ", has recved fl client num: " << _fl_clients_count.load();
+            << ", has received fl client num: " << _fl_clients_count.load();
     return;
   }
 
@@ -91,10 +91,9 @@ class CoordinatorServiceHandle {
     timeline.Start();
     auto f = [&]() -> bool {
       while (query_wait_time <
-             paddle::distributed::
-                 FLAGS_coordinator_wait_all_clients_max_time) {  // in case that
-                                                                 // some
-                                                                 // clients down
+             FLAGS_coordinator_wait_all_clients_max_time) {  // in case that
+                                                             // some
+                                                             // clients down
         if (_is_all_clients_info_collected == true) {
           // LOG(INFO) << "fl-ps > _is_all_clients_info_collected";
           return true;
@@ -103,7 +102,7 @@ class CoordinatorServiceHandle {
         timeline.Pause();
         query_wait_time += timeline.ElapsedSec();
       }
-      // LOG(WARNNING) << "fl-ps > query_wait_time exceed!";
+      // LOG(WARNING) << "fl-ps > query_wait_time exceed!";
       return true;
     };
 
@@ -188,6 +187,7 @@ class CoordinatorClient : public BrpcPsClient {
 
   virtual ~CoordinatorClient() {}
 
+  using BrpcPsClient::Initialize;
   int32_t Initialize(const std::vector<std::string>& trainer_endpoints);
 
   void SetTotalFLClientsNum(uint32_t all_fl_clients_num) {

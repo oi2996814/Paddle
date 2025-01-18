@@ -42,7 +42,7 @@ T GetValueOfExpectedType(const Context& ctx, const DenseTensor& x) {
     case DataType::UINT8:
       return static_cast<T>(GetValue<uint8_t, Context>(ctx, x));
     default:
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Data type (%s) is not supported when casting data type.",
           x.dtype()));
   }
@@ -58,18 +58,19 @@ void LinspaceKernel(const Context& ctx,
   using XPUType = typename XPUTypeTrait<T>::Type;
   T start_value = GetValueOfExpectedType<T, Context>(ctx, start);
   T stop_value = GetValueOfExpectedType<T, Context>(ctx, stop);
-  int32_t num = GetValueOfExpectedType<int32_t, Context>(ctx, number);
+  int64_t num = GetValueOfExpectedType<int64_t, Context>(ctx, number);
+  PADDLE_ENFORCE_GE(num,
+                    0,
+                    common::errors::InvalidArgument(
+                        "The num of linspace op should be larger "
+                        "than or equal to 0, but received num is %d",
+                        num));
 
-  PADDLE_ENFORCE_GT(
-      num,
-      0,
-      phi::errors::InvalidArgument("The num of linspace op should be larger "
-                                   "than 0, but received num is %d",
-                                   num));
-
-  out->Resize(phi::make_ddim({num}));
+  out->Resize(common::make_ddim({num}));
   T* out_data = ctx.template Alloc<T>(out);
-
+  if (num == 0) {
+    return;
+  }
   int r = xpu::linspace(ctx.x_context(),
                         reinterpret_cast<XPUType*>(out_data),
                         static_cast<XPUType>(start_value),
@@ -81,7 +82,7 @@ void LinspaceKernel(const Context& ctx,
 }  // namespace phi
 
 PD_REGISTER_KERNEL(
-    linspace, XPU, ALL_LAYOUT, phi::LinspaceKernel, float, int32_t) {
+    linspace, XPU, ALL_LAYOUT, phi::LinspaceKernel, float, int32_t, int64_t) {
   kernel->InputAt(0).SetBackend(phi::Backend::ALL_BACKEND);
   kernel->InputAt(1).SetBackend(phi::Backend::ALL_BACKEND);
   kernel->InputAt(2).SetBackend(phi::Backend::ALL_BACKEND);

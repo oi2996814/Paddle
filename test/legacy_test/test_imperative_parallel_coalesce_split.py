@@ -19,9 +19,8 @@ import numpy as np
 
 import paddle
 import paddle.nn.functional as F
-from paddle import fluid
-from paddle.fluid import core
-from paddle.fluid.dygraph.base import to_variable
+from paddle import base
+from paddle.base import core
 
 
 class MyLayer(paddle.nn.Layer):
@@ -42,17 +41,21 @@ class TestImperativeParallelCoalesceSplit(unittest.TestCase):
             _split_tensors,
         )
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             test_layer = MyLayer("test_layer")
             strategy = core.ParallelStrategy()
             test_layer = paddle.DataParallel(test_layer, strategy)
 
             # test variables prepare
             vars = []
-            vars.append(to_variable(np.random.random([2, 3]).astype("float32")))
-            vars.append(to_variable(np.random.random([4, 9]).astype("float32")))
             vars.append(
-                to_variable(np.random.random([10, 1]).astype("float32"))
+                paddle.to_tensor(np.random.random([2, 3]).astype("float32"))
+            )
+            vars.append(
+                paddle.to_tensor(np.random.random([4, 9]).astype("float32"))
+            )
+            vars.append(
+                paddle.to_tensor(np.random.random([10, 1]).astype("float32"))
             )
             var_groups = OrderedDict()
             var_groups.setdefault(0, vars)
@@ -73,7 +76,7 @@ class TestImperativeParallelCoalesceSplit(unittest.TestCase):
     def test_reshape_inplace(self):
         from paddle.distributed.parallel import _reshape_inplace
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             test_layer = MyLayer("test_layer")
             strategy = core.ParallelStrategy()
             test_layer = paddle.DataParallel(test_layer, strategy)
@@ -81,7 +84,7 @@ class TestImperativeParallelCoalesceSplit(unittest.TestCase):
             ori_shape = [2, 25]
             new_shape = [5, 10]
             x_data = np.random.random(ori_shape).astype("float32")
-            x = to_variable(x_data)
+            x = paddle.to_tensor(x_data)
             _reshape_inplace(x, new_shape)
             self.assertEqual(x.shape, new_shape)
 

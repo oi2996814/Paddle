@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import datetime
 import importlib
@@ -18,11 +19,11 @@ import json
 import os
 import socket
 from enum import Enum
-from typing import Any, Callable, Iterable, Optional, Union
+from typing import TYPE_CHECKING, Callable, Literal
 from warnings import warn
 
 import paddle
-from paddle.fluid.core import (
+from paddle.base.core import (
     ProfilerOptions,
     TracerEventType,
     _Profiler,
@@ -41,6 +42,14 @@ from .profiler_statistic import (
 )
 from .timer import benchmark
 from .utils import RecordEvent, wrap_optimizers
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from types import TracebackType
+
+    from typing_extensions import Self
+
+    from paddle.base.core import _ProfilerResult
 
 
 class SummaryView(Enum):
@@ -61,10 +70,11 @@ class SummaryView(Enum):
 
     - **SummaryView.MemoryView** : The memory summary view.
 
-    - **SummaryView.MemoryManipulationView** : The meomory manipulation summary view.
+    - **SummaryView.MemoryManipulationView** : The memory manipulation summary view.
 
     - **SummaryView.UDFView** : The user defined summary view.
     """
+
     DeviceView = 0
     OverView = 1
     ModelView = 2
@@ -90,6 +100,7 @@ class ProfilerState(Enum):
 
     - **ProfilerState.RECORD_AND_RETURN** : The profiler is open, and this state stands for the last batch of "RECORD" state in current profiling period. The collected data will be returned in this state.
     """
+
     CLOSED = 0
     READY = 1
     RECORD = 2
@@ -98,7 +109,7 @@ class ProfilerState(Enum):
 
 class ProfilerTarget(Enum):
     r"""
-    ProfilerTarget is used to specify target device for :ref:`profiling <api_paddle_profiler_Profiler>` . Only CPU, GPU and XPU are supported currently.
+    ProfilerTarget is used to specify target device for :ref:`Profiler <api_paddle_profiler_Profiler>` . Only CPU, GPU and XPU are supported currently.
 
     The meaning of each ProfilerState is as following
 
@@ -108,6 +119,7 @@ class ProfilerTarget(Enum):
 
     - **ProfilerTarget.XPU** : Profile events on XPU.
     """
+
     CPU = 0
     GPU = 1
     XPU = 2
@@ -121,9 +133,9 @@ def make_scheduler(
     record: int,
     repeat: int = 0,
     skip_first: int = 0,
-) -> Callable:
+) -> Callable[[int], ProfilerState]:
     r"""
-    Return a scheduler function, which scheduler the :ref:`state <api_paddle_profiler_ProfilerState>` according to the setting.
+    Return a scheduler function, which scheduler the :ref:`ProfilerState <api_paddle_profiler_ProfilerState>` according to the setting.
     The state transform confirms to:
 
     .. code-block:: text
@@ -153,19 +165,19 @@ def make_scheduler(
             .. code-block:: python
                 :name: code-example1
 
-                import paddle.profiler as profiler
-                profiler.make_scheduler(closed=1, ready=1, record=4, repeat=1)
+                >>> import paddle.profiler as profiler
+                >>> profiler.make_scheduler(closed=1, ready=1, record=4, repeat=1)
 
 
         2. profiling range [3,6], [9,12], [15,18].
 
-        Assume batch 0: skiped, batch 1: closed, batch 2: ready, batch [3,6]: record, repeat.
+        Assume batch 0: skipped, batch 1: closed, batch 2: ready, batch [3,6]: record, repeat.
 
             .. code-block:: python
                 :name: code-example2
 
-                import paddle.profiler as profiler
-                profiler.make_scheduler(closed=1, ready=1, record=4, skip_first=1)
+                >>> import paddle.profiler as profiler
+                >>> profiler.make_scheduler(closed=1, ready=1, record=4, skip_first=1)
     """
 
     def getScheduleState(step: int) -> ProfilerState:
@@ -213,10 +225,10 @@ def _default_state_scheduler(step: int):
 
 
 def export_chrome_tracing(
-    dir_name: str, worker_name: Optional[str] = None
-) -> Callable:
+    dir_name: str, worker_name: str | None = None
+) -> Callable[[Profiler], None]:
     r"""
-    Return a callable, used for outputing tracing data to chrome tracing format file.
+    Return a callable, used for outputting tracing data to chrome tracing format file.
     The output file will be saved in directory ``dir_name``, and file name will be set as `worker_name`.
     if `worker_name` is not set, the default name is `[hostname]_[pid]`.
 
@@ -232,32 +244,30 @@ def export_chrome_tracing(
 
         .. code-block:: python
 
-            # required: gpu
-            import paddle.profiler as profiler
-            with profiler.Profiler(
-                    targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
-                    scheduler = (3, 10),
-                    on_trace_ready=profiler.export_chrome_tracing('./log')) as p:
-                for iter in range(10):
-                    #train()
-                    p.step()
+            >>> # doctest: +REQUIRES(env:GPU)
+            >>> import paddle.profiler as profiler
+            >>> import paddle
+            >>> paddle.device.set_device('gpu')
+            >>> with profiler.Profiler(
+            ...        targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
+            ...        scheduler = (3, 10),
+            ...        on_trace_ready=profiler.export_chrome_tracing('./log')) as p:
+            ...     for iter in range(10):
+            ...        #train()
+            ...        p.step()
     """
     if not os.path.exists(dir_name):
         try:
             os.makedirs(dir_name, exist_ok=True)
         except Exception:
             raise RuntimeError(
-                "Can not create directory '{}' for saving profiling results.".format(
-                    dir_name
-                )
+                f"Can not create directory '{dir_name}' for saving profiling results."
             )
 
     def handle_fn(prof):
         nonlocal worker_name
         if not worker_name:
-            worker_name = "host_{}pid_{}".format(
-                socket.gethostname(), str(os.getpid())
-            )
+            worker_name = f"host_{socket.gethostname()}pid_{os.getpid()}"
         now = datetime.datetime.now()
         filename = '{}_time_{}.paddle_trace.json'.format(
             worker_name, now.strftime('%Y_%m_%d_%H_%M_%S_%f')
@@ -268,10 +278,10 @@ def export_chrome_tracing(
 
 
 def export_protobuf(
-    dir_name: str, worker_name: Optional[str] = None
-) -> Callable:
+    dir_name: str, worker_name: str | None = None
+) -> Callable[[Profiler], None]:
     r"""
-    Return a callable, used for outputing tracing data to protobuf file.
+    Return a callable, used for outputting tracing data to protobuf file.
     The output file will be saved in directory ``dir_name``, and file name will be set as ``worker_name``.
     if ``worker_name`` is not set, the default name is `[hostname]_[pid]`.
 
@@ -287,32 +297,31 @@ def export_protobuf(
 
         .. code-block:: python
 
-            # required: gpu
-            import paddle.profiler as profiler
-            with profiler.Profiler(
-                    targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
-                    scheduler = (3, 10),
-                    on_trace_ready = profiler.export_protobuf('./log')) as p:
-                for iter in range(10):
-                    #train()
-                    p.step()
+            >>> # doctest: +REQUIRES(env:GPU)
+            >>> import paddle.profiler as profiler
+            >>> import paddle
+            >>> paddle.device.set_device('gpu')
+            >>> with profiler.Profiler(
+            ...     targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
+            ...     scheduler = (3, 10),
+            ...     on_trace_ready = profiler.export_protobuf('./log')
+            ... ) as p:
+            ...     for iter in range(10):
+            ...         # train()
+            ...         p.step()
     """
     if not os.path.exists(dir_name):
         try:
             os.makedirs(dir_name, exist_ok=True)
         except Exception:
             raise RuntimeError(
-                "Can not create directory '{}' for saving profiling results.".format(
-                    dir_name
-                )
+                f"Can not create directory '{dir_name}' for saving profiling results."
             )
 
     def handle_fn(prof):
         nonlocal worker_name
         if not worker_name:
-            worker_name = "host_{}pid_{}".format(
-                socket.gethostname(), str(os.getpid())
-            )
+            worker_name = f"host_{socket.gethostname()}pid_{os.getpid()}"
         now = datetime.datetime.now()
         filename = '{}_time_{}.paddle_trace.pb'.format(
             worker_name, now.strftime('%Y_%m_%d_%H_%M_%S_%f')
@@ -370,122 +379,142 @@ class Profiler:
             .. code-block:: python
                 :name: code-example1
 
-                # required: gpu
-                import paddle.profiler as profiler
-                with profiler.Profiler(
-                        targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
-                        scheduler = (2, 5),
-                        on_trace_ready = profiler.export_chrome_tracing('./log')) as p:
-                    for iter in range(10):
-                        #train()
-                        p.step()
+                >>> # doctest: +REQUIRES(env:GPU)
+                >>> import paddle.profiler as profiler
+                >>> import paddle
+                >>> paddle.device.set_device('gpu')
+                >>> with profiler.Profiler(
+                ...     targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
+                ...     scheduler = (2, 5),
+                ...     on_trace_ready = profiler.export_chrome_tracing('./log')
+                ... ) as p:
+                ...     for iter in range(10):
+                ...         # train()
+                ...         p.step()
 
         2. profiling range [2,4], [7, 9], [11,13].
 
             .. code-block:: python
                 :name: code-example2
 
-                # required: gpu
-                import paddle.profiler as profiler
-                with profiler.Profiler(
-                        targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
-                        scheduler = profiler.make_scheduler(closed=1, ready=1, record=3, repeat=3),
-                        on_trace_ready = profiler.export_chrome_tracing('./log')) as p:
-                    for iter in range(10):
-                        #train()
-                        p.step()
+                >>> # doctest: +REQUIRES(env:GPU)
+                >>> import paddle.profiler as profiler
+                >>> import paddle
+                >>> paddle.device.set_device('gpu')
+                >>> with profiler.Profiler(
+                ...     targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
+                ...     scheduler = profiler.make_scheduler(closed=1, ready=1, record=3, repeat=3),
+                ...     on_trace_ready = profiler.export_chrome_tracing('./log')
+                ... ) as p:
+                ...     for iter in range(10):
+                ...         # train()
+                ...         p.step()
 
         3. Use profiler without context manager, and use default parameters.
 
             .. code-block:: python
                 :name: code-example3
 
-                # required: gpu
-                import paddle.profiler as profiler
-                p = profiler.Profiler()
-                p.start()
-                for iter in range(10):
-                    #train()
-                    p.step()
-                p.stop()
-                p.summary()
+                >>> # doctest: +REQUIRES(env:GPU)
+                >>> import paddle.profiler as profiler
+                >>> import paddle
+                >>> paddle.device.set_device('gpu')
+                >>> p = profiler.Profiler()
+                >>> p.start()
+                >>> for iter in range(10):
+                ...     #train()
+                ...     p.step()
+                >>> p.stop()
+                >>> p.summary()
 
         4. Use profiler to get throughput and cost of the model.
 
             .. code-block:: python
                 :name: code-example-timer1
 
-                import paddle
-                import paddle.profiler as profiler
+                >>> import paddle
+                >>> import paddle.profiler as profiler
 
-                class RandomDataset(paddle.io.Dataset):
-                    def __init__(self, num_samples):
-                        self.num_samples = num_samples
-
-                    def __getitem__(self, idx):
-                        image = paddle.rand(shape=[100], dtype='float32')
-                        label = paddle.randint(0, 10, shape=[1], dtype='int64')
-                        return image, label
-
-                    def __len__(self):
-                        return self.num_samples
-
-                class SimpleNet(paddle.nn.Layer):
-                    def __init__(self):
-                        super().__init__()
-                        self.fc = paddle.nn.Linear(100, 10)
-
-                    def forward(self, image, label=None):
-                        return self.fc(image)
-
-                dataset = RandomDataset(20 * 4)
-                simple_net = SimpleNet()
-                opt = paddle.optimizer.SGD(learning_rate=1e-3, parameters=simple_net.parameters())
-                BATCH_SIZE = 4
-                loader = paddle.io.DataLoader(
-                    dataset,
-                    batch_size=BATCH_SIZE)
-                p = profiler.Profiler(timer_only=True)
-                p.start()
-                for i, (image, label) in enumerate(loader()):
-                    out = simple_net(image)
-                    loss = paddle.nn.functional.cross_entropy(out, label)
-                    avg_loss = paddle.mean(loss)
-                    avg_loss.backward()
-                    opt.minimize(avg_loss)
-                    simple_net.clear_gradients()
-                    p.step(num_samples=BATCH_SIZE)
-                    if i % 10 == 0:
-                        step_info = p.step_info(unit='images')
-                        print("Iter {}: {}".format(i, step_info))
-                        # The average statistics for 10 steps between the last and this call will be
-                        # printed when the "step_info" is called at 10 iteration intervals.
-                        # The values you get may be different from the following.
-                        # Iter 0:  reader_cost: 0.51946 s batch_cost: 0.66077 s ips: 6.054 images/s
-                        # Iter 10:  reader_cost: 0.00014 s batch_cost: 0.00441 s ips: 907.009 images/s
-                p.stop()
-                # The performance summary will be automatically printed when the "stop" is called.
-                # Reader Ratio: 2.658%
-                # Time Unit: s, IPS Unit: images/s
-                # |                 |       avg       |       max       |       min       |
-                # |   reader_cost   |     0.00011     |     0.00013     |     0.00007     |
-                # |    batch_cost   |     0.00405     |     0.00434     |     0.00326     |
-                # |       ips       |    1086.42904   |    1227.30604   |    959.92796    |
+                >>> class RandomDataset(paddle.io.Dataset): # type: ignore[type-arg]
+                ...     def __init__(self, num_samples):
+                ...         self.num_samples = num_samples
+                ...     def __getitem__(self, idx):
+                ...         image = paddle.rand(shape=[100], dtype='float32')
+                ...         label = paddle.randint(0, 10, shape=[1], dtype='int64')
+                ...         return image, label
+                ...     def __len__(self):
+                ...         return self.num_samples
+                >>> class SimpleNet(paddle.nn.Layer):
+                ...     def __init__(self):
+                ...         super().__init__()
+                ...         self.fc = paddle.nn.Linear(100, 10)
+                ...     def forward(self, image, label=None):
+                ...         return self.fc(image)
+                >>> dataset = RandomDataset(20 * 4)
+                >>> simple_net = SimpleNet()
+                >>> opt = paddle.optimizer.SGD(learning_rate=1e-3, parameters=simple_net.parameters())
+                >>> BATCH_SIZE = 4
+                >>> loader = paddle.io.DataLoader(
+                ...     dataset,
+                ...     batch_size=BATCH_SIZE)
+                >>> p = profiler.Profiler(timer_only=True)
+                >>> p.start()
+                >>> for i, (image, label) in enumerate(loader()):
+                ...     out = simple_net(image)
+                ...     loss = paddle.nn.functional.cross_entropy(out, label)
+                ...     avg_loss = paddle.mean(loss)
+                ...     avg_loss.backward()
+                ...     opt.minimize(avg_loss)
+                ...     simple_net.clear_gradients()
+                ...     p.step(num_samples=BATCH_SIZE)
+                ...     if i % 10 == 0:
+                ...         step_info = p.step_info(unit='images')
+                ...         print("Iter {}: {}".format(i, step_info))
+                ...         # The average statistics for 10 steps between the last and this call will be
+                ...         # printed when the "step_info" is called at 10 iteration intervals.
+                ...         # The values you get may be different from the following.
+                ...         # Iter 0:  reader_cost: 0.51946 s batch_cost: 0.66077 s ips: 6.054 images/s
+                ...         # Iter 10:  reader_cost: 0.00014 s batch_cost: 0.00441 s ips: 907.009 images/s
+                >>> p.stop()
+                >>> # The performance summary will be automatically printed when the "stop" is called.
+                >>> # Reader Ratio: 2.658%
+                >>> # Time Unit: s, IPS Unit: images/s
+                >>> # |                 |       avg       |       max       |       min       |
+                >>> # |   reader_cost   |     0.00011     |     0.00013     |     0.00007     |
+                >>> # |    batch_cost   |     0.00405     |     0.00434     |     0.00326     |
+                >>> # |       ips       |    1086.42904   |    1227.30604   |    959.92796    |
     """
+
+    targets: Iterable[ProfilerTarget]
+    profiler: _Profiler
+    scheduler: Callable[[int], ProfilerState]
+    on_trace_ready: Callable[[Profiler], None]
+    step_num: int
+    previous_state: ProfilerState
+    current_state: ProfilerState
+    record_event: RecordEvent
+    profiler_result: _ProfilerResult
+    timer_only: bool
+    record_shapes: bool
+    profile_memory: bool
+    with_flops: bool
+    emit_nvtx: bool
 
     def __init__(
         self,
         *,
-        targets: Optional[Iterable[ProfilerTarget]] = None,
-        scheduler: Union[Callable[[int], ProfilerState], tuple, None] = None,
-        on_trace_ready: Optional[Callable[..., Any]] = None,
-        record_shapes: Optional[bool] = False,
-        profile_memory: Optional[bool] = False,
-        timer_only: Optional[bool] = False,
-        emit_nvtx: Optional[bool] = False,
-        custom_device_types: Optional[list] = [],
-        with_flops: Optional[bool] = False,
-    ):
+        targets: Iterable[ProfilerTarget] | None = None,
+        scheduler: (
+            Callable[[int], ProfilerState] | tuple[int, int] | None
+        ) = None,
+        on_trace_ready: Callable[[Profiler], None] | None = None,
+        record_shapes: bool = False,
+        profile_memory: bool = False,
+        timer_only: bool = False,
+        emit_nvtx: bool = False,
+        custom_device_types: list[str] = [],
+        with_flops: bool = False,
+    ) -> None:
         supported_targets = _get_supported_targets()
         if targets:
             self.targets = set(targets)
@@ -493,9 +522,7 @@ class Profiler:
                 if target not in supported_targets:
                     self.targets.remove(target)
                     warn(
-                        "Profiling {} is not supported in current context.".format(
-                            target
-                        )
+                        f"Profiling {target} is not supported in current context."
                     )
         else:
             self.targets = supported_targets
@@ -550,14 +577,19 @@ class Profiler:
         self.with_flops = with_flops
         self.emit_nvtx = emit_nvtx
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         self.start()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         self.stop()
 
-    def start(self):
+    def start(self) -> None:
         r'''
         Start profiler and enter the first profiler step(0).
         State transformed from CLOSED to self.current_state and trigger corresponding action.
@@ -566,17 +598,19 @@ class Profiler:
             .. code-block:: python
                 :name: code-example4
 
-                # required: gpu
-                import paddle.profiler as profiler
-                prof = profiler.Profiler(
-                    targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
-                    scheduler = (1, 9),
-                    on_trace_ready = profiler.export_chrome_tracing('./log'))
-                prof.start()
-                for iter in range(10):
-                    #train()
-                    prof.step()
-                prof.stop()
+                >>> # doctest: +REQUIRES(env:GPU)
+                >>> import paddle.profiler as profiler
+                >>> import paddle
+                >>> paddle.device.set_device('gpu')
+                >>> prof = profiler.Profiler(
+                ...     targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
+                ...     scheduler = (1, 9),
+                ...     on_trace_ready = profiler.export_chrome_tracing('./log'))
+                >>> prof.start()
+                >>> for iter in range(10):
+                ...     # train()
+                ...     prof.step()
+                >>> prof.stop()
 
         '''
         # Timing only without profiling.
@@ -604,7 +638,7 @@ class Profiler:
         )
         self.record_event.begin()
 
-    def stop(self):
+    def stop(self) -> None:
         r'''
         Stop profiler and State transformed from self.current_state to CLOSED.
         Trigger corresponding action and post-process profiler result using self.on_trace_ready if result exists.
@@ -613,17 +647,19 @@ class Profiler:
             .. code-block:: python
                 :name: code-example5
 
-                # required: gpu
-                import paddle.profiler as profiler
-                prof = profiler.Profiler(
-                    targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
-                    scheduler = (1, 7),
-                    on_trace_ready = profiler.export_chrome_tracing('./log'))
-                prof.start()
-                for iter in range(10):
-                    #train()
-                    prof.step()
-                prof.stop()
+                >>> # doctest: +REQUIRES(env:GPU)
+                >>> import paddle.profiler as profiler
+                >>> import paddle
+                >>> paddle.device.set_device('gpu')
+                >>> prof = profiler.Profiler(
+                ...     targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
+                ...     scheduler = (1, 7),
+                ...     on_trace_ready = profiler.export_chrome_tracing('./log'))
+                >>> prof.start()
+                >>> for iter in range(10):
+                ...     # train()
+                ...     prof.step()
+                ... prof.stop()
         '''
         benchmark().end()
         if self.timer_only:
@@ -639,7 +675,7 @@ class Profiler:
             self.record_event = None
         if self.current_state == ProfilerState.READY:
             warn(
-                "Inproper Profiler state transform: READY->CLOSED, profiler will start and stop without saving data"
+                "Improper Profiler state transform: READY->CLOSED, profiler will start and stop without saving data"
             )
             self.profiler.start()
             self.profiler.stop()
@@ -652,7 +688,7 @@ class Profiler:
                 self.on_trace_ready(self)
         utils._is_profiler_used = False
 
-    def step(self, num_samples: Optional[int] = None):
+    def step(self, num_samples: int | None = None) -> None:
         r"""
         Signals the profiler that the next profiling step has started.
         Get the new ProfilerState and trigger corresponding action.
@@ -665,18 +701,20 @@ class Profiler:
             .. code-block:: python
                 :name: code-example6
 
-                # required: gpu
-                import paddle.profiler as profiler
-                prof = profiler.Profiler(
-                    targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
-                    scheduler = (3, 7),
-                    on_trace_ready = profiler.export_chrome_tracing('./log'))
+                >>> # doctest: +REQUIRES(env:GPU)
+                >>> import paddle.profiler as profiler
+                >>> import paddle
+                >>> paddle.device.set_device('gpu')
+                >>> prof = profiler.Profiler(
+                ...     targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
+                ...     scheduler = (3, 7),
+                ...     on_trace_ready = profiler.export_chrome_tracing('./log'))
 
-                prof.start()
-                for iter in range(10):
-                    #train()
-                    prof.step()
-                prof.stop()
+                >>> prof.start()
+                >>> for iter in range(10):
+                ...     #train()
+                ...     prof.step()
+                >>> prof.stop()
         """
         benchmark().step(num_samples)
         if self.timer_only:
@@ -694,7 +732,7 @@ class Profiler:
         )
         self.record_event.begin()
 
-    def step_info(self, unit=None):
+    def step_info(self, unit: str | None = None) -> str:
         r"""
         Get statistics for current step. If the function is called at certain iteration
         intervals, the result is the average of all steps between the previous call and
@@ -720,22 +758,22 @@ class Profiler:
             .. code-block:: python
                 :name: code-example-timer2
 
-                import paddle.profiler as profiler
-                prof = profiler.Profiler(timer_only=True)
-                prof.start()
-                for iter in range(20):
-                    #train()
-                    prof.step()
-                    if iter % 10 == 0:
-                        print("Iter {}: {}".format(iter, prof.step_info()))
-                        # The example does not call the DataLoader, so there is no "reader_cost".
-                        # Iter 0:  batch_cost: 0.00001 s ips: 86216.623 steps/s
-                        # Iter 10:  batch_cost: 0.00001 s ips: 103645.034 steps/s
-                prof.stop()
-                # Time Unit: s, IPS Unit: steps/s
-                # |                 |       avg       |       max       |       min       |
-                # |    batch_cost   |     0.00000     |     0.00002     |     0.00000     |
-                # |       ips       |   267846.19437  |   712030.38727  |   45134.16662   |
+                >>> import paddle.profiler as profiler
+                >>> prof = profiler.Profiler(timer_only=True)
+                >>> prof.start()
+                >>> for iter in range(20):
+                ...     #train()
+                ...     prof.step()
+                ...     if iter % 10 == 0:
+                ...         print("Iter {}: {}".format(iter, prof.step_info()))
+                ...         # The example does not call the DataLoader, so there is no "reader_cost".
+                ...         # Iter 0:  batch_cost: 0.00001 s ips: 86216.623 steps/s
+                ...         # Iter 10:  batch_cost: 0.00001 s ips: 103645.034 steps/s
+                >>> prof.stop()
+                >>> # Time Unit: s, IPS Unit: steps/s
+                >>> # |                 |       avg       |       max       |       min       |
+                >>> # |    batch_cost   |     0.00000     |     0.00002     |     0.00000     |
+                >>> # |       ips       |   267846.19437  |   712030.38727  |   45134.16662   |
         """
         if unit is None:
             unit = 'samples'
@@ -812,7 +850,7 @@ class Profiler:
             if self.on_trace_ready:
                 self.on_trace_ready(self)
 
-    def export(self, path="", format="json"):
+    def export(self, path: str = "", format: str = "json") -> None:
         r"""
         Exports the tracing data to file.
 
@@ -825,55 +863,58 @@ class Profiler:
             .. code-block:: python
                 :name: code-example7
 
-                # required: gpu
-                import paddle.profiler as profiler
-                prof = profiler.Profiler(
-                    targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
-                    scheduler = (3, 7))
-                prof.start()
-                for iter in range(10):
-                    #train()
-                    prof.step()
-                prof.stop()
-                prof.export(path="./profiler_data.json", format="json")
+                >>> # doctest: +REQUIRES(env:GPU)
+                >>> import paddle
+                >>> paddle.device.set_device('gpu')
+                >>> import paddle.profiler as profiler
+                >>> prof = profiler.Profiler(
+                ...     targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
+                ...     scheduler = (3, 7))
+                >>> prof.start()
+                >>> for iter in range(10):
+                ...     # train()
+                ...     prof.step()
+                >>> prof.stop()
+                >>> prof.export(path="./profiler_data.json", format="json")
         """
         if self.profiler_result:
             self.profiler_result.save(path, format)
 
     def summary(
         self,
-        sorted_by=SortedKeys.CPUTotal,
-        op_detail=True,
-        thread_sep=False,
-        time_unit='ms',
-        views=None,
-    ):
+        sorted_by: SortedKeys = SortedKeys.CPUTotal,
+        op_detail: bool = True,
+        thread_sep: bool = False,
+        time_unit: Literal['s', 'ms', 'us', 'ns'] = 'ms',
+        views: SummaryView | list[SummaryView] | None = None,
+    ) -> None:
         r"""
-        Print the Summary table. Currently support overview, model, distributed, operator, memory manipulation and userdefined summary.
+        Print the Summary table. Currently support overview, model, distributed, operator, memory manipulation and user-defined summary.
 
         Args:
             sorted_by( :ref:`SortedKeys <api_paddle_profiler_SortedKeys>` , optional): how to rank the op table items, default value is SortedKeys.CPUTotal.
             op_detail(bool, optional): expand each operator detail information, default value is True.
             thread_sep(bool, optional): print op table each thread, default value is False.
-            time_unit(str, optional): time unit for display, can be chosen form ['s', 'ms', 'us', 'ns'], default value is 'ms'.
+            time_unit(str, optional): time unit for display, can be chosen from ['s', 'ms', 'us', 'ns'], default value is 'ms'.
             views(SummaryView|list[SummaryView], optional): summary tables to print, default to None means all views to be printed.
 
         Examples:
             .. code-block:: python
-                :name: code-example8
 
-                # required: gpu
-                import paddle.profiler as profiler
-                prof = profiler.Profiler(
-                    targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
-                    scheduler = (3, 7),
-                    on_trace_ready = profiler.export_chrome_tracing('./log'))
-                prof.start()
-                for iter in range(10):
-                    #train()
-                    prof.step()
-                prof.stop()
-                prof.summary(sorted_by=profiler.SortedKeys.CPUTotal, op_detail=True, thread_sep=False, time_unit='ms')
+                >>> # doctest: +REQUIRES(env:GPU)
+                >>> import paddle
+                >>> paddle.device.set_device('gpu')
+                >>> import paddle.profiler as profiler
+                >>> prof = profiler.Profiler(
+                ...     targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
+                ...     scheduler = (3, 7),
+                ...     on_trace_ready = profiler.export_chrome_tracing('./log'))
+                >>> prof.start()
+                >>> for iter in range(10):
+                ...     # train()
+                ...     prof.step()
+                >>> prof.stop()
+                >>> prof.summary(sorted_by=profiler.SortedKeys.CPUTotal, op_detail=True, thread_sep=False, time_unit='ms')
         """
         if isinstance(views, SummaryView):
             views = [views]

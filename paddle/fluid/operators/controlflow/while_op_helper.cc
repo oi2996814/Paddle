@@ -16,16 +16,13 @@
 
 #include <string>
 
-#include "paddle/fluid/string/string_helper.h"
+#include "paddle/utils/string/string_helper.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class BlockDesc;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 // Set skip variables of while_op and while_grad_op
 // These variables should be skipped when eager deletion enables.
@@ -86,10 +83,10 @@ static void ModifyWhileOpAndWhileGradOpAttr(const OpVariant &fwd_op,
   PADDLE_ENFORCE_EQ(
       fwd_input.size(),
       in_grads.size(),
-      platform::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "Backward output gradient number does not match forward input number."
           "The number of forward input number is %d and the number of backward "
-          "output geadient number is %d.",
+          "output gradient number is %d.",
           fwd_input.size(),
           in_grads.size()));
 
@@ -116,7 +113,7 @@ static void FindAllWhileAndWhileGradOp(const framework::ProgramDesc &program,
   PADDLE_ENFORCE_GE(
       while_ops->size(),
       while_grad_ops->size(),
-      platform::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "There are more while_grad_ops than forward while_ops in the graph "
           "or program, the number of while_ops is %d and the number of "
           "while_grad_ops is %d.",
@@ -125,7 +122,7 @@ static void FindAllWhileAndWhileGradOp(const framework::ProgramDesc &program,
   for (size_t i = 1; i < program.Size(); ++i) {
     auto &block = program.Block(i);
     for (size_t j = 0; j < block.OpSize(); ++j) {
-      auto *op = block.Op(j);
+      auto *op = block.Op(static_cast<int>(j));
       if (op->Type() == "while") {
         while_ops->emplace_back(op);
       } else if (op->Type() == "while_grad") {
@@ -137,7 +134,7 @@ static void FindAllWhileAndWhileGradOp(const framework::ProgramDesc &program,
   PADDLE_ENFORCE_GE(
       while_ops->size(),
       while_grad_ops->size(),
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "There are more while_grad_ops than forward while_ops in the graph "
           "or program, the number of while_ops is %d and the number of "
           "while_grad_ops is %d.",
@@ -167,14 +164,14 @@ static void PrepareSafeEagerDeletionOnWhileOpAndWhileGradOpImpl(
       if (IsMatchedWhileOpAndWhileGradOp(fwd_op, bwd_op)) {
         PADDLE_ENFORCE_EQ(matched_fwd_op,
                           nullptr,
-                          platform::errors::PreconditionNotMet(
+                          common::errors::PreconditionNotMet(
                               "Found multiple while forward ops match while "
                               "grad ops."));
         matched_fwd_op = &fwd_op;
       }
     }
     PADDLE_ENFORCE_NOT_NULL(matched_fwd_op,
-                            platform::errors::PreconditionNotMet(
+                            common::errors::PreconditionNotMet(
                                 "Cannot find matched forward while op."));
     ModifyWhileOpAndWhileGradOpAttr(*matched_fwd_op, bwd_op);
     while_op_set.erase(*matched_fwd_op);
@@ -221,17 +218,17 @@ void PrepareSafeEagerDeletionOnWhileOpAndWhileGradOp(
 
 // Make while_op could run on GPU place
 bool GetCondData(const phi::DenseTensor &cond) {
-  if (platform::is_cpu_place(cond.place())) {
+  if (cond.place().GetType() == phi::AllocationType::CPU) {
     return cond.data<bool>()[0];
   }
-  // when platform::is_gpu_place(cond.place()) or
-  // platform::is_xpu_place(cond.place()) is true
+  // when cond.place().GetType() == phi::AllocationType::GPU or
+  // cond.place().GetType() == phi::AllocationType::XPU is true
   std::unique_ptr<phi::DenseTensor> cpu_cond{new phi::DenseTensor()};
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP) || \
     defined(PADDLE_WITH_XPU) || defined(PADDLE_WITH_CUSTOM_DEVICE)
-  framework::TensorCopySync(cond, platform::CPUPlace(), cpu_cond.get());
+  framework::TensorCopySync(cond, phi::CPUPlace(), cpu_cond.get());
 #else
-  PADDLE_THROW(platform::errors::PreconditionNotMet(
+  PADDLE_THROW(common::errors::PreconditionNotMet(
       "This version of PaddlePaddle does NOT support GPU/XPU but got "
       "GPU/XPU tensor Cond in WhileOp. Please compile WITH_GPU or "
       "WITH_XPU option."));
@@ -239,8 +236,8 @@ bool GetCondData(const phi::DenseTensor &cond) {
   return cpu_cond->data<bool>()[0];
 }
 
-bool StrInVaraiableNameMap(const std::string &name,
-                           const framework::VariableNameMap &var_names) {
+bool StrInVariableNameMap(const std::string &name,
+                          const framework::VariableNameMap &var_names) {
   for (auto &ipt : var_names) {
     if (std::find(ipt.second.begin(), ipt.second.end(), name) !=
         ipt.second.end()) {
@@ -250,5 +247,37 @@ bool StrInVaraiableNameMap(const std::string &name,
   return false;
 }
 
-}  // namespace operators
-}  // namespace paddle
+void TransferVariablePlace(const framework::Scope *scope,
+                           const std::string &var_name,
+                           const phi::Place &dst_place,
+                           const phi::DeviceContext &dev_ctx) {
+  framework::Variable *var = scope->FindVar(var_name);
+  if (var == nullptr) {
+    VLOG(4) << "[TransferVariablePlace]"
+            << "lost in_var: " << var_name;
+    return;
+  }
+  if (var->Type() != framework::proto::VarType::DENSE_TENSOR) {
+    VLOG(10) << "[TransferVariablePlace]" << var_name << " type changed:"
+             << phi::TransToPhiDataType(framework::ToVarType(var->Type()));
+    return;
+  }
+  phi::DenseTensor *t = var->GetMutable<phi::DenseTensor>();
+  if (t->place() == dst_place) {
+    VLOG(10) << "[TransferVariablePlace]"
+             << "no need transfer: " << var_name;
+    return;
+  }
+
+  phi::DenseTensor *new_t = new phi::DenseTensor;
+  framework::TensorCopy(*t, dst_place, new_t);
+  dev_ctx.Wait();
+
+  t->set_meta(new_t->meta());
+  t->ResetHolder(new_t->Holder());
+
+  VLOG(4) << "[TransferVariablePlace]" << var_name
+          << " place: " << new_t->place();
+}
+
+}  // namespace paddle::operators

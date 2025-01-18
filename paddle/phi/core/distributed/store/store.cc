@@ -15,8 +15,7 @@
 #include "paddle/phi/core/distributed/store/store.h"
 #include "paddle/phi/core/enforce.h"
 
-namespace phi {
-namespace distributed {
+namespace phi::distributed {
 
 int64_t Store::add(const std::string& key, int64_t value) {
   PADDLE_THROW(
@@ -24,6 +23,11 @@ int64_t Store::add(const std::string& key, int64_t value) {
 }
 
 std::vector<uint8_t> Store::get(const std::string& key) {
+  PADDLE_THROW(
+      errors::InvalidArgument("Implement the get method in the subclass."));
+}
+
+bool Store::check(const std::string& key) {
   PADDLE_THROW(
       errors::InvalidArgument("Implement the get method in the subclass."));
 }
@@ -38,5 +42,4 @@ void Store::set(const std::string& key, const std::vector<uint8_t>& value) {
       errors::InvalidArgument("Implement the set method in the subclass."));
 }
 
-}  // namespace distributed
-}  // namespace phi
+}  // namespace phi::distributed

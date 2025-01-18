@@ -1,4 +1,4 @@
-# Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
+# Copyright (c) 2024 PaddlePaddle Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,9 +17,9 @@ import unittest
 import numpy as np
 
 import paddle
-import paddle.fluid.dygraph as dg
+import paddle.base.dygraph as dg
 import paddle.nn.functional as F
-from paddle import fluid, nn
+from paddle import base, nn
 
 
 class Conv3DTransposeTestCase(unittest.TestCase):
@@ -27,7 +27,7 @@ class Conv3DTransposeTestCase(unittest.TestCase):
         self,
         methodName='runTest',
         batch_size=2,
-        spartial_shape=(8, 8, 8),
+        spatial_shape=(8, 8, 8),
         num_channels=6,
         num_filters=8,
         filter_size=3,
@@ -44,7 +44,7 @@ class Conv3DTransposeTestCase(unittest.TestCase):
         self.batch_size = batch_size
         self.num_channels = num_channels
         self.num_filters = num_filters
-        self.spartial_shape = spartial_shape
+        self.spatial_shape = spatial_shape
         self.filter_size = filter_size
         self.output_size = output_size
 
@@ -60,13 +60,16 @@ class Conv3DTransposeTestCase(unittest.TestCase):
         self.channel_last = self.data_format == "NDHWC"
         if self.channel_last:
             input_shape = (
-                (self.batch_size,) + self.spartial_shape + (self.num_channels,)
+                self.batch_size,
+                *self.spatial_shape,
+                self.num_channels,
             )
         else:
             input_shape = (
                 self.batch_size,
                 self.num_channels,
-            ) + self.spartial_shape
+                *self.spatial_shape,
+            )
         self.input = np.random.randn(*input_shape).astype(self.dtype)
 
         if isinstance(self.filter_size, int):
@@ -76,7 +79,8 @@ class Conv3DTransposeTestCase(unittest.TestCase):
         self.weight_shape = weight_shape = (
             self.num_channels,
             self.num_filters // self.groups,
-        ) + tuple(filter_size)
+            *filter_size,
+        )
         self.weight = np.random.uniform(-1, 1, size=weight_shape).astype(
             self.dtype
         )
@@ -87,11 +91,11 @@ class Conv3DTransposeTestCase(unittest.TestCase):
                 -1, 1, size=(self.num_filters,)
             ).astype(self.dtype)
 
-    def fluid_layer(self, place):
-        main = fluid.Program()
-        start = fluid.Program()
-        with fluid.unique_name.guard():
-            with fluid.program_guard(main, start):
+    def base_layer(self, place):
+        main = base.Program()
+        start = base.Program()
+        with base.unique_name.guard():
+            with base.program_guard(main, start):
                 input_shape = (
                     (-1, -1, -1, -1, self.num_channels)
                     if self.channel_last
@@ -105,30 +109,29 @@ class Conv3DTransposeTestCase(unittest.TestCase):
                     bias_attr = False
                 else:
                     bias_attr = paddle.nn.initializer.Assign(self.bias)
-                y_var = paddle.static.nn.conv3d_transpose(
-                    x_var,
-                    self.num_filters,
-                    filter_size=self.filter_size,
-                    output_size=self.output_size,
-                    padding=self.padding,
+                y_var = paddle.nn.Conv3DTranspose(
+                    in_channels=self.num_channels,
+                    out_channels=self.num_filters,
+                    kernel_size=self.filter_size,
                     stride=self.stride,
+                    padding=self.padding,
                     dilation=self.dilation,
                     groups=self.groups,
-                    param_attr=weight_attr,
+                    weight_attr=weight_attr,
                     bias_attr=bias_attr,
                     data_format=self.data_format,
-                )
+                )(x_var, self.output_size)
         feed_dict = {"input": self.input}
-        exe = fluid.Executor(place)
+        exe = base.Executor(place)
         exe.run(start)
         (y_np,) = exe.run(main, feed=feed_dict, fetch_list=[y_var])
         return y_np
 
     def functional(self, place):
-        main = fluid.Program()
-        start = fluid.Program()
-        with fluid.unique_name.guard():
-            with fluid.program_guard(main, start):
+        main = base.Program()
+        start = base.Program()
+        with base.unique_name.guard():
+            with base.program_guard(main, start):
                 input_shape = (
                     (-1, -1, -1, -1, self.num_channels)
                     if self.channel_last
@@ -140,9 +143,12 @@ class Conv3DTransposeTestCase(unittest.TestCase):
                 w_var = paddle.static.data(
                     "weight", self.weight_shape, dtype=self.dtype
                 )
-                b_var = paddle.static.data(
-                    "bias", (self.num_filters,), dtype=self.dtype
-                )
+                if not self.no_bias:
+                    b_var = paddle.static.data(
+                        "bias", (self.num_filters,), dtype=self.dtype
+                    )
+                else:
+                    b_var = None
                 y_var = F.conv3d_transpose(
                     x_var,
                     w_var,
@@ -157,13 +163,13 @@ class Conv3DTransposeTestCase(unittest.TestCase):
         feed_dict = {"input": self.input, "weight": self.weight}
         if self.bias is not None:
             feed_dict["bias"] = self.bias
-        exe = fluid.Executor(place)
+        exe = base.Executor(place)
         exe.run(start)
         (y_np,) = exe.run(main, feed=feed_dict, fetch_list=[y_var])
         return y_np
 
     def paddle_nn_layer(self):
-        x_var = dg.to_variable(self.input)
+        x_var = paddle.to_tensor(self.input)
         conv = nn.Conv3DTranspose(
             self.num_channels,
             self.num_filters,
@@ -181,27 +187,40 @@ class Conv3DTransposeTestCase(unittest.TestCase):
         y_np = y_var.numpy()
         return y_np
 
+    def _test_pir_equivalence(self, place):
+        place = base.CPUPlace()
+        with paddle.pir_utils.IrGuard():
+            result1 = self.base_layer(place)
+            result2 = self.functional(place)
+        with dg.guard(place):
+            result3 = self.paddle_nn_layer()
+        np.testing.assert_array_almost_equal(result1, result2)
+        np.testing.assert_array_almost_equal(result2, result3)
+
     def _test_equivalence(self, place):
-        place = fluid.CPUPlace()
-        result1 = self.fluid_layer(place)
-        result2 = self.functional(place)
+        place = base.CPUPlace()
+        with paddle.pir_utils.OldIrGuard():
+            result1 = self.base_layer(place)
+            result2 = self.functional(place)
         with dg.guard(place):
             result3 = self.paddle_nn_layer()
         np.testing.assert_array_almost_equal(result1, result2)
         np.testing.assert_array_almost_equal(result2, result3)
 
     def runTest(self):
-        place = fluid.CPUPlace()
+        place = base.CPUPlace()
         self._test_equivalence(place)
+        self._test_pir_equivalence(place)
 
-        if fluid.core.is_compiled_with_cuda():
-            place = fluid.CUDAPlace(0)
+        if base.core.is_compiled_with_cuda():
+            place = base.CUDAPlace(0)
             self._test_equivalence(place)
+            self._test_pir_equivalence(place)
 
 
 class Conv3DTransposeErrorTestCase(Conv3DTransposeTestCase):
     def runTest(self):
-        place = fluid.CPUPlace()
+        place = base.CPUPlace()
         with dg.guard(place):
             with self.assertRaises(ValueError):
                 self.paddle_nn_layer()

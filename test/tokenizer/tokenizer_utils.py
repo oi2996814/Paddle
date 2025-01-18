@@ -14,12 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import copy
 import json
 import os
 import unicodedata
 from shutil import copyfile
-from typing import Optional
 
 from paddle.dataset.common import DATA_HOME
 from paddle.utils.download import get_path_from_url
@@ -38,12 +39,12 @@ def convert_to_unicode(text):
     elif isinstance(text, bytes):
         return text.decode("utf-8", "ignore")
     else:
-        raise ValueError("Unsupported string type: %s" % (type(text)))
+        raise ValueError(f"Unsupported string type: {type(text)}")
 
 
 def whitespace_tokenize(text):
     """
-    Runs basic whitespace cleaning and splitting on a peice of text.
+    Runs basic whitespace cleaning and splitting on a piece of text.
     Args:
         text (str): Text to be tokened.
     Returns:
@@ -60,7 +61,7 @@ def _is_whitespace(char):
     """
     Checks whether `chars` is a whitespace character.
     """
-    # \t, \n, and \r are technically contorl characters but we treat them
+    # \t, \n, and \r are technically control characters but we treat them
     # as whitespace since they are generally considered as such.
     if char == " " or char == "\t" or char == "\n" or char == "\r":
         return True
@@ -190,7 +191,7 @@ class PretrainedTokenizer:
         self,
         text,
         text_pair=None,
-        max_seq_len: Optional[int] = None,
+        max_seq_len: int | None = None,
         stride=0,
         is_split_into_words=False,
         pad_to_max_seq_len=False,
@@ -409,7 +410,7 @@ class PretrainedTokenizer:
         """
         Converts a sequence of tokens into ids using the `vocab` attribute (an
         instance of `Vocab`). Override it if needed.
-        Args：
+        Args:
             tokens (list[int]): List of token ids.
         Returns:
             list: Converted id list.
@@ -484,7 +485,7 @@ class PretrainedTokenizer:
                 continue
             path = os.path.join(default_root, file_path.split('/')[-1])
             if os.path.exists(path):
-                print("Already cached %s" % path)
+                print(f"Already cached {path}")
                 resolved_vocab_files[file_id] = path
             else:
                 print(f"Downloading {file_path} and saved to {default_root}")
@@ -564,9 +565,7 @@ class PretrainedTokenizer:
         """
         assert not os.path.isfile(
             save_directory
-        ), "Saving directory ({}) should be a directory, not a file".format(
-            save_directory
-        )
+        ), f"Saving directory ({save_directory}) should be a directory, not a file"
         os.makedirs(save_directory, exist_ok=True)
 
         tokenizer_config_file = os.path.join(
@@ -632,9 +631,7 @@ class PretrainedTokenizer:
         elif name.endswith('_token_id'):
             return self.vocab[self.special_tokens_map[name[:-3]]]
         raise AttributeError(
-            "'{}' object has no attribute '{}'".format(
-                type(self).__name__, name
-            )
+            f"'{type(self).__name__}' object has no attribute '{name}'"
         )
 
     def truncate_sequences(
@@ -672,7 +669,7 @@ class PretrainedTokenizer:
             overflowing_tokens = []
             for _ in range(num_tokens_to_remove):
                 if pair_ids is None or len(ids) > len(pair_ids):
-                    overflowing_tokens = [ids[-1]] + overflowing_tokens
+                    overflowing_tokens = [ids[-1], *overflowing_tokens]
                     ids = ids[:-1]
                 else:
                     pair_ids = pair_ids[:-1]
@@ -941,14 +938,14 @@ class PretrainedTokenizer:
             ids, pair_ids
         )
 
-        # Build output dictionnary
+        # Build output dictionary
         encoded_inputs["input_ids"] = sequence
         if return_token_type_ids:
             encoded_inputs["token_type_ids"] = token_type_ids
         if return_special_tokens_mask:
-            encoded_inputs[
-                "special_tokens_mask"
-            ] = self.get_special_tokens_mask(ids, pair_ids)
+            encoded_inputs["special_tokens_mask"] = (
+                self.get_special_tokens_mask(ids, pair_ids)
+            )
         if return_length:
             encoded_inputs["seq_len"] = len(encoded_inputs["input_ids"])
 
@@ -1192,14 +1189,14 @@ class PretrainedTokenizer:
                         ids, pair_ids
                     )
 
-                    # Build output dictionnary
+                    # Build output dictionary
                     encoded_inputs["input_ids"] = sequence
                     if return_token_type_ids:
                         encoded_inputs["token_type_ids"] = token_type_ids
                     if return_special_tokens_mask:
-                        encoded_inputs[
-                            "special_tokens_mask"
-                        ] = self.get_special_tokens_mask(ids, pair_ids)
+                        encoded_inputs["special_tokens_mask"] = (
+                            self.get_special_tokens_mask(ids, pair_ids)
+                        )
                     if return_length:
                         encoded_inputs["seq_len"] = len(
                             encoded_inputs["input_ids"]

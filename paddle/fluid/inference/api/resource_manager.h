@@ -19,17 +19,18 @@
 #include <memory>
 #include <mutex>
 
-#include "paddle/fluid/platform/macros.h"
+#include "paddle/common/macros.h"
 #include "paddle/phi/api/include/tensor.h"
 #include "paddle/phi/backends/cpu/forwards.h"
 #include "paddle/phi/common/place.h"
+#include "paddle/utils/test_macros.h"
 #include "unsupported/Eigen/CXX11/Tensor"
 
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
-#include "paddle/fluid/platform/device/gpu/gpu_types.h"
 #include "paddle/phi/backends/gpu/forwards.h"
 #include "paddle/phi/backends/gpu/gpu_decls.h"
 #include "paddle/phi/backends/gpu/gpu_resources.h"
+#include "paddle/phi/core/platform/device/gpu/gpu_types.h"
 #endif
 
 namespace paddle {
@@ -53,7 +54,7 @@ class CPUContextResource {
 class GPUContextResource {
  public:
   explicit GPUContextResource(const phi::Place& place, void* stream);
-  ~GPUContextResource();
+  TEST_API ~GPUContextResource();
   phi::Place Place() const;
 
   std::function<phi::dnnHandle_t()> GetDnnHandleCreator();
@@ -80,14 +81,14 @@ class GPUContextResource {
   int GetGPUMultiProcessors() const;
   int GetGpuMaxThreadsPerMp() const;
   int GetGpuMaxThreadsPerBlock() const;
-  std::array<int, 3> GetGpuMaxGridDimSize() const;
+  std::array<unsigned int, 3> GetGpuMaxGridDimSize() const;
 
  private:
   void InitGPUResource(void* stream);
   void DestroyGPUResource();
   void InitGpuProperties();
   void InitGpuEigenDevice();
-  void InitDnnHanlde();
+  void InitDnnHandle();
   void DestroyDnnHandle();
   void DestroyBlasHandle();
   void InitBlasLtHandle();
@@ -106,7 +107,7 @@ class GPUContextResource {
   int multi_process_;
   int max_threads_per_mp_;
   int max_threads_per_block_;
-  std::array<int, 3> max_grid_dim_size_;
+  std::array<unsigned int, 3> max_grid_dim_size_;
 
   bool owned_stream_{true};
   gpuStream_t stream_;
@@ -127,10 +128,7 @@ class GPUContextResource {
 class ResourceManager {
  public:
   ResourceManager() = default;
-  static ResourceManager& Instance() {
-    static ResourceManager* resource_manager = new ResourceManager;
-    return *resource_manager;
-  }
+  TEST_API static ResourceManager& Instance();
 
   // CPU Resource
  public:
@@ -146,8 +144,8 @@ class ResourceManager {
  public:
   void* InitGPUResource(const phi::Place& place, void* stream);
   void DestroyGPUResource(void* stream);
-  GPUContextResource* GetGPUResource(void* stream) const;
-  int RefCount(void* stream) const;
+  TEST_API GPUContextResource* GetGPUResource(void* stream) const;
+  TEST_API int RefCount(void* stream) const;
   void GpuResourceSwitchStream(void* old_stream, void* new_stream);
 
  private:

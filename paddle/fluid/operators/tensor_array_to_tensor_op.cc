@@ -15,19 +15,19 @@ limitations under the License. */
 #include <string>
 #include <vector>
 
-#include "paddle/fluid/framework/lod_tensor_array.h"
+#include "paddle/fluid/framework/dense_tensor_array.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/variable.h"
 
 namespace paddle {
 namespace operators {
 
-void LodTensorArray2LodTensorVector(const framework::Scope &scope,
-                                    const std::string &base_name,
-                                    const std::string &lod_tensor_array_name,
-                                    std::vector<std::string> *res_names) {
-  auto &inx =
-      scope.FindVar(lod_tensor_array_name)->Get<framework::LoDTensorArray>();
+void DenseTensorArray2DenseTensorVector(
+    const framework::Scope &scope,
+    const std::string &base_name,
+    const std::string &lod_tensor_array_name,
+    std::vector<std::string> *res_names) {
+  auto &inx = scope.FindVar(lod_tensor_array_name)->Get<phi::TensorArray>();
   for (size_t i = 0; i < inx.size(); i++) {
     std::string var_name = base_name + std::to_string(i);
     framework::Variable *g_feed_value =
@@ -38,13 +38,12 @@ void LodTensorArray2LodTensorVector(const framework::Scope &scope,
   }
 }
 
-void LodTensorVectorResizeFromLodTensorArray(
+void DenseTensorVectorResizeFromDenseTensorArray(
     const framework::Scope &scope,
     const std::string &base_name,
     const std::string &lod_tensor_array_name,
     std::vector<std::string> *res_names) {
-  auto &inx =
-      scope.FindVar(lod_tensor_array_name)->Get<framework::LoDTensorArray>();
+  auto &inx = scope.FindVar(lod_tensor_array_name)->Get<phi::TensorArray>();
   for (size_t i = 0; i < inx.size(); i++) {
     std::string var_name = base_name + std::to_string(i);
     framework::Variable *g_feed_value =
@@ -56,14 +55,14 @@ void LodTensorVectorResizeFromLodTensorArray(
   }
 }
 
-void LodTensorArrayCreateFromLodTensorArray(
+void DenseTensorArrayCreateFromDenseTensorArray(
     const framework::Scope &scope,
     const std::string &input_lod_tensor_array_name,
     const std::string &output_lod_tensor_array_name) {
-  auto &inx = scope.FindVar(input_lod_tensor_array_name)
-                  ->Get<framework::LoDTensorArray>();
+  auto &inx =
+      scope.FindVar(input_lod_tensor_array_name)->Get<phi::TensorArray>();
   auto &grad_inx = *scope.FindVar(output_lod_tensor_array_name)
-                        ->GetMutable<framework::LoDTensorArray>();
+                        ->GetMutable<phi::TensorArray>();
 
   for (size_t i = 0; i < inx.size(); i++) {
     std::string var_name = output_lod_tensor_array_name + std::to_string(i);
@@ -74,28 +73,28 @@ void LodTensorArrayCreateFromLodTensorArray(
   }
 }
 
-class LoDTensorArray2TensorOp : public framework::OperatorBase {
+class DenseTensorArray2TensorOp : public framework::OperatorBase {
  public:
   using OperatorBase::OperatorBase;
 
  private:
   void RunImpl(const framework::Scope &scope,
-               const platform::Place &place) const override {
+               const phi::Place &place) const override {
     auto axis = Attr<int>("axis");
 
     framework::AttributeMap attrs;
     attrs["axis"] = axis;
 
-    auto &inx = scope.FindVar(Input("X"))->Get<framework::LoDTensorArray>();
+    auto &inx = scope.FindVar(Input("X"))->Get<phi::TensorArray>();
     auto &out = *scope.FindVar(Output("Out"))->GetMutable<phi::DenseTensor>();
 
     const size_t n = inx.size();
     PADDLE_ENFORCE_GT(
         n,
         0,
-        platform::errors::InvalidArgument("Input tensorarray size should > 0,"
-                                          "but the received is %d",
-                                          n));
+        common::errors::InvalidArgument("Input tensorarray size should > 0,"
+                                        "but the received is %d",
+                                        n));
 
     std::string base_name = Inputs("X")[0];
     std::vector<std::string> names;
@@ -105,15 +104,15 @@ class LoDTensorArray2TensorOp : public framework::OperatorBase {
     for (size_t i = 1; i < n; i++) {
       for (size_t j = 0; j < in_zero_dims_size; j++) {
         if (j == static_cast<size_t>(axis)) {
-          out_dims[axis] += inx[i].dims()[j];
+          out_dims[axis] += inx[i].dims()[static_cast<int>(j)];
         }
       }
     }
-    auto vec = phi::vectorize<int>(out_dims);
-    vec.insert(vec.begin() + axis, inx.size());
-    out.Resize(phi::make_ddim(vec));
+    auto vec = common::vectorize<int>(out_dims);
+    vec.insert(vec.begin() + axis, inx.size());  // NOLINT
+    out.Resize(common::make_ddim(vec));
 
-    LodTensorArray2LodTensorVector(scope, base_name, Input("X"), &names);
+    DenseTensorArray2DenseTensorVector(scope, base_name, Input("X"), &names);
 
     auto use_stack = Attr<bool>("use_stack");
 
@@ -129,13 +128,14 @@ class LoDTensorArray2TensorOp : public framework::OperatorBase {
   }
 };
 
-class LoDTensorArray2TensorOpMaker : public framework::OpProtoAndCheckerMaker {
+class DenseTensorArray2TensorOpMaker
+    : public framework::OpProtoAndCheckerMaker {
  public:
   void Make() override {
-    AddInput("X", "Input LoDTensorArray of tensor_array_to_tensor operator.");
+    AddInput("X", "Input phi::TensorArray of tensor_array_to_tensor operator.");
     AddOutput("Out", "Output tensor of tensor_array_to_tensor operator.");
     AddOutput("OutIndex",
-              "Output input LoDTensorArray items' dims of "
+              "Output input phi::TensorArray items' dims of "
               "tensor_array_to_tensor operator.");
     AddAttr<int>("axis",
                  "The axis along which the input tensors will be concatenated.")
@@ -147,7 +147,7 @@ class LoDTensorArray2TensorOpMaker : public framework::OpProtoAndCheckerMaker {
     AddComment(R"DOC(
 tensor_array_to_tensor Operator.
 
-If use concat mode, concatenate all tensors in the input LoDTensorArray along
+If use concat mode, concatenate all tensors in the input phi::TensorArray along
 axis into the output Tensor.
 
 Examples:
@@ -156,7 +156,7 @@ Examples:
   Output = [1,2,3,4,5,6]
   OutputIndex = [2,2,2]
 
-If use stack mode, stack all tensors in the input LoDTensorArray along axis into
+If use stack mode, stack all tensors in the input phi::TensorArray along axis into
 the output Tensor.
 
 Examples:
@@ -171,23 +171,23 @@ Examples:
   }
 };
 
-class LoDTensorArray2TensorOpInferShape : public framework::InferShapeBase {
+class DenseTensorArray2TensorOpInferShape : public framework::InferShapeBase {
  public:
   void operator()(framework::InferShapeContext *ctx) const override {
     // in runtime, shape is determined by RunImpl
     if (ctx->IsRuntime()) return;
     auto dims = ctx->GetInputDim("X");
     // if the shape is empty
-    if (dims == phi::make_ddim({0UL})) return;
+    if (dims == common::make_ddim({0UL})) return;
     // otherwise, suppose the shape of array is the shape of tensor in the
     // array, which is consistent with what tensor_array_read_write dose
     auto axis = ctx->Attrs().Get<int>("axis");
     auto use_stack = ctx->Attrs().Get<bool>("use_stack");
     if (use_stack) {
-      auto dim_vec = phi::vectorize<int>(dims);
+      auto dim_vec = common::vectorize<int>(dims);
       // use -1 for the stack dim size
       dim_vec.insert(dim_vec.begin() + axis, -1);
-      dims = phi::make_ddim(dim_vec);
+      dims = common::make_ddim(dim_vec);
     } else {
       // use -1 for the concat dim size
       dims[axis] = -1;
@@ -196,47 +196,47 @@ class LoDTensorArray2TensorOpInferShape : public framework::InferShapeBase {
   }
 };
 
-class LoDTensorArray2TensorGradInferShape : public framework::InferShapeBase {
+class DenseTensorArray2TensorGradInferShape : public framework::InferShapeBase {
  public:
   void operator()(framework::InferShapeContext *ctx) const override {
     ctx->SetOutputDim(framework::GradVarName("X"), ctx->GetInputDim("X"));
   }
 };
 
-class LoDTensorArray2TensorGradInferVarType
+class DenseTensorArray2TensorGradInferVarType
     : public framework::VarTypeInference {
  public:
   void operator()(framework::InferVarTypeContext *ctx) const override {
     ctx->SetOutputType(framework::GradVarName("X"),
-                       framework::proto::VarType::LOD_TENSOR_ARRAY,
+                       framework::proto::VarType::DENSE_TENSOR_ARRAY,
                        framework::ALL_ELEMENTS);
   }
 };
 
-class LoDTensorArray2TensorGradOp : public framework::OperatorBase {
+class DenseTensorArray2TensorGradOp : public framework::OperatorBase {
  public:
   using OperatorBase::OperatorBase;
 
  private:
   void RunImpl(const framework::Scope &scope,
-               const platform::Place &place) const override {
+               const phi::Place &place) const override {
     auto axis = Attr<int>("axis");
     framework::AttributeMap attrs;
     attrs["axis"] = axis;
 
-    auto &inx = scope.FindVar(Input("X"))->Get<framework::LoDTensorArray>();
+    auto &inx = scope.FindVar(Input("X"))->Get<phi::TensorArray>();
     const size_t n = inx.size();
     PADDLE_ENFORCE_GT(
         n,
         0,
-        platform::errors::InvalidArgument("Input tensorarray size should > 0, "
-                                          "but the received is: %d. ",
-                                          n));
+        common::errors::InvalidArgument("Input tensorarray size should > 0, "
+                                        "but the received is: %d. ",
+                                        n));
 
     std::string base_name = Inputs("X")[0];
     std::vector<std::string> names;
 
-    LodTensorArray2LodTensorVector(scope, base_name, Input("X"), &names);
+    DenseTensorArray2DenseTensorVector(scope, base_name, Input("X"), &names);
 
     // grad
     auto dx_name = Output(framework::GradVarName("X"));
@@ -248,7 +248,7 @@ class LoDTensorArray2TensorGradOp : public framework::OperatorBase {
     // multi-thread that will cause wrong calculation result.
     std::string grad_base_name = base_name + "_temp_grad_";
 
-    LodTensorVectorResizeFromLodTensorArray(
+    DenseTensorVectorResizeFromDenseTensorArray(
         scope, grad_base_name, Input("X"), &grad_names);
 
     auto use_stack = Attr<bool>("use_stack");
@@ -266,9 +266,8 @@ class LoDTensorArray2TensorGradOp : public framework::OperatorBase {
 
     grad_op->Run(scope, place);
 
-    LodTensorArrayCreateFromLodTensorArray(scope, Input("X"), dx_name);
-    auto &grad_inx =
-        *scope.FindVar(dx_name)->GetMutable<framework::LoDTensorArray>();
+    DenseTensorArrayCreateFromDenseTensorArray(scope, Input("X"), dx_name);
+    auto &grad_inx = *scope.FindVar(dx_name)->GetMutable<phi::TensorArray>();
 
     for (size_t i = 0; i < grad_names.size(); i++) {
       std::string var_name = grad_names[i];
@@ -300,12 +299,12 @@ USE_OP_ITSELF(concat);
 namespace ops = paddle::operators;
 REGISTER_OPERATOR(
     tensor_array_to_tensor,
-    ops::LoDTensorArray2TensorOp,
-    ops::LoDTensorArray2TensorOpMaker,
-    ops::LoDTensorArray2TensorOpInferShape,
+    ops::DenseTensorArray2TensorOp,
+    ops::DenseTensorArray2TensorOpMaker,
+    ops::DenseTensorArray2TensorOpInferShape,
     ops::TensorArrayToTensorGradOpMaker<paddle::framework::OpDesc>,
     ops::TensorArrayToTensorGradOpMaker<paddle::imperative::OpBase>);
 REGISTER_OPERATOR(tensor_array_to_tensor_grad,
-                  ops::LoDTensorArray2TensorGradOp,
-                  ops::LoDTensorArray2TensorGradInferShape,
-                  ops::LoDTensorArray2TensorGradInferVarType);
+                  ops::DenseTensorArray2TensorGradOp,
+                  ops::DenseTensorArray2TensorGradInferShape,
+                  ops::DenseTensorArray2TensorGradInferVarType);

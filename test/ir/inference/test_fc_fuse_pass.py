@@ -55,7 +55,7 @@ class TestFcFusePass(PassAutoScanTest):
             bias_shape = list(program_config.weights["bias"].shape)
 
             if predictor_config.tensorrt_engine_enabled():
-                # TensorRT cann't handle all the situation of elementwise_add
+                # TensorRT can't handle all the situation of elementwise_add
                 # disable it until this problem fixed
                 predictor_config.exp_disable_tensorrt_ops(["elementwise_add"])
 

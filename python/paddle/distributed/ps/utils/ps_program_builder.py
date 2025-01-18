@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import paddle
-from paddle import fluid
+from paddle import base
 from paddle.distributed.fleet.base.private_helper_function import (
     wait_server_ready,
 )
@@ -78,11 +78,9 @@ class PsProgramBuilder:
     def _build_programs(self):
         if self.attrs['is_worker']:
             self._build_trainer_programs()
-            fluid.framework.switch_startup_program(self.cloned_startup)
+            base.framework.switch_startup_program(self.cloned_startup)
             print(
-                "paddle.static.default_startup_program: {}".format(
-                    paddle.static.default_startup_program
-                )
+                f"paddle.static.default_startup_program: {paddle.static.default_startup_program}"
             )
             # print("ps_program_build before =", id(self.loss.block.program))
             self._build_trainer_desc()
@@ -97,9 +95,7 @@ class PsProgramBuilder:
         elif self.attrs['is_server']:
             self._build_pserver_programs()
             self.loss.block.program = self.attrs['_main_server']
-            fluid.framework.switch_startup_program(
-                self.attrs['_startup_server']
-            )
+            base.framework.switch_startup_program(self.attrs['_startup_server'])
 
 
 class GeoPsProgramBuilder(PsProgramBuilder):  # 仅 CPU 模式
@@ -107,8 +103,7 @@ class GeoPsProgramBuilder(PsProgramBuilder):  # 仅 CPU 模式
         super().__init__(pass_ctx)
         if self.ps_mode != DistributedMode.GEO:
             raise ValueError(
-                "ps mode: {} not matched {}",
-                format(self.ps_mode, "GeoPsProgramBuilder"),
+                f"ps mode: {self.ps_mode} not matched GeoPsProgramBuilder",
             )
 
     def _build_trainer_programs(self):
@@ -127,7 +122,6 @@ class GeoPsProgramBuilder(PsProgramBuilder):  # 仅 CPU 模式
         add_listen_and_serv_pass.apply(
             [self.attrs['_main_server']], [None], self.pass_ctx
         )
-        return
 
 
 class NuPsProgramBuilder(PsProgramBuilder):
@@ -176,8 +170,6 @@ class NuPsProgramBuilder(PsProgramBuilder):
         if self.launch_barrier and self.launch_barrier_flag:
             wait_server_ready(self.server_endpoints)
 
-        return
-
 
 class CpuSyncPsProgramBuilder(PsProgramBuilder):
     def __init__(self, pass_ctx):
@@ -187,8 +179,7 @@ class CpuSyncPsProgramBuilder(PsProgramBuilder):
             and self.ps_mode != DistributedMode.ASYNC
         ):
             raise ValueError(
-                "ps mode: {} not matched {}",
-                format(self.ps_mode, "PsProgramBuilder"),
+                f"ps mode: {self.ps_mode} not matched PsProgramBuilder"
             )
 
     def _build_trainer_programs(self):
@@ -227,8 +218,6 @@ class CpuSyncPsProgramBuilder(PsProgramBuilder):
 
         if self.launch_barrier and self.launch_barrier_flag:
             wait_server_ready(self.server_endpoints)
-
-        return
 
 
 class CpuAsyncPsProgramBuilder(CpuSyncPsProgramBuilder):
@@ -287,18 +276,17 @@ class GpuPsProgramBuilder(PsProgramBuilder):
         ps_gpu_pass = new_pass("ps_gpu_pass", self.attrs)
         ps_gpu_pass.apply([self.cloned_main], [None], self.pass_ctx)
 
-        ps_transpile_pass = new_pass("ps_transpile_pass", self.attrs)
-        ps_transpile_pass.apply(
-            [self.cloned_main], [self.cloned_startup], self.pass_ctx
-        )
+        if not getattr(self.attrs['user_defined_strategy'], "sharding", False):
+            ps_transpile_pass = new_pass("ps_transpile_pass", self.attrs)
+            ps_transpile_pass.apply(
+                [self.cloned_main], [self.cloned_startup], self.pass_ctx
+            )
 
         self.attrs['origin_main_program'] = self.cloned_main
         self.attrs['origin_startup_program'] = self.cloned_startup
 
         if self.launch_barrier and self.launch_barrier_flag:
             wait_server_ready(self.server_endpoints)
-
-        return
 
 
 class HeterAsyncPsProgramBuilder(PsProgramBuilder):
@@ -357,8 +345,6 @@ class HeterAsyncPsProgramBuilder(PsProgramBuilder):
         if self.launch_barrier and self.launch_barrier_flag:
             wait_server_ready(self.server_endpoints)
 
-        return
-
     def _build_programs(self):
         if self.attrs['is_worker'] or self.attrs['is_heter_worker']:
             self._build_trainer_programs()
@@ -372,9 +358,7 @@ class HeterAsyncPsProgramBuilder(PsProgramBuilder):
         elif self.attrs['is_server']:
             self._build_pserver_programs()
             self.loss.block.program = self.attrs['_main_server']
-            fluid.framework.switch_startup_program(
-                self.attrs['_startup_server']
-            )
+            base.framework.switch_startup_program(self.attrs['_startup_server'])
 
 
 class FlPsProgramBuilder(HeterAsyncPsProgramBuilder):
@@ -462,24 +446,18 @@ class FlPsProgramBuilder(HeterAsyncPsProgramBuilder):
                 ],
             )
 
-        return
-
     def _build_pserver_programs(self):
         self.loss.block.program = self.attrs['_main_server']
 
     def _build_programs(self):
         if not self.is_server:
             self._build_trainer_programs()
-            fluid.framework.switch_startup_program(self.cloned_startup)
+            base.framework.switch_startup_program(self.cloned_startup)
             paddle.framework.switch_main_program(self.cloned_main)
             print(
-                "paddle.static.default_startup_program: {}".format(
-                    paddle.static.default_startup_program()._heter_pipeline_opt
-                )
+                f"paddle.static.default_startup_program: {paddle.static.default_startup_program()._heter_pipeline_opt}"
             )
         else:
             self._build_pserver_programs()
-            fluid.framework.switch_startup_program(
-                self.attrs['_startup_server']
-            )
+            base.framework.switch_startup_program(self.attrs['_startup_server'])
             paddle.framework.switch_main_program(self.attrs['_main_server'])

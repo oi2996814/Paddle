@@ -12,73 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import unittest
 
 import numpy as np
+
+sys.path.append("../../legacy_test")
 from test_eager_deletion_padding_rnn import PaddingRNNTestBase, RNNConfig
 
 import paddle
-from paddle import fluid
-
-
-class TestExecutor(unittest.TestCase):
-    def test_mul(self):
-        main_program = fluid.Program()
-        startup_program = fluid.Program()
-        with fluid.program_guard(main_program, startup_program):
-            a = paddle.static.data(name='a', shape=[-1, 784], dtype='float32')
-            b = paddle.static.data(name='b', shape=[784, 100], dtype='float32')
-            a.desc.set_need_check_feed(False)
-            b.desc.set_need_check_feed(False)
-            output = paddle.matmul(x=a, y=b)
-
-        # Compute with numpy
-        a_np = np.random.random((100, 784)).astype('float32')
-        b_np = np.random.random((784, 100)).astype('float32')
-        out_np = np.dot(a_np, b_np)
-
-        place = paddle.CPUPlace()
-        exe = fluid.Executor(place)
-
-        def _train(use_program_cache, max_iters=1):
-            import time
-
-            run_time = 0.0
-            for i in range(max_iters):
-                begin = time.time()
-                outs = exe.run(
-                    program=main_program,
-                    feed={'a': a_np, 'b': b_np},
-                    fetch_list=[output.name],
-                    use_program_cache=use_program_cache,
-                )
-                end = time.time()
-                run_time += end - begin
-                out = outs[0]
-                self.assertEqual((100, 100), out.shape)
-                np.testing.assert_allclose(out, out_np, rtol=1e-05)
-            return run_time
-
-        max_iters = 3
-        run_time_with_cache = _train(
-            use_program_cache=True, max_iters=max_iters
-        )
-        print("run time with program cache: %f" % run_time_with_cache)
-
-        run_time_without_cache = _train(
-            use_program_cache=False, max_iters=max_iters
-        )
-        print("run time without program cache: %f" % run_time_without_cache)
-
-        run_time_with_cache = _train(
-            use_program_cache=True, max_iters=max_iters
-        )
-        print("run time with program cache: %f" % run_time_with_cache)
-
-        run_time_with_cache = _train(
-            use_program_cache=True, max_iters=max_iters
-        )
-        print("run time with program cache: %f" % run_time_with_cache)
+from paddle import base
 
 
 class ExecutorPaddingRNNTest(PaddingRNNTestBase):
@@ -86,7 +29,7 @@ class ExecutorPaddingRNNTest(PaddingRNNTestBase):
         self, rnn_model="static", use_program_cache=True
     ):
         config = RNNConfig("test", rnn_model)
-        with fluid.scope_guard(fluid.Scope()):
+        with base.scope_guard(base.Scope()):
             self.train(config, use_program_cache)
             paddle.static.io.save_inference_model(
                 path_prefix="padding_rnn." + rnn_model + ".inference_model",
@@ -125,7 +68,7 @@ class ExecutorPaddingRNNTest(PaddingRNNTestBase):
             ).astype("float32")
 
             for use_program_cache in [False, True]:
-                with fluid.scope_guard(fluid.Scope()):
+                with base.scope_guard(base.Scope()):
                     save_dirname = (
                         "padding_rnn." + rnn_model + ".inference_model"
                     )

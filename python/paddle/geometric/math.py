@@ -11,16 +11,24 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from paddle import _C_ops
-from paddle.fluid.data_feeder import check_variable_and_dtype
-from paddle.fluid.layer_helper import LayerHelper
-from paddle.framework import in_dynamic_mode
+from paddle.base.data_feeder import check_variable_and_dtype
+from paddle.base.layer_helper import LayerHelper
+from paddle.framework import in_dynamic_or_pir_mode
+
+if TYPE_CHECKING:
+    from paddle import Tensor
 
 __all__ = []
 
 
-def segment_sum(data, segment_ids, name=None):
+def segment_sum(
+    data: Tensor, segment_ids: Tensor, name: str | None = None
+) -> Tensor:
     r"""
     Segment Sum Operator.
 
@@ -52,7 +60,7 @@ def segment_sum(data, segment_ids, name=None):
              [4. 5. 6.]]
 
     """
-    if in_dynamic_mode():
+    if in_dynamic_or_pir_mode():
         return _C_ops.segment_pool(data, segment_ids, "SUM")
     else:
         check_variable_and_dtype(
@@ -77,7 +85,9 @@ def segment_sum(data, segment_ids, name=None):
         return out
 
 
-def segment_mean(data, segment_ids, name=None):
+def segment_mean(
+    data: Tensor, segment_ids: Tensor, name: str | None = None
+) -> Tensor:
     r"""
     Segment mean Operator.
 
@@ -111,7 +121,7 @@ def segment_mean(data, segment_ids, name=None):
 
     """
 
-    if in_dynamic_mode():
+    if in_dynamic_or_pir_mode():
         return _C_ops.segment_pool(data, segment_ids, "MEAN")
     else:
         check_variable_and_dtype(
@@ -136,7 +146,9 @@ def segment_mean(data, segment_ids, name=None):
         return out
 
 
-def segment_min(data, segment_ids, name=None):
+def segment_min(
+    data: Tensor, segment_ids: Tensor, name: str | None = None
+) -> Tensor:
     r"""
     Segment min operator.
 
@@ -169,7 +181,7 @@ def segment_min(data, segment_ids, name=None):
 
     """
 
-    if in_dynamic_mode():
+    if in_dynamic_or_pir_mode():
         return _C_ops.segment_pool(data, segment_ids, "MIN")
     else:
         check_variable_and_dtype(
@@ -194,7 +206,9 @@ def segment_min(data, segment_ids, name=None):
         return out
 
 
-def segment_max(data, segment_ids, name=None):
+def segment_max(
+    data: Tensor, segment_ids: Tensor, name: str | None = None
+) -> Tensor:
     r"""
     Segment max operator.
 
@@ -227,7 +241,7 @@ def segment_max(data, segment_ids, name=None):
 
     """
 
-    if in_dynamic_mode():
+    if in_dynamic_or_pir_mode():
         return _C_ops.segment_pool(data, segment_ids, "MAX")
     else:
         check_variable_and_dtype(

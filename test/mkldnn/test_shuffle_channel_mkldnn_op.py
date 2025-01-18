@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, OpTestTool
+from op_test import OpTest, OpTestTool
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 
 @OpTestTool.skip_if_not_cpu_bf16()
@@ -44,7 +44,7 @@ class TestShuffleChannelOneDNNOp(OpTest):
         self.group = 4
 
     def test_check_output(self):
-        self.check_output_with_place(core.CPUPlace())
+        self.check_output_with_place(core.CPUPlace(), check_pir_onednn=True)
 
 
 class TestShuffleChannelSingleGroupOneDNNOp(TestShuffleChannelOneDNNOp):

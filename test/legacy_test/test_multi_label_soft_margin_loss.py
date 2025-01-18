@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
@@ -25,10 +26,10 @@ def call_MultiLabelSoftMarginLoss_layer(
     weight=None,
     reduction='mean',
 ):
-    multilabel_margin_loss = paddle.nn.MultiLabelSoftMarginLoss(
+    multi_label_margin_loss = paddle.nn.MultiLabelSoftMarginLoss(
         weight=weight, reduction=reduction
     )
-    res = multilabel_margin_loss(
+    res = multi_label_margin_loss(
         input=input,
         label=label,
     )
@@ -96,7 +97,7 @@ def test_static(
 def test_dygraph(
     place, input_np, label_np, weight=None, reduction='mean', functional=False
 ):
-    with paddle.fluid.dygraph.base.guard():
+    with paddle.base.dygraph.base.guard():
         input = paddle.to_tensor(input_np)
         label = paddle.to_tensor(label_np)
         if weight is not None:
@@ -114,7 +115,7 @@ def test_dygraph(
         return dy_result
 
 
-def calc_multilabel_margin_loss(
+def calc_multi_label_margin_loss(
     input,
     label,
     weight=None,
@@ -139,17 +140,24 @@ def calc_multilabel_margin_loss(
 
 
 class TestMultiLabelMarginLoss(unittest.TestCase):
+
     def test_MultiLabelSoftMarginLoss(self):
         input = np.random.uniform(0.1, 0.8, size=(5, 5)).astype(np.float64)
         label = np.random.randint(0, 2, size=(5, 5)).astype(np.float64)
 
-        places = ['cpu']
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.device.is_compiled_with_cuda()
+        ):
+            places.append('cpu')
         if paddle.device.is_compiled_with_cuda():
             places.append('gpu')
         reductions = ['sum', 'mean', 'none']
         for place in places:
             for reduction in reductions:
-                expected = calc_multilabel_margin_loss(
+                expected = calc_multi_label_margin_loss(
                     input=input, label=label, reduction=reduction
                 )
 
@@ -215,7 +223,7 @@ class TestMultiLabelMarginLoss(unittest.TestCase):
         weight = np.random.randint(0, 2, size=(5, 5)).astype(np.float64)
         place = 'cpu'
         reduction = 'mean'
-        expected = calc_multilabel_margin_loss(
+        expected = calc_multi_label_margin_loss(
             input=input, label=label, weight=weight, reduction=reduction
         )
 

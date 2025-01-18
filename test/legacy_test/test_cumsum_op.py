@@ -13,16 +13,21 @@
 # limitations under the License.
 
 import os
+import sys
 import tempfile
 import unittest
 
+from paddle.framework import use_pir_api
+
+sys.path.append("../../legacy_test")
+
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
 import paddle.inference as paddle_infer
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 
 class TestCumsumOp(unittest.TestCase):
@@ -43,17 +48,17 @@ class TestCumsumOp(unittest.TestCase):
         np.testing.assert_array_equal(z, y.numpy())
 
         y = paddle.cumsum(data, dtype='float64')
-        self.assertTrue(y.dtype == core.VarDesc.VarType.FP64)
+        self.assertTrue(y.dtype == paddle.float64)
 
         y = paddle.cumsum(data, dtype=np.int32)
-        self.assertTrue(y.dtype == core.VarDesc.VarType.INT32)
+        self.assertTrue(y.dtype == paddle.int32)
 
         y = paddle.cumsum(data, axis=-2)
         z = np.cumsum(data_np, axis=-2)
         np.testing.assert_array_equal(z, y.numpy())
 
     def run_static(self, use_gpu=False):
-        with fluid.program_guard(fluid.Program()):
+        with paddle.static.program_guard(paddle.static.Program()):
             data_np = np.random.random((100, 100)).astype(np.float32)
             x = paddle.static.data('X', [100, 100])
             y = paddle.cumsum(x)
@@ -63,18 +68,18 @@ class TestCumsumOp(unittest.TestCase):
             y5 = paddle.cumsum(x, dtype=np.int32)
             y6 = paddle.cumsum(x, axis=-2)
 
-            place = fluid.CUDAPlace(0) if use_gpu else fluid.CPUPlace()
-            exe = fluid.Executor(place)
-            exe.run(fluid.default_startup_program())
+            place = base.CUDAPlace(0) if use_gpu else base.CPUPlace()
+            exe = base.Executor(place)
+            exe.run(paddle.static.default_startup_program())
             out = exe.run(
                 feed={'X': data_np},
                 fetch_list=[
-                    y.name,
-                    y2.name,
-                    y3.name,
-                    y4.name,
-                    y5.name,
-                    y6.name,
+                    y,
+                    y2,
+                    y3,
+                    y4,
+                    y5,
+                    y6,
                 ],
             )
 
@@ -89,27 +94,32 @@ class TestCumsumOp(unittest.TestCase):
             z = np.cumsum(data_np, axis=-2)
             np.testing.assert_allclose(z, out[5], rtol=1e-05)
 
-    def test_cpu(self):
-        paddle.disable_static(paddle.fluid.CPUPlace())
+    def test_cpu_dygraph(self):
+        paddle.disable_static(paddle.base.CPUPlace())
         self.run_cases()
         paddle.enable_static()
 
+    def test_cpu_static(self):
         self.run_static()
 
-    def test_gpu(self):
-        if not fluid.core.is_compiled_with_cuda():
+    def test_gpu_dygraph(self):
+        if not base.core.is_compiled_with_cuda():
             return
-        paddle.disable_static(paddle.fluid.CUDAPlace(0))
+        paddle.disable_static(paddle.base.CUDAPlace(0))
         self.run_cases()
         paddle.enable_static()
 
+    def test_gpu_static(self):
+        if not base.core.is_compiled_with_cuda():
+            return
         self.run_static(use_gpu=True)
 
     def test_name(self):
-        with fluid.program_guard(fluid.Program()):
-            x = paddle.static.data('x', [3, 4])
-            y = paddle.cumsum(x, name='out')
-            self.assertTrue('out' in y.name)
+        with paddle.pir_utils.OldIrGuard():
+            with base.program_guard(base.Program()):
+                x = paddle.static.data('x', [3, 4])
+                y = paddle.cumsum(x, name='out')
+                self.assertTrue('out' in y.name)
 
 
 def cumsum_wrapper(x, axis=-1, flatten=False, exclusive=False, reverse=False):
@@ -133,10 +143,12 @@ class TestSumOp1(OpTest):
             self.outputs = {'Out': self.out}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Out', check_prim=True)
+        self.check_grad(
+            ['X'], 'Out', check_prim=True, check_pir=True, check_prim_pir=True
+        )
 
     def init_dtype(self):
         self.dtype = self.dtype_ = np.float64
@@ -242,10 +254,12 @@ class TestSumOpExclusive1(OpTest):
             self.outputs = {'Out': self.out}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Out', check_prim=True)
+        self.check_grad(
+            ['X'], 'Out', check_prim=True, check_pir=True, check_prim_pir=True
+        )
 
     def init_dtype(self):
         self.dtype = self.dtype_ = np.float64
@@ -341,10 +355,12 @@ class TestSumOpExclusiveFP16(OpTest):
             self.outputs = {'Out': self.out}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Out', check_prim=True)
+        self.check_grad(
+            ['X'], 'Out', check_prim=True, check_pir=True, check_prim_pir=True
+        )
 
     def init_dtype(self):
         self.dtype = np.float16
@@ -380,10 +396,12 @@ class TestSumOpReverseExclusive(OpTest):
             self.outputs = {'Out': self.out}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Out', check_prim=True)
+        self.check_grad(
+            ['X'], 'Out', check_prim=True, check_pir=True, check_prim_pir=True
+        )
 
     def init_dtype(self):
         self.dtype = self.dtype_ = np.float64
@@ -401,13 +419,15 @@ def create_test_fp16_class(parent, max_relative_error=1e-2):
             pass
 
         def test_check_output(self):
-            self.check_output()
+            self.check_output(check_pir=True)
 
         def test_check_grad(self):
             self.check_grad(
                 ['X'],
                 'Out',
                 check_prim=True,
+                check_pir=True,
+                check_prim_pir=True,
             )
 
     cls_name = "{}_{}".format(parent.__name__, "Fp16")
@@ -445,12 +465,18 @@ def create_test_bf16_class(parent):
 
         def test_check_output(self):
             place = paddle.CUDAPlace(0)
-            self.check_output_with_place(place, check_prim=True)
+            self.check_output_with_place(place, check_prim=True, check_pir=True)
 
         def test_check_grad(self):
             place = paddle.CUDAPlace(0)
             self.check_grad_with_place(
-                place, ["X"], "Out", check_prim=True, numeric_grad_delta=0.05
+                place,
+                ["X"],
+                "Out",
+                check_prim=True,
+                numeric_grad_delta=0.05,
+                check_pir=True,
+                check_prim_pir=True,
             )
 
     cls_name = "{}_{}".format(parent.__name__, "BF16")
@@ -473,9 +499,12 @@ create_test_bf16_class(TestSumOpReverseExclusive)
 
 
 class BadInputTest(unittest.TestCase):
+
     def test_error(self):
         paddle.enable_static()
-        with fluid.program_guard(fluid.Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
 
             def test_bad_x():
                 data = [1, 2, 4]
@@ -511,8 +540,8 @@ class TestTensorAxis(unittest.TestCase):
         paddle.enable_static()
         np_x = np.random.randn(9, 10, 11).astype('float32')
         main_prog = paddle.static.Program()
-        starup_prog = paddle.static.Program()
-        with paddle.static.program_guard(main_prog, starup_prog):
+        startup_prog = paddle.static.Program()
+        with paddle.static.program_guard(main_prog, startup_prog):
             # run static
             x = paddle.static.data(shape=np_x.shape, name='x', dtype=np_x.dtype)
             linear = paddle.nn.Linear(np_x.shape[-1], np_x.shape[-1])
@@ -525,14 +554,22 @@ class TestTensorAxis(unittest.TestCase):
             sgd.minimize(paddle.mean(out))
 
             exe = paddle.static.Executor(self.place)
-            exe.run(starup_prog)
+            exe.run(startup_prog)
             static_out = exe.run(feed={'x': np_x}, fetch_list=[out])
 
             # run infer
             paddle.static.save_inference_model(self.save_path, [x], [out], exe)
-            config = paddle_infer.Config(
-                self.save_path + '.pdmodel', self.save_path + '.pdiparams'
-            )
+            if use_pir_api():
+                config = paddle_infer.Config(
+                    self.save_path + '.json', self.save_path + '.pdiparams'
+                )
+                config.enable_new_ir()
+                config.enable_new_executor()
+                config.use_optimized_model(True)
+            else:
+                config = paddle_infer.Config(
+                    self.save_path + '.pdmodel', self.save_path + '.pdiparams'
+                )
             if paddle.is_compiled_with_cuda():
                 config.enable_use_gpu(100, 0)
             else:
@@ -550,23 +587,75 @@ class TestTensorAxis(unittest.TestCase):
             infer_out = output_handle.copy_to_cpu()
             np.testing.assert_allclose(static_out[0], infer_out)
 
+    def test_static(self):
+        paddle.enable_static()
+        np_x = np.random.randn(9, 10, 11).astype('float32')
+        with paddle.pir_utils.IrGuard():
+            main_prog = paddle.static.Program()
+            startup_prog = paddle.static.Program()
+            with paddle.static.program_guard(main_prog, startup_prog):
+                # run static
+                x = paddle.static.data(
+                    shape=np_x.shape, name='x', dtype=np_x.dtype
+                )
+                linear = paddle.nn.Linear(np_x.shape[-1], np_x.shape[-1])
+                linear_out = linear(x)
+                relu_out = paddle.nn.functional.relu(linear_out)
+                axis = paddle.full([1], 2, dtype='int64')
+                out = paddle.cumsum(relu_out, axis=axis)
+                loss = paddle.mean(out)
+                sgd = paddle.optimizer.SGD(learning_rate=0.0)
+                sgd.minimize(paddle.mean(out))
+
+                exe = paddle.static.Executor(self.place)
+                exe.run(startup_prog)
+                static_out = exe.run(feed={'x': np_x}, fetch_list=[out])
+                # run infer
+                paddle.static.save_inference_model(
+                    self.save_path, [x], [out], exe, program=main_prog
+                )
+
+                exe = paddle.static.Executor(self.place)
+                load_program, _, _ = paddle.static.load_inference_model(
+                    self.save_path, exe
+                )
+
+                self.assertEqual(
+                    len(load_program.global_block().ops),
+                    9,
+                )
+                print(load_program)
+                self.assertEqual(
+                    load_program.global_block().ops[7].name(), 'pd_op.cumsum'
+                )
+
+                out = exe.run(
+                    program=load_program,
+                    feed={'x': np_x},
+                    fetch_list=[],
+                )
+                np.testing.assert_allclose(static_out, out)
+
 
 class TestCumSumOpFp16(unittest.TestCase):
+
     def test_fp16(self):
-        paddle.enable_static()
-        x_np = np.random.random((100, 100)).astype('float16')
-        with paddle.static.program_guard(paddle.static.Program()):
-            x = paddle.static.data(shape=[100, 100], name='x', dtype='float16')
-            y1 = paddle.cumsum(x)
-            y2 = paddle.cumsum(x, axis=0)
-            y3 = paddle.cumsum(x, axis=-1)
-            y4 = paddle.cumsum(x, axis=-2)
-            if core.is_compiled_with_cuda():
+        if core.is_compiled_with_cuda():
+            paddle.enable_static()
+            x_np = np.random.random((100, 100)).astype('float16')
+            with paddle.static.program_guard(paddle.static.Program()):
+                x = paddle.static.data(
+                    shape=[100, 100], name='x', dtype='float16'
+                )
+                y1 = paddle.cumsum(x)
+                y2 = paddle.cumsum(x, axis=0)
+                y3 = paddle.cumsum(x, axis=-1)
+                y4 = paddle.cumsum(x, axis=-2)
                 place = paddle.CUDAPlace(0)
                 exe = paddle.static.Executor(place)
                 exe.run(paddle.static.default_startup_program())
                 out = exe.run(feed={'x': x_np}, fetch_list=[y1, y2, y3, y4])
-        paddle.disable_static()
+            paddle.disable_static()
 
 
 if __name__ == '__main__':

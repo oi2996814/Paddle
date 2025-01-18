@@ -78,7 +78,7 @@ class Event {
   Event *parent_{nullptr};
   uint64_t thread_id_;
   EventRole role_{};
-  int64_t cpu_ns_;
+  uint64_t cpu_ns_;
   bool visited_status_{false};
   std::string attr_;
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
@@ -194,6 +194,20 @@ class CudaEvent {
 #endif
     PADDLE_ENFORCE_GPU_SUCCESS(err);
     return false;
+  }
+
+  float ElapsedTime(CudaEvent *end_event) {
+    float milliseconds = 0;
+#ifdef PADDLE_WITH_HIP
+    hipEventSynchronize(end_event->GetRawCudaEvent());
+    PADDLE_ENFORCE_GPU_SUCCESS(hipEventElapsedTime(
+        &milliseconds, event_, end_event->GetRawCudaEvent()));
+#else
+    cudaEventSynchronize(end_event->GetRawCudaEvent());
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaEventElapsedTime(
+        &milliseconds, event_, end_event->GetRawCudaEvent()));
+#endif
+    return milliseconds;
   }
 
   void Synchronize() {

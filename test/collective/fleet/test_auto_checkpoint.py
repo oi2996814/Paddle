@@ -18,9 +18,9 @@ import unittest
 from auto_checkpoint_utils import AutoCheckpointBase, get_logger
 
 import paddle
-import paddle.fluid.incubate.checkpoint.auto_checkpoint as acp
+import paddle.base.incubate.checkpoint.auto_checkpoint as acp
+from paddle.base.incubate.checkpoint.checkpoint_saver import PaddleModel
 from paddle.distributed.fleet.utils.fs import HDFSClient, LocalFS
-from paddle.fluid.incubate.checkpoint.checkpoint_saver import PaddleModel
 
 paddle.enable_static()
 logger = get_logger()
@@ -183,7 +183,7 @@ class AutoCheckPointACLBase(AutoCheckpointBase):
         logger.info("begin _run_load_0")
 
     def _test_corner_epoch_no(self, break_epoch_no):
-        logger.info("begin test_corener_epoch_no")
+        logger.info("begin test_corner_epoch_no")
         checker = acp._get_checker()
         fs = HDFSClient(checker.hdfs_home, None)
 
@@ -194,7 +194,7 @@ class AutoCheckPointACLBase(AutoCheckpointBase):
         self._run_load_0(break_epoch_no=break_epoch_no)
 
         fs.delete(checker.hdfs_checkpoint_path)
-        logger.info("end test_corener_epoch_no")
+        logger.info("end test_corner_epoch_no")
 
 
 class AutoCheckpointTest(AutoCheckPointACLBase):

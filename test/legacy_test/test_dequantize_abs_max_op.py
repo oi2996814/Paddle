@@ -16,7 +16,7 @@ import math
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 
 def quantize_max_abs(x, max_range):
@@ -51,7 +51,7 @@ class TestDequantizeMaxAbsOp(OpTest):
         self.outputs = {'Out': ydq}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_dygraph=False)
 
 
 class TestDequantizeMaxAbsOp5Bits(TestDequantizeMaxAbsOp):

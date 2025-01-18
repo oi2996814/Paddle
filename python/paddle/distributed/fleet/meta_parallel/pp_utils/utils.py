@@ -24,6 +24,7 @@ FLOAT_TYPE_DICT = {
     paddle.float32: "float32",
     paddle.float64: "float64",
     paddle.bfloat16: "bfloat16",
+    paddle.bool: "bool",
 }
 
 PADDLE_TO_NUMBER = {
@@ -33,6 +34,7 @@ PADDLE_TO_NUMBER = {
     paddle.int32: 3,
     paddle.int64: 4,
     paddle.bfloat16: 5,
+    paddle.bool: 6,
 }
 
 NUMBER_TO_DTYPE = {
@@ -42,6 +44,7 @@ NUMBER_TO_DTYPE = {
     3: "int32",
     4: "int64",
     5: "bfloat16",
+    6: "bool",
 }
 
 
@@ -98,10 +101,8 @@ def _all_gather(tensor, group=None, use_calc_stream=True):
         if group is None
         else group.nranks
     )
-    return _legacy_C_ops.c_allgather(
+    return _legacy_C_ops.all_gather(
         tensor,
-        'use_calc_stream',
-        use_calc_stream,
         'ring_id',
         ring_id,
         'nranks',

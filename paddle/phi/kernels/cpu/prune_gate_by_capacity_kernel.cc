@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #include "paddle/phi/kernels/prune_gate_by_capacity_kernel.h"
-#include "paddle/phi/core/errors.h"
+#include "paddle/common/errors.h"
 #include "paddle/phi/core/kernel_registry.h"
 
 namespace phi {
@@ -25,7 +25,7 @@ void PruneGateByCapacityKernel(const Context& dev_ctx,
                                int64_t n_expert,
                                int64_t n_worker,
                                DenseTensor* new_gate_idx) {
-  PADDLE_THROW(phi::errors::Unimplemented(
+  PADDLE_THROW(common::errors::Unimplemented(
       "prune_gate_by_capacity is not supported on CPU."));
 }
 

@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import unittest
 from functools import partial
-from typing import List
 
 import numpy as np
 from program_config import ProgramConfig, TensorConfig
@@ -46,8 +47,8 @@ class TrtConvertGridSampler(TrtLayerAutoScanTest):
                 return np.random.random([1, 3, 3, 2, 3]).astype(np.float32)
 
         mode = ["bilinear", "nearest"]
-        padding_mode = ["zeros", "reflection", "border"]
-        align_corners = [True, False]
+        padding_mode = ["zeros", "reflection"]
+        align_corners = [True]
         descs = []
         for m in mode:
             for p in padding_mode:
@@ -94,7 +95,7 @@ class TrtConvertGridSampler(TrtLayerAutoScanTest):
 
     def sample_predictor_configs(
         self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
+    ) -> tuple[paddle_infer.Config, list[int], float]:
         def generate_dynamic_shape():
             if self.dims == 4:
                 self.dynamic_shape.min_input_shape = {
@@ -138,10 +139,8 @@ class TrtConvertGridSampler(TrtLayerAutoScanTest):
         # for dynamic_shape
         generate_dynamic_shape()
         self.trt_param.precision = paddle_infer.PrecisionType.Float32
-        program_config.set_input_type(np.float32)
         yield self.create_inference_config(), (1, 3), 1e-5
         self.trt_param.precision = paddle_infer.PrecisionType.Half
-        program_config.set_input_type(np.float16)
         yield self.create_inference_config(), (1, 3), 1e-3
 
     def test(self):

@@ -46,8 +46,7 @@ using paddle::distributed::GraphPyServer;
 using paddle::distributed::GraphPyService;
 using paddle::distributed::HeterClient;
 
-namespace paddle {
-namespace pybind {
+namespace paddle::pybind {
 void BindDistFleetWrapper(py::module* m) {
   py::class_<FleetWrapper, std::shared_ptr<FleetWrapper>>(*m,
                                                           "DistFleetWrapper")
@@ -81,6 +80,8 @@ void BindDistFleetWrapper(py::module* m) {
       .def("push_fl_client_info_sync", &FleetWrapper::PushFLClientInfoSync)
       .def("pull_fl_strategy", &FleetWrapper::PullFlStrategy)
       .def("revert", &FleetWrapper::Revert)
+      .def("set_date", &FleetWrapper::SetDate)
+      .def("print_table_stat", &FleetWrapper::PrintTableStat)
       .def("check_save_pre_patch_done", &FleetWrapper::CheckSavePrePatchDone);
 }
 
@@ -169,10 +170,10 @@ void BindDistCommunicator(py::module* m) {
           Communicator::InitInstance<FLCommunicator>(
               send_ctx, recv_ctx, dist_desc, host_sign_list, param_scope, envs);
         } else {
-          PADDLE_THROW(platform::errors::InvalidArgument(
-              "unsupported communicator MODE"));
+          PADDLE_THROW(
+              common::errors::InvalidArgument("unsupported communicator MODE"));
         }
-        return Communicator::GetInstantcePtr();
+        return Communicator::GetInstancePtr();
       }))
       .def("stop", &Communicator::Stop)
       .def("start", &Communicator::Start)
@@ -233,7 +234,6 @@ void BindGraphPyClient(py::module* m) {
       .def("add_table_feat_conf", &GraphPyClient::add_table_feat_conf)
       .def("pull_graph_list", &GraphPyClient::pull_graph_list)
       .def("start_client", &GraphPyClient::start_client)
-      .def("batch_sample_neighboors", &GraphPyClient::batch_sample_neighbors)
       .def("batch_sample_neighbors", &GraphPyClient::batch_sample_neighbors)
       // .def("use_neighbors_sample_cache",
       //      &GraphPyClient::use_neighbors_sample_cache)
@@ -303,7 +303,8 @@ void BindTreeIndex(py::module* m) {
       .def("total_node_nums",
            [](TreeIndex& self) { return self.TotalNodeNums(); })
       .def("emb_size", [](TreeIndex& self) { return self.EmbSize(); })
-      .def("get_all_leafs", [](TreeIndex& self) { return self.GetAllLeafs(); })
+      .def("get_all_leaves",
+           [](TreeIndex& self) { return self.GetAllLeaves(); })
       .def("get_nodes",
            [](TreeIndex& self, const std::vector<uint64_t>& codes) {
              return self.GetNodes(codes);
@@ -371,6 +372,7 @@ void BindGraphGpuWrapper(py::module* m) {
                &GraphGpuWrapper::graph_neighbor_sample))
       .def("set_device", &GraphGpuWrapper::set_device)
       .def("set_feature_separator", &GraphGpuWrapper::set_feature_separator)
+      .def("set_infer_mode", &GraphGpuWrapper::set_infer_mode)
       .def("set_slot_feature_separator",
            &GraphGpuWrapper::set_slot_feature_separator)
       .def("init_service", &GraphGpuWrapper::init_service)
@@ -385,14 +387,17 @@ void BindGraphGpuWrapper(py::module* m) {
                              std::string,
                              int,
                              bool,
-                             const std::vector<bool>&>(
-               &GraphGpuWrapper::load_edge_file))
+                             const std::vector<bool>&,
+                             bool>(&GraphGpuWrapper::load_edge_file))
       .def("load_node_and_edge", &GraphGpuWrapper::load_node_and_edge)
+      .def("calc_edge_type_limit", &GraphGpuWrapper::calc_edge_type_limit)
+      .def("show_mem", &GraphGpuWrapper::show_mem)
       .def("upload_batch",
            py::overload_cast<int, int, const std::string&>(
                &GraphGpuWrapper::upload_batch))
-      .def("upload_batch",
-           py::overload_cast<int, int, int>(&GraphGpuWrapper::upload_batch))
+      .def(
+          "upload_batch",
+          py::overload_cast<int, int, int, int>(&GraphGpuWrapper::upload_batch))
       .def(
           "get_all_id",
           py::overload_cast<int, int, int, std::vector<std::vector<uint64_t>>*>(
@@ -423,7 +428,13 @@ void BindGraphGpuWrapper(py::module* m) {
       .def("release_graph", &GraphGpuWrapper::release_graph)
       .def("release_graph_edge", &GraphGpuWrapper::release_graph_edge)
       .def("release_graph_node", &GraphGpuWrapper::release_graph_node)
-      .def("finalize", &GraphGpuWrapper::finalize);
+      .def("finalize", &GraphGpuWrapper::finalize)
+      .def("set_node_iter_from_file",
+           py::overload_cast<std::string, std::string, int, bool, bool>(
+               &GraphGpuWrapper::set_node_iter_from_file))
+      .def("set_node_iter_from_graph",
+           py::overload_cast<bool, bool>(
+               &GraphGpuWrapper::set_node_iter_from_graph));
 }
 #endif
 
@@ -436,7 +447,7 @@ void BindIndexSampler(py::module* m) {
         if (mode == "by_layerwise") {
           return IndexSampler::Init<LayerWiseSampler>(name);
         } else {
-          PADDLE_THROW(platform::errors::InvalidArgument(
+          PADDLE_THROW(common::errors::InvalidArgument(
               "Unsupported IndexSampler Type!"));
         }
       }))
@@ -444,5 +455,4 @@ void BindIndexSampler(py::module* m) {
       .def("init_beamsearch_conf", &IndexSampler::init_beamsearch_conf)
       .def("sample", &IndexSampler::sample);
 }
-}  // end namespace pybind
-}  // namespace paddle
+}  // namespace paddle::pybind

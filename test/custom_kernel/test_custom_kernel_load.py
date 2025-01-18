@@ -26,11 +26,7 @@ class TestCustomKernelLoad(unittest.TestCase):
         cur_dir = os.path.dirname(os.path.abspath(__file__))
 
         # --inplace to place output so file to current dir
-        cmd = (
-            'cd {} && {} custom_kernel_dot_setup.py build_ext --inplace'.format(
-                cur_dir, sys.executable
-            )
-        )
+        cmd = f'cd {cur_dir} && {sys.executable} custom_kernel_dot_setup.py build_ext --inplace'
         os.system(cmd)
 
         # get paddle lib path and place so
@@ -54,9 +50,7 @@ class TestCustomKernelLoad(unittest.TestCase):
             [paddle_lib_path, '..', '..', 'paddle_custom_device']
         )
         # copy so to default path
-        cmd = 'mkdir -p {} && cp ./*.so {}'.format(
-            self.default_path, self.default_path
-        )
+        cmd = f'mkdir -p {self.default_path} && cp ./*.so {self.default_path}'
         os.system(cmd)  # wait
 
     def test_custom_kernel_dot_load(self):
@@ -75,9 +69,7 @@ class TestCustomKernelLoad(unittest.TestCase):
         np.testing.assert_array_equal(
             out.numpy(),
             result,
-            err_msg='custom kernel dot out: {},\n numpy dot out: {}'.format(
-                out.numpy(), result
-            ),
+            err_msg=f'custom kernel dot out: {out.numpy()},\n numpy dot out: {result}',
         )
 
     def tearDown(self):

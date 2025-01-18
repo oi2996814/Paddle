@@ -18,7 +18,7 @@ limitations under the License. */
 #include <string>
 
 #include "glog/logging.h"
-#include "paddle/phi/api/ext/exception.h"
+#include "paddle/common/exception.h"
 #include "paddle/phi/backends/gpu/gpu_info.h"
 
 namespace phi {
@@ -37,11 +37,19 @@ const char *AllocationTypeStr(AllocationType type) {
       return "xpu";
     case AllocationType::IPU:
       return "ipu";
+    case AllocationType::CUSTOM:
+      return "custom_device";
     default:
       PD_THROW("Invalid phi device type.");
       return {};
   }
 }
+
+Place::Place(AllocationType type, const std::string &dev_type)
+    : device(0),
+      alloc_type_(type),
+      device_type_id_(phi::CustomRegisteredDeviceMap::Instance()
+                          .GetOrRegisterGlobalDeviceTypeId(dev_type)) {}
 
 std::string Place::DebugString() const {
   std::ostringstream os;
@@ -125,7 +133,7 @@ static int8_t GetCorrectDeviceIdByPlaceType(
       return 0;
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
     case paddle::PlaceType::kGPU:
-      return phi::backends::gpu::GetCurrentDeviceId();
+      return static_cast<int8_t>(phi::backends::gpu::GetCurrentDeviceId());
 #endif
     default:
       PD_THROW(
@@ -146,6 +154,96 @@ Place::Place(paddle::PlaceType type)
          "2.3, and will be removed in version 2.4! Please use "
          "`paddle::CPUPlace()/DefaultGPUPlace()` to represent the place type.";
 }
+
+TEST_API bool is_gpu_place(const Place &p) {
+  return p.GetType() == phi::AllocationType::GPU;
+}
+
+bool is_xpu_place(const Place &p) {
+  return p.GetType() == phi::AllocationType::XPU;
+}
+
+bool is_ipu_place(const Place &p) {
+  return p.GetType() == phi::AllocationType::IPU;
+}
+
+TEST_API bool is_cpu_place(const Place &p) {
+  return p.GetType() == phi::AllocationType::CPU;
+}
+
+bool is_cuda_pinned_place(const Place &p) {
+  return p.GetType() == phi::AllocationType::GPUPINNED;
+}
+
+bool is_custom_place(const Place &p) {
+  return p.GetType() == phi::AllocationType::CUSTOM;
+}
+
+bool is_accelerat_place(const Place &p) {
+  return is_gpu_place(p) || is_xpu_place(p) || is_ipu_place(p) ||
+         is_custom_place(p);
+}
+
+bool is_accelerat_allocation_type(AllocationType type) {
+  return type == phi::AllocationType::GPU || type == phi::AllocationType::XPU ||
+         type == phi::AllocationType::IPU ||
+         type == phi::AllocationType::CUSTOM;
+}
+
+bool places_are_same_class(const Place &p1, const Place &p2) {
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+  if (is_custom_place(p1) && is_custom_place(p2)) {
+    return p1.GetDeviceType() == p2.GetDeviceType();
+  }
+#endif
+  return p1.GetType() == p2.GetType();
+}
+
+bool is_same_place(const Place &p1, const Place &p2) {
+  if (places_are_same_class(p1, p2)) {
+    if (is_cpu_place(p1) || is_cuda_pinned_place(p1)) {
+      return true;
+    } else {
+      return p1 == p2;
+    }
+  } else {
+    return false;
+  }
+}
+
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+std::string PlaceHelper::GetDeviceType(const Place &place) {
+  if (is_cpu_place(place)) {
+    return "cpu";
+  } else if (is_gpu_place(place)) {
+    return "gpu";
+  } else if (is_xpu_place(place)) {
+    return "xpu";
+  } else if (is_custom_place(place)) {
+    return place.GetDeviceType();
+  } else {
+    PADDLE_THROW(common::errors::Fatal(
+        "Unknown device type. Please check available devices by "
+        "paddle.device.get_available_device()"));
+  }
+}
+
+size_t PlaceHelper::GetDeviceId(const Place &place) {
+  return place.GetDeviceId();
+}
+
+Place PlaceHelper::CreatePlace(const std::string &dev_type, size_t dev_id) {
+  if (dev_type == "cpu") {
+    return CPUPlace();
+  } else if (dev_type == "gpu") {
+    return GPUPlace(dev_id);
+  } else if (dev_type == "xpu") {
+    return XPUPlace(dev_id);
+  } else {
+    return CustomPlace(dev_type, dev_id);
+  }
+}
+#endif
 
 }  // namespace phi
 

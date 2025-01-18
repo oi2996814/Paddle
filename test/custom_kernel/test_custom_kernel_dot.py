@@ -26,11 +26,7 @@ class TestCustomKernelDot(unittest.TestCase):
         cur_dir = os.path.dirname(os.path.abspath(__file__))
 
         # --inplace to place output so file to current dir
-        cmd = (
-            'cd {} && {} custom_kernel_dot_setup.py build_ext --inplace'.format(
-                cur_dir, sys.executable
-            )
-        )
+        cmd = f'cd {cur_dir} && {sys.executable} custom_kernel_dot_setup.py build_ext --inplace'
         os.system(cmd)
 
     def test_custom_kernel_dot_run(self):
@@ -49,9 +45,7 @@ class TestCustomKernelDot(unittest.TestCase):
         np.testing.assert_array_equal(
             out.numpy(),
             result,
-            err_msg='custom kernel dot out: {},\n numpy dot out: {}'.format(
-                out.numpy(), result
-            ),
+            err_msg=f'custom kernel dot out: {out.numpy()},\n numpy dot out: {result}',
         )
 
 
@@ -61,9 +55,7 @@ class TestCustomKernelDotC(unittest.TestCase):
         cur_dir = os.path.dirname(os.path.abspath(__file__))
 
         # --inplace to place output so file to current dir
-        cmd = 'cd {} && {} custom_kernel_dot_c_setup.py build_ext --inplace'.format(
-            cur_dir, sys.executable
-        )
+        cmd = f'cd {cur_dir} && {sys.executable} custom_kernel_dot_c_setup.py build_ext --inplace'
         os.system(cmd)
 
     def test_custom_kernel_dot_run(self):
@@ -82,9 +74,7 @@ class TestCustomKernelDotC(unittest.TestCase):
         np.testing.assert_array_equal(
             out.numpy(),
             result,
-            err_msg='custom kernel dot out: {},\n numpy dot out: {}'.format(
-                out.numpy(), result
-            ),
+            err_msg=f'custom kernel dot out: {out.numpy()},\n numpy dot out: {result}',
         )
 
 

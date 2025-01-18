@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -32,7 +32,7 @@ if [[ "$SYSTEM" == "Linux" ]] || [[ "$SYSTEM" == "Darwin" ]];then
     cp $PADDLE_ROOT/paddle/scripts/paddle_build.sh $PADDLE_ROOT/paddle/scripts/paddle_build_pre.sh
 elif [[ "$SYSTEM" == "Windows_NT" ]];then
     git remote | grep upstream
-    if [ $? != 0 ]; then 
+    if [ $? != 0 ]; then
         git remote add upstream https://github.com/PaddlePaddle/Paddle.git
     fi
     git fetch upstream ${BRANCH}
@@ -53,7 +53,7 @@ elif [[ "$SYSTEM" == "Windows_NT" ]];then
 fi
 # remove line ended with .exe to get correct deleted_ut list
 ctest -N | awk -F ':' '{print $2}' | sed '/^$/d' | sed '$d' | sed 's/ //g' | sed '/\.exe$/d' | grep 'test' > $PADDLE_ROOT/br-ut
-#UNITTEST_DEV.spec is used for checking changes of unnitests between pr and paddle_develop in the later step
+#UNITTEST_DEV.spec is used for checking changes of unittests between pr and paddle_develop in the later step
 spec_path_dev=${PADDLE_ROOT}/paddle/fluid/UNITTEST_DEV.spec
 ctest -N | awk -F ':' '{print $2}' | sed '/^$/d' | sed '$d' > ${spec_path_dev}
 cd $PADDLE_ROOT/build

@@ -18,8 +18,8 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle import fluid
-from paddle.fluid.executor import Executor
+from paddle import base
+from paddle.base.executor import Executor
 
 os.environ["CPU_NUM"] = "1"
 
@@ -240,18 +240,32 @@ def lm_model(
         init_cell, shape=[num_layers, -1, hidden_size]
     )
 
-    x_emb = paddle.static.nn.embedding(
-        input=x,
-        size=[vocab_size, hidden_size],
-        dtype='float32',
-        is_sparse=False,
-        param_attr=fluid.ParamAttr(
-            name='embedding_para',
-            initializer=paddle.nn.initializer.Uniform(
-                low=-init_scale, high=init_scale
+    if paddle.framework.in_pir_mode():
+        Emb = paddle.nn.Embedding(
+            vocab_size,
+            hidden_size,
+            sparse=False,
+            weight_attr=base.ParamAttr(
+                name='embedding_para',
+                initializer=paddle.nn.initializer.Uniform(
+                    low=-init_scale, high=init_scale
+                ),
             ),
-        ),
-    )
+        )
+        x_emb = Emb(x)
+    else:
+        x_emb = paddle.static.nn.embedding(
+            input=x,
+            size=[vocab_size, hidden_size],
+            dtype='float32',
+            is_sparse=False,
+            param_attr=base.ParamAttr(
+                name='embedding_para',
+                initializer=paddle.nn.initializer.Uniform(
+                    low=-init_scale, high=init_scale
+                ),
+            ),
+        )
 
     x_emb = paddle.reshape(x_emb, shape=[-1, num_steps, hidden_size])
     if dropout is not None and dropout > 0.0:
@@ -323,22 +337,16 @@ class PaddingRNNTestBase(unittest.TestCase):
         self.reader = Reader()
         self.device_count = 1
 
-        # The default exec_strategy used for PaddingRNN.
-        # You can change it in set_customed_config.
-        self.exec_strategy = fluid.ExecutionStrategy()
-        self.exec_strategy.num_threads = self.device_count
-        self.exec_strategy.num_iteration_per_drop_scope = 100
-
         # The default build_strategy used for PaddingRNN.
         # You can change it in set_customed_config.
-        self.build_strategy = fluid.BuildStrategy()
+        self.build_strategy = base.BuildStrategy()
         self.build_strategy.enable_inplace = True
         self.build_strategy.memory_optimize = False
         self.build_strategy.fuse_all_optimizer_ops = True
 
         # CPU executor is used for PaddingRNN default.
         # You can change to CUDA executor in set_customed_config.
-        self.exe = Executor(fluid.CPUPlace())
+        self.exe = Executor(base.CPUPlace())
 
     def set_customed_config(self):
         # This function will be called before training.
@@ -347,10 +355,10 @@ class PaddingRNNTestBase(unittest.TestCase):
 
     def _prepare_program(self, config):
         paddle.seed(config.random_seed)
-        self.main_program = fluid.Program()
-        self.startup_program = fluid.Program()
-        with fluid.program_guard(self.main_program, self.startup_program):
-            with fluid.unique_name.guard():
+        self.main_program = base.Program()
+        self.startup_program = base.Program()
+        with base.program_guard(self.main_program, self.startup_program):
+            with base.unique_name.guard():
                 res_vars = lm_model(
                     config.hidden_size,
                     config.vocab_size,
@@ -454,9 +462,9 @@ class PaddingRNNTestBase(unittest.TestCase):
                 self.train_program,
                 feed=input_data_feed,
                 fetch_list=[
-                    self.loss.name,
-                    self.last_hidden.name,
-                    self.last_cell.name,
+                    self.loss,
+                    self.last_hidden,
+                    self.last_cell,
                 ],
                 use_program_cache=use_program_cache,
             )

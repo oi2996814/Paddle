@@ -26,7 +26,7 @@ VarDesc* Data(paddle::framework::BlockDesc* block,
               bool is_persistable = false,
               proto::VarType::Type data_type = proto::VarType::FP32) {
   auto* var = block->Var(name);
-  var->SetType(proto::VarType::LOD_TENSOR);
+  var->SetType(proto::VarType::DENSE_TENSOR);
   var->SetDataType(data_type);
   var->SetShape(shape);
   var->SetPersistable(is_persistable);
@@ -79,7 +79,7 @@ TEST(ApplyCastSoftmaxPass, basic) {
   PADDLE_ENFORCE_EQ(
       GetOpNum(graph->GetSubGraph(0), "cast"),
       0,
-      platform::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "graph should have 0 cast after xpu_delete_cast_op_pass, "
           "but actually has %d.",
           cast_num_in_graph));
@@ -106,7 +106,7 @@ TEST(ApplyCastLayerNormPass, basic) {
   PADDLE_ENFORCE_EQ(
       GetOpNum(graph->GetSubGraph(0), "cast"),
       0,
-      platform::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "graph should have 0 cast after xpu_delete_cast_op_pass, "
           "but actually has %d.",
           cast_num_in_graph));
@@ -188,18 +188,18 @@ TEST(ApplyCastCacheKVInitializationPass, basic) {
   PADDLE_ENFORCE_EQ(
       GetOpNum(graph->GetSubGraph(0), "shape"),
       1,
-      platform::errors::PreconditionNotMet("graph should have 1 shape after "
-                                           "xpu_delete_cast_op_pass, "
-                                           "but actually has %d.",
-                                           shape_num_in_graph));
+      common::errors::PreconditionNotMet("graph should have 1 shape after "
+                                         "xpu_delete_cast_op_pass, "
+                                         "but actually has %d.",
+                                         shape_num_in_graph));
   int cast_num_in_graph = GetOpNum(graph->GetSubGraph(0), "cast");
   PADDLE_ENFORCE_EQ(
       GetOpNum(graph->GetSubGraph(0), "cast"),
       1,
-      platform::errors::PreconditionNotMet("graph should have 1 cast after "
-                                           "xpu_delete_cast_op_pass, "
-                                           "but actually has %d.",
-                                           cast_num_in_graph));
+      common::errors::PreconditionNotMet("graph should have 1 cast after "
+                                         "xpu_delete_cast_op_pass, "
+                                         "but actually has %d.",
+                                         cast_num_in_graph));
 }
 
 }  // namespace ir

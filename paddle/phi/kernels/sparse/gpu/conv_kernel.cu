@@ -91,7 +91,7 @@ void Conv3dCooGPUKernel(const GPUContext& dev_ctx,
 
   int rank = is2D ? 4 : 5;
   std::vector<int> out_dims_vec(rank, 1);
-  DDim out_dims = make_ddim(out_dims_vec);
+  DDim out_dims = common::make_ddim(out_dims_vec);
 
   std::vector<int> kernel_sizes(kernel_dims.size());
   for (int i = 0; i < kernel_dims.size(); i++) {
@@ -177,6 +177,11 @@ void Conv3dCooGPUKernel(const GPUContext& dev_ctx,
                          dev_ctx.GetComputeCapability() < 80 &&
                          std::is_same<T, float>::value;
   bool cutlass = true;
+  // NOTE(HaipengMing): 256(in channel)x256(out channel) cutlass kernel could
+  // cause CUDA Error(700).
+  if (kernel_dims[kernel_dims.size() - 1] == 256 &&
+      kernel_dims[kernel_dims.size() - 2] == 256)
+    cutlass = false;
   if (dev_ctx.GetComputeCapability() < 75) cutlass = false;
   if (in_channels % 8 != 0 || out_channels % 8 != 0) {
     if (std::is_same<T, phi::dtype::float16>::value) cutlass = false;
@@ -218,14 +223,14 @@ void Conv3dCooGPUKernel(const GPUContext& dev_ctx,
       int* unique_value_ptr = unique_value.data<int>();
       phi::backends::gpu::GpuMemsetAsync(
           out_index_ptr, 0, sizeof(int) * rulebook_len, dev_ctx.stream());
-      GroupIndexs<<<config.block_per_grid,
-                    config.thread_per_block,
-                    0,
-                    dev_ctx.stream()>>>(rulebook_len,
-                                        kernel_size,
-                                        rulebook_ptr + rulebook_len,
-                                        out_index_ptr,
-                                        unique_value_ptr);
+      GroupIndices<<<config.block_per_grid,
+                     config.thread_per_block,
+                     0,
+                     dev_ctx.stream()>>>(rulebook_len,
+                                         kernel_size,
+                                         rulebook_ptr + rulebook_len,
+                                         out_index_ptr,
+                                         unique_value_ptr);
     }
     // 2. gather
     phi::DenseTensor in_features =

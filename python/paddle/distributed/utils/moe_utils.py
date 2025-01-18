@@ -29,7 +29,7 @@ def global_scatter(
     The global_count of the rank 0 is [2, 0, , ], rank 1 is [2, 0, ,](Due to the limited space, only the data calculated on rank 0 is shown here).
     In the global_scatter operator, local_count[i] represents sending local_count[i] data to the (i % n_expert)th expert of the (i // n_expert)th card,
     global_count[i] represents receiving global_count[i] data from the (i // n_expert)th card to the (i % n_expert)th expert of this card. The rank in the
-    figure respresent the rank of the current card in all cards.
+    figure represent the rank of the current card in all cards.
 
     The process of global_scatter sending data is as follows:
 
@@ -61,7 +61,7 @@ def global_scatter(
         global_count (Tensor): Tensor which have n_expert * world_size elements that indicates
             how many data needed to be received. The tensor data type should be int64.
         group (Group, optional): The group instance return by new_group or None for global default group. Default: None.
-        use_calc_stream (bool, optional): Wether to use calculation stream (True) or communication stream. Default: True.
+        use_calc_stream (bool, optional): Whether to use calculation stream (True) or communication stream. Default: True.
 
     Returns:
         out (Tensor): The data received from all experts.
@@ -69,34 +69,41 @@ def global_scatter(
     Examples:
         .. code-block:: python
 
-            # required: distributed
-            import paddle
-            from paddle.distributed import init_parallel_env
-            init_parallel_env()
-            n_expert = 2
-            world_size = 2
-            d_model = 2
-            in_feat = d_model
-            local_input_buf = paddle.to_tensor([[1, 2],[3, 4],[5, 6],[7, 8],[9, 10]], \
-                                            dtype='float32', stop_gradient=False)
-            if paddle.distributed.ParallelEnv().local_rank == 0:
-                local_count = paddle.to_tensor([2, 1, 1, 1], dtype="int64")
-                global_count = paddle.to_tensor([2, 1, 1, 1], dtype="int64")
-            else:
-                local_count = paddle.to_tensor([1, 1, 2, 1], dtype="int64")
-                global_count = paddle.to_tensor([1, 1, 2, 1], dtype="int64")
-            a = paddle.distributed.utils.global_scatter(local_input_buf, \
-            local_count, global_count)
-            a.stop_gradient = False
-            print(a)
-            # out for rank 0: [[1, 2], [3, 4], [1, 2], [5, 6], [3, 4]]
-            # out for rank 1: [[7, 8], [5, 6], [7, 8], [9, 10], [9, 10]]
-            # backward test
-            c = a * a
-            c.backward()
-            print("local_input_buf.grad: ", local_input_buf.grad)
-            # out for rank 0: [[2, 4], [6, 8], [10, 12], [14, 16], [18, 20]]
-            # out for rank 1: [[2, 4], [6, 8], [10, 12], [14, 16], [18, 20]]
+            >>> # doctest: +REQUIRES(env:DISTRIBUTED)
+            >>> import paddle
+            >>> from paddle.distributed import init_parallel_env
+            >>> from paddle.distributed.utils import moe_utils
+            >>> init_parallel_env()
+            >>> n_expert = 2
+            >>> world_size = 2
+            >>> d_model = 2
+            >>> in_feat = d_model
+            >>> local_input_buf = paddle.to_tensor(
+            ...     [[1, 2],[3, 4],[5, 6],[7, 8],[9, 10]],
+            ...     dtype='float32',
+            ...     stop_gradient=False
+            ... )
+            >>> if paddle.distributed.ParallelEnv().local_rank == 0:
+            ...     local_count = paddle.to_tensor([2, 1, 1, 1], dtype="int64")
+            ...     global_count = paddle.to_tensor([2, 1, 1, 1], dtype="int64")
+            >>> else:
+            ...     local_count = paddle.to_tensor([1, 1, 2, 1], dtype="int64")
+            ...     global_count = paddle.to_tensor([1, 1, 2, 1], dtype="int64")
+            >>> a = moe_utils.global_scatter(local_input_buf,
+            ...     local_count,
+            ...     global_count
+            ... )
+            >>> a.stop_gradient = False
+            >>> print(a)
+            >>> # out for rank 0: [[1, 2], [3, 4], [1, 2], [5, 6], [3, 4]]
+            >>> # out for rank 1: [[7, 8], [5, 6], [7, 8], [9, 10], [9, 10]]
+            >>> # backward test
+            >>> c = a * a
+            >>> c.backward()
+            >>> print("local_input_buf.grad: ", local_input_buf.grad)
+            >>> # out for rank 0: [[2, 4], [6, 8], [10, 12], [14, 16], [18, 20]]
+            >>> # out for rank 1: [[2, 4], [6, 8], [10, 12], [14, 16], [18, 20]]
+
     """
     if group is not None and not group.is_member():
         return
@@ -117,7 +124,7 @@ def global_scatter(
         check_variable_and_dtype(
             x,
             'x',
-            ['float16', 'float32', 'float64', 'int32', 'int64'],
+            ['float16', 'float32', 'float64', 'int32', 'int64', 'uint16'],
             'global_scatter',
         )
         check_variable_and_dtype(
@@ -154,7 +161,7 @@ def global_gather(
     The global_count of the rank 0 is [2, 0, , ], rank 1 is [2, 0, ,](Due to the limited space, only the data calculated on rank 0 is shown here).
     In the global_gather operator, the meaning of the global_count and local_count is opposed to global_scatter, global_count[i] represents sending global_count[i] data to the (i % n_expert)th expert of the (i // n_expert)th card,
     local_count[i] represents receiving local_count[i] data from the (i // n_expert)th card to the (i % n_expert)th expert of this card. The data sent will be arranged according to the experts of each card.
-    The rank in the figure respresent the rank of the current card in all cards.
+    The rank in the figure represent the rank of the current card in all cards.
 
     The process of global_gather sending data is as follows:
 
@@ -179,7 +186,7 @@ def global_gather(
         global_count (Tensor): Tensor which have n_expert * world_size elements that indicates
             how many data needed to be sent. Tensor data type should be int64.
         group (Group, optional): The group instance return by new_group or None for global default group. Default: None.
-        use_calc_stream (bool, optional): Wether to use calculation stream (True) or communication stream. Default: True.
+        use_calc_stream (bool, optional): Whether to use calculation stream (True) or communication stream. Default: True.
 
     Returns:
         out (Tensor): The data received from all experts.
@@ -187,33 +194,41 @@ def global_gather(
     Examples:
         .. code-block:: python
 
-            # required: distributed
-            import paddle
-            from paddle.distributed import init_parallel_env
-            init_parallel_env()
-            n_expert = 2
-            world_size = 2
-            d_model = 2
-            in_feat = d_model
-            local_input_buf = paddle._to_tensor([[1, 2],[3, 4],[5, 6],[7, 8],[9, 10]],\
-                                        dtype='float32', stop_gradient=False)
-            if paddle.distributed.ParallelEnv().local_rank == 0:
-                local_count = paddle.to_tensor([2, 1, 1, 1], dtype="int64")
-                global_count = paddle.to_tensor([2, 1, 1, 1], dtype="int64")
-            else:
-                local_count = paddle.to_tensor([1, 1, 2, 1], dtype="int64")
-                global_count = paddle.to_tensor([1, 1, 2, 1], dtype="int64")
+            >>> # doctest: +REQUIRES(env:DISTRIBUTED)
+            >>> import paddle
+            >>> from paddle.distributed import init_parallel_env
+            >>> from paddle.distributed.utils import moe_utils
+            >>> init_parallel_env()
+            >>> n_expert = 2
+            >>> world_size = 2
+            >>> d_model = 2
+            >>> in_feat = d_model
+            >>> local_input_buf = paddle._to_tensor(
+            ...     [[1, 2],[3, 4],[5, 6],[7, 8],[9, 10]],
+            ...     dtype='float32',
+            ...     stop_gradient=False
+            ... )
+            >>> if paddle.distributed.ParallelEnv().local_rank == 0:
+            ...     local_count = paddle.to_tensor([2, 1, 1, 1], dtype="int64")
+            ...     global_count = paddle.to_tensor([2, 1, 1, 1], dtype="int64")
+            >>> else:
+            ...     local_count = paddle.to_tensor([1, 1, 2, 1], dtype="int64")
+            ...     global_count = paddle.to_tensor([1, 1, 2, 1], dtype="int64")
+            >>> a = moe_utils.global_gather(
+            ...     local_input_buf,
+            ...     local_count,
+            ...     global_count
+            ... )
+            >>> print(a)
+            >>> # out for rank 0: [[1, 2], [3, 4], [7, 8], [1, 2], [7, 8]]
+            >>> # out for rank 1: [[5, 6], [9, 10], [3, 4], [5, 6], [9, 10]]
+            >>> a.stop_gradient = False
+            >>> c = a * a
+            >>> c.backward()
+            >>> print("local_input_buf.grad", local_input_buf.grad)
+            >>> # out for rank 0: [[2, 4], [6, 8], [10, 12], [14, 16], [18, 20]]
+            >>> # out for rank 1: [[2, 4], [6, 8], [10, 12], [14, 16], [18, 20]]
 
-            a = paddle.distributed.utils.global_gather(local_input_buf, local_count, global_count)
-            print(a)
-            # out for rank 0: [[1, 2], [3, 4], [7, 8], [1, 2], [7, 8]]
-            # out for rank 1: [[5, 6], [9, 10], [3, 4], [5, 6], [9, 10]]
-            a.stop_gradient = False
-            c = a * a
-            c.backward()
-            print("local_input_buf.grad", local_input_buf.grad)
-            # out for rank 0: [[2, 4], [6, 8], [10, 12], [14, 16], [18, 20]]
-            # out for rank 1: [[2, 4], [6, 8], [10, 12], [14, 16], [18, 20]]
     """
     if group is not None and not group.is_member():
         return
@@ -234,7 +249,7 @@ def global_gather(
         check_variable_and_dtype(
             x,
             'x',
-            ['float16', 'float32', 'float64', 'int32', 'int64'],
+            ['float16', 'float32', 'float64', 'int32', 'int64', 'uint16'],
             'global_gather',
         )
 

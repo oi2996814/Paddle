@@ -20,8 +20,7 @@
 #include "paddle/phi/kernels/sparse/empty_kernel.h"
 #include "paddle/phi/kernels/sparse/impl/unary_grad_kernel_impl.h"
 
-namespace phi {
-namespace sparse {
+namespace phi::sparse {
 
 template <typename T, typename Context>
 void ReshapeCooGradKernel(const Context& dev_ctx,
@@ -29,7 +28,7 @@ void ReshapeCooGradKernel(const Context& dev_ctx,
                           const SparseCooTensor& dout,
                           SparseCooTensor* dx) {
   EmptyLikeCooKernel<T, Context>(dev_ctx, x, dx);
-  phi::IntArray x_shape(phi::vectorize(x.dims()));
+  phi::IntArray x_shape(common::vectorize(x.dims()));
   ReshapeCooKernel<T, Context>(dev_ctx, dout, x_shape, dx);
 }
 
@@ -39,12 +38,11 @@ void ReshapeCsrGradKernel(const Context& dev_ctx,
                           const SparseCsrTensor& dout,
                           SparseCsrTensor* dx) {
   EmptyLikeCsrKernel<T, Context>(dev_ctx, x, dx);
-  phi::IntArray x_shape(phi::vectorize(x.dims()));
+  phi::IntArray x_shape(common::vectorize(x.dims()));
   ReshapeCsrKernel<T, Context>(dev_ctx, dout, x_shape, dx);
 }
 
-}  // namespace sparse
-}  // namespace phi
+}  // namespace phi::sparse
 
 PD_REGISTER_KERNEL(reshape_coo_grad,
                    CPU,

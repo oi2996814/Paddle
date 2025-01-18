@@ -12,14 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import sys
 import unittest
 
 import numpy as np
-from test_imperative_lod_tensor_to_selected_rows import SimpleNet
 
-from paddle import fluid
-from paddle.fluid import core
-from paddle.fluid.dygraph import base
+sys.path.append("../deprecated/legacy_test")
+from test_imperative_lod_tensor_to_selected_rows_deprecated import SimpleNet
+
+import paddle
+from paddle import base
+from paddle.base import core
 
 call_forward_post_hook = False
 call_forward_pre_hook = False
@@ -49,15 +53,20 @@ class Test_Forward_Hook(unittest.TestCase):
     def test_forward_hook_return_value(self):
         seed = 90
 
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
 
         for place in places:
-            with fluid.dygraph.guard(place):
-                fluid.default_startup_program().random_seed = seed
-                fluid.default_main_program().random_seed = seed
-                fluid.set_flags({'FLAGS_sort_sum_gradient': True})
+            with base.dygraph.guard(place):
+                paddle.seed(seed)
+                base.set_flags({'FLAGS_sort_sum_gradient': True})
 
                 input_word = (
                     np.array(
@@ -78,9 +87,9 @@ class Test_Forward_Hook(unittest.TestCase):
                 )
                 y_data = y_data.reshape((-1, 1))
 
-                input = base.to_variable(input_word)
-                input1 = base.to_variable(input_word1)
-                y = base.to_variable(y_data)
+                input = paddle.to_tensor(input_word)
+                input1 = paddle.to_tensor(input_word1)
+                y = paddle.to_tensor(y_data)
 
                 simplenet = SimpleNet(
                     hidden_size=20,
@@ -131,15 +140,20 @@ class Test_Forward_Hook(unittest.TestCase):
     def test_forward_hook(self):
         seed = 90
 
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
 
         for place in places:
-            with fluid.dygraph.guard(place):
-                fluid.default_startup_program().random_seed = seed
-                fluid.default_main_program().random_seed = seed
-                fluid.set_flags({'FLAGS_sort_sum_gradient': True})
+            with base.dygraph.guard(place):
+                paddle.seed(seed)
+                base.set_flags({'FLAGS_sort_sum_gradient': True})
 
                 global call_forward_post_hook
                 global call_forward_pre_hook
@@ -161,8 +175,8 @@ class Test_Forward_Hook(unittest.TestCase):
                 )
                 y_data = y_data.reshape((-1, 1))
 
-                input = base.to_variable(input_word)
-                y = base.to_variable(y_data)
+                input = paddle.to_tensor(input_word)
+                y = paddle.to_tensor(y_data)
 
                 simplenet = SimpleNet(
                     hidden_size=20,

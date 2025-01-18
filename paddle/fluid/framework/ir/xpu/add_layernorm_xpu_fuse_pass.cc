@@ -59,7 +59,7 @@ After the pass is applied:
    scale---- add_layernorm_fusion ---- bias
                 /     |    \     \
                /      |     \     \
-          variance    |      meam  z_add
+          variance    |      mean  z_add
                     Output
 */
 struct AddLayernormXPUPattern : public PatternBase {
@@ -105,10 +105,12 @@ AddLayernormXPUPattern::AddLayernormXPUPattern(PDPattern* pattern,
                         ->assert_is_op_input("layer_norm", "Scale");
   auto norm_mean = pattern->NewNode(norm_mean_repr())
                        ->AsOutput()
-                       ->assert_is_op_output("layer_norm", "Mean");
+                       ->assert_is_op_output("layer_norm", "Mean")
+                       ->assert_has_n_outputs(0);
   auto norm_variance = pattern->NewNode(norm_variance_repr())
                            ->AsOutput()
-                           ->assert_is_op_output("layer_norm", "Variance");
+                           ->assert_is_op_output("layer_norm", "Variance")
+                           ->assert_has_n_outputs(0);
   auto norm_out = pattern->NewNode(norm_out_repr())
                       ->AsOutput()
                       ->assert_is_op_output("layer_norm", "Y");
@@ -151,7 +153,7 @@ class AddLayernormXPUFusePass : public FusePassBase {
 
 void AddLayernormXPUFusePass::ApplyImpl(ir::Graph* graph) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, platform::errors::PreconditionNotMet("graph should not be null."));
+      graph, common::errors::PreconditionNotMet("graph should not be null."));
   Init(name_scope_, graph);
 
   FuseAddLayernorm(graph);
@@ -181,7 +183,7 @@ void AddLayernormXPUFusePass::FuseAddLayernorm(ir::Graph* graph) const {
     auto* block = l_norm->Op()->Block();
     auto* scope = param_scope();
     PADDLE_ENFORCE_NOT_NULL(
-        scope, platform::errors::InvalidArgument("Scope cannot be nullptr."));
+        scope, common::errors::InvalidArgument("Scope cannot be nullptr."));
     auto x_shape = add_x->Var()->GetShape();
     auto x_rank = x_shape.size();
     auto y_shape = add_y->Var()->GetShape();
@@ -198,6 +200,7 @@ void AddLayernormXPUFusePass::FuseAddLayernorm(ir::Graph* graph) const {
     fused_op_out_name = norm_out->Name();
     // Generate add_layernorm fused op
     framework::OpDesc fused_op_desc(block);
+
     fused_op_desc.SetType("add_layernorm_xpu");
     // set attrs for fused op
     fused_op_desc.SetInput("x", {add_x->Name()});
@@ -207,9 +210,6 @@ void AddLayernormXPUFusePass::FuseAddLayernorm(ir::Graph* graph) const {
     fused_op_desc.SetAttr("epsilon", eps);
     fused_op_desc.SetAttr("begin_norm_axis", begin_norm_axis);
     fused_op_desc.SetOutput("out", {fused_op_out_name});
-    setIntermediateOut(&fused_op_desc, "mean", name_scope_);
-    setIntermediateOut(&fused_op_desc, "variance", name_scope_);
-    setIntermediateOut(&fused_op_desc, "z_add", name_scope_);
     // relink fused op
     auto* fused_op = graph->CreateOpNode(&fused_op_desc);
     IR_NODE_LINK_TO(add_x, fused_op);
@@ -217,9 +217,7 @@ void AddLayernormXPUFusePass::FuseAddLayernorm(ir::Graph* graph) const {
     IR_NODE_LINK_TO(norm_scale, fused_op);
     IR_NODE_LINK_TO(norm_bias, fused_op);
     IR_NODE_LINK_TO(fused_op, norm_out);
-    addIntermediateOut(fused_op, "mean", name_scope_, graph);
-    addIntermediateOut(fused_op, "variance", name_scope_, graph);
-    addIntermediateOut(fused_op, "z_add", name_scope_, graph);
+
     delete_nodes.insert({ele_add, l_norm, ele_out, norm_mean, norm_variance});
     GraphSafeRemoveNodes(graph, delete_nodes);
     found_subgraph_count++;

@@ -25,9 +25,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "paddle/cinn/frontend/syntax.h"
-#include "paddle/cinn/hlir/framework/graph.h"
 #include "paddle/cinn/utils/dot_lang.h"
+
+#include "paddle/common/errors.h"
 
 namespace cinn {
 namespace hlir {
@@ -44,8 +44,6 @@ class PassPrinter {
   bool PassBegin(const std::string& pass_name,
                  const frontend::Program& program);
   bool PassEnd(const std::string& pass_name, const frontend::Program& program);
-  bool PassBegin(const std::string& pass_name, Graph* g);
-  bool PassEnd(const std::string& pass_name, Graph* g);
   bool End();
 
  private:
@@ -59,7 +57,8 @@ inline void WriteToFile(const std::string& filepath,
                         const std::string& content) {
   VLOG(4) << "Write to " << filepath;
   std::ofstream of(filepath);
-  CHECK(of.is_open()) << "Failed to open " << filepath;
+  PADDLE_ENFORCE(of.is_open(),
+                 ::common::errors::Unavailable("Failed to open %s", filepath));
   of << content;
   of.close();
 }
@@ -136,7 +135,7 @@ bool MakeDirectory(const std::string& dirname, mode_t mode);
 std::string GenNodeDataLabel(
     const NodeData* node,
     const absl::flat_hash_map<std::string, shape_t>& shape_dict,
-    const absl::flat_hash_map<std::string, common::Type>& dtype_dict,
+    const absl::flat_hash_map<std::string, cinn::common::Type>& dtype_dict,
     const std::string dot_nodedata_id);
 
 void Summary(const std::vector<std::vector<Node*>>& groups,
@@ -152,7 +151,7 @@ void AddGroupNode(
     const std::string& dot_cluster_id,
     const std::unordered_set<std::string>& fetch_var_ids,
     const absl::flat_hash_map<std::string, shape_t>& shape_dict,
-    const absl::flat_hash_map<std::string, common::Type>& dtype_dict,
+    const absl::flat_hash_map<std::string, cinn::common::Type>& dtype_dict,
     std::unordered_map<std::string, int>* recompute_nodes,
     std::unordered_map<std::string, std::string>* outnode2dot_id,
     std::unordered_set<std::string>* nodedatas_set,

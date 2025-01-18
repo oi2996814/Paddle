@@ -13,16 +13,17 @@
 # limitations under the License.
 
 import logging
+import re
 
 import paddle
-from paddle.distributed.fleet.meta_optimizers.common import OP_ROLE_KEY, OpRole
-from paddle.fluid.backward import (
+from paddle.base.backward import (
     ProgramStats,
     _append_grad_suffix_,
     _find_op_path_,
     _get_no_grad_set_name,
     _rename_arg_,
 )
+from paddle.distributed.fleet.meta_optimizers.common import OP_ROLE_KEY, OpRole
 from paddle.framework import core
 from paddle.utils import unique_name
 
@@ -31,12 +32,16 @@ from ..auto_parallel.static.utils import (
     get_loss_op,
     insert_dependencies_for_two_ops,
     is_backward_op,
+    is_recompute_exclude_op,
     is_recompute_op,
     naive_set_dist_op_attr_for_program_by_mesh_and_mapping,
     set_dist_op_desc_original_id,
     set_var_dist_attr,
 )
+from ..utils.log_utils import get_logger
 from .pass_base import PassBase, register_pass
+
+logger = get_logger(logging.INFO)
 
 
 class RecomputeState(ProgramStats):
@@ -80,9 +85,12 @@ class RecomputeState(ProgramStats):
 
             if not is_recompute_op(op):
                 self._checkpoints.extend(op.output_arg_names)
-                continue
+                if not is_recompute_exclude_op(op):
+                    continue
 
             seg_name = op.attr('op_namescope')
+            res = re.search("/auto_parallel/rc_[0-9]*", seg_name)
+            seg_name = res.group(0)
             if seg_name not in self.seg_op_deps:
                 self.seg_op_deps[seg_name] = [i]
             else:
@@ -102,16 +110,14 @@ class RecomputeState(ProgramStats):
         for i in sorted(no_recompute_segments, reverse=True):
             assert i < len(
                 segments
-            ), "the no_recompute_segments idx [{}] should be lower the number of segment [{}]".format(
-                i, len(segments)
-            )
+            ), f"the no_recompute_segments idx [{i}] should be lower the number of segment [{len(segments)}]"
             segments.pop(i)
 
         return segments
 
     def modify_forward_desc_for_recompute(self, dist_context):
         """
-        If program's foward part has 'dropout' op, this function will insert
+        If program's forward part has 'dropout' op, this function will insert
         a seed op before it to guarantee that two dropout op have the same outputs.
         """
         op_types = [op.type for op in self.ops]
@@ -142,7 +148,7 @@ class RecomputeState(ProgramStats):
             cur_op_dist_attr = dist_context.get_op_dist_attr_for_program(cur_op)
             # insert seed op to guarantee that two dropout op have the same outputs
             # NOTE Hack for adopt recompute for random control, for more info see dist_dropout.py
-            # new seed added by recompute should have a prefix to distinguish with seed added by user or other moudule.
+            # new seed added by recompute should have a prefix to distinguish with seed added by user or other module.
             op_unique_name = unique_name.generate("rc_seed")
             var_unique_name = unique_name.generate_with_ignorable_key(
                 ".".join([op_unique_name, 'tmp'])
@@ -151,7 +157,7 @@ class RecomputeState(ProgramStats):
             seed_var = self.block.create_var(
                 name=var_unique_name,
                 dtype='int32',
-                type=core.VarDesc.VarType.LOD_TENSOR,
+                type=core.VarDesc.VarType.DENSE_TENSOR,
                 persistable=False,
                 stop_gradient=False,
             )
@@ -160,7 +166,11 @@ class RecomputeState(ProgramStats):
             ref_dims_mapping = [-1]
             ref_process_mesh = cur_op_dist_attr.process_mesh
             seed_var_dist_attr = set_var_dist_attr(
-                dist_context, seed_var, ref_dims_mapping, ref_process_mesh
+                dist_context,
+                seed_var,
+                ref_dims_mapping,
+                ref_process_mesh,
+                chunk_id=cur_op_dist_attr.chunk_id,
             )
 
             seed = (
@@ -179,14 +189,18 @@ class RecomputeState(ProgramStats):
             seed_op._set_attr('op_namescope', cur_op.attr('op_namescope'))
             # set new seed op's dist_attr
             naive_set_dist_op_attr_for_program_by_mesh_and_mapping(
-                seed_op, ref_process_mesh, ref_dims_mapping, dist_context
+                seed_op,
+                ref_process_mesh,
+                ref_dims_mapping,
+                dist_context,
+                chunk_id=cur_op_dist_attr.chunk_id,
             )
 
             # modify dropout op's desc
             self.ops.insert(op_idx, seed_op)
             cur_op.desc.set_input(seed_tensor_name, [var_unique_name])
-            cur_op._remove_attr("fix_seed")
-            cur_op._remove_attr("seed")
+            cur_op.desc._set_attr("fix_seed", False)
+            cur_op.desc._set_attr("seed", 0)
             cur_op_dist_attr.set_input_dist_attr(
                 seed_var.name, seed_var_dist_attr
             )
@@ -277,22 +291,118 @@ class RecomputePass(PassBase):
     def _check_conflict(self, other_pass):
         return True
 
+    def get_ops_per_device(self, ops, all_ops_process_meshes, sr=0):
+        """
+        Get ops and op_names of each process mesh excluding ops within the first "sr" chunks
+        """
+
+        def reset_recompute_op(op):
+            if is_recompute_op(op) or is_recompute_exclude_op(op):
+                op._set_attr("op_namescope", "")
+
+        all_process_meshes_count = len(all_ops_process_meshes)
+        ops_of_stages = [[] for _ in range(all_process_meshes_count)]
+        op_names_of_stages = [[] for _ in range(all_process_meshes_count)]
+        pushed_ops_count = 0
+        reset_ops_count = 0
+        chunk_id = 0
+        for op_id, op in enumerate(ops):
+            if chunk_id // all_process_meshes_count < sr:
+                reset_ops_count += 1
+                reset_recompute_op(op)
+            if (
+                op_id < len(ops) - 1
+                and op.dist_attr.process_mesh
+                != ops[op_id + 1].dist_attr.process_mesh
+            ):
+                chunk_id += 1
+            if chunk_id // all_process_meshes_count < sr:
+                continue
+
+            for id, process_mesh in enumerate(all_ops_process_meshes):
+                if op.dist_attr.process_mesh == process_mesh:
+                    pushed_ops_count += 1
+                    ops_of_stages[id].append(op)
+                    op_names_of_stages[id].append(op.type)
+        assert (
+            len(ops) == reset_ops_count + pushed_ops_count
+        ), f"The sum of pushed_ops_count and reset_ops_count must be the same as length of ops, but the sum is {reset_ops_count + pushed_ops_count} while length of ops is {len(ops)}"
+        return ops_of_stages, op_names_of_stages
+
     def _apply_single_impl(self, main_program, startup_program, context):
         loss = self.get_attr("loss")
         no_grad_set = self.get_attr("no_grad_set")
         no_recompute_segments = self.get_attr("no_recompute_segments")
         self._dist_context = self.get_attr("dist_context")
+        self._sr = self.get_attr("sr", 0)
+        self._refined_ops_patterns = self.get_attr("refined_ops_patterns", [])
 
         # 0. get op_path which is related to loss
         main_block = main_program.global_block()
         op_path = _find_op_path(main_program, loss, no_grad_set)
 
-        # 1. build recompute state
+        # 1. mark exclude ops for refined-recompute according to ops-patterns(mainly linear and flash_attn)
+        # 1.1 get all process_meshes in op_path
+        all_ops_process_meshes = []
+        for op in op_path:
+            if op.dist_attr.process_mesh not in all_ops_process_meshes:
+                all_ops_process_meshes.append(op.dist_attr.process_mesh)
+
+        # 1.2 get ops_devices and op_names_devices
+        ops_devices, op_names_devices = self.get_ops_per_device(
+            op_path, all_ops_process_meshes, self._sr
+        )
+        all_ops_len = len(op_path)
+        all_exclude_ops_ids = [[] for _ in op_names_devices]
+        # 1.3 find exclude ops for refined-recompute according to ops-patterns
+        for refined_ops_pattern in self._refined_ops_patterns:
+            num = refined_ops_pattern['num']
+            num = (
+                num if num >= 0 else all_ops_len
+            )  # 'num == -1' represents to all ops
+            main_ops = refined_ops_pattern['main_ops']
+            pre_ops = refined_ops_pattern['pre_ops']
+            suf_ops = refined_ops_pattern['suf_ops']
+            main_start_id = len(pre_ops)
+            main_ops_len = len(main_ops)
+            pattern_ops = pre_ops + main_ops + suf_ops
+            pattern_ops_len = len(pattern_ops)
+
+            for id, op_names_device in enumerate(op_names_devices):
+                pattern_count = 0
+                ops_len_device = len(op_names_device)
+                for i in range(ops_len_device - pattern_ops_len + 1):
+                    if (
+                        op_names_device[i : i + pattern_ops_len] == pattern_ops
+                        and pattern_count < num
+                    ):
+                        pattern_count += 1
+                        all_exclude_ops_ids[id].extend(
+                            list(
+                                range(
+                                    i + main_start_id,
+                                    i + main_start_id + main_ops_len,
+                                )
+                            )
+                        )
+        logger.info(
+            f"The excluded ops in recompute segments are:\n{all_exclude_ops_ids}"
+        )
+        # 1.4 mark exclude ops in exclude_ops_ids
+        for id, exclude_ops_ids in enumerate(all_exclude_ops_ids):
+            for op_id in exclude_ops_ids:
+                if is_recompute_op(ops_devices[id][op_id]):
+                    rc_mark_str = ops_devices[id][op_id].attr("op_namescope")
+                    ops_devices[id][op_id]._set_attr(
+                        "op_namescope", rc_mark_str + "_exclude_rc"
+                    )
+
+        # 2. build recompute state
         rc_state = RecomputeState(main_block, op_path)
         if not rc_state.is_recompute():
             return
 
-        # 2. get the segments to be recomputed
+        # 3. get the segments to be recomputed
         rc_state.modify_forward_desc_for_recompute(self._dist_context)
         rc_state.build_states()
         segments = rc_state.get_recompute_segments(no_recompute_segments)
@@ -300,34 +410,25 @@ class RecomputePass(PassBase):
             return
 
         for i, (idx1, idx2) in enumerate(segments):
-            logging.info(f"recompute segment[{i + 1}/{len(segments)}]")
-            logging.info(
-                "segment start op: [{}]: [{}] [{}]".format(
-                    rc_state.ops[idx1].type,
-                    rc_state.ops[idx1].input_arg_names,
-                    rc_state.ops[idx1].output_arg_names,
-                )
+            logger.debug(f"recompute segment[{i + 1}/{len(segments)}]")
+            logger.debug(
+                f"segment start op: [{rc_state.ops[idx1].type}]: [{rc_state.ops[idx1].input_arg_names}] [{rc_state.ops[idx1].output_arg_names}]"
             )
-            logging.info(
-                "segment end op: [{}]: [{}] [{}]".format(
-                    rc_state.ops[idx2 - 1].type,
-                    rc_state.ops[idx2 - 1].input_arg_names,
-                    rc_state.ops[idx2 - 1].output_arg_names,
-                )
+            logger.debug(
+                f"segment end op: [{rc_state.ops[idx2 - 1].type}]: [{rc_state.ops[idx2 - 1].input_arg_names}] [{rc_state.ops[idx2 - 1].output_arg_names}]"
             )
 
-        # 3. get vars that should be hold in memory
+        # 4. get vars that should be hold in memory
+        # list of var_names
         vars_should_be_hold = []
         for segment in segments:
             vars_should_be_hold.extend(
                 rc_state.get_out_of_subgraph_vars(segment[0], segment[1])
             )
         cross_vars = set(vars_should_be_hold) - set(rc_state.checkpoints)
-        logging.info(
-            "found [{}] vars which cross recompute segment: [{}],"
-            "better checkpoints might be set to reduce those vars".format(
-                len(cross_vars), cross_vars
-            )
+        logger.debug(
+            f"found [{len(cross_vars)}] vars which cross recompute segment: [{cross_vars}],"
+            "better checkpoints might be set to reduce those vars"
         )
         vars_should_be_hold.extend(rc_state.reserved_vars)
         vars_should_be_hold.extend(rc_state.get_input_nodes())
@@ -335,13 +436,13 @@ class RecomputePass(PassBase):
             set(vars_should_be_hold) | set(rc_state.checkpoints)
         )
 
-        # 4. get the fwd ops desc to be recomputed.
+        # 5. get the fwd ops desc to be recomputed.
         var_name_dict = {}  # varname --> varname.subprog_XXX
         ckpt_ops_dict = {}  # ckpt_op_id --> segment_descs
         buffer_block = main_block.program._create_block()
         for i, segment in enumerate(segments[::-1]):
             fwd_ops = op_path[segment[0] : segment[1]]
-            var_suffix = ".subprog_%d" % i
+            var_suffix = f".subprog_{i}"
             for op in fwd_ops:
                 input_and_output_names = []
                 input_and_output_names.extend(op.input_arg_names)
@@ -387,6 +488,7 @@ class RecomputePass(PassBase):
                             rc_var,
                             ref_dims_mapping,
                             ref_process_mesh,
+                            chunk_id=cur_op_dist_attr.chunk_id,
                         )
             # get recomputed segment's descs
             segment_descs = _add_needed_descs_to_block(
@@ -406,7 +508,7 @@ class RecomputePass(PassBase):
             ckpt_op = op_path[segment[1] - 1]
             ckpt_ops_dict[ckpt_op.desc.original_id()] = [True, segment_descs]
 
-        # 5. insert recomputed fwd ops into backward parse
+        # 6. insert recomputed fwd ops into backward parse
         ops = main_block.ops
         loss_op = get_loss_op(main_block)
         loss_op_idx = _find_op_index(main_block, loss_op)
@@ -416,10 +518,6 @@ class RecomputePass(PassBase):
         # segments ops should be inserted.
         for i in range(len(ops) - 1, loss_op_idx, -1):
             grad_op = ops[i]
-            # remove some attrs of dropout_grad op's desc
-            if grad_op.type == "dropout_grad":
-                grad_op._remove_attr("fix_seed")
-                grad_op._remove_attr("seed")
 
             input_and_output_names = []
             input_and_output_names.extend(grad_op.input_arg_names)
@@ -471,8 +569,8 @@ class RecomputePass(PassBase):
                                 posterior_op
                             ).process_mesh
                         )
-                        # NOTE if two recompute segements across two pipeline stages
-                        # not need dependecies for it
+                        # NOTE if two recompute segments across two pipeline stages
+                        # not need dependencies for it
                         if prior_mesh == posterior_mesh:
                             insert_dependencies_for_two_ops(
                                 main_block,
@@ -508,6 +606,7 @@ class RecomputePass(PassBase):
         new_dist_attr.impl_idx = old_dist_attr.impl_idx
         new_dist_attr.impl_type = old_dist_attr.impl_type
         new_dist_attr.process_mesh = old_dist_attr.process_mesh
+        new_dist_attr.chunk_id = old_dist_attr.chunk_id
         for input in old_dist_attr.inputs_dist_attrs.keys():
             if input in var_name_dict.keys():
                 in_dist_attr = old_dist_attr.inputs_dist_attrs[input]

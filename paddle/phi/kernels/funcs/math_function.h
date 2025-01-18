@@ -22,6 +22,7 @@ limitations under the License. */
 #include "paddle/phi/core/dense_tensor.h"
 #include "paddle/phi/core/utils/data_type.h"
 #ifdef PADDLE_WITH_XPU
+#include <type_traits>
 #include "paddle/phi/backends/context_pool.h"
 #include "paddle/phi/backends/xpu/enforce_xpu.h"
 #include "paddle/phi/backends/xpu/xpu_header.h"
@@ -120,40 +121,8 @@ struct TensorSetConstantXPU {
     auto* ctx = phi::DeviceContextPool::Instance().Get(place_);
     auto begin = ctx->Alloc<T>(tensor_);
     int numel = tensor_->numel();
-    std::unique_ptr<T[]> data_cpu(new T[numel]);
-    std::fill(data_cpu.get(), data_cpu.get() + numel, static_cast<T>(value_));
-    memory_utils::Copy(place_,
-                       begin,
-                       phi::CPUPlace(),
-                       static_cast<void*>(data_cpu.get()),
-                       numel * sizeof(T));
-  }
-  phi::DenseTensor* tensor_;
-  U value_;
-  phi::Place place_;
-};
-
-template <>
-struct TensorSetConstantXPU<float> {
-  TensorSetConstantXPU(phi::DenseTensor* tensor, float value, phi::Place place)
-      : tensor_(tensor), value_(value), place_(place) {}
-  template <typename T>
-  void apply() const {
-    auto* ctx = phi::DeviceContextPool::Instance().Get(place_);
-    auto begin = ctx->Alloc<T>(tensor_);
-    int numel = tensor_->numel();
-    if (((std::is_same<T, float>::value) ||
-         (std::is_same<T, phi::dtype::float16>::value)) &&
-        (place_ == phi::XPUPlace())) {
-      using XPUType = typename XPUTypeTrait<T>::Type;
-      auto* dev_ctx = static_cast<phi::XPUContext*>(ctx);
-      int r = xpu::constant<XPUType>(dev_ctx->x_context(),
-                                     reinterpret_cast<XPUType*>(begin),
-                                     numel,
-                                     static_cast<XPUType>(value_));
-      PADDLE_ENFORCE_XDNN_SUCCESS(r, "constant");
-      dev_ctx->Wait();
-    } else {
+    if (std::is_same<T, phi::dtype::complex<float>>::value ||
+        std::is_same<T, phi::dtype::complex<double>>::value) {
       std::unique_ptr<T[]> data_cpu(new T[numel]);
       std::fill(data_cpu.get(), data_cpu.get() + numel, static_cast<T>(value_));
       memory_utils::Copy(place_,
@@ -161,10 +130,22 @@ struct TensorSetConstantXPU<float> {
                          phi::CPUPlace(),
                          static_cast<void*>(data_cpu.get()),
                          numel * sizeof(T));
+    } else if (std::is_same<T, phi::dtype::float8_e4m3fn>::value ||
+               std::is_same<T, phi::dtype::float8_e5m2>::value) {
+      PADDLE_THROW(common::errors::Fatal("XPU does not support fp8"));
+    } else {
+      auto* dev_ctx = static_cast<phi::XPUContext*>(ctx);
+      using XPUType = typename XPUTypeTrait<T>::Type;
+      T val = static_cast<T>(value_);
+      int r = xpu::constant<XPUType>(dev_ctx->x_context(),
+                                     reinterpret_cast<XPUType*>(begin),
+                                     numel,
+                                     static_cast<XPUType>(val));
+      PADDLE_ENFORCE_XDNN_SUCCESS(r, "constant");
     }
   }
   phi::DenseTensor* tensor_;
-  float value_;
+  U value_;
   phi::Place place_;
 };
 #endif

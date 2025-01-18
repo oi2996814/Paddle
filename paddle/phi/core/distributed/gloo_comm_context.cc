@@ -29,8 +29,7 @@
 #include "paddle/phi/core/distributed/check/static_check.h"
 #include "paddle/phi/core/enforce.h"
 
-namespace phi {
-namespace distributed {
+namespace phi::distributed {
 
 GlooCommContext::GlooCommContext(
     int rank,
@@ -128,6 +127,9 @@ void GlooCommContext::Scatter(phi::DenseTensor* out_tensor,
   gloo::ScatterOptions opts(gloo_context_);
   const auto& dtype = in_tensor.dtype();
   if (rank_ == src) {
+    if (size == 0) {
+      size = size_;
+    }
     GENERATE_FUNC(dtype, SetInputForScatter, &opts, in_tensor, size);
   }
   GENERATE_FUNC(dtype, SetOutput, &opts, out_tensor);
@@ -147,7 +149,7 @@ void GlooCommContext::Send(const phi::DenseTensor& in_tensor,
   SendRecvOptions opts(gloo_context_);
   const auto& dtype = in_tensor.dtype();
   GENERATE_FUNC(dtype, SetInput, &opts, in_tensor);
-  opts.setSrc(gloo_context_.get()->rank);
+  opts.setSrc(gloo_context_->rank);
   opts.setDst(dst);
   opts.setTag(tag);
   send_recv(&opts);
@@ -160,10 +162,9 @@ void GlooCommContext::Recv(phi::DenseTensor* out_tensor,
   const auto& dtype = out_tensor->dtype();
   GENERATE_FUNC(dtype, SetOutput, &opts, out_tensor);
   opts.setSrc(src);
-  opts.setDst(gloo_context_.get()->rank);
+  opts.setDst(gloo_context_->rank);
   opts.setTag(tag);
   send_recv(&opts);
 }
 
-}  // namespace distributed
-}  // namespace phi
+}  // namespace phi::distributed

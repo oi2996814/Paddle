@@ -23,8 +23,8 @@
 #include "paddle/fluid/framework/new_executor/interpretercore.h"
 #include "paddle/fluid/framework/new_executor/new_executor_defs.h"
 #include "paddle/fluid/framework/program_desc.h"
-#include "paddle/fluid/platform/place.h"
-#include "paddle/ir/core/program.h"
+#include "paddle/phi/common/place.h"
+#include "paddle/pir/include/core/program.h"
 
 namespace paddle {
 namespace framework {
@@ -33,25 +33,33 @@ class InterpreterCore;
 
 class StandaloneExecutor {
  public:
-  StandaloneExecutor(const platform::Place& place,
+  StandaloneExecutor(const phi::Place& place,
                      const interpreter::Plan& plan_,
                      Scope* scope);
 
   ~StandaloneExecutor() {}
 
-  paddle::framework::FetchList Run(const std::vector<std::string>& feed_names);
+  paddle::framework::FetchList Run(
+      const std::vector<std::string>& feed_names,
+      const bool enable_job_schedule_profiler = false);
+
+  std::shared_ptr<framework::ProgramDesc> RunProfile(
+      const std::vector<std::string>& feed_names);
 
  private:
   bool is_interpretercore_build_result_shared_{false};
-  const platform::Place place_;
-  const interpreter::Plan plan_;
-
-  std::vector<framework::Scope*> micro_batch_scopes_;
+  const phi::Place place_;
+  interpreter::Plan plan_;
   std::vector<std::shared_ptr<InterpreterCore>> interpretercores_;
 
   Scope* scope_;
+  std::vector<Scope*> micro_batch_scopes_;
 
   std::vector<std::string> fetch_var_names_;
+  FetchUnmergedList fetch_list_;
+
+  std::vector<std::unordered_map<std::string, std::shared_ptr<EventInter>>>
+      vec_force_events_to_wait_;
 };
 
 }  // namespace framework

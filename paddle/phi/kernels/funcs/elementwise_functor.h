@@ -14,12 +14,12 @@ limitations under the License. */
 
 #pragma once
 
+#include "paddle/common/hostdevice.h"
+#include "paddle/common/macros.h"
 #include "paddle/phi/common/bfloat16.h"
 #include "paddle/phi/common/complex.h"
 #include "paddle/phi/common/float16.h"
 #include "paddle/phi/core/enforce.h"
-#include "paddle/phi/core/hostdevice.h"
-#include "paddle/phi/core/macros.h"
 #if defined(__xpu__)
 #include <xpu/runtime.h>
 
@@ -40,8 +40,13 @@ struct AddFunctor {
   inline HOSTDEVICE T operator()(const T a, const T b) const { return a + b; }
 };
 template <typename T>
-struct InverseAddFunctor {
-  inline HOSTDEVICE T operator()(const T a, const T b) const { return b + a; }
+using InverseAddFunctor = AddFunctor<T>;
+
+template <typename T, typename Ty = T>
+struct MultiPrecisionAddFunctor {
+  inline HOSTDEVICE T operator()(const T x, const Ty y) const {
+    return x + static_cast<T>(y);
+  }
 };
 
 // Float32Bfloat16Add
@@ -82,15 +87,7 @@ struct MultiplyFunctor<bool> {
   }
 };
 template <typename T>
-struct InverseMultiplyFunctor {
-  inline HOSTDEVICE T operator()(const T a, const T b) const { return b * a; }
-};
-template <>
-struct InverseMultiplyFunctor<bool> {
-  inline HOSTDEVICE bool operator()(const bool a, const bool b) const {
-    return b && a;
-  }
-};
+using InverseMultiplyFunctor = MultiplyFunctor<T>;
 
 template <typename T>
 struct IsZeroFunctor {
@@ -112,7 +109,7 @@ struct DivideFunctor<
     T,
     typename std::enable_if<std::is_integral<T>::value>::type> {
   inline HOSTDEVICE T operator()(const T a, const T b) const {
-    // For int32/int64, need to check whether the divison is zero.
+    // For int32/int64, need to check whether the division is zero.
     PADDLE_ENFORCE(b != 0, DIV_ERROR_INFO);
     return a / b;
   }
@@ -546,7 +543,7 @@ struct RemainderFunctor {
     PADDLE_ENFORCE(b != 0, DIV_ERROR_INFO);
     T res = a % b;
 
-    // Accoding to #PR26732: in dividen % divsor
+    // According to #PR26732: in dividen % divsor
     // remainder shall have the same sign as divsor.
     if ((res != 0) && ((b ^ res) < 0)) res += b;
     return res;
@@ -560,7 +557,7 @@ struct RemainderFunctor<
   inline HOSTDEVICE T operator()(const T a, const T b) const {
     T res = fmod(a, b);
 
-    // Accoding to #PR26732: in dividen % divsor
+    // According to #PR26732: in dividen % divsor
     // remainder shall have the same sign as divsor.
     if ((res != 0) && ((res < 0) != (b < 0))) res += b;
     return res;
@@ -573,7 +570,7 @@ struct RemainderFunctor<dtype::float16> {
                                               const dtype::float16 b) const {
     float b_float = static_cast<float>(b);
     float res = fmod(static_cast<float>(a), b_float);
-    // Accoding to #PR26732: in dividen % divsor
+    // According to #PR26732: in dividen % divsor
     // remainder shall have the same sign as divsor.
     if ((res != 0.0f) && ((res < 0.0f) != (b_float < 0.0f))) res += b_float;
     return static_cast<dtype::float16>(res);
@@ -587,10 +584,118 @@ struct RemainderFunctor<dtype::bfloat16> {
     float b_float = static_cast<float>(b);
     float res = fmod(static_cast<float>(a), b_float);
 
-    // Accoding to #PR26732: in dividen % divsor
+    // According to #PR26732: in dividen % divsor
     // remainder shall have the same sign as divsor.
     if ((res != 0.0f) && ((res < 0.0f) != (b_float < 0.0f))) res += b_float;
     return static_cast<dtype::bfloat16>(res);
+  }
+};
+
+// RemainderGradXFunctor
+template <typename T>
+struct RemainderGradXFunctor {
+  inline HOSTDEVICE T operator()(const T x, const T y, const T dout) const {
+    // dx = dout
+    return dout;
+  }
+};
+
+// RemainderGradYFunctor
+template <typename T, typename Enable = void>
+struct RemainderGradYFunctor {
+  inline HOSTDEVICE T operator()(const T x, const T y, const T dout) const {
+    // dy = -dout * (floor_div(x, y))
+    return -dout * static_cast<T>((std::floor(x / y)));
+  }
+};
+template <typename T>
+struct RemainderGradYFunctor<
+    T,
+    typename std::enable_if<std::is_floating_point<T>::value>::type> {
+  inline HOSTDEVICE T operator()(const T x, const T y, const T dout) const {
+    using MPType = typename phi::dtype::MPTypeTrait<T>::Type;
+    // dy = -dout * (floor_div(x, y))
+    auto x_ = static_cast<MPType>(x);
+    auto y_ = static_cast<MPType>(y);
+    return static_cast<T>(-static_cast<MPType>(dout) * (std::floor((x_ / y_))));
+  }
+};
+template <typename T>
+struct RemainderGradYFunctor<
+    T,
+    typename std::enable_if<std::is_integral<T>::value>::type> {
+  inline HOSTDEVICE T operator()(const T x, const T y, const T dout) const {
+    // dy = -dout * (floor_div(x, y))
+    if (phi::is_negative(x) != phi::is_negative(y)) {
+      // Subtracts one from the results of truncation division if the
+      // divisor and dividend have different sign(bit)s and the remainder of
+      // the division is nonzero
+      const auto quot = x / y;
+      const auto rem = x % y;
+      auto ret = rem ? quot - 1 : quot;
+      return -dout * static_cast<T>(ret);
+    }
+    return -dout * static_cast<T>(x / y);
+  }
+};
+
+// RemainderGradXYFunctor
+template <typename InT, typename OutT, typename Enable = void>
+struct RemainderGradXYFunctor {
+  inline HOSTDEVICE phi::Array<OutT, 2> operator()(const InT x,
+                                                   const InT y,
+                                                   const InT dout) {
+    phi::Array<OutT, 2> outs;
+    // dx = dout
+    outs[0] = static_cast<OutT>(dout);
+    // dy = -dout * (floor_div(x, y))
+    outs[1] = static_cast<OutT>(dout * static_cast<InT>(std::floor(x / y)));
+    return outs;
+  }
+};
+template <typename InT, typename OutT>
+struct RemainderGradXYFunctor<
+    InT,
+    OutT,
+    typename std::enable_if<std::is_floating_point<InT>::value>::type> {
+  inline HOSTDEVICE Array<OutT, 2> operator()(const InT x,
+                                              const InT y,
+                                              const InT dout) {
+    Array<OutT, 2> outs;
+    // dx = dout
+    outs[0] = static_cast<OutT>(dout);
+    // dy = -dout * (x / y)
+    using MPType = typename phi::dtype::MPTypeTrait<InT>::Type;
+    auto x_ = static_cast<MPType>(x);
+    auto y_ = static_cast<MPType>(y);
+    outs[1] =
+        static_cast<OutT>(static_cast<MPType>(-dout) * std::floor(x_ / y_));
+    return outs;
+  }
+};
+template <typename InT, typename OutT>
+struct RemainderGradXYFunctor<
+    InT,
+    OutT,
+    typename std::enable_if<std::is_integral<InT>::value>::type> {
+  inline HOSTDEVICE Array<OutT, 2> operator()(const InT x,
+                                              const InT y,
+                                              const InT dout) {
+    Array<OutT, 2> outs;
+    // dx = dout
+    outs[0] = static_cast<OutT>(dout);
+    // dy = -dout * (x / y)
+    if (phi::is_negative(x) != phi::is_negative(y)) {
+      // Subtracts one from the results of truncation division if the
+      // divisor and dividend have different sign(bit)s and the remainder of
+      // the division is nonzero
+      const auto quot = x / y;
+      const auto rem = x % y;
+      auto ret = rem ? quot - 1 : quot;
+      outs[1] = -static_cast<OutT>(dout) * static_cast<OutT>(ret);
+    }
+    outs[1] = -static_cast<OutT>(dout) * static_cast<OutT>(x / y);
+    return outs;
   }
 };
 
@@ -895,6 +1000,72 @@ struct ElementwiseInversePowFunctor {
   using MPType = typename phi::dtype::MPTypeTrait<T>::Type;
   inline HOSTDEVICE T operator()(const T a, const T b) const {
     return compute_pow<T, MPType>(b, a);
+  }
+};
+
+// copysign forward and grad functors
+template <typename T>
+inline HOSTDEVICE auto copysign_func(const T& a, const T& b) {
+#ifdef WIN32
+  using U = typename std::conditional_t<std::is_integral<T>::value, float, T>;
+  return static_cast<T>(std::copysign(static_cast<U>(a), static_cast<U>(b)));
+#else
+  return static_cast<T>(std::copysign(a, b));
+#endif
+}
+
+inline HOSTDEVICE phi::dtype::float16 copysign_func(phi::dtype::float16 a,
+                                                    phi::dtype::float16 b) {
+  return phi::dtype::raw_uint16_to_float16((a.x & 0x7fff) | (b.x & 0x8000));
+}
+
+inline HOSTDEVICE phi::dtype::bfloat16 copysign_func(phi::dtype::bfloat16 a,
+                                                     phi::dtype::bfloat16 b) {
+  return phi::dtype::raw_uint16_to_bfloat16((a.x & 0x7fff) | (b.x & 0x8000));
+}
+
+template <typename T>
+struct CopySignGradXFunctor {
+  inline HOSTDEVICE T operator()(const T x, const T y, const T dout) const {
+    if (x == static_cast<T>(0)) return x;
+    return dout * (funcs::copysign_func(x, y) / x);
+  }
+};
+
+template <typename T>
+struct CopySignGradYFunctor {
+  inline HOSTDEVICE T operator()(const T x, const T y, const T dout) const {
+    return static_cast<T>(0);
+  }
+};
+
+template <typename InT, typename OutT>
+struct CopySignGradXYFunctor {
+  inline HOSTDEVICE phi::Array<OutT, 2> operator()(const InT x,
+                                                   const InT y,
+                                                   const InT dout) {
+    phi::Array<OutT, 2> outs;
+    // dx
+    if (x == static_cast<InT>(0))
+      outs[0] = static_cast<OutT>(0);
+    else
+      outs[0] = static_cast<OutT>(dout * (funcs::copysign_func(x, y)) / x);
+    // dy = 0
+    outs[1] = static_cast<OutT>(0);
+    return outs;
+  }
+};
+
+template <typename T>
+struct CopySignFunctor {
+  inline HOSTDEVICE T operator()(const T a, const T b) const {
+    return copysign_func(a, b);
+  }
+};
+template <typename T>
+struct InverseCopySignFunctor {
+  inline HOSTDEVICE T operator()(const T a, const T b) const {
+    return copysign_func(b, a);
   }
 };
 

@@ -46,11 +46,11 @@ class DNNLayer(nn.Layer):
             ),
         )
 
-        sizes = (
-            [sparse_feature_dim * num_field + dense_feature_dim]
-            + self.layer_sizes
-            + [2]
-        )
+        sizes = [
+            sparse_feature_dim * num_field + dense_feature_dim,
+            *self.layer_sizes,
+            2,
+        ]
         acts = ["relu" for _ in range(len(self.layer_sizes))] + [None]
         self._mlp_layers = []
         for i in range(len(layer_sizes) + 1):
@@ -63,11 +63,11 @@ class DNNLayer(nn.Layer):
                     )
                 ),
             )
-            self.add_sublayer('linear_%d' % i, linear)
+            self.add_sublayer(f'linear_{i}', linear)
             self._mlp_layers.append(linear)
             if acts[i] == 'relu':
                 act = paddle.nn.ReLU()
-                self.add_sublayer('act_%d' % i, act)
+                self.add_sublayer(f'act_{i}', act)
                 self._mlp_layers.append(act)
 
     def forward(self, sparse_inputs, dense_inputs):
@@ -85,10 +85,10 @@ class DNNLayer(nn.Layer):
             # emb.stop_gradient = True
             sparse_embs.append(emb)
 
-        y_dnn = paddle.concat(x=sparse_embs + [dense_inputs], axis=1)
+        y_dnn = paddle.concat(x=[*sparse_embs, dense_inputs], axis=1)
 
         if self.sync_mode == 'heter':
-            with paddle.fluid.device_guard('gpu'):
+            with paddle.base.device_guard('gpu'):
                 for n_layer in self._mlp_layers:
                     y_dnn = n_layer(y_dnn)
         else:
@@ -151,10 +151,10 @@ class FlDNNLayer(nn.Layer):
                     )
                 ),
             )
-            self.add_sublayer('linear_%d' % i, linear)
+            self.add_sublayer(f'linear_{i}', linear)
             self._mlp_layers_a.append(linear)
             act = paddle.nn.ReLU()
-            self.add_sublayer('act_%d' % i, act)
+            self.add_sublayer(f'act_{i}', act)
             self._mlp_layers_a.append(act)
 
         # part_b fc
@@ -170,10 +170,10 @@ class FlDNNLayer(nn.Layer):
                     )
                 ),
             )
-            self.add_sublayer('linear_%d' % i, linear)
+            self.add_sublayer(f'linear_{i}', linear)
             self._mlp_layers_b.append(linear)
             act = paddle.nn.ReLU()
-            self.add_sublayer('act_%d' % i, act)
+            self.add_sublayer(f'act_{i}', act)
             self._mlp_layers_b.append(act)
 
         # top fc
@@ -189,14 +189,14 @@ class FlDNNLayer(nn.Layer):
                     )
                 ),
             )
-            self.add_sublayer('linear_%d' % i, linear)
+            self.add_sublayer(f'linear_{i}', linear)
             self._mlp_layers_top.append(linear)
             act = paddle.nn.ReLU()
-            self.add_sublayer('act_%d' % i, act)
+            self.add_sublayer(f'act_{i}', act)
             self._mlp_layers_top.append(act)
 
     def bottom_a_layer(self, sparse_inputs):
-        with paddle.fluid.device_guard(self.PART_A_DEVICE_FlAG):
+        with paddle.base.device_guard(self.PART_A_DEVICE_FlAG):
             sparse_embs = []
             for s_input in sparse_inputs:
                 emb = self.embedding(s_input)
@@ -208,7 +208,7 @@ class FlDNNLayer(nn.Layer):
             y = self._mlp_layers_a[1](y)
 
             y = self._mlp_layers_a[2](y)
-        with paddle.fluid.device_guard(
+        with paddle.base.device_guard(
             self.PART_A_JOINT_OP_DEVICE_FlAG
         ):  # joint point
             bottom_a = self._mlp_layers_a[3](y)
@@ -216,7 +216,7 @@ class FlDNNLayer(nn.Layer):
         return bottom_a
 
     def bottom_b_layer(self, dense_inputs):
-        with paddle.fluid.device_guard(self.PART_B_DEVICE_FlAG):
+        with paddle.base.device_guard(self.PART_B_DEVICE_FlAG):
             y = self._mlp_layers_b[0](dense_inputs)
             y = self._mlp_layers_b[1](y)
 
@@ -226,14 +226,14 @@ class FlDNNLayer(nn.Layer):
         return bottom_b
 
     def interactive_layer(self, bottom_a, bottom_b):
-        with paddle.fluid.device_guard(
+        with paddle.base.device_guard(
             self.PART_B_JOINT_OP_DEVICE_FlAG
         ):  # joint point
             interactive = paddle.add(bottom_a, bottom_b)
         return interactive
 
     def top_layer(self, interactive, label_input):
-        with paddle.fluid.device_guard(self.PART_B_DEVICE_FlAG):
+        with paddle.base.device_guard(self.PART_B_DEVICE_FlAG):
             y = self._mlp_layers_top[0](interactive)
             y_top = self._mlp_layers_top[1](y)
             predict_2d = paddle.nn.functional.softmax(y_top)
@@ -318,7 +318,7 @@ class StaticModel:
 
         label = paddle.static.data(name="label", shape=[None, 1], dtype="int64")
 
-        feeds_list = [label] + sparse_input_ids + [dense_input]
+        feeds_list = [label, *sparse_input_ids, dense_input]
         return feeds_list
 
     def net(self, input, is_infer=False):

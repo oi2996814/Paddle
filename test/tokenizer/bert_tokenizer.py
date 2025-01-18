@@ -327,11 +327,9 @@ class BertTokenizer(PretrainedTokenizer):
     ):
         if not os.path.isfile(vocab_file):
             raise ValueError(
-                "Can't find a vocabulary file at path '{}'. To load the "
+                f"Can't find a vocabulary file at path '{vocab_file}'. To load the "
                 "vocabulary from a pretrained model please use "
-                "`tokenizer = BertTokenizer.from_pretrained(PRETRAINED_MODEL_NAME)`".format(
-                    vocab_file
-                )
+                "`tokenizer = BertTokenizer.from_pretrained(PRETRAINED_MODEL_NAME)`"
             )
         self.vocab = self.load_vocabulary(vocab_file, unk_token=unk_token)
         self.do_lower_case = do_lower_case
@@ -428,7 +426,7 @@ class BertTokenizer(PretrainedTokenizer):
             List[int]: List of input_id with the appropriate special tokens.
         """
         if token_ids_1 is None:
-            return [self.cls_token_id] + token_ids_0 + [self.sep_token_id]
+            return [self.cls_token_id, *token_ids_0, self.sep_token_id]
         _cls = [self.cls_token_id]
         _sep = [self.sep_token_id]
         return _cls + token_ids_0 + _sep + token_ids_1 + _sep
@@ -468,7 +466,7 @@ class BertTokenizer(PretrainedTokenizer):
         Args:
             token_ids_0 (List[int]):
                 A list of `inputs_ids` for the first sequence.
-            token_ids_1 (List[int], optinal):
+            token_ids_1 (List[int], optional):
                 Optional second list of IDs for sequence pairs. Defaults to None.
             already_has_special_tokens (bool, optional): Whether or not the token list is already
                 formatted with special tokens for the model. Defaults to None.

@@ -13,13 +13,16 @@
 # limitations under the License.
 
 
+import sys
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
+
+sys.path.append("../deprecated/legacy_test")
 from test_softmax_op import stable_softmax
 
-from paddle.fluid import core
+from paddle.base import core
 
 
 class TestSequenceSoftmaxOp(OpTest):
@@ -58,16 +61,16 @@ class TestSequenceSoftmaxOp(OpTest):
     def test_check_output(self):
         if self.use_cudnn:
             place = core.CUDAPlace(0)
-            self.check_output_with_place(place, atol=1e-5)
+            self.check_output_with_place(place, atol=1e-5, check_dygraph=False)
         else:
-            self.check_output()
+            self.check_output(check_dygraph=False)
 
     def test_check_grad(self):
         if self.use_cudnn:
             place = core.CUDAPlace(0)
-            self.check_grad_with_place(place, ["X"], "Out")
+            self.check_grad_with_place(place, ["X"], "Out", check_dygraph=False)
         else:
-            self.check_grad(["X"], "Out")
+            self.check_grad(["X"], "Out", check_dygraph=False)
 
 
 # ----------------cudnn Sequencesoftmax----------------

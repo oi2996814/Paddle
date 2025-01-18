@@ -18,13 +18,13 @@
 import numpy as np
 
 import paddle
+from paddle.base import core
 from paddle.distributed.fleet.meta_parallel.sharding.group_sharded_stage3 import (
     GroupShardedStage3,
 )
 from paddle.distributed.fleet.meta_parallel.sharding.group_sharded_utils import (
     GroupShardedScaler,
 )
-from paddle.fluid import core
 from paddle.nn import Linear
 
 epoch = 10
@@ -70,9 +70,11 @@ class RandomDataset(paddle.io.Dataset):
 def optimizer_setting(model, use_pure_fp16, opt_group=False):
     clip = paddle.nn.ClipGradByGlobalNorm(clip_norm=1.0)
     optimizer = paddle.optimizer.AdamW(
-        parameters=[{"params": model.parameters()}]
-        if opt_group
-        else model.parameters(),
+        parameters=(
+            [{"params": model.parameters()}]
+            if opt_group
+            else model.parameters()
+        ),
         learning_rate=0.001,
         weight_decay=0.00001,
         grad_clip=clip,
@@ -214,9 +216,8 @@ def test_stage3_offload():
         )
 
     # bfp16 offload
-    nccl_version = core.nccl_version()
-    if (
-        nccl_version >= 21000
+    if paddle.is_compiled_with_xpu() or (
+        core.nccl_version() >= 21000
         and paddle.device.cuda.get_device_properties().major >= 8
     ):
         stage3_params = train_mlp(mlp7, use_pure_fp16=True, use_bfp16=True)
@@ -250,7 +251,6 @@ def test_stage3_offload():
             rtol=1e-6,
             atol=1e-8,
         )
-    return
 
 
 if __name__ == '__main__':

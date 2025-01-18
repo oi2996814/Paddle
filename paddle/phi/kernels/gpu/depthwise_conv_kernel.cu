@@ -54,7 +54,7 @@ void DepthwiseConvKernel(const Context& dev_ctx,
         output->dims()[output->dims().size() - 1] %
             input.dims()[input.dims().size() - 1],
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "ShapeError: The output channels must be a multiple of the "
             "input channels. But receivced output channel number is %d "
             "and input channel number is %d",
@@ -64,7 +64,7 @@ void DepthwiseConvKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         output->dims()[1] % input.dims()[1],
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "ShapeError: The output channels must be a multiple of the "
             "input channels. But receivced output channel number is %d "
             "and input channel number is %d",
@@ -77,7 +77,7 @@ void DepthwiseConvKernel(const Context& dev_ctx,
   auto filter_dims = filter.dims();
 
   DDim in_data_dims;
-  const phi::DataLayout data_layout = phi::StringToDataLayout(data_format);
+  const phi::DataLayout data_layout = common::StringToDataLayout(data_format);
   if (data_layout != phi::DataLayout::kNHWC) {
     in_data_dims = slice_ddim(in_dims, 2, in_dims.size());
   } else {
@@ -85,7 +85,7 @@ void DepthwiseConvKernel(const Context& dev_ctx,
   }
 
   DDim filter_data_dims = slice_ddim(filter_dims, 2, filter_dims.size());
-  std::vector<int> ksize = vectorize<int>(filter_data_dims);
+  std::vector<int> ksize = common::vectorize<int>(filter_data_dims);
   UpdatePaddingAndDilation(
       &paddings, &dilations, padding_algorithm, in_data_dims, strides, ksize);
 

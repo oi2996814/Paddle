@@ -89,8 +89,7 @@ class CspReporter:
     def _checkArgs(self):
         if self._trainerNum % self._groupSize != 0:
             raise Exception(
-                "Input args error: trainerNum[%d] %% groupSize[%d] != 0"
-                % (self._trainerNum, self._groupSize)
+                f"Input args error: trainerNum[{self._trainerNum}] %% groupSize[{self._groupSize}] != 0"
             )
 
     def _init_logger(self):
@@ -166,14 +165,14 @@ class CspReporter:
                 self._timeInfo[gpuId * trainerId] = info
 
     def _generateTraceFileByGroupAndGpuId(
-        self, pipileInfo, netInfo, groupId, gpuId
+        self, pipeLineInfo, netInfo, groupId, gpuId
     ):
         dcgmInfoDict = self._dcgmFileReader.getDcgmInfoDict(groupId, gpuId)
         opInfoDict = self._profileFileReader.getOpInfoDict(groupId, gpuId)
 
         traceObj = {}
         traceObj["traceEvents"] = (
-            pipileInfo[str(gpuId)]
+            pipeLineInfo[str(gpuId)]
             + opInfoDict["traceEvents"]
             + dcgmInfoDict["traceEvents"]
             + netInfo["traceEvents"]
@@ -185,7 +184,7 @@ class CspReporter:
 
     def _generateTraceFileByGroup(self, groupId, processNum):
         # first we need to generate pipeline info
-        pipileInfo = self._profileFileReader.getPipeLineInfo(
+        pipeLineInfo = self._profileFileReader.getPipeLineInfo(
             groupId, processNum
         )
         # second we need to generate dcgm info
@@ -207,7 +206,7 @@ class CspReporter:
             subproc = Process(
                 target=self._generateTraceFileByGroupAndGpuId,
                 args=(
-                    pipileInfo,
+                    pipeLineInfo,
                     netInfo,
                     groupId,
                     gpuId,
@@ -217,16 +216,14 @@ class CspReporter:
             subproc.start()
             pidList.append(subproc.pid)
             self._logger.info(
-                "[traceFile]: process [%d] has been started, total task num is %d ..."
-                % (subproc.pid, 1)
+                f"[traceFile]: process [{subproc.pid}] has been started, total task num is {1} ..."
             )
 
         for t in processPool:
             t.join()
             pidList.remove(t.pid)
             self._logger.info(
-                "[traceFile]: process [%d] has exited! remained %d process!"
-                % (t.pid, len(pidList))
+                f"[traceFile]: process [{t.pid}] has exited! remained {len(pidList)} process!"
             )
 
     def generateTraceFile(self, processNum=8):
@@ -244,15 +241,13 @@ class CspReporter:
             subproc.start()
             pidList.append(subproc.pid)
             self._logger.info(
-                "[GroupTraceFile]: process [%d] has been started, total task num is %d ..."
-                % (subproc.pid, 1)
+                f"[GroupTraceFile]: process [{subproc.pid}] has been started, total task num is {1} ..."
             )
         for t in processPool:
             t.join()
             pidList.remove(t.pid)
             self._logger.info(
-                "[GroupTraceFile]: process [%d] has exited! remained %d process!"
-                % (t.pid, len(pidList))
+                f"[GroupTraceFile]: process [{t.pid}] has exited! remained {len(pidList)} process!"
             )
 
 

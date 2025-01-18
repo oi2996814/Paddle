@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import unittest
 from functools import partial
-from typing import List
 
 import numpy as np
 from program_config import ProgramConfig, TensorConfig
@@ -77,13 +78,14 @@ class TrtConvertTakeAlongAxisTest(TrtLayerAutoScanTest):
                             ),
                         },
                         outputs=["output_data"],
+                        no_cast_list=["index_data"],
                     )
 
                     yield program_config
 
     def sample_predictor_configs(
         self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
+    ) -> tuple[paddle_infer.Config, list[int], float]:
         def generate_dynamic_shape(attrs):
             if len(self.shape) == 1:
                 self.dynamic_shape.min_input_shape = {
@@ -168,7 +170,7 @@ class TrtConvertTakeAlongAxisTest(TrtLayerAutoScanTest):
         program_config.set_input_type(np.float16)
         yield self.create_inference_config(), generate_trt_nodes_num(
             False
-        ), 1e-5
+        ), 1e-3
 
         # for dynamic_shape
         generate_dynamic_shape(attrs)

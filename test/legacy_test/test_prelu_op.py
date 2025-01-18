@@ -15,12 +15,12 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16, skip_check_grad_ci
+from op_test import OpTest, convert_float_to_uint16, skip_check_grad_ci
 
 import paddle
 import paddle.nn.functional as F
-from paddle import fluid
-from paddle.fluid import Program, core
+from paddle import base
+from paddle.base import core
 
 
 def ref_prelu(x, weight):
@@ -90,10 +90,11 @@ class TestFunctionalPReluAPI(unittest.TestCase):
             )
             self.assertRaises(TypeError, F.prelu, x=x_int32, weight=weight_fp32)
             # support the input dtype is float16
-            x_fp16 = paddle.static.data(
-                name='x_fp16', shape=[2, 3], dtype='float16'
-            )
-            F.prelu(x=x_fp16, weight=weight_fp32)
+            if core.is_compiled_with_cuda():
+                x_fp16 = paddle.static.data(
+                    name='x_fp16', shape=[2, 3], dtype='float16'
+                )
+                F.prelu(x=x_fp16, weight=weight_fp32)
 
 
 class TestNNPReluAPI(unittest.TestCase):
@@ -144,14 +145,14 @@ class TestNNPReluAPI(unittest.TestCase):
         np.testing.assert_allclose(out_ref, out.numpy(), rtol=1e-05)
 
         x = paddle.to_tensor(self.x_np)
-        m = paddle.nn.PReLU(weight_attr=fluid.ParamAttr(name="weight"))
+        m = paddle.nn.PReLU(weight_attr=base.ParamAttr(name="weight"))
         out = m(x)
         out_ref = ref_prelu_nn(self.x_np, 1, 0.25)
         np.testing.assert_allclose(out_ref, out.numpy(), rtol=1e-05)
 
         x = paddle.to_tensor(self.x_np)
         m = paddle.nn.PReLU(
-            weight_attr=fluid.ParamAttr(
+            weight_attr=base.ParamAttr(
                 initializer=paddle.nn.initializer.Constant(0.5)
             )
         )
@@ -226,10 +227,10 @@ class PReluTest(OpTest):
         self.attrs = {'mode': "channel", "data_format": "NCHW"}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
-        self.check_grad(['X', 'Alpha'], 'Out')
+        self.check_grad(['X', 'Alpha'], 'Out', check_pir=True)
 
 
 @skip_check_grad_ci(
@@ -392,13 +393,17 @@ def create_test_fp16_class(
             if core.is_compiled_with_cuda():
                 place = core.CUDAPlace(0)
                 if core.is_float16_supported(place):
-                    self.check_output_with_place(place, atol=atol)
+                    self.check_output_with_place(
+                        place, atol=atol, check_pir=True
+                    )
 
         def test_check_grad(self):
             place = core.CUDAPlace(0)
             if core.is_float16_supported(place) and check_grad:
                 # Use the default max_relative_error, not use max_relative_error
-                self.check_grad_with_place(place, ['X', 'Alpha'], 'Out')
+                self.check_grad_with_place(
+                    place, ['X', 'Alpha'], 'Out', check_pir=True
+                )
 
     cls_name = "{}_{}".format(parent.__name__, "Fp16Op")
     TestPReluFp16Case.__name__ = cls_name
@@ -411,7 +416,7 @@ def create_test_bf16_class(
     @unittest.skipIf(
         not core.is_compiled_with_cuda()
         or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-        "core is not complied with CUDA and not support the bfloat16",
+        "core is not compiled with CUDA and not support the bfloat16",
     )
     class TestPReluBF16Op(parent):
         def setUp(self):
@@ -426,13 +431,15 @@ def create_test_bf16_class(
 
         def test_check_output(self):
             place = core.CUDAPlace(0)
-            self.check_output_with_place(place, atol=atol)
+            self.check_output_with_place(place, atol=atol, check_pir=True)
 
         def test_check_grad(self):
             place = core.CUDAPlace(0)
             if check_grad:
                 # Use the default max_relative_error, not use max_relative_error
-                self.check_grad_with_place(place, ['X', 'Alpha'], 'Out')
+                self.check_grad_with_place(
+                    place, ['X', 'Alpha'], 'Out', check_pir=True
+                )
 
     cls_name = "{}_{}".format(parent.__name__, "BF16Op")
     TestPReluBF16Op.__name__ = cls_name
@@ -468,66 +475,6 @@ create_test_bf16_class(TestModeChannelRank3NHWC)
 create_test_bf16_class(TestModeChannelRank6NHWC)
 create_test_bf16_class(TestModeElementRank3NHWC)
 create_test_bf16_class(TestModeElementRank6NHWC)
-
-
-def prelu_t(x, mode, param_attr=None, name=None, data_format='NCHW'):
-    helper = fluid.layer_helper.LayerHelper('prelu', **locals())
-    alpha_shape = [1, x.shape[1], 1, 1]
-    dtype = helper.input_dtype(input_param_name='x')
-    alpha = helper.create_parameter(
-        attr=helper.param_attr,
-        shape=alpha_shape,
-        dtype='float32',
-        is_bias=False,
-        default_initializer=paddle.nn.initializer.Constant(0.25),
-    )
-    out = helper.create_variable_for_type_inference(dtype)
-    helper.append_op(
-        type="prelu",
-        inputs={"X": x, 'Alpha': alpha},
-        attrs={"mode": mode, 'data_format': data_format},
-        outputs={"Out": out},
-    )
-    return out
-
-
-# error message test if mode is not one of 'all', 'channel', 'element'
-class TestModeError(unittest.TestCase):
-    def setUp(self):
-        self.place = (
-            paddle.CUDAPlace(0)
-            if core.is_compiled_with_cuda()
-            else paddle.CPUPlace()
-        )
-        self.x_np = np.ones([1, 2, 3, 4]).astype('float32')
-
-    def test_mode_error(self):
-        main_program = Program()
-        with fluid.program_guard(main_program, Program()):
-            x = paddle.static.data(name='x', shape=[2, 3, 4, 5])
-            try:
-                y = prelu_t(x, 'any')
-            except Exception as e:
-                assert e.args[0].find('InvalidArgument') != -1
-
-    def test_data_format_error1(self):
-        main_program = Program()
-        with fluid.program_guard(main_program, Program()):
-            x = paddle.static.data(name='x', shape=[2, 3, 4, 5])
-            try:
-                y = prelu_t(x, 'channel', data_format='N')
-            except Exception as e:
-                assert e.args[0].find('InvalidArgument') != -1
-
-    def test_data_format_error2(self):
-        main_program = Program()
-        with fluid.program_guard(main_program, Program()):
-            x = paddle.static.data(name='x', shape=[2, 3, 4, 5])
-            try:
-                y = paddle.static.nn.prelu(x, 'channel', data_format='N')
-            except ValueError as e:
-                pass
-
 
 if __name__ == "__main__":
     unittest.main()

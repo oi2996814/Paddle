@@ -20,6 +20,7 @@ from paddle.distributed.auto_parallel.static.operators.common import (
 from paddle.distributed.auto_parallel.static.utils import (
     OpRole,
     insert_dependencies_for_vars,
+    is_comm_op,
 )
 
 from .auto_parallel_sharding import ShardingPass, _supported_optimizer_type
@@ -41,7 +42,7 @@ def _sharding_pass_applied(pass_ctx):
 class AutoParalSupplementDepPass(PassBase):
     """
     Functional Concern.
-    for strategies like amp & global norm, there is a collective communication to sync gradient inforation in every rank.
+    for strategies like amp & global norm, there is a collective communication to sync gradient information in every rank.
     after partition the gradients to each rank, the order of that collective communication is different in each rank
     and might cause hang problem in graph based random order executor. here supplement explicit dependencies for those cases.
 
@@ -49,7 +50,7 @@ class AutoParalSupplementDepPass(PassBase):
     global collective will introduce global synchronization which forces the fast workers to wait for slow ones.
     therefore we should conduct this collective when all the ranks reach a same stage.
     BUT the depend API offered by executor could only ensure "conduct-not-before" but not "conduct-right-after".
-    Some ranks might call the colletives first than other ranks while they still some local could be performed to wait for slow peers.
+    Some ranks might call the collectives first than other ranks while they still some local could be performed to wait for slow peers.
     IR Pass currently could not have the fully control of time the to perform these global collectives.
     """
 
@@ -109,7 +110,11 @@ class AutoParalSupplementDepPass(PassBase):
         for idx, op in enumerate(main_block.ops):
             if op.type == "check_finite_and_unscale":
                 if first_check_op:
-                    last_backward_op = main_block.ops[idx - 1]
+                    last_backward_op = None
+                    for last_idx in range(idx - 1, 0, -1):
+                        if not is_comm_op(main_block.ops[last_idx]):
+                            last_backward_op = main_block.ops[last_idx]
+                            break
                     prior_varname = last_backward_op.output_arg_names[0]
                     first_check_op = False
                 deps_map[idx] = (

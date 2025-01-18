@@ -12,8 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import (
+    TYPE_CHECKING,
+)
+
 import paddle
 from paddle import nn
+
+if TYPE_CHECKING:
+    from paddle import Tensor
 
 __all__ = []
 
@@ -24,7 +33,7 @@ class LeNet(nn.Layer):
 
     Args:
         num_classes (int, optional): Output dim of last fc layer. If num_classes <= 0, last fc layer
-                            will not be defined. Default: 10.
+            will not be defined. Default: 10.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of LeNet model.
@@ -32,19 +41,21 @@ class LeNet(nn.Layer):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import LeNet
+            >>> import paddle
+            >>> from paddle.vision.models import LeNet
 
-            model = LeNet()
+            >>> model = LeNet()
 
-            x = paddle.rand([1, 1, 28, 28])
-            out = model(x)
+            >>> x = paddle.rand([1, 1, 28, 28])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 10]
+            >>> print(out.shape)
+            [1, 10]
     """
 
-    def __init__(self, num_classes=10):
+    num_classes: int
+
+    def __init__(self, num_classes: int = 10) -> None:
         super().__init__()
         self.num_classes = num_classes
         self.features = nn.Sequential(
@@ -63,7 +74,7 @@ class LeNet(nn.Layer):
                 nn.Linear(84, num_classes),
             )
 
-    def forward(self, inputs):
+    def forward(self, inputs: Tensor) -> Tensor:
         x = self.features(inputs)
 
         if self.num_classes > 0:

@@ -22,40 +22,22 @@ limitations under the License. */
 
 #include "paddle/fluid/framework/infershape_utils.h"
 #include "paddle/fluid/framework/op_version_registry.h"
-#include "paddle/fluid/operators/common_infer_shape_functions.h"
 #include "paddle/fluid/prim/api/composite_backward/composite_backward_api.h"
 #include "paddle/fluid/prim/utils/static/composite_grad_desc_maker.h"
 #include "paddle/fluid/prim/utils/static/desc_tensor.h"
-#include "paddle/phi/backends/dynload/port.h"
+#include "paddle/phi/common/port.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/infermeta/backward.h"
 
-PHI_DECLARE_bool(use_mkldnn);
+COMMON_DECLARE_bool(use_mkldnn);
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 template <typename GradFunctor>
 static constexpr bool CanInplaceAct() {
   return GradFunctor::FwdDeps() == ActBwdOpFwdDeps::kDepOut ||
          GradFunctor::FwdDeps() == ActBwdOpFwdDeps::kNoDeps;
 }
-
-#define REGISTER_ACTIVATION_OP_MAKER(OP_NAME, OP_COMMENT)           \
-  class OP_NAME##OpMaker                                            \
-      : public ::paddle::framework::OpProtoAndCheckerMaker {        \
-   public:                                                          \
-    void Make() override {                                          \
-      AddInput("X",                                                 \
-               "Input of " #OP_NAME                                 \
-               " operator, an N-D Tensor, with data type float32, " \
-               "float64 or float16.");                              \
-      AddOutput("Out",                                              \
-                "Output of " #OP_NAME                               \
-                " operator, a Tensor with shape same as input.");   \
-      AddComment(OP_COMMENT);                                       \
-    }                                                               \
-  }
 
 template <ActBwdOpFwdDeps kDepValue, typename T>
 class ActivationGradOpMaker : public framework::SingleGradOpMaker<T> {
@@ -83,22 +65,6 @@ class ActivationGradOpMaker : public framework::SingleGradOpMaker<T> {
     }
   }
 };
-// class HardSwishCompositeGradOpMaker : public prim::CompositeGradOpMakerBase {
-//  public:
-//   using prim::CompositeGradOpMakerBase::CompositeGradOpMakerBase;
-
-//  protected:
-//   void Apply() override {
-//     paddle::Tensor x = this->GetSingleForwardInput("X");
-//     paddle::Tensor out_grad = this->GetSingleOutputGrad("Out");
-//     paddle::Tensor dx = this->GetSingleInputGrad("X");
-//     auto* dx_ptr = this->GetOutputPtr(&dx);
-//     std::string dx_name = this->GetOutputName(dx);
-//     VLOG(6) << "Runing hardswish_grad composite func";
-//     prim::hardswish_grad<prim::DescTensor>(x, out_grad, dx_ptr);
-//     this->RecoverOutputName(dx, dx_name);
-//   }
-// };
 
 phi::KernelKey GetKernelType(const framework::ExecutionContext& ctx,
                              const framework::OperatorWithKernel& oper,
@@ -323,22 +289,9 @@ DECLARE_INPLACE_OP_INFERER(ActivationTripleGradOpInplaceInferer,
 
 DECLARE_INPLACE_OP_INFERER(ActFwdInplaceInferer, {"X", "Out"});
 
-#define DEFINE_ACTIVATION_CPU_KERNEL(op_name, functor, grad_functor)           \
-  template <typename T, typename DeviceContext>                                \
-  class op_name##Kernel : public ActivationKernel<DeviceContext, functor<T>> { \
-  };                                                                           \
-                                                                               \
-  template <typename T, typename DeviceContext>                                \
-  class op_name##GradKernel                                                    \
-      : public ActivationGradKernel<DeviceContext, grad_functor<T>> {};
-
-DEFINE_ACTIVATION_CPU_KERNEL(SoftRelu, SoftReluFunctor, SoftReluGradFunctor)
-
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
-namespace plat = paddle::platform;
 
 #define REGISTER_ACTIVATION_OP(KERNEL_TYPE, OP_NAME, functor, grad_functor) \
   REGISTER_OPERATOR(                                                        \
@@ -357,57 +310,26 @@ namespace plat = paddle::platform;
                     ops::ActivationOpGrad,                                  \
                     ops::ActivationGradOpInplaceInferer);
 
-#define REGISTER_ACTIVATION_OP_WITH_COMP(                              \
-    KERNEL_TYPE, OP_NAME, functor, grad_functor)                       \
-  REGISTER_OPERATOR(                                                   \
-      KERNEL_TYPE,                                                     \
-      ops::ActivationOp,                                               \
-      ops::OP_NAME##OpMaker,                                           \
-      ops::ActivationOpInferVarType,                                   \
-      ops::ActivationGradOpMaker<ops::grad_functor<float>::FwdDeps(),  \
-                                 paddle::framework::OpDesc>,           \
-      ops::ActivationGradOpMaker<ops::grad_functor<float>::FwdDeps(),  \
-                                 paddle::imperative::OpBase>,          \
-      ops::OP_NAME##CompositeGradOpMaker,                              \
-      std::conditional<ops::CanInplaceAct<ops::grad_functor<float>>(), \
-                       ops::ActFwdInplaceInferer,                      \
-                       void>::type);                                   \
-  REGISTER_OPERATOR(KERNEL_TYPE##_grad,                                \
-                    ops::ActivationOpGrad,                             \
-                    ops::ActivationGradOpInplaceInferer);
-
 FOR_EACH_ACTIVATION_OP(REGISTER_ACTIVATION_OP);
-
-#define REGISTER_ACTIVATION_CPU_KERNEL(act_type, op_name)                \
-  PD_REGISTER_STRUCT_KERNEL(                                             \
-      act_type, CPU, ALL_LAYOUT, ops::op_name##Kernel, float, double) {} \
-  PD_REGISTER_STRUCT_KERNEL(act_type##_grad,                             \
-                            CPU,                                         \
-                            ALL_LAYOUT,                                  \
-                            ops::op_name##GradKernel,                    \
-                            float,                                       \
-                            double) {}
-
-REGISTER_ACTIVATION_CPU_KERNEL(soft_relu, SoftRelu)
 
 REGISTER_ACTIVATION_OP(mish, Mish, MishFunctor, MishGradFunctor);
 
 /* ==========================  register checkpoint ===========================*/
 REGISTER_OP_VERSION(leaky_relu)
     .AddCheckpoint(
-        R"ROC(fix leaky_relu, bahavior changed when alpha < 0 or alpha > 1)ROC",
+        R"ROC(fix leaky_relu, behavior changed when alpha < 0 or alpha > 1)ROC",
         paddle::framework::compatible::OpVersionDesc()
             .BugfixWithBehaviorChanged(
-                "leaky_relu calculate formula before checkponit: out = max(x, "
+                "leaky_relu calculate formula before checkpoint: out = max(x, "
                 "alpha * x); after checkpoint: out = x if x > 0 else alpha * "
                 "x"));
 
 REGISTER_OP_VERSION(hard_shrink)
     .AddCheckpoint(
-        R"ROC(fix hard_shrink, bahavior changed when threshold<0)ROC",
+        R"ROC(fix hard_shrink, behavior changed when threshold<0)ROC",
         paddle::framework::compatible::OpVersionDesc()
             .BugfixWithBehaviorChanged(
-                "hard_shrink calculate formula before checkponit: out = x * "
+                "hard_shrink calculate formula before checkpoint: out = x * "
                 "((x < -threshold) + (x > threshold)); after checkpoint: out = "
                 "x * (((x < -threshold) + (x > threshold)) > 0)"));
 
@@ -418,12 +340,5 @@ REGISTER_OP_VERSION(softplus).AddCheckpoint(
     paddle::framework::compatible::OpVersionDesc()
         .NewAttr("beta", "The beta value of the new formula", 1.0f)
         .NewAttr("threshold", "The threshold value of the new formula", 20.0f));
-
-REGISTER_OP_VERSION(mish).AddCheckpoint(
-    R"ROC(add new attributes [use_mkldnn], and when computing softplus the formula is changed as the new veriosn of softplus)ROC",
-    paddle::framework::compatible::OpVersionDesc().NewAttr(
-        "use_mkldnn",
-        "(bool, default false) Only used in mkldnn kernel",
-        false));
 
 /* ========================================================================== */

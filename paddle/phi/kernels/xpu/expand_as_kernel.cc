@@ -17,7 +17,7 @@
 #include "paddle/phi/backends/xpu/enforce_xpu.h"
 #include "paddle/phi/core/kernel_registry.h"
 
-#define MAX_RANK_SUPPORTED 6
+#define MAX_RANK_SUPPORTED 8
 
 namespace phi {
 
@@ -28,19 +28,19 @@ void ExpandAs(const Context& context,
               DenseTensor* out) {
   using XPUType = typename XPUTypeTrait<T>::Type;
   auto in_dims = x.dims();
-  auto vec_in_dims = phi::vectorize<int>(in_dims);
+  auto vec_in_dims = common::vectorize<int>(in_dims);
   auto diff = target_shape.size() - vec_in_dims.size();
   vec_in_dims.insert(vec_in_dims.begin(), diff, 1);
   for (size_t i = 0; i < vec_in_dims.size(); ++i) {
     PADDLE_ENFORCE_NE(target_shape[i],
                       0,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The value of target shape cannot be zero."));
     if (vec_in_dims[i] != 1) {
       PADDLE_ENFORCE_EQ(
           vec_in_dims[i],
           target_shape[i],
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The value (%d) of the non-singleton dimension does not match"
               " the corresponding value (%d) in "
               "target tensor for expand_as_v2 op.",
@@ -49,7 +49,7 @@ void ExpandAs(const Context& context,
     }
   }
   if (target_shape.size() == 0) {
-    phi::DDim out_dims = phi::make_ddim(target_shape);
+    phi::DDim out_dims = common::make_ddim(target_shape);
     out->Resize(out_dims);
     context.template Alloc<T>(out);
 
@@ -61,11 +61,11 @@ void ExpandAs(const Context& context,
     return;
   }
 
-  phi::DDim out_dims = phi::make_ddim(target_shape);
+  phi::DDim out_dims = common::make_ddim(target_shape);
   out->Resize(out_dims);
   context.template Alloc<T>(out);
   auto& x_shape = vec_in_dims;
-  auto out_shape = phi::vectorize<int>(out_dims);
+  auto out_shape = common::vectorize<int>(out_dims);
 
   int r = XPU_SUCCESS;
 
@@ -83,10 +83,10 @@ void ExpandAs(const Context& context,
   PADDLE_ENFORCE_EQ(
       r,
       XPU_SUCCESS,
-      phi::errors::External("XPU API(broadcast) return wrong "
-                            "value[%d %s] in ExpandAsV2XPUKernel.",
-                            r,
-                            XPUAPIErrorMsg[r]));
+      common::errors::External("XPU API(broadcast) return wrong "
+                               "value[%d %s] in ExpandAsV2XPUKernel.",
+                               r,
+                               XPUAPIErrorMsg[r]));
 }
 
 template <typename T, typename Context>
@@ -99,7 +99,7 @@ void ExpandAsKernel(const Context& ctx,
   auto target_rank = target_shape.size();
   PADDLE_ENFORCE_GE(target_rank,
                     rank,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The rank (%d) of the input 'target_tensor' for "
                         "expand_as_v2 op must be greater than or equal to "
                         "the rank (%d) of the input 'x'.",
@@ -108,12 +108,12 @@ void ExpandAsKernel(const Context& ctx,
   PADDLE_ENFORCE_GE(
       rank,
       0,
-      phi::errors::InvalidArgument("The rank (%d) of the input 'x' for "
-                                   "expand_as_v2 op must be positive.",
-                                   rank));
+      common::errors::InvalidArgument("The rank (%d) of the input 'x' for "
+                                      "expand_as_v2 op must be positive.",
+                                      rank));
   PADDLE_ENFORCE_LE(target_rank,
                     MAX_RANK_SUPPORTED,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The rank (%d) of the input 'target_tensor' for "
                         "expand_as_v2 op must be less than or equal to %d.",
                         target_rank,
@@ -126,7 +126,9 @@ PD_REGISTER_KERNEL(expand_as,
                    XPU,
                    ALL_LAYOUT,
                    phi::ExpandAsKernel,
+                   double,
                    float,
+                   phi::dtype::bfloat16,
                    phi::dtype::float16,
                    bool,
                    int,

@@ -25,7 +25,10 @@ void GatherKernel(const Context& dev_ctx,
                   const DenseTensor& index,
                   const Scalar& axis,
                   DenseTensor* out) {
-  auto axis_v = axis.to<int>();
+  auto axis_v = axis.to<int64_t>();
+  if (axis_v < 0) {
+    axis_v += static_cast<int64_t>(x.dims().size());
+  }
   const auto& index_type = index.dtype();
 
   dev_ctx.template Alloc<T>(out);
@@ -36,18 +39,18 @@ void GatherKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         index_dims[1],
         1,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The last dim of index should be 1 when it is 2D, but we get %d",
             index_dims[1]));
   } else {
     PADDLE_ENFORCE_EQ(
         index_dims.size() == 1 || index_dims.size() == 0,
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The index should be 0D, 1D, when it is not 2D, but we get %d",
             index_dims.size()));
   }
-  std::vector<int> xshape(x.dims().size());
+  std::vector<int64_t> xshape(x.dims().size());
   for (int i = 0; i < x.dims().size(); ++i) {
     xshape[i] = x.dims()[i];
   }
@@ -56,7 +59,7 @@ void GatherKernel(const Context& dev_ctx,
 
   int r = XPU_SUCCESS;
   if (index_type == DataType::INT32) {
-    r = xpu::gather<XPUType, int>(
+    r = xpu::paddle_gather<XPUType, int>(
         dev_ctx.x_context(),
         reinterpret_cast<const XPUType*>(x.data<T>()),
         index.data<int>(),
@@ -65,7 +68,7 @@ void GatherKernel(const Context& dev_ctx,
         index.dims().size() == 0 ? 1 : index.dims()[0],
         axis_v);
   } else {
-    r = xpu::gather<XPUType, int64_t>(
+    r = xpu::paddle_gather<XPUType, int64_t>(
         dev_ctx.x_context(),
         reinterpret_cast<const XPUType*>(x.data<T>()),
         index.data<int64_t>(),
@@ -74,11 +77,7 @@ void GatherKernel(const Context& dev_ctx,
         index.dims().size() == 0 ? 1 : index.dims()[0],
         axis_v);
   }
-  PADDLE_ENFORCE_EQ(
-      r,
-      xpu::Error_t::SUCCESS,
-      phi::errors::External(
-          "XPU gather kernel return wrong value[%d %s]", r, XPUAPIErrorMsg[r]));
+  PADDLE_ENFORCE_XDNN_SUCCESS(r, "paddle_gather");
 }
 
 }  // namespace phi

@@ -14,9 +14,7 @@ limitations under the License. */
 
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 /*
  * TemporalShiftOp.
@@ -177,17 +175,18 @@ class TemporalShiftOpConverter : public OpConverter {
     // Concatenate slices along the third dimension (C)
     nvinfer1::IConcatenationLayer* concat_layer;
     if (!slice_c) {
-      nvinfer1::ITensor* concat_inputs[2] = {slice2_layer->getOutput(0),
-                                             slice3_layer->getOutput(0)};
+      std::vector<nvinfer1::ITensor*> concat_inputs = {
+          slice2_layer->getOutput(0), slice3_layer->getOutput(0)};
       concat_layer =
-          TRT_ENGINE_ADD_LAYER(engine_, Concatenation, concat_inputs, 2);
+          TRT_ENGINE_ADD_LAYER(engine_, Concatenation, concat_inputs.data(), 2);
       concat_layer->setAxis(2);
     } else {
-      nvinfer1::ITensor* concat_inputs[3] = {slice1_layer->getOutput(0),
-                                             slice2_layer->getOutput(0),
-                                             slice3_layer->getOutput(0)};
+      std::vector<nvinfer1::ITensor*> concat_inputs = {
+          slice1_layer->getOutput(0),
+          slice2_layer->getOutput(0),
+          slice3_layer->getOutput(0)};
       concat_layer =
-          TRT_ENGINE_ADD_LAYER(engine_, Concatenation, concat_inputs, 3);
+          TRT_ENGINE_ADD_LAYER(engine_, Concatenation, concat_inputs.data(), 3);
       concat_layer->setAxis(2);
     }
 
@@ -205,10 +204,10 @@ class TemporalShiftOpConverter : public OpConverter {
           TRT_ENGINE_ADD_LAYER(engine_, Shuffle, *reshape_layer3->getOutput(0));
       nvinfer1::Permutation permute_order{0, 2, 3, 1};
       transpose_layer2->setFirstTranspose(permute_order);
-      RreplenishLayerAndOutput(
+      ReplenishLayerAndOutput(
           transpose_layer2, "temporal_shift", {output_name}, test_mode);
     } else {
-      RreplenishLayerAndOutput(
+      ReplenishLayerAndOutput(
           reshape_layer3, "temporal_shift", {output_name}, test_mode);
     }
 #else
@@ -217,8 +216,6 @@ class TemporalShiftOpConverter : public OpConverter {
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(temporal_shift, TemporalShiftOpConverter);

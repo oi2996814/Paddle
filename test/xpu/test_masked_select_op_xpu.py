@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
@@ -20,6 +21,7 @@ from get_test_cover_info import (
     create_test_class,
     get_xpu_op_support_types,
 )
+from op_test import convert_float_to_uint16
 from op_test_xpu import XPUOpTest
 
 import paddle
@@ -45,11 +47,18 @@ class XPUTestMaskedSelectOp(XPUOpTestWrapper):
             self.dtype = self.in_type
             self.place = paddle.XPUPlace(0)
             self.op_type = "masked_select"
-            self.__class__.no_need_check_grad = True
+            self.__class__.no_need_check_grad = False
 
-            x = np.random.random(self.shape).astype(self.dtype)
             mask = np.array(np.random.randint(2, size=self.shape, dtype=bool))
-            out = np_masked_select(x, mask)
+
+            if self.dtype == np.uint16:
+                x_fp32 = np.random.random(self.shape).astype('float32')
+                x = convert_float_to_uint16(x_fp32)
+                out = np_masked_select(x_fp32, mask)
+            else:
+                x = np.random.random(self.shape).astype(self.dtype)
+                out = np_masked_select(x, mask)
+
             self.inputs = {'X': x, 'Mask': mask}
             self.outputs = {'Y': out}
 
@@ -107,6 +116,20 @@ class TestMaskedSelectAPI(unittest.TestCase):
             fetch_list=[out],
         )
         self.assertEqual(np.allclose(res, np_out), True)
+
+    def test_simulator_skip_run_mode(self):
+        os.environ['XPUSIM_SKIP_RUN'] = '1'
+        paddle.disable_static(paddle.XPUPlace(0))
+        shape = (88, 6, 8)
+        np_x = np.random.random(shape).astype('float32')
+        np_mask = np.array(np.random.randint(2, size=shape, dtype=bool))
+        x = paddle.to_tensor(np_x)
+        mask = paddle.to_tensor(np_mask)
+        out = paddle.masked_select(x, mask)
+        # only check the numel of output
+        np.testing.assert_equal(out.numpy().size, np_x.size)
+        paddle.enable_static()
+        del os.environ['XPUSIM_SKIP_RUN']
 
 
 class TestMaskedSelectError(unittest.TestCase):

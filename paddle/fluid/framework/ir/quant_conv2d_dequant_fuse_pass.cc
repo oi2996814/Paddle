@@ -18,9 +18,7 @@
 
 #include "paddle/fluid/framework/op_version_registry.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 QuantDequantFusePass::QuantDequantFusePass() {
   AddOpCompat(OpCompat("fake_quantize_range_abs_max"))
       .AddInput("X")
@@ -271,7 +269,7 @@ void QuantDequantFusePass::DeleteQuant(ir::Graph* graph,
     PADDLE_ENFORCE_EQ(
         subgraph.count(input_act_node),
         true,
-        platform::errors::NotFound(
+        common::errors::NotFound(
             "Input act node(%s) not found in QuantDequantFuse pass.",
             input_act_node->name()));
     Node* input_act = subgraph.at(input_act_node);
@@ -285,15 +283,14 @@ void QuantDequantFusePass::DeleteQuant(ir::Graph* graph,
     std::string input_scale_var_name = quant->Op()->Input("InScale").front();
     PADDLE_ENFORCE_NOT_NULL(
         scope,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Scope in QuantDequantFuse pass should not be null."));
     const phi::DenseTensor& input_scale_tensor =
         scope->FindVar(input_scale_var_name)->Get<phi::DenseTensor>();
-    PADDLE_ENFORCE_EQ(
-        paddle::platform::is_cpu_place(input_scale_tensor.place()),
-        true,
-        platform::errors::InvalidArgument(
-            "Input scale tensor's place should be CPU."));
+    PADDLE_ENFORCE_EQ(phi::is_cpu_place(input_scale_tensor.place()),
+                      true,
+                      common::errors::InvalidArgument(
+                          "Input scale tensor's place should be CPU."));
     const float* input_scale_data = input_scale_tensor.data<float>();
     float in_scale = input_scale_data[0];
     float scale_value = in_scale;
@@ -306,13 +303,13 @@ void QuantDequantFusePass::DeleteQuant(ir::Graph* graph,
       auto op_desc = quantized_node->Op();
       std::string quantized_op_type = op_desc->Type();
       if (quantized_op_type == "conv2d" ||
-          quantized_op_type == "conv2d_fusion" ||
+          quantized_op_type == "fused_conv2d_add_act" ||
           quantized_op_type == "depthwise_conv2d" ||
           quantized_op_type == "conv2d_transpose" ||
           quantized_op_type == "matrix_multiply") {
         op_desc->SetAttr("Input_scale", scale_value);
       } else {
-        PADDLE_THROW(platform::errors::Unimplemented(
+        PADDLE_THROW(common::errors::Unimplemented(
             "Unsupported quantized op type %s.", quantized_op_type));
       }
       op_desc->SetAttr("bit_length", bit_length);
@@ -339,7 +336,7 @@ void QuantDequantFusePass::FuseDequant(ir::Graph* graph,
   if (quantized_op_type == "conv2d" ||
       quantized_op_type == "depthwise_conv2d" ||
       quantized_op_type == "fused_conv2d" ||
-      quantized_op_type == "conv2d_fusion" ||
+      quantized_op_type == "fused_conv2d_add_act" ||
       quantized_op_type == "conv2d_transpose") {
     weight_name = "Filter";
     input_name = "Input";
@@ -347,8 +344,9 @@ void QuantDequantFusePass::FuseDequant(ir::Graph* graph,
     weight_name = "Y";
     input_name = "X";
   } else {
-    PADDLE_THROW(platform::errors::Unimplemented(
-        "QuantDequantFuse: We only support conv2d, conv2d_fusion, fused_conv2d,"
+    PADDLE_THROW(common::errors::Unimplemented(
+        "QuantDequantFuse: We only support conv2d, fused_conv2d_add_act, "
+        "fused_conv2d,"
         "conv2d_transpose, matrix_multiply(mul/matmul/matmul_v2) for now, but "
         "received: "
         "%s.",
@@ -378,9 +376,9 @@ void QuantDequantFusePass::FuseDequant(ir::Graph* graph,
     PADDLE_ENFORCE_EQ(
         subgraph.count(quantized_op_input),
         true,
-        platform::errors::NotFound("Quantized op input node(%s) did not find "
-                                   "in QuantDequantFuse pass.",
-                                   quantized_op_input->name()));
+        common::errors::NotFound("Quantized op input node(%s) did not find "
+                                 "in QuantDequantFuse pass.",
+                                 quantized_op_input->name()));
     Node* quantized_op_input_node = subgraph.at(quantized_op_input);
     Node* quantized_op_weight_node =
         subgraph.at(pattern.GetPDNode("quantized_op_weight"));
@@ -407,25 +405,26 @@ void QuantDequantFusePass::FuseDequant(ir::Graph* graph,
       PADDLE_ENFORCE_EQ(
           scales_name.size(),
           2,
-          platform::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Scales size in channel-wise dequantize op should be 2, got %d.",
               scales_name.size()));
       const phi::DenseTensor& channel_scale_tensor =
           scope->FindVar(scales_name[0])->Get<phi::DenseTensor>();
-      PADDLE_ENFORCE_EQ(
-          paddle::platform::is_cpu_place(channel_scale_tensor.place()),
-          true,
-          platform::errors::InvalidArgument(
-              "Channel scale tensor's place should be CPU."));
+      PADDLE_ENFORCE_EQ(phi::is_cpu_place(channel_scale_tensor.place()),
+                        true,
+                        common::errors::InvalidArgument(
+                            "Channel scale tensor's place should be CPU."));
       const float* channel_scale_data = channel_scale_tensor.data<float>();
       for (int i = 0; i < channel_scale_tensor.numel(); i++) {
-        weight_scale.push_back(channel_scale_data[i] / range);
+        weight_scale.push_back(channel_scale_data[i] /
+                               static_cast<float>(range));
       }
       nodes2rm.insert(dequant_channel_scale_node);
     } else {
       float max_range =
           PADDLE_GET_CONST(float, dequant_op_node->Op()->GetAttr("max_range"));
-      weight_scale.push_back((range * range) / max_range / range);
+      weight_scale.push_back(static_cast<float>(range * range) / max_range /
+                             static_cast<float>(range));
     }
 
     // Convert weight to fp32 range
@@ -433,8 +432,8 @@ void QuantDequantFusePass::FuseDequant(ir::Graph* graph,
                               ->GetMutable<phi::DenseTensor>();
     const auto& w_dims = weight_tensor->dims();
     float* quantized_weight_data =
-        weight_tensor->mutable_data<float>(platform::CPUPlace());
-    //  Determine whether this weight tensor has been re-writed, avoiding
+        weight_tensor->mutable_data<float>(phi::CPUPlace());
+    //  Determine whether this weight tensor has been re-written, avoiding
     //  re-write it again when this weight tensor is shared among many ops.
     if (!quantized_op_weight_node_set.count(quantized_op_weight_node)) {
       quantized_op_weight_node_set.insert(quantized_op_weight_node);
@@ -445,7 +444,7 @@ void QuantDequantFusePass::FuseDequant(ir::Graph* graph,
         if (dequant_type == "fake_dequantize_max_abs") {
           PADDLE_ENFORCE_EQ(weight_scale.size(),
                             1,
-                            platform::errors::InvalidArgument(
+                            common::errors::InvalidArgument(
                                 "matrix_multiply(mul/matmul/matmul_v2) op "
                                 "weight dequantized by "
                                 "[fake_dequantize_max_abs] "
@@ -461,7 +460,7 @@ void QuantDequantFusePass::FuseDequant(ir::Graph* graph,
             PADDLE_ENFORCE_EQ(
                 quant_axis == 1,
                 true,
-                platform::errors::InvalidArgument(
+                common::errors::InvalidArgument(
                     "'quant_axis' of matrix_multiply(mul/matmul/matmul_v2) op "
                     "weight "
                     "dequantized by "
@@ -472,7 +471,7 @@ void QuantDequantFusePass::FuseDequant(ir::Graph* graph,
           PADDLE_ENFORCE_EQ(
               weight_scale.size(),
               static_cast<size_t>(w_dims[1]),
-              platform::errors::InvalidArgument(
+              common::errors::InvalidArgument(
                   "matrix_multiply(mul/matmul/matmul_v2) op weight dequantized "
                   "by "
                   "[fake_channel_wise_dequantize_max_abs] "
@@ -493,7 +492,7 @@ void QuantDequantFusePass::FuseDequant(ir::Graph* graph,
         PADDLE_ENFORCE_EQ(
             dequant_type,
             "fake_channel_wise_dequantize_max_abs",
-            platform::errors::InvalidArgument(
+            common::errors::InvalidArgument(
                 "conv2d op must be dequantized by "
                 "[fake_channel_wise_dequantize_max_abs], but got %s. "
                 "If you uses PaddleSlim to generate the quantized "
@@ -506,7 +505,7 @@ void QuantDequantFusePass::FuseDequant(ir::Graph* graph,
           PADDLE_ENFORCE_EQ(
               quant_axis == 0,
               true,
-              platform::errors::InvalidArgument(
+              common::errors::InvalidArgument(
                   "'quant_axis' of conv2d/depthwise_conv2d op weight "
                   "dequantized "
                   "by [fake_channel_wise_dequantize_max_abs]should be 0, but "
@@ -516,20 +515,20 @@ void QuantDequantFusePass::FuseDequant(ir::Graph* graph,
         PADDLE_ENFORCE_EQ(
             weight_scale.size(),
             static_cast<size_t>(w_dims[0]),
-            platform::errors::InvalidArgument(
+            common::errors::InvalidArgument(
                 "conv2d op requires weight scale size = channel size of the "
                 "weight, which is %d, but got %d.",
                 static_cast<size_t>(w_dims[0]),
                 weight_scale.size()));
         for (int j = 0; j < weight_tensor->numel(); j++) {
-          int inner_size = w_dims[1] * w_dims[2] * w_dims[3];
+          int inner_size = static_cast<int>(w_dims[1] * w_dims[2] * w_dims[3]);
           quantized_weight_data[j] *= weight_scale[j / inner_size];
         }
       } else if (quantized_op_type == "conv2d_transpose") {
         PADDLE_ENFORCE_EQ(
             dequant_type,
             "fake_channel_wise_dequantize_max_abs",
-            platform::errors::InvalidArgument(
+            common::errors::InvalidArgument(
                 "conv2d_transpose must be dequantized by "
                 "[fake_channel_wise_dequantize_max_abs], but got %s",
                 dequant_type));
@@ -538,7 +537,7 @@ void QuantDequantFusePass::FuseDequant(ir::Graph* graph,
           PADDLE_ENFORCE_EQ(
               quant_axis == 1,
               true,
-              platform::errors::InvalidArgument(
+              common::errors::InvalidArgument(
                   "'quant_axis' of conv2d_transpose op weight dequantized by "
                   "[fake_channel_wise_dequantize_max_abs]should be 1, but "
                   "the received is %d",
@@ -547,18 +546,18 @@ void QuantDequantFusePass::FuseDequant(ir::Graph* graph,
         PADDLE_ENFORCE_EQ(
             weight_scale.size(),
             static_cast<size_t>(w_dims[1]),
-            platform::errors::InvalidArgument(
+            common::errors::InvalidArgument(
                 "conv2d_transpose op requires weight scale size = channel size "
                 "of the weight, which is %d, but got %d.",
                 static_cast<size_t>(w_dims[1]),
                 weight_scale.size()));
         for (int j = 0; j < weight_tensor->numel(); j++) {
-          int inner_size = w_dims[2] * w_dims[3];
+          int inner_size = static_cast<int>(w_dims[2] * w_dims[3]);
           quantized_weight_data[j] *=
               weight_scale[(j / inner_size) % w_dims[1]];
         }
       } else {
-        PADDLE_THROW(platform::errors::InvalidArgument(
+        PADDLE_THROW(common::errors::InvalidArgument(
             "Unsupported quantized op type: %s", quantized_op_type));
       }
     }
@@ -571,7 +570,8 @@ void QuantDequantFusePass::FuseDequant(ir::Graph* graph,
                                   quantized_op_node->Op()->Block());
     new_op_desc.SetType(quantized_op_type);
     new_op_desc.SetAttr("enable_int8", true);
-    if (quantized_op_type == "conv2d" || quantized_op_type == "conv2d_fusion" ||
+    if (quantized_op_type == "conv2d" ||
+        quantized_op_type == "fused_conv2d_add_act" ||
         quantized_op_type == "fused_conv2d" ||
         quantized_op_type == "depthwise_conv2d" ||
         quantized_op_type == "conv2d_transpose") {
@@ -621,9 +621,7 @@ void QuantDequantFusePass::ApplyImpl(ir::Graph* graph) const {
   }
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(quant_conv2d_dequant_fuse_pass,
               paddle::framework::ir::QuantDequantFusePass);

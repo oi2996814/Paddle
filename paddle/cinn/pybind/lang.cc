@@ -20,19 +20,22 @@
 #include "paddle/cinn/backends/codegen_c.h"
 #include "paddle/cinn/common/target.h"
 #include "paddle/cinn/ir/module.h"
+#include "paddle/cinn/ir/schedule/ir_schedule.h"
+#include "paddle/cinn/ir/schedule/ir_schedule_util.h"
 #include "paddle/cinn/ir/tensor.h"
 #include "paddle/cinn/lang/buffer.h"
 #include "paddle/cinn/lang/builtin.h"
 #include "paddle/cinn/lang/compute.h"
 #include "paddle/cinn/lang/lower.h"
 #include "paddle/cinn/lang/placeholder.h"
+#include "paddle/cinn/optim/transform_gpu_forloop.h"
 #include "paddle/cinn/pybind/bind.h"
 #include "paddle/cinn/pybind/bind_utils.h"
 
 namespace py = pybind11;
 
 namespace cinn::pybind {
-using common::Type;
+using cinn::common::Type;
 using lang::Placeholder;
 using py::arg;
 using utils::GetStreamCnt;
@@ -40,8 +43,6 @@ using utils::StringFormat;
 
 namespace {
 void BindBuffer(py::module *);
-void BindLower(py::module *);
-void BindLowerVec(py::module *);
 void BindPlaceholder(py::module *);
 void BindCompute(py::module *);
 void BindModule(py::module *);
@@ -55,34 +56,6 @@ void BindBuffer(py::module *m) {
            py::arg("name") = "")
       .def(py::init<const ir::Buffer &>())
       .def("buffer", &lang::Buffer::buffer);
-}
-
-void BindLower(py::module *m) {
-  using py::arg;
-  m->def("lower",
-         &lang::Lower,
-         arg("name"),
-         arg("stages"),
-         arg("tensor_args"),
-         arg("scalar_args") = std::vector<ir::Var>(),
-         arg("temp_tensors") = std::vector<ir::Tensor>(),
-         arg("b") = nullptr,
-         arg("target") = common::DefaultHostTarget(),
-         arg("supprt_ir_schedule") = false);
-}
-
-void BindLowerVec(py::module *m) {
-  using py::arg;
-  m->def("lower_vec",
-         &lang::LowerVec,
-         arg("name"),
-         arg("stages"),
-         arg("tensor_args"),
-         arg("scalar_args") = std::vector<ir::Var>(),
-         arg("temp_tensors") = std::vector<ir::Tensor>(),
-         arg("b") = nullptr,
-         arg("target") = common::DefaultHostTarget(),
-         arg("supprt_ir_schedule") = false);
 }
 
 void BindCompute(py::module *m) {
@@ -141,14 +114,36 @@ void BindModule(py::module *m) {
       .def("submodules", &ir::Module::submodules)
       .def("compile", &ir::Module::Compile)
       .def("get_c_code", [](const ir::Module &self) -> std::string {
-        backends::CodeGenC codegen(common::DefaultHostTarget());
+        backends::CodeGenC codegen(cinn::common::DefaultHostTarget());
         codegen.SetInlineBuiltinCodes(false);
         return codegen.Compile(self, backends::CodeGenC::OutputKind::CImpl);
       });
 
   py::class_<ir::Module::Builder> builder(module, "Builder");
-  builder.def(py::init<const std::string &, const common::Target &>())
-      .def("add_function", &ir::Module::Builder::AddFunction)
+  builder.def(py::init<const std::string &, const cinn::common::Target &>())
+      .def("add_function",
+           [](ir::Module::Builder &self, ir::LoweredFunc func) {
+             self.GetTargetArch().Match(
+                 [&](common::UnknownArch) { LOG(FATAL) << "NotImplemented"; },
+                 [&](common::X86Arch) {
+                   // Do nothing
+                 },
+                 [&](common::ARMArch) {
+                   // Do nothing
+                 },
+                 [&](common::NVGPUArch) {
+#ifdef CINN_WITH_CUDA
+                   ir::SetCudaAxisInfo(func);
+                   optim::OptimizeExprGPU(&(func->body));
+#endif
+                 },
+                 [&](std::variant<common::HygonDCUArchHIP,
+                                  common::HygonDCUArchSYCL>) {
+                   PADDLE_THROW(::common::errors::Unimplemented(
+                       "CINN old obsolete code!"));
+                 });
+             self.AddFunction(func);
+           })
       .def("add_buffer", &ir::Module::Builder::AddBuffer)
       .def("build", &ir::Module::Builder::Build);
 }
@@ -275,8 +270,6 @@ void BindBuiltin(py::module *m) {
 
 void BindLang(py::module *m) {
   BindBuffer(m);
-  BindLower(m);
-  BindLowerVec(m);
   BindPlaceholder(m);
   BindCompute(m);
   BindModule(m);

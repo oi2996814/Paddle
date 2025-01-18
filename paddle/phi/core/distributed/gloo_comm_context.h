@@ -19,8 +19,8 @@
 
 #include <memory>
 
+#include "paddle/common/macros.h"
 #include "paddle/phi/core/distributed/comm_context.h"
-#include "paddle/phi/core/macros.h"
 
 namespace phi {
 class DenseTensor;
@@ -61,7 +61,7 @@ class GlooCommContext final : public CommContext {
   void Scatter(phi::DenseTensor* out_tensor,
                const phi::DenseTensor& in_tensor,
                int src,
-               int size,
+               int size = 0,
                uint32_t tag = 0);
 
   void Barrier();

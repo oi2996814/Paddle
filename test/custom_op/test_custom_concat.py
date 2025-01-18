@@ -31,9 +31,9 @@ if os.name == 'nt' and os.path.isfile(file):
     run_cmd(cmd, True)
 
 if os.name == 'nt':
-    test_include = "..\\python\\paddle\\fluid\\tests\\custom_op"
+    test_include = "..\\python\\paddle\\base\\tests\\custom_op"
 else:
-    test_include = "../python/paddle/fluid/tests/custom_op"
+    test_include = "../python/paddle/base/tests/custom_op"
 paddle_includes.append(test_include)
 
 custom_ops = load(
@@ -94,10 +94,19 @@ def concat_static(func, dtype, np_inputs, axis_v, with_attr=False):
                     "x2": np_inputs[1].astype(dtype),
                     "axis": axis,
                 }
+            if paddle.framework.in_pir_mode():
+                ops = static.default_main_program().global_block().ops
+                fetch_list = [
+                    out,
+                    ops[-1].result(0),  # x1_grad
+                    ops[-1].result(1),
+                ]  # x2_grad
+            else:
+                fetch_list = [out.name, x1.name + "@GRAD", x2.name + "@GRAD"]
             out_v, x1_grad_v, x2_grad_v = exe.run(
                 static.default_main_program(),
                 feed=feed_dict,
-                fetch_list=[out.name, x1.name + "@GRAD", x2.name + "@GRAD"],
+                fetch_list=fetch_list,
             )
     paddle.disable_static()
     return out_v, x1_grad_v, x2_grad_v
@@ -110,20 +119,18 @@ class TestCustomConcatDynamicAxisJit(unittest.TestCase):
             np.array([[1, 2, 3], [4, 5, 6]]),
             np.array([[11, 12, 13], [14, 15, 16]]),
         ]
-        self.axises = [0, 1]
+        self.axes = [0, 1]
 
     def check_output(self, out, pd_out, name):
         np.testing.assert_array_equal(
             out,
             pd_out,
-            err_msg='custom op {}: {},\n paddle api {}: {}'.format(
-                name, out, name, pd_out
-            ),
+            err_msg=f'custom op {name}: {out},\n paddle api {name}: {pd_out}',
         )
 
     def test_dynamic(self):
         for dtype in self.dtypes:
-            for axis in self.axises:
+            for axis in self.axes:
                 out, grad_inputs = concat_dynamic(
                     custom_ops.custom_concat, dtype, self.np_inputs, axis
                 )
@@ -137,7 +144,7 @@ class TestCustomConcatDynamicAxisJit(unittest.TestCase):
 
     def test_static(self):
         for dtype in self.dtypes:
-            for axis in self.axises:
+            for axis in self.axes:
                 out, x1_grad, x2_grad = concat_static(
                     custom_ops.custom_concat, dtype, self.np_inputs, axis
                 )
@@ -151,7 +158,7 @@ class TestCustomConcatDynamicAxisJit(unittest.TestCase):
 
     def test_dynamic_with_attr(self):
         for dtype in self.dtypes:
-            for axis in self.axises:
+            for axis in self.axes:
                 out, grad_inputs = concat_dynamic(
                     custom_ops.custom_concat_with_attr,
                     dtype,
@@ -169,7 +176,7 @@ class TestCustomConcatDynamicAxisJit(unittest.TestCase):
 
     def test_static_with_attr(self):
         for dtype in self.dtypes:
-            for axis in self.axises:
+            for axis in self.axes:
                 out, x1_grad, x2_grad = concat_static(
                     custom_ops.custom_concat_with_attr,
                     dtype,

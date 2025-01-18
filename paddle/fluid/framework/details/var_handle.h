@@ -20,9 +20,9 @@
 #include <unordered_set>
 #include <utility>
 
+#include "paddle/common/macros.h"
 #include "paddle/fluid/framework/ir/node.h"
-#include "paddle/fluid/platform/macros.h"
-#include "paddle/fluid/platform/place.h"
+#include "paddle/phi/common/place.h"
 
 namespace paddle {
 namespace framework {
@@ -49,7 +49,7 @@ struct VarHandleBase {
     node_->WrappedBy(this);
   }
 
-  virtual ~VarHandleBase();
+  TEST_API virtual ~VarHandleBase();
 
   virtual std::string DebugString() const = 0;
   virtual const std::string& Name() const = 0;
@@ -63,7 +63,7 @@ struct VarHandleBase {
   void AddOutput(OpHandleBase* out, ir::Node* node) {
     if (pending_ops_.find(out) == pending_ops_.end()) {
       PADDLE_ENFORCE_NOT_NULL(out,
-                              platform::errors::InvalidArgument(
+                              common::errors::InvalidArgument(
                                   "The output added to VarHandle %s is NULL.",
                                   this->Node()->Name()));
       pending_ops_.insert(out);
@@ -114,15 +114,15 @@ struct VarHandle : public VarHandleBase {
   DISABLE_COPY_AND_ASSIGN(VarHandle);
 
  public:
-  virtual ~VarHandle();
+  TEST_API virtual ~VarHandle();
 
-  std::string DebugString() const override;
+  TEST_API std::string DebugString() const override;
 
   VarHandle(ir::Node* node,
             size_t version,
             size_t scope_index,
             std::string name,
-            platform::Place place)
+            phi::Place place)
       : VarHandleBase(node),
         version_(version),
         scope_idx_(scope_index),
@@ -136,7 +136,7 @@ struct VarHandle : public VarHandleBase {
     PADDLE_ENFORCE_EQ(
         HasEvent(),
         true,
-        platform::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "The cuda event is not set, maybe InitCUDA() is not called."));
     return event_;
   }
@@ -153,7 +153,7 @@ struct VarHandle : public VarHandleBase {
   size_t version_;
   size_t scope_idx_;
   std::string name_;
-  platform::Place place_;
+  phi::Place place_;
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
   // Only when this event is triggered, var is generated.
   gpuEvent_t event_;
@@ -170,16 +170,16 @@ struct VarHandle : public VarHandleBase {
   size_t scope_idx() const { return scope_idx_; }
   const std::string& Name() const override { return name_; }
   const std::string& name() const { return name_; }
-  const platform::Place& place() const { return place_; }
+  const phi::Place& place() const { return place_; }
 };
 
 // Dummy Variable. It is used to represent dependencies between operators
 struct DummyVarHandle : public VarHandleBase {
   explicit DummyVarHandle(ir::Node* node) : VarHandleBase(node) {}
 
-  virtual ~DummyVarHandle();
+  TEST_API virtual ~DummyVarHandle();
 
-  std::string DebugString() const override;
+  TEST_API std::string DebugString() const override;
 
  public:
   const std::string& Name() const override { return name_; }

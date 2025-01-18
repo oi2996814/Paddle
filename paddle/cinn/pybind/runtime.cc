@@ -21,9 +21,17 @@
 #include <cstring>
 #include <memory>
 
+#include "paddle/cinn/common/common.h"
 #include "paddle/cinn/pybind/bind.h"
 #include "paddle/cinn/runtime/cinn_runtime.h"
 #include "paddle/cinn/runtime/flags.h"
+
+#ifdef CINN_WITH_CUDA
+#include <cuda.h>
+#include <cuda_runtime.h>
+
+#include "paddle/cinn/backends/cuda_util.h"
+#endif
 
 namespace py = pybind11;
 namespace cinn::pybind {
@@ -66,6 +74,77 @@ cinn_buffer_t *CreateBufferFromNumpy(py::array data,
   return buffer;
 }
 
+cinn_buffer_t *CreateBufferFromNumpyImpl(common::UnknownArch, py::array data) {
+  LOG(FATAL) << "NotImplemented.";
+}
+
+cinn_buffer_t *CreateBufferFromNumpyImpl(common::X86Arch, py::array data) {
+  return CreateBufferFromNumpy(data, cinn_x86_device);
+}
+
+cinn_buffer_t *CreateBufferFromNumpyImpl(common::ARMArch, py::array data) {
+  LOG(FATAL) << "NotImplemented.";
+}
+
+cinn_buffer_t *CreateBufferFromNumpyImpl(common::NVGPUArch, py::array data) {
+#ifdef CINN_WITH_CUDA
+  std::vector<int> shape;
+  std::copy_n(data.shape(), data.ndim(), std::back_inserter(shape));
+  auto *buffer = new cinn_buffer_t();
+  buffer->device = cinn_nvgpu_device;
+  buffer->memory_size = data.nbytes();
+  CUDA_CALL(cudaMalloc(&buffer->memory, data.nbytes()));
+  CUDA_CALL(cudaMemcpy(
+      buffer->memory, data.data(), data.nbytes(), cudaMemcpyHostToDevice));
+  return buffer;
+#else
+  PADDLE_THROW(::common::errors::Fatal(
+      "To use CUDA backends, you need to set WITH_CUDA ON!"));
+#endif
+}
+
+cinn_buffer_t *CreateBufferFromNumpyImpl(common::HygonDCUArchHIP,
+                                         py::array data) {
+  PADDLE_THROW(::common::errors::Unimplemented("CINN old obsolete code!"));
+}
+
+cinn_buffer_t *CreateBufferFromNumpyImpl(common::HygonDCUArchSYCL,
+                                         py::array data) {
+  PADDLE_THROW(::common::errors::Unimplemented("CINN old obsolete code!"));
+}
+
+cinn_buffer_t *InterfaceCreateBufferFromNumpy(common::Arch arch,
+                                              py::array data) {
+  return std::visit(
+      [&](const auto &impl) { return CreateBufferFromNumpyImpl(impl, data); },
+      arch.variant());
+}
+
+cinn_buffer_t *CreateBufferFromNumpy(
+    py::array data,
+    cinn::common::Target target = cinn::common::DefaultHostTarget(),
+    int align = 0) {
+  return InterfaceCreateBufferFromNumpy(target.arch, data);
+}
+
+void BufferCopyTo(const cinn_buffer_t &buffer, py::array array) {
+  void *array_data = array.mutable_data();
+  if (buffer.device == cinn_x86_device) {
+    std::memcpy(array_data, buffer.memory, array.nbytes());
+  } else if (buffer.device == cinn_nvgpu_device) {
+#ifdef CINN_WITH_CUDA
+    CUDA_CALL(cudaMemcpy(
+        array_data, buffer.memory, array.nbytes(), cudaMemcpyDeviceToHost));
+#else
+    PADDLE_THROW(::common::errors::Fatal(
+        "To use CUDA backends, you need to set WITH_CUDA ON!"));
+#endif
+
+  } else {
+    CINN_NOT_IMPLEMENTED
+  }
+}
+
 py::array BufferHostMemoryToNumpy(cinn_buffer_t &buffer) {  // NOLINT
   py::dtype dt;
   if (buffer.type == cinn_int32_t()) {
@@ -85,7 +164,7 @@ py::array BufferHostMemoryToNumpy(cinn_buffer_t &buffer) {  // NOLINT
   } else if (buffer.type == cinn_bool_t()) {
     dt = py::dtype::of<bool>();
   } else {
-    LOG(FATAL) << "Not supported type found";
+    PADDLE_THROW(::common::errors::InvalidArgument("Not supported type found"));
   }
 
   py::array::ShapeContainer shape(buffer.dims, buffer.dims + buffer.dimensions);
@@ -162,6 +241,7 @@ void BindCinnRuntime(py::module *m) {
       .value("cinn_x86_device", cinn_x86_device)
       .value("cinn_opencl_device", cinn_opencl_device)
       .value("cinn_arm_device", cinn_arm_device)
+      .value("cinn_nvgpu_device", cinn_nvgpu_device)
       .export_values();
 
   py::enum_<cinn_buffer_kind_t> cinn_buffer_kind(*m, "cinn_buffer_kind_t");
@@ -220,10 +300,17 @@ void BindCinnRuntime(py::module *m) {
       .def("set_flag", &cinn_buffer_t::set_flag)
       // Python methods
       .def("numpy", &BufferHostMemoryToNumpy)
-      .def(py::init(&CreateBufferFromNumpy),
+      .def(py::init(py::overload_cast<py::array, cinn_device_kind_t, int>(
+               &CreateBufferFromNumpy)),
            arg("data"),
            arg("device"),
-           arg("align") = 0);
+           arg("align") = 0)
+      .def(py::init(py::overload_cast<py::array, cinn::common::Target, int>(
+               &CreateBufferFromNumpy)),
+           arg("data"),
+           arg("target"),
+           arg("align") = 0)
+      .def("copy_to", &BufferCopyTo);
 
   m->def("cinn_x86_device_interface", &cinn_x86_device_interface)
       .def("cinn_buffer_load_float32", &cinn_buffer_load_float32)

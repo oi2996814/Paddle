@@ -22,11 +22,11 @@
 namespace phi {
 
 static constexpr int kNumCUDAThreads = 512;
-static constexpr int kNumMaxinumNumBlocks = 4096;
+static constexpr int kNumMaximumNumBlocks = 4096;
 
 static inline int NumBlocks(const int N) {
   return std::min((N + kNumCUDAThreads - 1) / kNumCUDAThreads,
-                  kNumMaxinumNumBlocks);
+                  kNumMaximumNumBlocks);
 }
 
 template <typename T1, typename T2>
@@ -86,7 +86,7 @@ static void VisitType(phi::DataType type, Visitor visitor) {
   if (type == phi::DataType::INT64) {
     visitor.template apply<int64_t>();
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "The received values gate_id type %s can not meet input requirements. "
         "Because the given gate_id data type of operators must be "
         "int64. Please input appropriate gate_id again! ",

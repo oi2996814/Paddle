@@ -14,14 +14,13 @@
 
 #include "paddle/fluid/imperative/layout_autotune.h"
 
+#include "paddle/common/errors.h"
 #include "paddle/fluid/eager/api/utils/global_utils.h"
 #include "paddle/fluid/framework/op_info.h"
 #include "paddle/fluid/imperative/layout_transformer.h"
 #include "paddle/phi/backends/gpu/gpu_info.h"
 #include "paddle/phi/core/enforce.h"
-#include "paddle/phi/core/errors.h"
-namespace paddle {
-namespace imperative {
+namespace paddle::imperative {
 
 LayoutAutoTune::LayoutAutoTune() {
   const auto& op_info = paddle::framework::OpInfoMap::Instance().map();
@@ -33,7 +32,7 @@ LayoutAutoTune::LayoutAutoTune() {
       continue;
     }
 
-    // only record forwrd operators
+    // only record forward operators
     if (info.first.find("_grad") != std::string::npos) {
       continue;
     }
@@ -45,13 +44,13 @@ LayoutAutoTune::LayoutAutoTune() {
       // Attribute name is fuzzy matched, such as start and start_axis.
       for (auto& attr : attrs) {
         auto attr_name = attr.first;
-        VLOG(6) << "OP: " << info.first << " Attr Name: " << attr_name;
+        VLOG(8) << "OP: " << info.first << " Attr Name: " << attr_name;
         if (attr_name.find("axis") != std::string::npos ||
             attr_name.find("axes") != std::string::npos ||
             attr_name.find("dim") != std::string::npos ||
             attr_name.find("start") != std::string::npos ||
             attr_name.find("end") != std::string::npos) {
-          VLOG(4) << "Lightly layout sensitive OP: " << info.first;
+          VLOG(8) << "Lightly layout sensitive OP: " << info.first;
           layout_agnostic = false;
           lightly_layout_sensitive_ops_.emplace(info.first);
           break;
@@ -61,9 +60,9 @@ LayoutAutoTune::LayoutAutoTune() {
       if ((attrs.find("data_format") != attrs.end() ||
            attrs.find("data_layout") != attrs.end()) &&
           layout_agnostic == true) {
-        VLOG(4) << "Heavily layout sensitive OP: " << info.first;
+        VLOG(8) << "Heavily layout sensitive OP: " << info.first;
         heavily_layout_sensitive_ops_.emplace(info.first);
-        layout_agnostic = false;
+        layout_agnostic = false;  // NOLINT
         continue;
       }
     }
@@ -76,7 +75,7 @@ LayoutAutoTune::LayoutAutoTune() {
     }
 
     if (layout_agnostic) {
-      VLOG(4) << "Layout agnostic_ops: " << info.first;
+      VLOG(8) << "Layout agnostic_ops: " << info.first;
       layout_agnostic_ops_.emplace(info.first);
     }
   }
@@ -134,8 +133,7 @@ paddle::imperative::NameVarMap<VarType> DealLightlyLayoutSensitive(
 
 LayoutAutotuneGuard::LayoutAutotuneGuard(std::shared_ptr<Tracer> tracer,
                                          bool use_autotune)
-    : tracer_(tracer) {
-  pre_layout_autotune_ = tracer_->UseLayoutAutoTune();
+    : tracer_(tracer), pre_layout_autotune_(tracer_->UseLayoutAutoTune()) {
   if (pre_layout_autotune_ != use_autotune) {
     tracer_->EnableLayoutAutoTune();
     if (!use_autotune) {
@@ -145,7 +143,7 @@ LayoutAutotuneGuard::LayoutAutotuneGuard(std::shared_ptr<Tracer> tracer,
 }
 
 LayoutAutotuneGuard::~LayoutAutotuneGuard() {
-  if (pre_layout_autotune_) {
+  if (pre_layout_autotune_) {  // NOLINT
     tracer_->EnableLayoutAutoTune();
   } else {
     tracer_->DisableLayoutAutoTune();
@@ -207,7 +205,7 @@ paddle::imperative::NameVarMap<VarType> AutoTuneLayout(
       VLOG(3) << "Tune the layout from "
               << PADDLE_GET_CONST(std::string, (*attrs)["data_format"])
               << " to "
-              << phi::DataLayoutToString(
+              << common::DataLayoutToString(
                      LayoutAutoTune::Instance().GetDesiredLayout());
     }
   }
@@ -225,8 +223,8 @@ paddle::imperative::NameVarMap<VarType> AutoTuneLayout(
     }
     PADDLE_ENFORCE_NOT_NULL(
         transposer,
-        phi::errors::Unimplemented("%s 's LayoutTransformer is unimplemented.",
-                                   op_type));
+        common::errors::Unimplemented(
+            "%s 's LayoutTransformer is unimplemented.", op_type));
     return transposer->Apply(ins, outs, attrs, tracer);
   }
 }
@@ -245,5 +243,4 @@ AutoTuneLayout<egr::EagerVariable>(
     paddle::framework::AttributeMap* attrs,
     const std::shared_ptr<imperative::Tracer>& tracer);
 
-}  // namespace imperative
-}  // namespace paddle
+}  // namespace paddle::imperative

@@ -13,13 +13,16 @@
 # limitations under the License.
 
 import inspect
-import os
 import unittest
 
+import numpy as np
+from dygraph_to_static_utils import (
+    Dy2StTestBase,
+)
 from numpy import append
 
 import paddle
-from paddle.jit.dy2static.utils import FunctionNameLivenessAnalysis
+from paddle.jit.dy2static.transformers.utils import FunctionNameLivenessAnalysis
 from paddle.utils import gast
 
 global_a = []
@@ -37,9 +40,7 @@ class JudgeVisitor(gast.NodeVisitor):
         assert scope.existed_vars() == expected, "Not Equals."
         assert (
             scope.modified_vars() == exp_mod
-        ), "Not Equals in function:{} . expect {} , but get {}".format(
-            node.name, exp_mod, scope.modified_vars()
-        )
+        ), f"Not Equals in function:{node.name} . expect {exp_mod} , but get {scope.modified_vars()}"
         self.generic_visit(node)
 
 
@@ -52,9 +53,7 @@ class JudgePushPopVisitor(gast.NodeVisitor):
         expected = self.pp_var.get(node.name, set())
         assert (
             scope.push_pop_vars == expected
-        ), "Not Equals in function:{} . expect {} , but get {}".format(
-            node.name, expected, scope.push_pop_vars
-        )
+        ), f"Not Equals in function:{node.name} . expect {expected} , but get {scope.push_pop_vars}"
         self.generic_visit(node)
 
 
@@ -160,7 +159,7 @@ def test_push_pop_4(x, *args, **kargs):
     return l, k
 
 
-class TestClosureAnalysis(unittest.TestCase):
+class TestClosureAnalysis(Dy2StTestBase):
     def setUp(self):
         self.judge_type = "var and w_vars"
         self.init_dygraph_func()
@@ -259,7 +258,7 @@ class TestClosureAnalysis_PushPop(TestClosureAnalysis):
         ]
 
 
-class TestPushPopTrans(unittest.TestCase):
+class TestPushPopTrans(Dy2StTestBase):
     def test(self):
         def vlist_of_dict(x):
             ma = {'a': []}
@@ -268,12 +267,9 @@ class TestPushPopTrans(unittest.TestCase):
             return ma
 
         x = paddle.to_tensor([3])
-        print(paddle.jit.to_static(vlist_of_dict).code)
         print(paddle.jit.to_static(vlist_of_dict)(x))
 
     def test2(self):
-        import numpy as np
-
         def vlist_of_dict(x):
             a = np.array([1, 2, 3])
             for i in range(3):
@@ -281,12 +277,9 @@ class TestPushPopTrans(unittest.TestCase):
             return a
 
         x = paddle.to_tensor([3])
-        print(paddle.jit.to_static(vlist_of_dict).code)
         print(paddle.jit.to_static(vlist_of_dict)(x))
 
     def test3(self):
-        import numpy as np
-
         def vlist_of_dict(x):
             a = np.array([1, 2, 3])
             if True:
@@ -294,12 +287,9 @@ class TestPushPopTrans(unittest.TestCase):
             return a
 
         x = paddle.to_tensor([3])
-        print(paddle.jit.to_static(vlist_of_dict).code)
         print(paddle.jit.to_static(vlist_of_dict)(x))
 
     def test4(self):
-        import numpy as np
-
         def vlist_of_dict(x):
             a = np.array([1, 2, 3])
             for i in range(3):
@@ -307,12 +297,9 @@ class TestPushPopTrans(unittest.TestCase):
             return a
 
         x = paddle.to_tensor([3])
-        print(paddle.jit.to_static(vlist_of_dict).code)
         print(paddle.jit.to_static(vlist_of_dict)(x))
 
     def test5(self):
-        import numpy as np
-
         def vlist_of_dict(x):
             a = np.array([1, 2, 3])
             for i in range(3):
@@ -320,10 +307,8 @@ class TestPushPopTrans(unittest.TestCase):
             return a
 
         x = paddle.to_tensor([3])
-        print(paddle.jit.to_static(vlist_of_dict).code)
         print(paddle.jit.to_static(vlist_of_dict)(x))
 
 
 if __name__ == '__main__':
-    os.environ['ENABLE_FALL_BACK'] = "False"
     unittest.main()

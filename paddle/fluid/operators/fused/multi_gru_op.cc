@@ -12,18 +12,33 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include "paddle/fluid/operators/fused/multi_gru_op.h"
-// #include "paddle/fluid/operators/fused/fusion_gru_op.h"
 #include <cstring>  // for memcpy
 #include <string>
 #include <vector>
 
-#include "paddle/phi/kernels/funcs/blas/blas.h"
-#include "paddle/phi/kernels/funcs/fc_functor.h"
-#include "paddle/phi/kernels/funcs/sequence2batch.h"
+#include "paddle/fluid/framework/op_registry.h"
+#include "paddle/fluid/framework/operator.h"
 
 namespace paddle {
 namespace operators {
+
+using framework::ExecutionContext;
+
+class MultiGRUOp : public framework::OperatorWithKernel {
+ public:
+  using framework::OperatorWithKernel::OperatorWithKernel;
+
+  void InferShape(framework::InferShapeContext* ctx) const override;
+
+ protected:
+  phi::KernelKey GetExpectedKernelType(
+      const ExecutionContext& ctx) const override;
+};
+
+class MultiGRUOpMaker : public framework::OpProtoAndCheckerMaker {
+ public:
+  void Make() override;
+};
 
 void MultiGRUOp::InferShape(framework::InferShapeContext* ctx) const {
   OP_INOUT_CHECK(ctx->HasInput("X"), "Input", "X", "multi_gru");
@@ -32,15 +47,15 @@ void MultiGRUOp::InferShape(framework::InferShapeContext* ctx) const {
   OP_INOUT_CHECK(ctx->HasOutput("Hidden"), "Output", "Hidden", "multi_gru");
   auto x_dims = ctx->GetInputDim("X");
   auto x_mat_dims = (x_dims.size() == 3 && x_dims[1] == 1)
-                        ? phi::flatten_to_2d(x_dims, 1)
+                        ? common::flatten_to_2d(x_dims, 1)
                         : x_dims;
   PADDLE_ENFORCE_EQ(
       x_mat_dims.size(),
       2,
-      platform::errors::InvalidArgument("The size of input X dims should be 2, "
-                                        "or 3 with second dimension equal to "
-                                        "1, but now Input X dim is:[%s] ",
-                                        x_dims));
+      common::errors::InvalidArgument("The size of input X dims should be 2, "
+                                      "or 3 with second dimension equal to "
+                                      "1, but now Input X dim is:[%s] ",
+                                      x_dims));
 
   auto layers = ctx->Attrs().Get<int>("layers");
   auto wx_dims = ctx->GetInputsDim("WeightX");
@@ -48,7 +63,7 @@ void MultiGRUOp::InferShape(framework::InferShapeContext* ctx) const {
     PADDLE_ENFORCE_EQ(
         wx_dims[i][0],
         x_mat_dims[1],
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The first dimension of flattened WeightX #%d"
             "should equal to last dimension of flattened input X, but "
             "received fattened WeightX dimension is:%d, flattened X dimension "
@@ -62,7 +77,7 @@ void MultiGRUOp::InferShape(framework::InferShapeContext* ctx) const {
   for (int i = 0; i < 2 * layers; ++i) {
     PADDLE_ENFORCE_EQ(wx_dims[i].size(),
                       2,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The rank of WeightX #%d should be 2, but received "
                           "WeightX dim size is:%d, WeightX dim is:[%s] ",
                           i,
@@ -70,17 +85,17 @@ void MultiGRUOp::InferShape(framework::InferShapeContext* ctx) const {
                           wx_dims[i]));
     PADDLE_ENFORCE_EQ(wh_dims[i].size(),
                       2,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The rank of WeightH #%d should be 2, but received "
                           "WeightH dim size is:%d, WeightH dim is:[%s] ",
                           i,
                           wh_dims[i].size(),
                           wh_dims[i]));
-    int frame_size = wh_dims[i][0];
+    int frame_size = static_cast<int>(wh_dims[i][0]);
     PADDLE_ENFORCE_EQ(
         wh_dims[i][1],
         3 * frame_size,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The second dimension of WeightH #%d "
             "should equal to 3 * frame_size, but received WeightH's "
             "second dimension is: %d, frame size is:%d",
@@ -90,7 +105,7 @@ void MultiGRUOp::InferShape(framework::InferShapeContext* ctx) const {
     PADDLE_ENFORCE_EQ(
         wx_dims[i][1],
         3 * frame_size,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The second dimension of WeightX #%d "
             "should equal to 3 * frame_size, but received WeightX's "
             "second dimension is: %d, frame size is:%d",
@@ -102,10 +117,10 @@ void MultiGRUOp::InferShape(framework::InferShapeContext* ctx) const {
   if (ctx->HasInputs("Bias")) {
     auto b_dims = ctx->GetInputsDim("Bias");
     for (int i = 0; i < 2 * layers; ++i) {
-      int frame_size = wh_dims[i][0];
+      int frame_size = static_cast<int>(wh_dims[i][0]);
       PADDLE_ENFORCE_EQ(b_dims[i].size(),
                         2,
-                        platform::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "The rank of Bias #%d should be 2, but received "
                             "Bias rank is:%d, Bias dim is:[%s]",
                             i,
@@ -113,7 +128,7 @@ void MultiGRUOp::InferShape(framework::InferShapeContext* ctx) const {
                             b_dims[i]));
       PADDLE_ENFORCE_EQ(b_dims[i][0],
                         1,
-                        platform::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "The first dimension of Bias #%d should be 1, but "
                             "received Bias first dim is:%d, Bias dim is:[%s]",
                             i,
@@ -122,7 +137,7 @@ void MultiGRUOp::InferShape(framework::InferShapeContext* ctx) const {
       PADDLE_ENFORCE_EQ(
           b_dims[i][1],
           frame_size * 3,
-          platform::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The shape of Bias #%d must be [1, frame_size * 3], but "
               "received bias dim is:[%s], frame size is:%d",
               i,
@@ -131,8 +146,8 @@ void MultiGRUOp::InferShape(framework::InferShapeContext* ctx) const {
     }
   }
 
-  int last_frame_size = wh_dims.back()[0];
-  framework::DDim out_dims({x_mat_dims[0], 2 * last_frame_size});
+  int last_frame_size = static_cast<int>(wh_dims.back()[0]);
+  phi::DDim out_dims({x_mat_dims[0], 2 * last_frame_size});
   ctx->SetOutputDim("Hidden", out_dims);
   ctx->ShareLoD("X", "Hidden");
 }
@@ -148,7 +163,7 @@ phi::KernelKey MultiGRUOp::GetExpectedKernelType(
 void MultiGRUOpMaker::Make() {
   AddInput(
       "X",
-      "(phi::DenseTensor) the input is an LodTensor, which support "
+      "(phi::DenseTensor) the input is an DenseTensor, which support "
       "variable-time length input sequence. The underlying tensor in "
       "this phi::DenseTensor is a matrix with shape (T X M), where T is the "
       "total time steps in this mini-batch, M is the dim size of x.");
@@ -159,7 +174,7 @@ void MultiGRUOpMaker::Make() {
   AddInput("WeightH",
            "(MultiTensor) (D x 3D) Same as GRUOp, where D is the hidden size. "
            "This weight is not exactly D x 3D as: {W_update, W_reset, W_state}"
-           "Acutally they are D x 2D and D x D two part weights."
+           "Actually they are D x 2D and D x D two part weights."
            "{W_update, W_reset; W_state}"
            "{D x (D + D); D x D}")
       .AsDuplicable();

@@ -11,12 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
+
 import collections
 import typing
 
 import paddle
 import paddle.framework.dtype as dtypes
-from paddle.fluid import framework
+from paddle.base import framework
 
 from .phi_ops_map import op_info, op_map
 
@@ -36,7 +39,7 @@ prim_option = PrimOption()
 
 
 @framework.static_only
-def prim_enabled():
+def prim_enabled() -> bool:
     """
     Note:
         **ONLY available in the static graph mode.**
@@ -51,23 +54,26 @@ def prim_enabled():
 
         .. code-block:: python
 
-            import paddle
-            from paddle.incubate.autograd import enable_prim, disable_prim, prim_enabled
+            >>> import paddle
+            >>> from paddle.incubate.autograd import enable_prim, disable_prim, prim_enabled
 
-            paddle.enable_static()
-            enable_prim()
+            >>> paddle.enable_static()
+            >>> enable_prim()
 
-            print(prim_enabled()) # True
+            >>> print(prim_enabled())
+            True
 
-            disable_prim()
+            >>> disable_prim()
 
-            print(prim_enabled()) # False
+            >>> print(prim_enabled())
+            False
+
     """
     return prim_option.get_status()
 
 
 @framework.static_only
-def enable_prim():
+def enable_prim() -> None:
     """
     Note:
         **ONLY available in the static graph mode.**
@@ -79,19 +85,21 @@ def enable_prim():
 
         .. code-block:: python
 
-            import paddle
-            from paddle.incubate.autograd import enable_prim, prim_enabled
+            >>> import paddle
+            >>> from paddle.incubate.autograd import enable_prim, prim_enabled
 
-            paddle.enable_static()
-            enable_prim()
+            >>> paddle.enable_static()
+            >>> enable_prim()
 
-            print(prim_enabled()) # True
+            >>> print(prim_enabled())
+            True
+
     """
     prim_option.set_status(True)
 
 
 @framework.static_only
-def disable_prim():
+def disable_prim() -> None:
     """
     Note:
         **ONLY available in the static graph mode.**
@@ -103,33 +111,36 @@ def disable_prim():
 
         .. code-block:: python
 
-            import paddle
-            from paddle.incubate.autograd import enable_prim, disable_prim, prim_enabled
+            >>> import paddle
+            >>> from paddle.incubate.autograd import enable_prim, disable_prim, prim_enabled
 
-            paddle.enable_static()
-            enable_prim()
+            >>> paddle.enable_static()
+            >>> enable_prim()
 
-            print(prim_enabled()) # True
+            >>> print(prim_enabled())
+            True
 
-            disable_prim()
+            >>> disable_prim()
 
-            print(prim_enabled()) # False
+            >>> print(prim_enabled())
+            False
+
     """
     prim_option.set_status(False)
 
 
 INT_DTYPE_2_STRING = {
-    int(0): 'bool',
-    int(1): 'int16',
-    int(2): 'int32',
-    int(3): 'int64',
-    int(4): 'float16',
-    int(5): 'float32',
-    int(6): 'float64',
-    int(20): 'uint8',
-    int(21): 'int8',
-    int(23): 'complex64',
-    int(24): 'complex128',
+    0: 'bool',
+    1: 'int16',
+    2: 'int32',
+    3: 'int64',
+    4: 'float16',
+    5: 'float32',
+    6: 'float64',
+    20: 'uint8',
+    21: 'int8',
+    23: 'complex64',
+    24: 'complex128',
 }
 
 
@@ -228,8 +239,8 @@ def _get_args_values(op, phi_name):
 def prepare_python_api_arguments(op):
     """
     Generate all args inputs of composite op. Because inputs of composite op is
-    the same as phi op desribed in ops.yaml. So we need to map origin op to phi op
-    and then push input data and attrs of origin op to correspondng phi op.
+    the same as phi op described in ops.yaml. So we need to map origin op to phi op
+    and then push input data and attrs of origin op to corresponding phi op.
     """
     if op.input_names is None:
         return []
@@ -301,7 +312,9 @@ def map_output_for_composite(op):
 
 
 def flatten(inp):
-    if inp is None or isinstance(inp, paddle.fluid.framework.Variable):
+    if inp is None or isinstance(
+        inp, (paddle.base.framework.Variable, paddle.pir.Value)
+    ):
         return [inp]
     flattened = []
     for part in inp:
@@ -315,7 +328,7 @@ def flatten_and_remove_none(inp):
 
 
 def as_tensors(xs):
-    if isinstance(xs, framework.Variable):
+    if isinstance(xs, (framework.Variable, paddle.pir.Value)):
         return (xs,)
     elif isinstance(xs, typing.Sequence):
         return tuple(xs)

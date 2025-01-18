@@ -31,7 +31,7 @@
 #include "paddle/cinn/common/object.h"
 #include "paddle/cinn/common/shared.h"
 #include "paddle/cinn/common/type.h"
-
+#include "paddle/common/enforce.h"
 namespace cinn {
 namespace common {
 
@@ -66,8 +66,8 @@ class GraphEdge : public Object {
 };
 
 struct GraphEdgeCompare {
-  bool operator()(const common::Shared<GraphEdge>& a,
-                  const common::Shared<GraphEdge>& b) const;
+  bool operator()(const cinn::common::Shared<GraphEdge>& a,
+                  const cinn::common::Shared<GraphEdge>& b) const;
 };
 
 /**
@@ -85,8 +85,12 @@ class GraphNode : public Object {
   template <typename EdgeT = GraphEdge>
   std::tuple<EdgeT*, EdgeT*> LinkTo(GraphNode* other) {
     EdgeT *a, *b;
-    CHECK(other);
-    CHECK_NE(other, this) << "Cannot link to itself";
+    PADDLE_ENFORCE_NOT_NULL(
+        other, ::common::errors::InvalidArgument("The input node is null."));
+    PADDLE_ENFORCE_NE(
+        other,
+        this,
+        ::common::errors::InvalidArgument("Cannot link to itself"));
     auto outlink_edge = make_shared<GraphEdge>(this, other, index_outlinks);
     auto inlink_edge =
         make_shared<GraphEdge>(this, other, other->index_inlinks);
@@ -107,8 +111,11 @@ class GraphNode : public Object {
         break;
       }
     }
-    CHECK(a);
-    CHECK(b);
+    PADDLE_ENFORCE_NOT_NULL(
+        a, ::common::errors::InvalidArgument("Sorry,but outlinks is nullptr"));
+    PADDLE_ENFORCE_NOT_NULL(b,
+                            ::common::errors::InvalidArgument(
+                                "Sorry, but other->inlinks_ is nullptr"));
     return std::make_tuple(a, b);
   }
 
@@ -127,7 +134,10 @@ class GraphNode : public Object {
         break;
       }
     }
-    CHECK_EQ(outlink_linked, inlink_linked);
+    PADDLE_ENFORCE_EQ(outlink_linked,
+                      inlink_linked,
+                      ::common::errors::InvalidArgument(
+                          "The outlink_linked should same as inlink_linked."));
     if (outlink_linked)
       return;
     else
@@ -224,11 +234,11 @@ class GraphNode : public Object {
   //! The input links of the node.
   //! \note We record the raw pointer rather than the shared pointer to avoid
   //! cycle reference.
-  std::set<common::Shared<GraphEdge>, GraphEdgeCompare> inlinks_;
+  std::set<cinn::common::Shared<GraphEdge>, GraphEdgeCompare> inlinks_;
   //! The output links of the node.
   //! \note We record the raw pointer rather than the shared pointer to avoid
   //! cycle reference.
-  std::set<common::Shared<GraphEdge>, GraphEdgeCompare> outlinks_;
+  std::set<cinn::common::Shared<GraphEdge>, GraphEdgeCompare> outlinks_;
 
   mutable int visited_time_{};
   //! used to mark the index of node's input/output tensors
@@ -251,7 +261,7 @@ class Graph {
   GraphNode* RegisterNode(const std::string& key, GraphNode* node);
   //! @}
 
-  //! Retrive a node.
+  //! Retrieve a node.
   //! @{
   GraphNode* RetrieveNode(size_t key) const;
   GraphNode* RetrieveNode(const std::string& key) const;
@@ -276,7 +286,7 @@ class Graph {
 
   //! Collect the nodes match the condition defined by \p teller in the graph.
   std::set<GraphNode*> CollectNodes(
-      std::function<bool(const common::GraphNode*)>&& teller);
+      std::function<bool(const cinn::common::GraphNode*)>&& teller);
 
   void DropNode(GraphNode* n) {
     auto it = std::find_if(
@@ -291,7 +301,7 @@ class Graph {
 
   void ClearUnlinkedNodes(
       absl::flat_hash_map<std::string, std::vector<int>>* shape_dict,
-      absl::flat_hash_map<std::string, common::Type>* type_dict,
+      absl::flat_hash_map<std::string, cinn::common::Type>* type_dict,
       absl::flat_hash_map<std::string, std::string>* layout_dict);
 
   size_t num_nodes() const { return nodes_.size(); }

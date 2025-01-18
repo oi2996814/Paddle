@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 
 class TestFlattenOp(OpTest):
@@ -46,18 +46,31 @@ class TestFlattenOp(OpTest):
     def test_check_output(self):
         if str(self.dtype) in {"float16", "uint16"}:
             self.check_output_with_place(
-                core.CUDAPlace(0), no_check_set=["XShape"], check_prim=True
+                core.CUDAPlace(0),
+                no_check_set=["XShape"],
+                check_prim=True,
+                check_pir=True,
+                check_prim_pir=True,
             )
         else:
-            self.check_output(no_check_set=["XShape"], check_prim=True)
+            self.check_output(
+                no_check_set=["XShape"],
+                check_prim=True,
+                check_pir=True,
+                check_prim_pir=True,
+            )
 
     def test_check_grad(self):
         if str(self.dtype) in {"float16", "uint16"}:
             self.check_grad_with_place(
-                core.CUDAPlace(0), ["X"], "Out", check_prim=True
+                core.CUDAPlace(0),
+                ["X"],
+                "Out",
+                check_prim=True,
+                check_pir=True,
             )
         else:
-            self.check_grad(["X"], "Out", check_prim=True)
+            self.check_grad(["X"], "Out", check_prim=True, check_pir=True)
 
     def init_test_case(self):
         self.in_shape = (3, 2, 5, 4)
@@ -91,7 +104,7 @@ class TestFlattenFP32Op(TestFlattenOp):
 
 @unittest.skipIf(
     not core.is_compiled_with_cuda(),
-    "core is not complied with CUDA",
+    "core is not compiled with CUDA",
 )
 class TestFlattenFP16Op(TestFlattenOp):
     def init_test_dtype(self):
@@ -101,7 +114,7 @@ class TestFlattenFP16Op(TestFlattenOp):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestFlattenBF16Op(TestFlattenOp):
     def if_enable_cinn(self):
@@ -132,7 +145,7 @@ class TestFlattenFP32Op_1(TestFlattenOp_1):
 
 @unittest.skipIf(
     not core.is_compiled_with_cuda(),
-    "core is not complied with CUDA",
+    "core is not compiled with CUDA",
 )
 class TestFlattenFP16Op_1(TestFlattenOp_1):
     def init_test_dtype(self):
@@ -142,7 +155,7 @@ class TestFlattenFP16Op_1(TestFlattenOp_1):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestFlattenBF16Op_1(TestFlattenOp_1):
     def if_enable_cinn(self):
@@ -173,7 +186,7 @@ class TestFlattenFP32Op_2(TestFlattenOp_2):
 
 @unittest.skipIf(
     not core.is_compiled_with_cuda(),
-    "core is not complied with CUDA",
+    "core is not compiled with CUDA",
 )
 class TestFlattenFP16Op_2(TestFlattenOp_2):
     def init_test_dtype(self):
@@ -183,7 +196,7 @@ class TestFlattenFP16Op_2(TestFlattenOp_2):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestFlattenBF16Op_2(TestFlattenOp_2):
     def if_enable_cinn(self):
@@ -214,7 +227,7 @@ class TestFlattenFP32Op_3(TestFlattenOp_3):
 
 @unittest.skipIf(
     not core.is_compiled_with_cuda(),
-    "core is not complied with CUDA",
+    "core is not compiled with CUDA",
 )
 class TestFlattenFP16Op_3(TestFlattenOp_3):
     def init_test_dtype(self):
@@ -224,7 +237,7 @@ class TestFlattenFP16Op_3(TestFlattenOp_3):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestFlattenBF16Op_3(TestFlattenOp_3):
     def if_enable_cinn(self):
@@ -255,7 +268,7 @@ class TestFlattenFP32Op_4(TestFlattenOp_4):
 
 @unittest.skipIf(
     not core.is_compiled_with_cuda(),
-    "core is not complied with CUDA",
+    "core is not compiled with CUDA",
 )
 class TestFlattenFP16Op_4(TestFlattenOp_4):
     def init_test_dtype(self):
@@ -265,7 +278,7 @@ class TestFlattenFP16Op_4(TestFlattenOp_4):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestFlattenBF16Op_4(TestFlattenOp_4):
     def if_enable_cinn(self):
@@ -296,7 +309,7 @@ class TestFlattenFP32Op_5(TestFlattenOp_5):
 
 @unittest.skipIf(
     not core.is_compiled_with_cuda(),
-    "core is not complied with CUDA",
+    "core is not compiled with CUDA",
 )
 class TestFlattenFP16Op_5(TestFlattenOp_5):
     def init_test_dtype(self):
@@ -306,7 +319,7 @@ class TestFlattenFP16Op_5(TestFlattenOp_5):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestFlattenBF16Op_5(TestFlattenOp_5):
     def if_enable_cinn(self):
@@ -340,7 +353,7 @@ class TestFlattenFP32Op_ZeroDim(TestFlattenOp_ZeroDim):
 
 @unittest.skipIf(
     not core.is_compiled_with_cuda(),
-    "core is not complied with CUDA",
+    "core is not compiled with CUDA",
 )
 class TestFlattenFP16Op_ZeroDim(TestFlattenOp_ZeroDim):
     def init_test_dtype(self):
@@ -368,7 +381,7 @@ class TestFlattenFP32OpSixDims(TestFlattenOpSixDims):
 
 @unittest.skipIf(
     not core.is_compiled_with_cuda(),
-    "core is not complied with CUDA",
+    "core is not compiled with CUDA",
 )
 class TestFlattenFP16OpSixDims(TestFlattenOpSixDims):
     def init_test_dtype(self):
@@ -378,7 +391,7 @@ class TestFlattenFP16OpSixDims(TestFlattenOpSixDims):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestFlattenBF16OpSixDims(TestFlattenOpSixDims):
     def if_enable_cinn(self):
@@ -480,7 +493,7 @@ class TestStaticFlattenInferShapePythonAPI(unittest.TestCase):
                 name="x", shape=[-1, 3, -1, -1], dtype='float32'
             )
             out = self.execute_api(x, start_axis=2, stop_axis=3)
-        self.assertTrue((-1, 3, -1) == out.shape)
+        self.assertTrue((-1, 3, -1) == tuple(out.shape))
 
 
 class TestStaticInplaceFlattenPythonAPI(TestStaticFlattenPythonAPI):
@@ -562,6 +575,29 @@ class TestFlatten0DTensorOpError(unittest.TestCase):
             out = paddle.flatten(x_var, start_axis=0, stop_axis=10)
 
         self.assertRaises(ValueError, test_ValueError2)
+
+
+class TestFlattenZeroSizedTensorAPI(unittest.TestCase):
+    def test_dygraph(self):
+        paddle.disable_static()
+        data = np.random.randn(2, 3, 0)
+        x = paddle.to_tensor(data)
+        out = paddle.flatten(x)
+        out_np = data.flatten()
+        np.testing.assert_equal(out.numpy(), out_np)
+
+    def test_static(self):
+        paddle.enable_static()
+        data = np.random.randn(2, 3, 0)
+        main_prog = paddle.static.Program()
+        with paddle.static.program_guard(main_prog, paddle.static.Program()):
+            x = paddle.static.data(name="x", shape=[2, 3, 0], dtype='float64')
+            out = paddle.flatten(x)
+
+        exe = paddle.static.Executor(place=paddle.CPUPlace())
+        fetch_out = exe.run(main_prog, feed={"x": data}, fetch_list=[out])[0]
+        out_np = data.flatten()
+        np.testing.assert_equal(fetch_out, out_np)
 
 
 if __name__ == "__main__":

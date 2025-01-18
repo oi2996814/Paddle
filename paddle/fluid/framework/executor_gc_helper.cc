@@ -24,12 +24,11 @@
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/framework/var_desc.h"
 #include "paddle/fluid/operators/controlflow/conditional_block_op_helper.h"
-#include "paddle/fluid/operators/controlflow/recurrent_op_helper.h"
+#include "paddle/fluid/operators/controlflow/pylayer_op_helper.h"
 #include "paddle/fluid/operators/controlflow/while_op_helper.h"
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 void OpInOutInfo::Build(const OperatorBase *op) {
   is_built_ = true;
@@ -63,40 +62,68 @@ bool OpInOutInfo::IsInArgBufferNeeded(const std::string &in_arg_name) const {
 
 static bool VarCanBeDeleted(const std::string &name,
                             const BlockDesc &block,
-                            const std::unordered_set<std::string> &skip_vars) {
+                            const std::unordered_set<std::string> &skip_vars,
+                            const std::multiset<std::string> *unpersist_vars) {
   if (skip_vars.count(name) != 0) {
     return false;
   }
 
   auto *var_desc = block.FindVar(name);
   if (var_desc == nullptr || var_desc->Persistable()) {
-    return false;
+    if (unpersist_vars != nullptr) {
+      // unpersist vars
+      if (unpersist_vars->find(name) == unpersist_vars->end()) {
+        return false;
+      }
+    } else {
+      return false;
+    }
   }
 
   auto type = var_desc->Proto()->type().type();
 
-  return type == proto::VarType::LOD_TENSOR ||
+  return type == proto::VarType::DENSE_TENSOR ||
          type == proto::VarType::SELECTED_ROWS ||
-         type == proto::VarType::LOD_TENSOR_ARRAY;
+         type == proto::VarType::DENSE_TENSOR_ARRAY;
 }
 
 std::unordered_map<const OperatorBase *, std::vector<std::string>>
 GetUnusedVars(const BlockDesc &block,
               const std::vector<std::unique_ptr<OperatorBase>> &ops,
-              const std::vector<std::string> &skip_var_list) {
+              const std::vector<std::string> &skip_var_list,
+              const std::multiset<std::string> *unpersist_vars,
+              bool is_shard_for_thread_mode) {
   std::unordered_set<std::string> skip_vars(skip_var_list.begin(),
                                             skip_var_list.end());
 
   std::unordered_map<std::string, size_t> var_op_idx_map;
-
+  std::unordered_map<std::string, std::string> old_to_new;
+  std::unordered_map<std::string, std::string> new_to_old;
   for (size_t i = 0; i < ops.size(); ++i) {
     auto *op = ops[i].get();
 
     OpInOutInfo info;
     for (auto &name_pair : op->Inputs()) {
       for (auto &name : name_pair.second) {
-        if (!VarCanBeDeleted(name, block, skip_vars)) {
+        if (!VarCanBeDeleted(name, block, skip_vars, unpersist_vars)) {
           continue;
+        }
+        bool is_unpersist_var = false;
+        if (is_shard_for_thread_mode) {
+          if (unpersist_vars->find(name) != unpersist_vars->end()) {
+            is_unpersist_var = true;
+            if (op->Type() == std::string("c_broadcast")) {
+              auto it = old_to_new.find(name);
+              if (it == old_to_new.end()) {
+                old_to_new[name] = name;
+                new_to_old[name] = name;
+              } else {
+                std::string new_name = it->second + std::string("_");
+                old_to_new[name] = new_name;
+                new_to_old[new_name] = name;
+              }
+            }
+          }
         }
 
         // var can be gc-ed
@@ -106,7 +133,11 @@ GetUnusedVars(const BlockDesc &block,
 
         if (info.IsInArgBufferNeeded(name)) {
           // Update the last living op of variable to current op
-          var_op_idx_map[name] = i;
+          if (is_unpersist_var && old_to_new.count(name) > 0) {
+            var_op_idx_map[old_to_new[name]] = i;
+          } else {
+            var_op_idx_map[name] = i;
+          }
         } else {
           VLOG(10) << "Skip reference count computing of variable "
                    << name_pair.first << "(" << name << ") in Operator "
@@ -117,9 +148,13 @@ GetUnusedVars(const BlockDesc &block,
 
     for (auto &name_pair : op->Outputs()) {
       for (auto &name : name_pair.second) {
-        if (VarCanBeDeleted(name, block, skip_vars)) {
+        if (VarCanBeDeleted(name, block, skip_vars, unpersist_vars)) {
           // Update the last living op of variable to current op
-          var_op_idx_map[name] = i;
+          if (is_shard_for_thread_mode && old_to_new.count(name) > 0) {
+            var_op_idx_map[old_to_new[name]] = i;
+          } else {
+            var_op_idx_map[name] = i;
+          }
         }
       }
     }
@@ -129,7 +164,11 @@ GetUnusedVars(const BlockDesc &block,
   for (auto &name_op_idx_pair : var_op_idx_map) {
     auto &name = name_op_idx_pair.first;
     size_t op_idx = name_op_idx_pair.second;
-    result[ops[op_idx].get()].emplace_back(name);
+    if (is_shard_for_thread_mode && new_to_old.count(name) > 0) {
+      result[ops[op_idx].get()].emplace_back(new_to_old[name]);
+    } else {
+      result[ops[op_idx].get()].emplace_back(name);
+    }
   }
   return result;
 }
@@ -153,17 +192,17 @@ void DeleteUnusedTensors(const Scope &scope,
       garbages.emplace_back(var->GetMutable<phi::SelectedRows>()
                                 ->mutable_value()
                                 ->MoveMemoryHolder());
-    } else if (var->IsType<LoDTensorArray>()) {
-      auto *lod_tensor_arr = var->GetMutable<LoDTensorArray>();
-      for (auto &t : *lod_tensor_arr) {
+    } else if (var->IsType<phi::TensorArray>()) {
+      auto *dense_tensor_arr = var->GetMutable<phi::TensorArray>();
+      for (auto &t : *dense_tensor_arr) {
         garbages.emplace_back(t.MoveMemoryHolder());
       }
-      // NOTE(wangxi): need clear the vector, otherwise lod_tensor_arr.size() is
-      // wrong, if size() decrease in next step, an error maybe occur.
-      lod_tensor_arr->clear();
+      // NOTE(wangxi): need clear the vector, otherwise dense_tensor_arr.size()
+      // is wrong, if size() decrease in next step, an error maybe occur.
+      dense_tensor_arr->clear();
     } else if (var->IsType<Strings>()) {
     } else {
-      PADDLE_THROW(platform::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Type %s of variable %s is not supported eager deletion.",
           framework::ToTypeName(var->Type()),
           var_name));
@@ -196,7 +235,7 @@ static std::vector<std::unique_ptr<OperatorBase>> CreateOpsFromBlock(
   size_t op_num = block.OpSize();
   ops.reserve(op_num);
   for (size_t i = 0; i < op_num; ++i) {
-    auto *op_desc = block.Op(i);
+    auto *op_desc = block.Op(static_cast<int>(i));
     ops.push_back(OpRegistry::CreateOp(*op_desc));
   }
   return ops;
@@ -215,7 +254,7 @@ GetEagerDeletionCleanVarsForPartial(const ProgramDesc &origin_program,
   size_t block_num = program.Size();
   PADDLE_ENFORCE_GE(block_num,
                     1,
-                    platform::errors::PermissionDenied(
+                    common::errors::PermissionDenied(
                         "Program should have at least one block"));
   // Note(zhangbo): For dygraph2static inplace policy, origin_program is a
   // partial program(only include forward or backward), and control flow op's
@@ -226,9 +265,9 @@ GetEagerDeletionCleanVarsForPartial(const ProgramDesc &origin_program,
     auto global_block_ops = CreateOpsFromBlock(program.Block(0));
     operators::PrepareSafeEagerDeletionOnConditionalOpAndConditionalGradOp(
         program, 0, global_block_ops);
-    operators::PrepareSafeEagerDeletionOnWhileOpAndWhileGradOp(
+    operators::PrepareSafeEagerDeletionOnPyLayerOpAndPyLayerGradOp(
         program, 0, global_block_ops);
-    operators::PrepareSafeEagerDeletionOnRecurrentOpAndRecurrentGradOp(
+    operators::PrepareSafeEagerDeletionOnWhileOpAndWhileGradOp(
         program, 0, global_block_ops);
   }
 
@@ -240,35 +279,54 @@ GetEagerDeletionCleanVarsForPartial(const ProgramDesc &origin_program,
 
   const char *kSubBlock = "sub_block";
   const char *kSkipEagerDeletionVars = "skip_eager_deletion_vars";
+  // NOTE: pylayer op contains may contain two blocks: forward block and
+  // backward block
+  const char *kBlocks = "blocks";
 
   for (size_t i = 0; i < block_num; ++i) {
     const auto &block = program.Block(i);
     size_t op_num = block.OpSize();
     for (size_t j = 0; j < op_num; ++j) {
-      auto *op = block.Op(j);
-      if (!op->HasAttr(kSubBlock) || !op->HasAttr(kSkipEagerDeletionVars)) {
+      auto *op = block.Op(static_cast<int>(j));
+      if ((!op->HasAttr(kSubBlock) && !op->HasAttr(kBlocks)) ||
+          !op->HasAttr(kSkipEagerDeletionVars)) {
         continue;
       }
-      auto sub_block_id = op->GetAttrIfExists<BlockDesc *>(kSubBlock)->ID();
-      PADDLE_ENFORCE_GE(sub_block_id,
-                        0,
-                        platform::errors::PermissionDenied(
-                            "sub_block id must be non-negative number"));
-      PADDLE_ENFORCE_LT(sub_block_id,
-                        block_num,
-                        platform::errors::PermissionDenied(
-                            "sub_block id exceeds max block num"));
-      PADDLE_ENFORCE_EQ(
-          found_skip_vars[sub_block_id],
-          false,
-          platform::errors::PermissionDenied(
-              "there are 2 ops which refer to the same sub_block %d",
-              sub_block_id));
 
-      found_skip_vars[sub_block_id] = true;
-      auto sub_block_skip_vars =
-          op->GetAttrIfExists<std::vector<std::string>>(kSkipEagerDeletionVars);
-      skip_vars_on_each_block[sub_block_id] = std::move(sub_block_skip_vars);
+      std::vector<int32_t> sub_block_ids;
+      if (op->HasAttr(kSubBlock)) {
+        sub_block_ids.push_back(
+            op->GetAttrIfExists<BlockDesc *>(kSubBlock)->ID());
+      } else if (op->HasAttr(kBlocks)) {
+        const auto &blocks =
+            op->GetAttrIfExists<std::vector<BlockDesc *>>(kBlocks);
+        for (const auto &block : blocks) {
+          sub_block_ids.push_back(block->ID());
+        }
+      }
+
+      for (auto sub_block_id : sub_block_ids) {
+        PADDLE_ENFORCE_GE(sub_block_id,
+                          0,
+                          common::errors::PermissionDenied(
+                              "sub_block id must be non-negative number"));
+        PADDLE_ENFORCE_LT(sub_block_id,
+                          block_num,
+                          common::errors::PermissionDenied(
+                              "sub_block id exceeds max block num"));
+        PADDLE_ENFORCE_EQ(
+            found_skip_vars[sub_block_id],
+            false,
+            common::errors::PermissionDenied(
+                "there are 2 ops which refer to the same sub_block %d",
+                sub_block_id));
+
+        found_skip_vars[sub_block_id] = true;
+        auto sub_block_skip_vars =
+            op->GetAttrIfExists<std::vector<std::string>>(
+                kSkipEagerDeletionVars);
+        skip_vars_on_each_block[sub_block_id] = std::move(sub_block_skip_vars);
+      }
     }
   }
 
@@ -291,5 +349,4 @@ GetEagerDeletionCleanVarsForPartial(const ProgramDesc &origin_program,
   return result;
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

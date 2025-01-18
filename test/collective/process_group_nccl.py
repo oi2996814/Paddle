@@ -43,7 +43,7 @@ class TestProcessGroupFp32(unittest.TestCase):
 
     def test_create_process_group_nccl(self):
         device_id = paddle.distributed.ParallelEnv().dev_id
-        paddle.set_device('gpu:%d' % device_id)
+        paddle.set_device(f'gpu:{device_id}')
 
         assert paddle.distributed.is_available()
 
@@ -356,14 +356,14 @@ class TestProcessGroupFp32(unittest.TestCase):
         )
         raw_tensor_y_1 = paddle.slice(tensor_y, [0], [0], [self.shape[0] // 2])
         if pg.rank() == 0:
-            task = pg.alltoall(tensor_x, tensor_out1)
+            task = pg.alltoall(tensor_out1, tensor_x)
             task.wait()
         # rank 1
         else:
             in_1, in_2 = paddle.split(tensor_y, 2)
             out_1, out_2 = paddle.split(tensor_out2, 2)
             out_tensor_list = [out_1, out_2]
-            task = dist.alltoall([in_1, in_2], out_tensor_list)
+            task = dist.alltoall(out_tensor_list, [in_1, in_2])
             paddle.device.cuda.synchronize()
             tensor_out2 = paddle.concat(out_tensor_list)
         out1_2 = paddle.slice(
@@ -391,14 +391,14 @@ class TestProcessGroupFp32(unittest.TestCase):
         )
         raw_tensor_y_1 = paddle.slice(tensor_y, [0], [0], [self.shape[0] // 2])
         if pg.rank() == 0:
-            task = pg.alltoall(tensor_x, tensor_out1)
+            task = pg.alltoall(tensor_out1, tensor_x)
             task.wait()
         # rank 1
         else:
             in_1, in_2 = paddle.split(tensor_y, 2)
             out_1, out_2 = paddle.split(tensor_out2, 2)
             out_tensor_list = []
-            task = dist.alltoall([in_1, in_2], out_tensor_list)
+            task = dist.alltoall(out_tensor_list, [in_1, in_2])
             paddle.device.cuda.synchronize()
             tensor_out2 = paddle.concat(out_tensor_list)
         out1_2 = paddle.slice(

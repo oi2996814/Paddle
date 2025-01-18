@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
@@ -193,13 +194,20 @@ def calc_triplet_margin_loss(
 
 
 class TestTripletMarginLoss(unittest.TestCase):
+
     def test_TripletMarginLoss(self):
         shape = (2, 2)
         input = np.random.uniform(0.1, 0.8, size=shape).astype(np.float64)
         positive = np.random.uniform(0, 2, size=shape).astype(np.float64)
         negative = np.random.uniform(0, 2, size=shape).astype(np.float64)
 
-        places = [paddle.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.device.is_compiled_with_cuda()
+        ):
+            places.append(paddle.CPUPlace())
         if paddle.device.is_compiled_with_cuda():
             places.append(paddle.CUDAPlace(0))
         reductions = ['sum', 'mean', 'none']

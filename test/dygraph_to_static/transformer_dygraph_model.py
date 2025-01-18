@@ -16,9 +16,7 @@ import numpy as np
 
 import paddle
 import paddle.nn.functional as F
-from paddle import fluid
-from paddle.fluid.dygraph import to_variable
-from paddle.jit.api import dygraph_to_static_func
+from paddle import base
 from paddle.nn import Layer, Linear
 
 
@@ -29,9 +27,7 @@ def position_encoding_init(n_position, d_pos_vec):
     channels = d_pos_vec
     position = np.arange(n_position)
     num_timescales = channels // 2
-    log_timescale_increment = np.log(float(1e4) / float(1)) / (
-        num_timescales - 1
-    )
+    log_timescale_increment = np.log(1e4 / float(1)) / (num_timescales - 1)
     inv_timescales = (
         np.exp(np.arange(num_timescales)) * -log_timescale_increment
     )
@@ -55,13 +51,13 @@ class PrePostProcessLayer(Layer):
             elif cmd == "n":  # add layer normalization
                 self.functors.append(
                     self.add_sublayer(
-                        "layer_norm_%d" % len(list(self.children())),
+                        f"layer_norm_{len(list(self.children()))}",
                         paddle.nn.LayerNorm(
                             normalized_shape=d_model,
-                            weight_attr=fluid.ParamAttr(
+                            weight_attr=base.ParamAttr(
                                 initializer=paddle.nn.initializer.Constant(1.0)
                             ),
-                            bias_attr=fluid.ParamAttr(
+                            bias_attr=base.ParamAttr(
                                 initializer=paddle.nn.initializer.Constant(0.0)
                             ),
                         ),
@@ -104,25 +100,25 @@ class MultiHeadAttention(Layer):
             in_features=d_model,
             out_features=d_key * n_head,
             bias_attr=False,
-            weight_attr=fluid.ParamAttr(initializer=param_initializer),
+            weight_attr=base.ParamAttr(initializer=param_initializer),
         )
         self.k_fc = Linear(
             in_features=d_model,
             out_features=d_key * n_head,
             bias_attr=False,
-            weight_attr=fluid.ParamAttr(initializer=param_initializer),
+            weight_attr=base.ParamAttr(initializer=param_initializer),
         )
         self.v_fc = Linear(
             in_features=d_model,
             out_features=d_value * n_head,
             bias_attr=False,
-            weight_attr=fluid.ParamAttr(initializer=param_initializer),
+            weight_attr=base.ParamAttr(initializer=param_initializer),
         )
         self.proj_fc = Linear(
             in_features=d_value * n_head,
             out_features=d_model,
             bias_attr=False,
-            weight_attr=fluid.ParamAttr(initializer=param_initializer),
+            weight_attr=base.ParamAttr(initializer=param_initializer),
         )
 
     def forward(self, queries, keys, values, attn_bias, cache=None):
@@ -256,7 +252,7 @@ class Encoder(Layer):
         for i in range(n_layer):
             self.encoder_layers.append(
                 self.add_sublayer(
-                    "layer_%d" % i,
+                    f"layer_{i}",
                     EncoderLayer(
                         n_head,
                         d_key,
@@ -289,7 +285,7 @@ class Embedder(Layer):
         self.word_embedder = paddle.nn.Embedding(
             vocab_size,
             emb_dim,
-            weight_attr=fluid.ParamAttr(
+            weight_attr=base.ParamAttr(
                 initializer=paddle.nn.initializer.Normal(0.0, emb_dim**-0.5)
             ),
         )
@@ -324,7 +320,7 @@ class WrapEncoder(Layer):
         self.pos_encoder = paddle.nn.Embedding(
             max_length,
             self.emb_dim,
-            weight_attr=fluid.ParamAttr(
+            weight_attr=base.ParamAttr(
                 initializer=paddle.nn.initializer.Assign(
                     position_encoding_init(max_length, self.emb_dim)
                 ),
@@ -450,7 +446,7 @@ class Decoder(Layer):
         for i in range(n_layer):
             self.decoder_layers.append(
                 self.add_sublayer(
-                    "layer_%d" % i,
+                    f"layer_{i}",
                     DecoderLayer(
                         n_head,
                         d_key,
@@ -516,7 +512,7 @@ class WrapDecoder(Layer):
         self.pos_encoder = paddle.nn.Embedding(
             max_length,
             self.emb_dim,
-            weight_attr=fluid.ParamAttr(
+            weight_attr=base.ParamAttr(
                 initializer=paddle.nn.initializer.Assign(
                     position_encoding_init(max_length, self.emb_dim)
                 ),
@@ -594,10 +590,11 @@ class CrossEntropyCriterion:
                 epsilon=self.label_smooth_eps,
             )
 
-        cost = paddle.nn.functional.softmax_with_cross_entropy(
-            logits=predict,
+        cost = paddle.nn.functional.cross_entropy(
+            input=predict,
             label=label_out,
             soft_label=True if self.label_smooth_eps else False,
+            reduction="none",
         )
         weighted_cost = cost * weights
         sum_cost = paddle.sum(weighted_cost)
@@ -681,7 +678,6 @@ class Transformer(Layer):
         self.d_key = d_key
         self.d_value = d_value
 
-    @dygraph_to_static_func
     def forward(
         self,
         src_word,
@@ -698,7 +694,6 @@ class Transformer(Layer):
         )
         return predict
 
-    @dygraph_to_static_func
     def beam_search(
         self,
         src_word,
@@ -713,7 +708,7 @@ class Transformer(Layer):
     ):
         def expand_to_beam_size(tensor, beam_size):
             tensor = paddle.reshape(
-                tensor, [tensor.shape[0], 1] + list(tensor.shape[1:])
+                tensor, [tensor.shape[0], 1, *list(tensor.shape[1:])]
             )
             tile_dims = [-1] * len(tensor.shape)
             tile_dims[1] = beam_size
@@ -795,28 +790,31 @@ class Transformer(Layer):
         vocab_size_tensor = paddle.tensor.fill_constant(
             shape=[1], dtype="int64", value=self.trg_vocab_size
         )
-        end_token_tensor = to_variable(
+        end_token_tensor = paddle.to_tensor(
             np.full([batch_size, beam_size], eos_id, dtype="int64")
         )
         noend_array = [-inf] * self.trg_vocab_size
         noend_array[eos_id] = 0
-        noend_mask_tensor = to_variable(np.array(noend_array, dtype="float32"))
+        noend_mask_tensor = paddle.to_tensor(
+            np.array(noend_array, dtype="float32")
+        )
         batch_pos = paddle.expand(
             paddle.unsqueeze(
-                to_variable(np.arange(0, batch_size, 1, dtype="int64")), [1]
+                paddle.to_tensor(np.arange(0, batch_size, 1, dtype="int64")),
+                [1],
             ),
             [-1, beam_size],
         )
         predict_ids = []
         parent_ids = []
         # initialize states of beam search
-        log_probs = to_variable(
+        log_probs = paddle.to_tensor(
             np.array(
                 [[0.0] + [-inf] * (beam_size - 1)] * batch_size, dtype="float32"
             )
         )
 
-        finished = to_variable(
+        finished = paddle.to_tensor(
             np.full([batch_size, beam_size], 0, dtype="bool")
         )
 

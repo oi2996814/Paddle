@@ -32,8 +32,8 @@
 #include "paddle/phi/backends/dynload/nccl.h"
 #endif  // !defined(__APPLE__) && defined(PADDLE_WITH_NCCL)
 #endif  // PADDLE_WITH_CUDA
-
 #ifdef PADDLE_WITH_HIP
+#include "paddle/phi/backends/dynload/hipblasLt.h"
 #include "paddle/phi/backends/dynload/rocsparse.h"
 #endif
 
@@ -51,7 +51,7 @@ void InitGpuProperties(Place place,
                        int* multi_process,
                        int* max_threads_per_mp,
                        int* max_threads_per_block,
-                       std::array<int, 3>* max_grid_dim_size) {
+                       std::array<unsigned int, 3>* max_grid_dim_size) {
   backends::gpu::GPUDeviceGuard guard(place.GetDeviceId());
   *compute_capability =
       backends::gpu::GetGPUComputeCapability(place.GetDeviceId());
@@ -146,30 +146,51 @@ void InitGpuProperties(Place place,
   }
 #else
   size_t cudnn_dso_ver = dynload::cudnnGetVersion();
-  LOG_FIRST_N(WARNING, 1) << "device: " << static_cast<int>(place.device)
-                          << ", cuDNN Version: " << cudnn_dso_ver / 1000 << "."
-                          << (cudnn_dso_ver % 1000) / 100 << ".";
+  auto get_cudnn_major = [](auto version) {
+    if (version < 9000) {
+      return version / 1000;
+    }
+    // CUDNN changes the CUDNN_VERSION rules after 9.0
+    return version / 10000;
+  };
+  auto get_cudnn_minor = [](auto version) {
+    if (version < 9000) {
+      return (version % 1000) / 100;
+    }
+    // CUDNN changes the CUDNN_VERSION rules after 9.0
+    return (version % 10000) / 100;
+  };
 
-  // Check CUDA/CUDNN version compatiblity
+  LOG_FIRST_N(WARNING, 1) << "device: " << static_cast<int>(place.device)
+                          << ", cuDNN Version: "
+                          << get_cudnn_major(cudnn_dso_ver) << "."
+                          << get_cudnn_minor(cudnn_dso_ver) << ".";
+
+  // Check CUDA/CUDNN version compatibility
   auto local_cuda_version =
       (*driver_version / 1000) * 10 + (*driver_version % 100) / 10;
   auto compile_cuda_version =
       (CUDA_VERSION / 1000) * 10 + (CUDA_VERSION % 100) / 10;
+
+  // Compute cuDNN major
+  auto local_cudnn_major = get_cudnn_major(cudnn_dso_ver);
+  size_t compile_cudnn_major = CUDNN_MAJOR;
+
 #if defined(__linux__)
   PADDLE_ENFORCE_EQ(
       (local_cuda_version / 10 < compile_cuda_version / 10) &&
-          (cudnn_dso_ver / 1000 < CUDNN_VERSION / 1000),
+          (local_cudnn_major < compile_cudnn_major),
       false,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The installed Paddle is compiled with CUDA%d/cuDNN%d,"
           "but CUDA/cuDNN version in your machine is CUDA%d/cuDNN%d. "
           "which will cause serious incompatible bug. "
           "Please recompile or reinstall Paddle with compatible CUDA/cuDNN "
           "version.",
           compile_cuda_version / 10,
-          CUDNN_VERSION / 1000,
+          compile_cudnn_major,
           local_cuda_version / 10,
-          cudnn_dso_ver / 1000));
+          local_cudnn_major));
 #endif
   if (local_cuda_version < compile_cuda_version) {
     LOG_FIRST_N(WARNING, 1)
@@ -195,7 +216,7 @@ void InitStream(gpuStream_t* stream) {
 #endif
 }
 
-void DestoryStream(gpuStream_t stream) {
+void DestroyStream(gpuStream_t stream) {
   if (stream != nullptr) {
 #ifdef PADDLE_WITH_HIP
     PADDLE_ENFORCE_GPU_SUCCESS(hipStreamDestroy(stream));
@@ -234,6 +255,8 @@ void DestroyBlasHandle(blasHandle_t handle) {
 void InitBlasLtHandle(blasLtHandle_t* blaslt_handle) {
 #if defined(PADDLE_WITH_CUDA) && CUDA_VERSION >= 11060
   phi::dynload::cublasLtCreate(blaslt_handle);
+#elif defined(PADDLE_WITH_HIP)
+  phi::dynload::hipblasLtCreate(blaslt_handle);
 #endif
 }
 
@@ -241,6 +264,11 @@ void DestroyBlasLtHandle(blasLtHandle_t handle) {
 #if defined(PADDLE_WITH_CUDA) && CUDA_VERSION >= 11060
   if (handle != nullptr) {
     phi::dynload::cublasLtDestroy(handle);
+    handle = nullptr;
+  }
+#elif defined(PADDLE_WITH_HIP)
+  if (handle != nullptr) {
+    phi::dynload::hipblasLtDestroy(handle);
     handle = nullptr;
   }
 #endif
@@ -257,7 +285,7 @@ void InitDnnHandle(dnnHandle_t* handle, gpuStream_t stream, Place place) {
     auto compile_miopen_version = MIOPEN_VERSION / 10;
     if (local_miopen_version < static_cast<size_t>(compile_miopen_version)) {
       LOG_FIRST_N(WARNING, 1)
-          << "WARNING: device: " << place.device
+          << "WARNING: device: " << static_cast<int>(place.device)
           << ". The installed Paddle is compiled with MIOPEN "
           << compile_miopen_version / 100 << "." << compile_miopen_version % 100
           << ", but MIOPEN version in your machine is "
@@ -269,15 +297,17 @@ void InitDnnHandle(dnnHandle_t* handle, gpuStream_t stream, Place place) {
     PADDLE_ENFORCE_GPU_SUCCESS(dynload::miopenCreate(handle));
     PADDLE_ENFORCE_GPU_SUCCESS(dynload::miopenSetStream(*handle, stream));
 #else
-    auto local_cudnn_version = phi::dynload::cudnnGetVersion() / 100;
-    auto compile_cudnn_version = CUDNN_VERSION / 100;
-    if (local_cudnn_version < static_cast<size_t>(compile_cudnn_version)) {
+    auto version = phi::dynload::cudnnGetVersion();
+    auto local_cudnn_major =
+        (version < 9000) ? version / 1000 : version / 10000;
+    auto local_cudnn_minor =
+        (version < 9000) ? (version % 1000) / 100 : (version % 10000) / 100;
+    if (version < static_cast<size_t>(CUDNN_VERSION)) {
       LOG_FIRST_N(WARNING, 1)
-          << "WARNING: device: " << place.device
-          << ". The installed Paddle is compiled with CUDNN "
-          << compile_cudnn_version / 10 << "." << compile_cudnn_version % 10
-          << ", but CUDNN version in your machine is "
-          << local_cudnn_version / 10 << "." << local_cudnn_version % 10
+          << "WARNING: device: " << static_cast<int>(place.device)
+          << ". The installed Paddle is compiled with CUDNN " << CUDNN_MAJOR
+          << "." << CUDNN_MINOR << ", but CUDNN version in your machine is "
+          << local_cudnn_major << "." << local_cudnn_minor
           << ", which may cause serious incompatible bug. "
           << "Please recompile or reinstall Paddle with compatible CUDNN "
              "version.";
@@ -305,16 +335,24 @@ void DestroyDnnHandle(dnnHandle_t handle) {
 }
 
 void InitSolverHandle(solverHandle_t* handle, gpuStream_t stream) {
-#ifndef PADDLE_WITH_HIP
+#if defined(PADDLE_WITH_CUDA)
   PADDLE_RETRY_CUDA_SUCCESS(phi::dynload::cusolverDnCreate(handle));
   PADDLE_RETRY_CUDA_SUCCESS(phi::dynload::cusolverDnSetStream(*handle, stream));
+#elif defined(PADDLE_WITH_HIP)
+  phi::dynload::rocblas_create_handle(handle);
+  phi::dynload::rocblas_set_stream(*handle, stream);
 #endif
 }
 
 void DestroySolverHandle(solverHandle_t solver_handle) {
-#ifndef PADDLE_WITH_HIP
+#if defined(PADDLE_WITH_CUDA)
   if (solver_handle != nullptr) {
     PADDLE_ENFORCE_GPU_SUCCESS(phi::dynload::cusolverDnDestroy(solver_handle));
+    solver_handle = nullptr;
+  }
+#elif defined(PADDLE_WITH_HIP)
+  if (solver_handle != nullptr) {
+    phi::dynload::rocblas_destroy_handle(solver_handle);
     solver_handle = nullptr;
   }
 #endif

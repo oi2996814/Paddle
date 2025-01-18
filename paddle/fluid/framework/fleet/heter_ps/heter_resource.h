@@ -19,13 +19,13 @@ limitations under the License. */
 #include <vector>
 
 #ifdef PADDLE_WITH_CUDA
-#include "paddle/fluid/platform/cuda_device_guard.h"
+#include "paddle/phi/core/platform/cuda_device_guard.h"
 #endif
 
 #ifdef PADDLE_WITH_XPU_KP
 #include <xpu/runtime.h>  // NOLINT
 
-#include "paddle/fluid/platform/device/xpu/xpu_info.h"
+#include "paddle/phi/core/platform/device/xpu/xpu_info.h"
 #endif
 
 #include "paddle/fluid/platform/enforce.h"
@@ -89,12 +89,12 @@ class XPUResource {
 
 #if defined(PADDLE_WITH_CUDA)
 using DevResource = GPUResource;
-using DevPlace = platform::CUDAPlace;
+using DevPlace = phi::GPUPlace;
 using AnyDeviceGuard = platform::CUDADeviceGuard;
 #elif defined(PADDLE_WITH_XPU_KP)
 using DevResource = XPUResource;
-using DevPlace = platform::XPUPlace;
-using AnyDeviceGuard = platform::XPUDeviceGuard;
+using DevPlace = phi::XPUPlace;
+using AnyDeviceGuard = phi::backends::xpu::XPUDeviceGuard;
 #endif
 
 #if defined(PADDLE_WITH_CUDA)
@@ -125,6 +125,9 @@ class GpuRDMAChecker {
 };
 #endif
 
+template <typename KeyType, typename ValType>
+class HashTable;
+
 class HeterPsResource {
  public:
   explicit HeterPsResource(const std::vector<int>& dev_ids);
@@ -136,6 +139,13 @@ class HeterPsResource {
   int get_index_by_devid(int devid);
   int dev_id(int num);
   void set_multi_mf(int multi_mf_dim, int max_mf_dim);
+  std::shared_ptr<HashTable<uint64_t, uint32_t>> keys2rank(int gpu_id) {
+    return keys2rank_vec_[gpu_id];
+  }
+  void set_keys2rank(int gpu_id,
+                     std::shared_ptr<HashTable<uint64_t, uint32_t>> keys2rank) {
+    keys2rank_vec_[gpu_id] = keys2rank;
+  }
   int multi_mf() { return multi_mf_dim_; }
   int max_mf_dim() { return max_mf_dim_; }
 
@@ -151,10 +161,12 @@ class HeterPsResource {
   std::map<int, int> devid_2_index_;
   int multi_mf_dim_{0};
   int max_mf_dim_{0};
+
   // multi node
   bool multi_node_ = false;
+  std::vector<std::shared_ptr<HashTable<uint64_t, uint32_t>>> keys2rank_vec_;
 };
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace framework
+}  // namespace paddle
 #endif

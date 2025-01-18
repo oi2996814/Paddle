@@ -28,7 +28,7 @@ void AddVarToScope(Scope* param_scope,
   auto* tensor = param_scope->Var(name)->GetMutable<phi::DenseTensor>();
   tensor->Resize(dims);
   auto* dev_ctx = static_cast<phi::CPUContext*>(
-      platform::DeviceContextPool::Instance().Get(platform::CPUPlace()));
+      phi::DeviceContextPool::Instance().Get(phi::CPUPlace()));
   dev_ctx->HostAlloc<T>(tensor, tensor->numel() * sizeof(T));
 }
 
@@ -63,25 +63,25 @@ TEST(DeleteWeightDequantLinearOpPass, basic) {
   graph->Set("__param_scope__", CreateParamScope<float>());
   auto pass =
       PassRegistry::Instance().Get("delete_weight_dequant_linear_op_pass");
-  int num_nodes_before = graph->Nodes().size();
+  int num_nodes_before = static_cast<int>(graph->Nodes().size());
   VLOG(3) << DebugString(graph);
 
   graph.reset(pass->Apply(graph.release()));
-  int num_nodes_after = graph->Nodes().size();
+  int num_nodes_after = static_cast<int>(graph->Nodes().size());
   int num_dequant_nodes_after = GetNumOpNodes(graph, "dequantize_linear");
   VLOG(3) << DebugString(graph);
 
   PADDLE_ENFORCE_EQ(
       num_nodes_before,
       num_nodes_after + 3,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "After pass, the number of nodes should be reduced by 3, but the "
           "number before pass is %d, after pass is %d.",
           num_nodes_before,
           num_nodes_after));
   PADDLE_ENFORCE_EQ(num_dequant_nodes_after,
                     0,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "After pass, the number of nodes of type "
                         "'dequantize_linear' should be 1, not %d.",
                         num_dequant_nodes_after));
@@ -110,25 +110,25 @@ TEST(DeleteWeightDequantLinearOpPass, basic_fp16) {
   graph->Set("__param_scope__", CreateParamScope<phi::dtype::float16>());
   auto pass =
       PassRegistry::Instance().Get("delete_weight_dequant_linear_op_pass");
-  int num_nodes_before = graph->Nodes().size();
+  int num_nodes_before = static_cast<int>(graph->Nodes().size());
   VLOG(3) << DebugString(graph);
 
   graph.reset(pass->Apply(graph.release()));
-  int num_nodes_after = graph->Nodes().size();
+  int num_nodes_after = static_cast<int>(graph->Nodes().size());
   int num_dequant_nodes_after = GetNumOpNodes(graph, "dequantize_linear");
   VLOG(3) << DebugString(graph);
 
   PADDLE_ENFORCE_EQ(
       num_nodes_before,
       num_nodes_after + 3,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "After pass, the number of nodes should be reduced by 3, but the "
           "number before pass is %d, after pass is %d.",
           num_nodes_before,
           num_nodes_after));
   PADDLE_ENFORCE_EQ(num_dequant_nodes_after,
                     0,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "After pass, the number of nodes of type "
                         "'dequantize_linear' should be 1, not %d.",
                         num_dequant_nodes_after));

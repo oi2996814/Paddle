@@ -22,11 +22,13 @@
 namespace phi {
 template <typename T, typename Context>
 void UnsqueezeGradKernel(const Context& dev_ctx,
-                         const DenseTensor& x_shape,
+                         const DenseTensor& x,
                          const DenseTensor& dout,
                          DenseTensor* dx) {
-  auto xshape_dims = x_shape.dims();
-  auto x_dims = phi::slice_ddim(xshape_dims, 1, xshape_dims.size());
+  // NOTE: [Why not to use x.dims() ?]
+  // Because inplace strategy is different between old IR and PIR,
+  // we need fix it into x.dims() after cleaning old IR system.
+  auto x_dims = dx->dims();
   dev_ctx.template Alloc<T>(dx);
   phi::Copy(dev_ctx, dout, dev_ctx.GetPlace(), true, dx);
   dx->Resize(x_dims);
@@ -39,13 +41,14 @@ PD_REGISTER_KERNEL(unsqueeze_grad,
                    phi::UnsqueezeGradKernel,
                    float,
                    double,
-                   phi::dtype::bfloat16,
                    bool,
                    int,
                    int16_t,
                    uint8_t,
                    int8_t,
                    int64_t,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16,
                    phi::dtype::complex<float>,
                    phi::dtype::complex<double>) {}
 
@@ -56,14 +59,14 @@ PD_REGISTER_KERNEL(unsqueeze_grad,
                    phi::UnsqueezeGradKernel,
                    float,
                    double,
-                   phi::dtype::float16,
-                   phi::dtype::bfloat16,
                    bool,
                    int,
                    int16_t,
                    uint8_t,
                    int8_t,
                    int64_t,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16,
                    phi::dtype::complex<float>,
                    phi::dtype::complex<double>) {}
 
@@ -77,6 +80,7 @@ PD_REGISTER_KERNEL(unsqueeze_grad,
                    float,
                    double,
                    phi::dtype::float16,
+                   phi::dtype::bfloat16,
                    bool,
                    int,
                    uint8_t,

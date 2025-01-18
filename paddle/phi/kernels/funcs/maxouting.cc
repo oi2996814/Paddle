@@ -16,8 +16,7 @@ limitations under the License. */
 
 #include "paddle/phi/backends/cpu/cpu_context.h"
 
-namespace phi {
-namespace funcs {
+namespace phi::funcs {
 
 // All tensors are in NCHW or NHWC format, and the groups must be greater than 1
 template <typename DeviceContext, typename T>
@@ -26,10 +25,12 @@ void MaxOutFunctor<DeviceContext, T>::operator()(const DeviceContext& context,
                                                  phi::DenseTensor* output,
                                                  const int groups,
                                                  const int axis) {
-  const int batch_size = input.dims()[0];
-  const int input_height = (axis == 1 ? input.dims()[2] : input.dims()[1]);
-  const int input_width = (axis == 1 ? input.dims()[3] : input.dims()[2]);
-  const int output_channels = output->dims()[axis];
+  const int batch_size = static_cast<int>(input.dims()[0]);
+  const int input_height =
+      static_cast<int>(axis == 1 ? input.dims()[2] : input.dims()[1]);
+  const int input_width =
+      static_cast<int>(axis == 1 ? input.dims()[3] : input.dims()[2]);
+  const int output_channels = static_cast<int>(output->dims()[axis]);
   int fea_size = input_height * input_width;
   // c_size means the output size of each sample
   int c_size = fea_size * output_channels;
@@ -41,7 +42,7 @@ void MaxOutFunctor<DeviceContext, T>::operator()(const DeviceContext& context,
       int new_cindex = fea_size * c;
       for (int f = 0; f < fea_size; ++f) {
         T ele = static_cast<T>(-FLT_MAX);
-        int input_idx, output_idx;
+        int input_idx = 0, output_idx = 0;
         for (int ph = 0; ph < groups; ++ph) {
           if (axis == 1) {
             input_idx = (new_bindex + new_cindex) * groups + ph * fea_size + f;
@@ -71,10 +72,12 @@ void MaxOutGradFunctor<DeviceContext, T>::operator()(
     const phi::DenseTensor& output_grad,
     const int groups,
     const int axis) {
-  const int batch_size = input.dims()[0];
-  const int input_height = (axis == 1 ? input.dims()[2] : input.dims()[1]);
-  const int input_width = (axis == 1 ? input.dims()[3] : input.dims()[2]);
-  const int output_channels = output.dims()[axis];
+  const int batch_size = static_cast<int>(input.dims()[0]);
+  const int input_height =
+      static_cast<int>(axis == 1 ? input.dims()[2] : input.dims()[1]);
+  const int input_width =
+      static_cast<int>(axis == 1 ? input.dims()[3] : input.dims()[2]);
+  const int output_channels = static_cast<int>(output.dims()[axis]);
   int fea_size = input_height * input_width;
   const T* input_data = input.data<T>();
   const T* output_data = output.data<T>();
@@ -85,7 +88,7 @@ void MaxOutGradFunctor<DeviceContext, T>::operator()(
     for (int c = 0; c < output_channels; ++c) {
       int clen = fea_size * c;
       for (int f = 0; f < fea_size; ++f) {
-        int input_idx0, output_idx;
+        int input_idx0 = 0, output_idx = 0;
         bool continue_match = true;
         if (axis == 1) {
           input_idx0 = (blen + clen) * groups + f;
@@ -112,5 +115,4 @@ template class MaxOutGradFunctor<phi::CPUContext, double>;
 template class MaxOutFunctor<phi::CPUContext, float>;
 template class MaxOutFunctor<phi::CPUContext, double>;
 
-}  // namespace funcs
-}  // namespace phi
+}  // namespace phi::funcs

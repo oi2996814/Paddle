@@ -16,6 +16,7 @@
 
 #include "paddle/phi/common/memory_utils.h"
 #include "paddle/phi/kernels/gpu/sigmoid_cross_entropy_with_logits.h"
+#include "paddle/phi/kernels/scale_kernel.h"
 
 namespace phi {
 
@@ -71,14 +72,12 @@ struct SigmoidFwdPosWeightFunctor {
       out_data = static_cast<T>(0.);
       counts = 0;
     } else {
-      T term1 = (x > 0) ? x : 0;
-      T term2 = x * label;
-      T term3 =
-          phi::funcs::real_log(static_cast<T>(1) +
-                               phi::funcs::real_exp(static_cast<T>(-abs(x)))) *
-          pos_weight;
+      T max_val = x < 0 ? -x : 0;
+      T term1 = (static_cast<T>(1.) - label) * x;
+      T term2 = phi::funcs::real_log(phi::funcs::real_exp(-max_val) +
+                                     phi::funcs::real_exp(-x - max_val));
+      out_data = term1 + pos_weight * (term2 + max_val);
 
-      out_data = term1 - term2 + term3;
       counts = 1;
     }
     phi::Array<T, 2> outs;
@@ -125,7 +124,7 @@ void SigmoidCrossEntropyWithLogitsKernel(
     DenseTensor *norm_tensor = new DenseTensor();
     norm_tensor->Resize({sizeof(T)});
     dev_ctx.template Alloc<T>(norm_tensor);
-    auto dims = phi::vectorize(counts_tensor->dims());
+    auto dims = common::vectorize(counts_tensor->dims());
     std::vector<int> reduce_dim = {};
     for (int i = 0; i < dims.size(); i++) {
       reduce_dim.push_back(i);
@@ -146,10 +145,7 @@ void SigmoidCrossEntropyWithLogitsKernel(
     auto eps = static_cast<T>(1e-5);
     *norm_cpu_ptr = *norm_cpu_ptr > eps ? *norm_cpu_ptr : eps;
 
-    std::vector<const DenseTensor *> div_ins = {out};
-    std::vector<DenseTensor *> div_outs = {out};
-    auto div_functor = DivFunctor<T>(*norm_cpu_ptr);
-    phi::funcs::ElementwiseKernel<T>(dev_ctx, div_ins, &div_outs, div_functor);
+    phi::ScaleKernel<T>(dev_ctx, *out, 1.0 / (*norm_cpu_ptr), 0.0f, false, out);
 
     delete norm_tensor;
   }

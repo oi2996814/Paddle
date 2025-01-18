@@ -15,7 +15,7 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 import paddle
 
@@ -53,7 +53,7 @@ class TestDistributeFPNProposalsOp(OpTest):
             'pixel_offset': self.pixel_offset,
         }
         output = [
-            ('out%d' % i, self.rois_fpn[i]) for i in range(len(self.rois_fpn))
+            (f'out{i}', self.rois_fpn[i]) for i in range(len(self.rois_fpn))
         ]
 
         self.outputs = {
@@ -142,7 +142,7 @@ class TestDistributeFPNProposalsOp(OpTest):
         self.set_data()
 
     def test_check_output(self):
-        self.check_output(check_dygraph=False)
+        self.check_output(check_dygraph=False, check_pir=False)
 
 
 class TestDistributeFPNProposalsOpWithRoisNum(TestDistributeFPNProposalsOp):
@@ -162,10 +162,10 @@ class TestDistributeFPNProposalsOpWithRoisNum(TestDistributeFPNProposalsOp):
             'pixel_offset': self.pixel_offset,
         }
         output = [
-            ('out%d' % i, self.rois_fpn[i]) for i in range(len(self.rois_fpn))
+            (f'out{i}', self.rois_fpn[i]) for i in range(len(self.rois_fpn))
         ]
         rois_num_per_level = [
-            ('rois_num%d' % i, np.array(self.rois_fpn[i][1][0]).astype('int32'))
+            (f'rois_num{i}', np.array(self.rois_fpn[i][1][0]).astype('int32'))
             for i in range(len(self.rois_fpn))
         ]
 
@@ -218,7 +218,7 @@ class TestDistributeFpnProposalsAPI(unittest.TestCase):
             refer_scale=224,
             rois_num=rois_num,
         )
-        fetch_list = multi_rois + [restore_ind] + rois_num_per_level
+        fetch_list = [*multi_rois, restore_ind, *rois_num_per_level]
 
         exe = paddle.static.Executor()
         output_stat = exe.run(
@@ -248,7 +248,7 @@ class TestDistributeFpnProposalsAPI(unittest.TestCase):
             refer_scale=224,
             rois_num=rois_num_dy,
         )
-        output_dy = multi_rois_dy + [restore_ind_dy] + rois_num_per_level_dy
+        output_dy = [*multi_rois_dy, restore_ind_dy, *rois_num_per_level_dy]
         output_dy_np = []
         for output in output_dy:
             output_np = output.numpy()

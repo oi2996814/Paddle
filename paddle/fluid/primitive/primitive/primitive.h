@@ -13,17 +13,6 @@
 // limitations under the License.
 
 #pragma once
-#include "paddle/fluid/primitive/backend/eager_backend.h"
-#include "paddle/fluid/primitive/backend/static_backend.h"
 
-namespace paddle {
-namespace primitive {
-namespace experimental {
-// why exist this file?
-// We provide this file to divide
-// the primitive ops set in the backend.
-// It will be called by the vjp composite
-// rules and composite ops rules.
-}  // namespace experimental
-}  // namespace primitive
-}  // namespace paddle
+#include "paddle/fluid/primitive/primitive/generated_primitive.h"
+#include "paddle/fluid/primitive/primitive/manual_primitive.h"

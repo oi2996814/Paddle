@@ -20,13 +20,15 @@ import numpy as np
 from test_imperative_base import new_program_scope
 
 import paddle
-from paddle import fluid
-from paddle.fluid import framework
+from paddle import base
+from paddle.base import framework
+from paddle.framework.io_utils import is_pir_fetch_var
 
 LARGE_PARAM = 2**26
 
 
 class TestStaticSaveLoadLargeParameters(unittest.TestCase):
+
     def test_large_parameters_static_save(self):
         # enable static graph mode
         paddle.enable_static()
@@ -46,10 +48,12 @@ class TestStaticSaveLoadLargeParameters(unittest.TestCase):
             base_map = {}
             for var in prog.list_vars():
                 if isinstance(var, framework.Parameter) or var.persistable:
+                    if is_pir_fetch_var(var):
+                        continue
                     t = np.array(
-                        fluid.global_scope().find_var(var.name).get_tensor()
+                        base.global_scope().find_var(var.name).get_tensor()
                     )
-                    # make sure all the paramerter or optimizer var have been update
+                    # make sure all the parameter or optimizer var have been update
                     self.assertTrue(np.sum(np.abs(t)) != 0)
                     base_map[var.name] = t
             temp_dir = tempfile.TemporaryDirectory()
@@ -59,44 +63,29 @@ class TestStaticSaveLoadLargeParameters(unittest.TestCase):
             path = os.path.join(path, "static_save")
             protocol = 4
             paddle.static.save(prog, path, pickle_protocol=protocol)
-            # set var to zero
-            for var in prog.list_vars():
+
+            load_prog1 = paddle.static.Program()
+            paddle.static.load(load_prog1, path)
+
+            for var in load_prog1.list_vars():
                 if isinstance(var, framework.Parameter) or var.persistable:
-                    ten = fluid.global_scope().find_var(var.name).get_tensor()
-                    ten.set(np.zeros_like(np.array(ten)), place)
-
+                    if is_pir_fetch_var(var):
+                        continue
                     new_t = np.array(
-                        fluid.global_scope().find_var(var.name).get_tensor()
-                    )
-                    self.assertTrue(np.sum(np.abs(new_t)) == 0)
-
-            paddle.static.load(prog, path)
-
-            for var in prog.list_vars():
-                if isinstance(var, framework.Parameter) or var.persistable:
-                    new_t = np.array(
-                        fluid.global_scope().find_var(var.name).get_tensor()
+                        base.global_scope().find_var(var.name).get_tensor()
                     )
                     base_t = base_map[var.name]
                     np.testing.assert_array_equal(new_t, base_t)
 
-            # set var to zero
-            for var in prog.list_vars():
-                if isinstance(var, framework.Parameter) or var.persistable:
-                    ten = fluid.global_scope().find_var(var.name).get_tensor()
-                    ten.set(np.zeros_like(np.array(ten)), place)
-
-                    new_t = np.array(
-                        fluid.global_scope().find_var(var.name).get_tensor()
-                    )
-                    self.assertTrue(np.sum(np.abs(new_t)) == 0)
-
+            load_prog2 = paddle.static.Program()
             program_state = paddle.static.load_program_state(path)
-            paddle.static.set_program_state(prog, program_state)
-            for var in prog.list_vars():
+            paddle.static.set_program_state(load_prog2, program_state)
+            for var in load_prog2.list_vars():
                 if isinstance(var, framework.Parameter) or var.persistable:
+                    if is_pir_fetch_var(var):
+                        continue
                     new_t = np.array(
-                        fluid.global_scope().find_var(var.name).get_tensor()
+                        base.global_scope().find_var(var.name).get_tensor()
                     )
                     base_t = base_map[var.name]
                     np.testing.assert_array_equal(new_t, base_t)

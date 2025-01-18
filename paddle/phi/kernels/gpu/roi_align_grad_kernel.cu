@@ -26,12 +26,12 @@
 namespace phi {
 
 static constexpr int kNumCUDAThreads = 512;
-static constexpr int kNumMaxinumNumBlocks = 4096;
+static constexpr int kNumMaximumNumBlocks = 4096;
 static constexpr int kROISize = 4;
 
 static inline int NumBlocks(const int N) {
   return std::min((N + kNumCUDAThreads - 1) / kNumCUDAThreads,
-                  kNumMaxinumNumBlocks);
+                  kNumMaximumNumBlocks);
 }
 
 template <class T>
@@ -193,19 +193,36 @@ void RoiAlignGradKernel(const Context& dev_ctx,
   auto gplace = dev_ctx.GetPlace();
   if (boxes_num) {
     int boxes_batch_size = boxes_num->numel();
-    std::vector<int> boxes_num_list(boxes_batch_size);
-    memory_utils::Copy(cplace,
-                       boxes_num_list.data(),
-                       gplace,
-                       boxes_num->data<int>(),
-                       sizeof(int) * boxes_batch_size,
-                       0);
-    int start = 0;
-    for (int n = 0; n < boxes_batch_size; ++n) {
-      for (size_t i = start; i < start + boxes_num_list[n]; ++i) {
-        box_batch_size[i] = n;
+    if (boxes_num->dtype() == phi::DataType::INT64) {
+      std::vector<int64_t> boxes_num_list(boxes_batch_size);
+      memory_utils::Copy(cplace,
+                         boxes_num_list.data(),
+                         gplace,
+                         boxes_num->data<int64_t>(),
+                         sizeof(int64_t) * boxes_batch_size,
+                         0);
+      int64_t start = 0;
+      for (int64_t n = 0; n < boxes_batch_size; ++n) {
+        for (int64_t i = start; i < start + boxes_num_list[n]; ++i) {
+          box_batch_size[i] = n;
+        }
+        start += boxes_num_list[n];
       }
-      start += boxes_num_list[n];
+    } else if (boxes_num->dtype() == phi::DataType::INT32) {
+      std::vector<int> boxes_num_list(boxes_batch_size);
+      memory_utils::Copy(cplace,
+                         boxes_num_list.data(),
+                         gplace,
+                         boxes_num->data<int>(),
+                         sizeof(int) * boxes_batch_size,
+                         0);
+      int start = 0;
+      for (int n = 0; n < boxes_batch_size; ++n) {
+        for (size_t i = start; i < start + boxes_num_list[n]; ++i) {
+          box_batch_size[i] = n;
+        }
+        start += boxes_num_list[n];
+      }
     }
   } else {
     auto boxes_lod = boxes.lod().back();

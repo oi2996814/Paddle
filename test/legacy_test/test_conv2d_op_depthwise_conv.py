@@ -19,7 +19,11 @@ import numpy as np
 import paddle
 
 paddle.enable_static()
-from eager_op_test import get_numeric_gradient
+import sys
+
+from op_test import get_numeric_gradient
+
+sys.path.append("../../legacy_test")
 from test_conv2d_op import (
     TestConv2DOp,
     TestConv2DOp_v2,
@@ -31,7 +35,7 @@ from test_conv2d_op import (
 )
 from testsuite import create_op
 
-from paddle.fluid import core
+from paddle.base import core
 
 # ----------------TestDepthwiseConv -----
 

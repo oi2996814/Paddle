@@ -26,15 +26,12 @@ limitations under the License. */
 #include "paddle/fluid/framework/fleet/metrics.h"
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/inference/io.h"
-#include "paddle/fluid/platform/place.h"
+#include "paddle/phi/common/place.h"
 
 #include "paddle/fluid/pybind/metrics_py.h"
 
-namespace py = pybind11;
-
 #if defined(PADDLE_WITH_PSLIB)
-namespace paddle {
-namespace pybind {
+namespace paddle::pybind {
 void BindMetrics(py::module* m) {
   py::class_<framework::Metric, std::shared_ptr<framework::Metric>>(*m,
                                                                     "Metric")
@@ -55,6 +52,5 @@ void BindMetrics(py::module* m) {
            &framework::Metric::GetMetricNameList,
            py::call_guard<py::gil_scoped_release>());
 }  // end Metrics
-}  // end namespace pybind
-}  // end namespace paddle
+}  // namespace paddle::pybind
 #endif

@@ -16,106 +16,123 @@
 Functions for Auto SParsity (ASP) training and inference.
 """
 
+from __future__ import annotations
+
 import copy
 import os
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 import paddle
-from paddle.fluid import core, global_scope, program_guard
-from paddle.fluid.framework import dygraph_only
-from paddle.incubate import asp
+from paddle.base import core, global_scope, program_guard
+from paddle.base.framework import dygraph_only
 
 from .supported_layer_list import (
     _default_pruning,
     supported_layers_and_prune_func_map,
 )
+from .utils import MaskAlgo
 
 OpRole = core.op_proto_and_checker_maker.OpRole
 OP_ROLE_KEY = core.op_proto_and_checker_maker.kOpRoleAttrName()
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Sequence
+    from typing import Any, Callable, Literal
+
+    import numpy.typing as npt
+
+    from paddle import Tensor
+    from paddle._typing import PlaceLike
+    from paddle.nn import Layer
+    from paddle.optimizer import Optimizer
+    from paddle.static import Operator, Program
+
 __all__ = []
 
 
-def set_excluded_layers(param_names, main_program=None):
+def set_excluded_layers(
+    param_names: list[str], main_program: Program | None = None
+) -> None:
     r"""
     Set parameter name of layers which would not be pruned as sparse weights.
 
     Args:
         param_names (list of string): A list contains names of parameters.
-        main_program (Program, optional): Program with model definition and its parameters.
+        main_program (Program|None, optional): Program with model definition and its parameters.
                                           If None is given, then it would be set as `paddle.static.default_main_program().
                                           Default is None.
     Examples:
-        1. Usage of Dynamic Graph
+        .. code-block:: python
+            :name: dynamic-graph
 
-            .. code-block:: python
+            >>> # Example1: Usage of Dynamic Graph
+            >>> import paddle
 
-                import paddle
+            >>> class MyLayer(paddle.nn.Layer):
+            ...     def __init__(self):
+            ...         super().__init__()
+            ...         self.conv1 = paddle.nn.Conv2D(
+            ...             in_channels=3, out_channels=4, kernel_size=3, padding=2)
+            ...         self.linear1 = paddle.nn.Linear(4624, 100)
+            ...
+            ...     def forward(self, img):
+            ...         hidden = self.conv1(img)
+            ...         hidden = paddle.flatten(hidden, start_axis=1)
+            ...         prediction = self.linear1(hidden)
+            ...         return prediction
 
-                class MyLayer(paddle.nn.Layer):
-                    def __init__(self):
-                        super().__init__()
-                        self.conv1 = paddle.nn.Conv2D(
-                            in_channels=3, out_channels=4, kernel_size=3, padding=2)
-                        self.linear1 = paddle.nn.Linear(4624, 100)
+            >>> my_layer = MyLayer()
+            >>> optimizer = paddle.optimizer.SGD(
+            ...     learning_rate=0.01, parameters=my_layer.parameters())
 
-                    def forward(self, img):
-                        hidden = self.conv1(img)
-                        hidden = paddle.flatten(hidden, start_axis=1)
-                        prediction = self.linear1(hidden)
-                        return prediction
+            >>> # Need to set excluded layers before calling decorate
+            >>> paddle.incubate.asp.set_excluded_layers([my_layer.linear1.full_name()])
 
-                my_layer = MyLayer()
-                optimizer = paddle.optimizer.SGD(
-                    learning_rate=0.01, parameters=my_layer.parameters())
+            >>> optimizer = paddle.incubate.asp.decorate(optimizer)
 
-                # Need to set excluded layers before calling decorate
-                paddle.incubate.asp.set_excluded_layers([my_layer.linear1.full_name()])
+        .. code-block:: python
+            :name: static-graph
 
-                optimizer = paddle.incubate.asp.decorate(optimizer)
+            >>> # Example2: Usage of Static Graph
+            >>> import paddle
 
-        2. Usage of Static Graph
+            >>> paddle.enable_static()
 
-            .. code-block:: python
+            >>> class MyLayer(paddle.nn.Layer):
+            ...     def __init__(self):
+            ...         super().__init__()
+            ...         self.conv1 = paddle.nn.Conv2D(
+            ...             in_channels=3, out_channels=4, kernel_size=3, padding=2)
+            ...         self.linear1 = paddle.nn.Linear(4624, 100)
+            ...
+            ...     def forward(self, img):
+            ...         hidden = self.conv1(img)
+            ...         hidden = paddle.flatten(hidden, start_axis=1)
+            ...         prediction = self.linear1(hidden)
+            ...         return prediction
 
-                import paddle
+            >>> main_program = paddle.static.Program()
+            >>> startup_program = paddle.static.Program()
 
-                paddle.enable_static()
-
-                class MyLayer(paddle.nn.Layer):
-                    def __init__(self):
-                        super().__init__()
-                        self.conv1 = paddle.nn.Conv2D(
-                            in_channels=3, out_channels=4, kernel_size=3, padding=2)
-                        self.linear1 = paddle.nn.Linear(4624, 100)
-
-                    def forward(self, img):
-                        hidden = self.conv1(img)
-                        hidden = paddle.flatten(hidden, start_axis=1)
-                        prediction = self.linear1(hidden)
-                        return prediction
-
-                main_program = paddle.static.Program()
-                startup_program = paddle.static.Program()
-
-                with paddle.static.program_guard(main_program, startup_program):
-                    input_data = paddle.static.data(name='data', shape=[None, 3, 224, 224])
-                    label = paddle.static.data(name='label', shape=[None, 100])
-                    my_layer = MyLayer()
-                    prob = my_layer(input_data)
-                    loss = paddle.mean(paddle.nn.functional.square_error_cost(prob, label))
-
-                    # Setup exluded layers out from ASP workflow.
-                    # Please note, excluded_layers must be set before calling optimizer.minimize().
-                    paddle.incubate.asp.set_excluded_layers([my_layer.linear1.full_name()], main_program)
-
-                    optimizer = paddle.optimizer.SGD(learning_rate=0.1)
-                    optimizer = paddle.static.amp.decorate(optimizer )
-                    # Calling paddle.incubate.asp.decorate() to wrap minimize() in optimizer, which
-                    # will insert necessary masking operations for ASP workflow.
-                    optimizer = paddle.incubate.asp.decorate(optimizer)
-                    optimizer.minimize(loss, startup_program)
+            >>> with paddle.static.program_guard(main_program, startup_program):
+            ...     input_data = paddle.static.data(name='data', shape=[None, 3, 224, 224])
+            ...     label = paddle.static.data(name='label', shape=[None, 100])
+            ...     my_layer = MyLayer()
+            ...     prob = my_layer(input_data)
+            ...     loss = paddle.mean(paddle.nn.functional.square_error_cost(prob, label))
+            ...
+            ...     # Setup excluded layers out from ASP workflow.
+            ...     # Please note, excluded_layers must be set before calling optimizer.minimize().
+            ...     paddle.incubate.asp.set_excluded_layers([my_layer.linear1.full_name()], main_program)
+            ...
+            ...     optimizer = paddle.optimizer.SGD(learning_rate=0.1)
+            ...     optimizer = paddle.static.amp.decorate(optimizer )
+            ...     # Calling paddle.incubate.asp.decorate() to wrap minimize() in optimizer, which
+            ...     # will insert necessary masking operations for ASP workflow.
+            ...     optimizer = paddle.incubate.asp.decorate(optimizer)
+            ...     optimizer.minimize(loss, startup_program)
     """
     if main_program is None:
         main_program = paddle.static.default_main_program()
@@ -124,9 +141,9 @@ def set_excluded_layers(param_names, main_program=None):
     )
 
 
-def reset_excluded_layers(main_program=None):
+def reset_excluded_layers(main_program: Program | None = None) -> None:
     r"""
-    Reset exculded layers setting corresponding to :attr:`main_program`. If :attr:`main_program`
+    Reset excluded layers setting corresponding to :attr:`main_program`. If :attr:`main_program`
     is None, then all configurations of excluded_layers would be cleaned.
 
     Args:
@@ -134,89 +151,89 @@ def reset_excluded_layers(main_program=None):
                                           If None is given, then this function would reset all excluded_layers.
                                           Default is None.
     Examples:
-        1. Usage of Dynamic Graph
+        .. code-block:: python
+            :name: dynamic-graph
 
-            .. code-block:: python
+            >>> # Example1: Usage of Dynamic Graph
+            >>> import paddle
 
-                import paddle
+            >>> class MyLayer(paddle.nn.Layer):
+            ...     def __init__(self):
+            ...         super().__init__()
+            ...         self.conv1 = paddle.nn.Conv2D(
+            ...             in_channels=3, out_channels=4, kernel_size=3, padding=2)
+            ...         self.linear1 = paddle.nn.Linear(4624, 100)
+            ...
+            ...     def forward(self, img):
+            ...         hidden = self.conv1(img)
+            ...         hidden = paddle.flatten(hidden, start_axis=1)
+            ...         prediction = self.linear1(hidden)
+            ...         return prediction
 
-                class MyLayer(paddle.nn.Layer):
-                    def __init__(self):
-                        super().__init__()
-                        self.conv1 = paddle.nn.Conv2D(
-                            in_channels=3, out_channels=4, kernel_size=3, padding=2)
-                        self.linear1 = paddle.nn.Linear(4624, 100)
+            >>> my_layer = MyLayer()
+            >>> optimizer = paddle.optimizer.SGD(
+            ...     learning_rate=0.01, parameters=my_layer.parameters())
 
-                    def forward(self, img):
-                        hidden = self.conv1(img)
-                        hidden = paddle.flatten(hidden, start_axis=1)
-                        prediction = self.linear1(hidden)
-                        return prediction
+            >>> # Need to set excluded layers before calling decorate
+            >>> paddle.incubate.asp.set_excluded_layers([my_layer.linear1.full_name()])
+            >>> # Reset excluded_layers, all supported layers would be included into Automatic SParsity's workflow.
+            >>> # Please note, reset_excluded_layers also must be called before calling asp.decorate().
+            >>> paddle.incubate.asp.reset_excluded_layers()
 
-                my_layer = MyLayer()
-                optimizer = paddle.optimizer.SGD(
-                    learning_rate=0.01, parameters=my_layer.parameters())
+            >>> optimizer = paddle.incubate.asp.decorate(optimizer)
 
-                # Need to set excluded layers before calling decorate
-                paddle.incubate.asp.set_excluded_layers([my_layer.linear1.full_name()])
-                # Reset excluded_layers, all supported layers would be included into Automatic SParsity's workflow.
-                # Please note, reset_excluded_layers also must be called before calling asp.decorate().
-                paddle.incubate.asp.reset_excluded_layers()
+        .. code-block:: python
+            :name: static-graph
 
-                optimizer = paddle.incubate.asp.decorate(optimizer)
+            >>> # Example2: Usage of Static Graph
+            >>> import paddle
 
-        2. Usage of Static Graph
+            >>> paddle.enable_static()
 
-            .. code-block:: python
+            >>> class MyLayer(paddle.nn.Layer):
+            ...     def __init__(self):
+            ...         super().__init__()
+            ...         self.conv1 = paddle.nn.Conv2D(
+            ...             in_channels=3, out_channels=4, kernel_size=3, padding=2)
+            ...         self.linear1 = paddle.nn.Linear(4624, 100)
+            ...
+            ...     def forward(self, img):
+            ...         hidden = self.conv1(img)
+            ...         hidden = paddle.flatten(hidden, start_axis=1)
+            ...         prediction = self.linear1(hidden)
+            ...         return prediction
 
-                import paddle
+            >>> main_program = paddle.static.Program()
+            >>> startup_program = paddle.static.Program()
 
-                paddle.enable_static()
-
-                class MyLayer(paddle.nn.Layer):
-                    def __init__(self):
-                        super().__init__()
-                        self.conv1 = paddle.nn.Conv2D(
-                            in_channels=3, out_channels=4, kernel_size=3, padding=2)
-                        self.linear1 = paddle.nn.Linear(4624, 100)
-
-                    def forward(self, img):
-                        hidden = self.conv1(img)
-                        hidden = paddle.flatten(hidden, start_axis=1)
-                        prediction = self.linear1(hidden)
-                        return prediction
-
-                main_program = paddle.static.Program()
-                startup_program = paddle.static.Program()
-
-                with paddle.static.program_guard(main_program, startup_program):
-                    input_data = paddle.static.data(name='data', shape=[None, 3, 224, 224])
-                    label = paddle.static.data(name='label', shape=[None, 100])
-                    my_layer = MyLayer()
-                    prob = my_layer(input_data)
-                    loss = paddle.mean(paddle.nn.functional.square_error_cost(prob, label))
-
-                    # Setup exluded layers out from ASP workflow.
-                    # Please note, excluded_layers must be set before calling optimizer.minimize().
-                    paddle.incubate.asp.set_excluded_layers([my_layer.linear1.full_name()], main_program)
-                    # Reset excluded_layers, all supported layers would be included into Automatic SParsity's workflow.
-                    # Please note, reset_excluded_layers also must be called before calling optimizer.minimize().
-                    paddle.incubate.asp.reset_excluded_layers(main_program)
-
-                    optimizer = paddle.optimizer.SGD(learning_rate=0.1)
-                    optimizer = paddle.static.amp.decorate(optimizer )
-                    # Calling paddle.incubate.asp.decorate() to wrap minimize() in optimizer, which
-                    # will insert necessary masking operations for ASP workflow.
-                    optimizer = paddle.incubate.asp.decorate(optimizer)
-                    optimizer.minimize(loss, startup_program)
+            >>> with paddle.static.program_guard(main_program, startup_program):
+            ...     input_data = paddle.static.data(name='data', shape=[None, 3, 224, 224])
+            ...     label = paddle.static.data(name='label', shape=[None, 100])
+            ...     my_layer = MyLayer()
+            ...     prob = my_layer(input_data)
+            ...     loss = paddle.mean(paddle.nn.functional.square_error_cost(prob, label))
+            ...
+            ...     # Setup excluded layers out from ASP workflow.
+            ...     # Please note, excluded_layers must be set before calling optimizer.minimize().
+            ...     paddle.incubate.asp.set_excluded_layers([my_layer.linear1.full_name()], main_program)
+            ...     # Reset excluded_layers, all supported layers would be included into Automatic SParsity's workflow.
+            ...     # Please note, reset_excluded_layers also must be called before calling optimizer.minimize().
+            ...     paddle.incubate.asp.reset_excluded_layers(main_program)
+            ...
+            ...     optimizer = paddle.optimizer.SGD(learning_rate=0.1)
+            ...     optimizer = paddle.static.amp.decorate(optimizer )
+            ...     # Calling paddle.incubate.asp.decorate() to wrap minimize() in optimizer, which
+            ...     # will insert necessary masking operations for ASP workflow.
+            ...     optimizer = paddle.incubate.asp.decorate(optimizer)
+            ...     optimizer.minimize(loss, startup_program)
     """
     ASPHelper.reset_excluded_layers(main_program=main_program)
 
 
-def decorate(optimizer):
+def decorate(optimizer: Optimizer) -> OptimizerWithSparsityGuarantee:
     r"""
     Wrap the given optimizer as a OptimizerWithSparsityGuarantee,
-    If runnig with dynamic graph mode. ASP would creates mask variables for supported parameters.
+    If running with dynamic graph mode. ASP would creates mask variables for supported parameters.
     Else if in static graph mode, ASP would creates mask variables and inserts necessary ops
     when calling minimize()
 
@@ -225,81 +242,87 @@ def decorate(optimizer):
     Returns:
         OptimizerWithSparsityGuarantee: A wrapper for ASP to decorate `minimize` function of the given optimizer.
     Examples:
-        1. Usage of Dynamic Graph
+        .. code-block:: python
+            :name: dynamic-graph
 
-            .. code-block:: python
+            >>> # Example1: Usage of Dynamic Graph
+            >>> import paddle
 
-                import paddle
+            >>> class MyLayer(paddle.nn.Layer):
+            ...     def __init__(self):
+            ...         super().__init__()
+            ...         self.conv1 = paddle.nn.Conv2D(
+            ...             in_channels=3, out_channels=4, kernel_size=3, padding=2)
+            ...         self.linear1 = paddle.nn.Linear(4624, 32)
+            ...         self.linear2 = paddle.nn.Linear(32, 32)
+            ...         self.linear3 = paddle.nn.Linear(32, 10)
+            ...
+            ...     def forward(self, img):
+            ...         hidden = self.conv1(img)
+            ...         hidden = paddle.flatten(hidden, start_axis=1)
+            ...         hidden = self.linear1(hidden)
+            ...         hidden = self.linear2(hidden)
+            ...         prediction = self.linear3(hidden)
+            ...         return prediction
 
-                class MyLayer(paddle.nn.Layer):
-                    def __init__(self):
-                        super().__init__()
-                        self.conv1 = paddle.nn.Conv2D(
-                            in_channels=3, out_channels=4, kernel_size=3, padding=2)
-                        self.linear1 = paddle.nn.Linear(4624, 32)
-                        self.linear2 = paddle.nn.Linear(32, 32)
-                        self.linear3 = paddle.nn.Linear(32, 10)
+            >>> my_layer = MyLayer()
+            >>> optimizer = paddle.optimizer.SGD(
+            ...     learning_rate=0.01, parameters=my_layer.parameters())
 
-                    def forward(self, img):
-                        hidden = self.conv1(img)
-                        hidden = paddle.flatten(hidden, start_axis=1)
-                        hidden = self.linear1(hidden)
-                        hidden = self.linear2(hidden)
-                        prediction = self.linear3(hidden)
-                        return prediction
+            >>> # Calling paddle.incubate.asp.decorate() to wrap step() in optimizer, which
+            >>> # will apply necessary masking operations for ASP workflow.
+            >>> # In dynamic graph mode, ASP would create related mask variables during decoration.
+            >>> optimizer = paddle.incubate.asp.decorate(optimizer)
 
-                my_layer = MyLayer()
-                optimizer = paddle.optimizer.SGD(
-                    learning_rate=0.01, parameters=my_layer.parameters())
+        .. code-block:: python
+            :name: static-graph
 
-                # Calling paddle.incubate.asp.decorate() to wrap step() in optimizer, which
-                # will apply necessary masking operations for ASP workflow.
-                # In dynamic graph mode, ASP would create related mask variables during decoration.
-                optimizer = paddle.incubate.asp.decorate(optimizer)
+            >>> # Example2: Usage of Static Graph
+            >>> import paddle
 
-        2. Usage of Static Graph
+            >>> paddle.enable_static()
 
-            .. code-block:: python
+            >>> class MyLayer(paddle.nn.Layer):
+            ...     def __init__(self):
+            ...         super().__init__()
+            ...         self.conv1 = paddle.nn.Conv2D(
+            ...             in_channels=3, out_channels=4, kernel_size=3, padding=2)
+            ...         self.linear1 = paddle.nn.Linear(4624, 100)
+            ...
+            ...     def forward(self, img):
+            ...         hidden = self.conv1(img)
+            ...         hidden = paddle.flatten(hidden, start_axis=1)
+            ...         prediction = self.linear1(hidden)
+            ...         return prediction
 
-                import paddle
+            >>> main_program = paddle.static.Program()
+            >>> startup_program = paddle.static.Program()
 
-                paddle.enable_static()
-
-                class MyLayer(paddle.nn.Layer):
-                    def __init__(self):
-                        super().__init__()
-                        self.conv1 = paddle.nn.Conv2D(
-                            in_channels=3, out_channels=4, kernel_size=3, padding=2)
-                        self.linear1 = paddle.nn.Linear(4624, 100)
-
-                    def forward(self, img):
-                        hidden = self.conv1(img)
-                        hidden = paddle.flatten(hidden, start_axis=1)
-                        prediction = self.linear1(hidden)
-                        return prediction
-
-                main_program = paddle.static.Program()
-                startup_program = paddle.static.Program()
-
-                with paddle.static.program_guard(main_program, startup_program):
-                    input_data = paddle.static.data(name='data', shape=[None, 3, 224, 224])
-                    label = paddle.static.data(name='label', shape=[None, 100])
-                    my_layer = MyLayer()
-                    prob = my_layer(input_data)
-                    loss = paddle.mean(paddle.nn.functional.square_error_cost(prob, label))
-
-                    optimizer = paddle.optimizer.SGD(learning_rate=0.1)
-                    # Calling paddle.incubate.asp.decorate() to wrap minimize() in optimizer, which
-                    # will insert necessary masking operations for ASP workflow.
-                    # In static graph mode, ASP creates related mask variables
-                    # during minimize().
-                    optimizer = paddle.incubate.asp.decorate(optimizer)
-                    optimizer.minimize(loss, startup_program)
+            >>> with paddle.static.program_guard(main_program, startup_program):
+            ...     input_data = paddle.static.data(name='data', shape=[None, 3, 224, 224])
+            ...     label = paddle.static.data(name='label', shape=[None, 100])
+            ...     my_layer = MyLayer()
+            ...     prob = my_layer(input_data)
+            ...     loss = paddle.mean(paddle.nn.functional.square_error_cost(prob, label))
+            ...
+            ...     optimizer = paddle.optimizer.SGD(learning_rate=0.1)
+            ...     # Calling paddle.incubate.asp.decorate() to wrap minimize() in optimizer, which
+            ...     # will insert necessary masking operations for ASP workflow.
+            ...     # In static graph mode, ASP creates related mask variables
+            ...     # during minimize().
+            ...     optimizer = paddle.incubate.asp.decorate(optimizer)
+            ...     optimizer.minimize(loss, startup_program)
     """
     return ASPHelper.decorate(optimizer)
 
 
-def prune_model(model, n=2, m=4, mask_algo='mask_1d', with_mask=True):
+def prune_model(
+    model: Program | Layer,
+    n: int = 2,
+    m: int = 4,
+    mask_algo: Literal['mask_1d', 'mask_2d_greedy', 'mask_2d_best'] = 'mask_1d',
+    with_mask: bool = True,
+) -> dict[str, Tensor]:
     r"""
     Pruning parameters of supported layers in :attr:`model` via
     specified mask generation function given by :attr:`mask_algo`. This
@@ -310,136 +333,136 @@ def prune_model(model, n=2, m=4, mask_algo='mask_1d', with_mask=True):
     *Note*: (Static graph mode) If calling this function with :attr:`with_mask`, it should call `OptimizerWithSparsityGuarantee.minimize`
     and initialization (`exe.run(startup_program`)) before (For successfully obtain mask Variable).
     Typically set `with_mask` as true for training (have called `OptimizerWithSparsityGuarantee.minimize`) and false for
-    inference only. To obtain OptimizerWithSparsityGuarantee, please see `paddle.incubate.asp.decoreate()`.
+    inference only. To obtain OptimizerWithSparsityGuarantee, please see `paddle.incubate.asp.decorate()`.
 
     Args:
         model (Program|nn.Layer): Program with model definition and its parameters, or a object of `paddle.nn.Layer`.
         n (int, optional): n of `n:m` sparse pattern. Default is 2.
         m (int, optional): m of `n:m` sparse pattern. Default is 4.
-        mask_algo (string, optional): The function name to generate spase mask. Default is `mask_1d`.
-                                      The vaild inputs should be one of 'mask_1d', 'mask_2d_greedy' and 'mask_2d_best'.
-        with_mask (bool, optional): To prune mask Variables related to parameters or not. True is purning also, False is not. Default is True.
+        mask_algo (string, optional): The function name to generate sparse mask. Default is `mask_1d`.
+                                      The valid inputs should be one of 'mask_1d', 'mask_2d_greedy' and 'mask_2d_best'.
+        with_mask (bool, optional): To prune mask Variables related to parameters or not. True is pruning also, False is not. Default is True.
     Returns:
         dictionary: A dictionary with key: `parameter name` (string) and value: its corresponding mask Variable.
     Examples:
-        1. Usage of Dynamic Graph
+        .. code-block:: python
+            :name: dynamic-graph
 
-            .. code-block:: python
+            >>> # Example1: Usage of Dynamic Graph
+            >>> import paddle
+            >>> import numpy as np
 
-                import paddle
-                import numpy as np
+            >>> class MyLayer(paddle.nn.Layer):
+            ...     def __init__(self):
+            ...         super().__init__()
+            ...         self.conv1 = paddle.nn.Conv2D(
+            ...             in_channels=3, out_channels=4, kernel_size=3, padding=2)
+            ...         self.linear1 = paddle.nn.Linear(4624, 32)
+            ...         self.linear2 = paddle.nn.Linear(32, 32)
+            ...         self.linear3 = paddle.nn.Linear(32, 10)
+            ...
+            ...     def forward(self, img):
+            ...         hidden = self.conv1(img)
+            ...         hidden = paddle.flatten(hidden, start_axis=1)
+            ...         hidden = self.linear1(hidden)
+            ...         hidden = self.linear2(hidden)
+            ...         prediction = self.linear3(hidden)
+            ...         return prediction
 
-                class MyLayer(paddle.nn.Layer):
-                    def __init__(self):
-                        super().__init__()
-                        self.conv1 = paddle.nn.Conv2D(
-                            in_channels=3, out_channels=4, kernel_size=3, padding=2)
-                        self.linear1 = paddle.nn.Linear(4624, 32)
-                        self.linear2 = paddle.nn.Linear(32, 32)
-                        self.linear3 = paddle.nn.Linear(32, 10)
+            >>> my_layer = MyLayer()
+            >>> loss_fn = paddle.nn.MSELoss(reduction='mean')
 
-                    def forward(self, img):
-                        hidden = self.conv1(img)
-                        hidden = paddle.flatten(hidden, start_axis=1)
-                        hidden = self.linear1(hidden)
-                        hidden = self.linear2(hidden)
-                        prediction = self.linear3(hidden)
-                        return prediction
+            >>> optimizer = paddle.optimizer.SGD(
+            ...     learning_rate=0.01, parameters=my_layer.parameters())
 
-                my_layer = MyLayer()
-                loss_fn = paddle.nn.MSELoss(reduction='mean')
+            >>> # Calling paddle.incubate.asp.decorate() to wrap step() in optimizer, which
+            >>> # will apply necessary masking operations for ASP workflow.
+            >>> # In dynamic graph mode, ASP would create related mask variables during decoration.
+            >>> optimizer = paddle.incubate.asp.decorate(optimizer)
 
-                optimizer = paddle.optimizer.SGD(
-                    learning_rate=0.01, parameters=my_layer.parameters())
+            >>> # Must call paddle.incubate.asp.decorate() first before calling paddle.incubate.asp.prune_model()
+            >>> paddle.incubate.asp.prune_model(my_layer, mask_algo='mask_2d_best')
 
-                # Calling paddle.incubate.asp.decorate() to wrap step() in optimizer, which
-                # will apply necessary masking operations for ASP workflow.
-                # In dynamic graph mode, ASP would create related mask variables during decoration.
-                optimizer = paddle.incubate.asp.decorate(optimizer)
+            >>> for i in range(10):
+            ...     imgs = paddle.to_tensor(
+            ...         np.random.randn(64, 3, 32, 32),
+            ...         dtype='float32', stop_gradient=False)
+            ...     labels = paddle.to_tensor(
+            ...         np.random.randint(10, size=(64, 1)),
+            ...         dtype='float32', stop_gradient=False)
+            ...     output = my_layer(imgs)
+            ...     loss = loss_fn(output, labels)
+            ...     loss.backward()
+            ...     optimizer.step()
+            ...     optimizer.clear_grad()
 
-                # Must call paddle.incubate.asp.decorate() first before calling paddle.incubate.asp.prune_model()
-                paddle.incubate.asp.prune_model(my_layer, mask_algo='mask_2d_best')
+        .. code-block:: python
+            :name: static-graph
 
-                for i in range(10):
-                    imgs = paddle.to_tensor(
-                        np.random.randn(64, 3, 32, 32),
-                        dtype='float32', stop_gradient=False)
-                    labels = paddle.to_tensor(
-                        np.random.randint(10, size=(64, 1)),
-                        dtype='float32', stop_gradient=False)
-                    output = my_layer(imgs)
-                    loss = loss_fn(output, labels)
-                    loss.backward()
-                    optimizer.step()
-                    optimizer.clear_grad()
+            >>> # Example2: Usage of Static Graph
+            >>> import paddle
+            >>> import numpy as np
 
-        2. Usage of Static Graph
+            >>> paddle.enable_static()
 
-            .. code-block:: python
+            >>> class MyLayer(paddle.nn.Layer):
+            ...     def __init__(self):
+            ...         super().__init__()
+            ...         self.conv1 = paddle.nn.Conv2D(
+            ...             in_channels=3, out_channels=4, kernel_size=3, padding=2)
+            ...         self.linear1 = paddle.nn.Linear(4624, 32)
+            ...         self.linear2 = paddle.nn.Linear(32, 32)
+            ...         self.linear3 = paddle.nn.Linear(32, 10)
+            ...
+            ...     def forward(self, img):
+            ...         hidden = self.conv1(img)
+            ...         hidden = paddle.flatten(hidden, start_axis=1)
+            ...         hidden = self.linear1(hidden)
+            ...         hidden = self.linear2(hidden)
+            ...         prediction = self.linear3(hidden)
+            ...         return prediction
 
-                import paddle
-                import numpy as np
+            >>> main_program = paddle.static.Program()
+            >>> startup_program = paddle.static.Program()
 
-                paddle.enable_static()
+            >>> with paddle.static.program_guard(main_program, startup_program):
+            ...     input_data = paddle.static.data(name='data', shape=[None, 3, 32, 32])
+            ...     label = paddle.static.data(name='label', shape=[None, 1])
+            ...     my_layer = MyLayer()
+            ...     prob = my_layer(input_data)
+            ...     loss = paddle.mean(paddle.nn.functional.square_error_cost(prob, label))
+            ...
+            ...     optimizer = paddle.optimizer.SGD(learning_rate=0.1)
+            ...     # Calling paddle.incubate.asp.decorate() to wrap minimize() in optimizer, which
+            ...     # will insert necessary masking operations for ASP workflow.
+            ...     # In static graph mode, ASP creates related mask variables
+            ...     # during minimize().
+            ...     optimizer = paddle.incubate.asp.decorate(optimizer)
+            ...     optimizer.minimize(loss, startup_program)
 
-                class MyLayer(paddle.nn.Layer):
-                    def __init__(self):
-                        super().__init__()
-                        self.conv1 = paddle.nn.Conv2D(
-                            in_channels=3, out_channels=4, kernel_size=3, padding=2)
-                        self.linear1 = paddle.nn.Linear(4624, 32)
-                        self.linear2 = paddle.nn.Linear(32, 32)
-                        self.linear3 = paddle.nn.Linear(32, 10)
+            >>> device = paddle.device.get_device()
+            >>> place = paddle.set_device(device)
 
-                    def forward(self, img):
-                        hidden = self.conv1(img)
-                        hidden = paddle.flatten(hidden, start_axis=1)
-                        hidden = self.linear1(hidden)
-                        hidden = self.linear2(hidden)
-                        prediction = self.linear3(hidden)
-                        return prediction
+            >>> exe = paddle.static.Executor(place)
+            >>> exe.run(startup_program)
 
-                main_program = paddle.static.Program()
-                startup_program = paddle.static.Program()
+            >>> # Must call exe.run(startup_program) first before calling paddle.asp.prune_model()
+            >>> paddle.incubate.asp.prune_model(my_layer, mask_algo='mask_2d_best')
+            >>> # it also be accepted to call
+            >>> # paddle.incubate.asp.prune_model(main_program, mask_algo='mask_2d_best')
 
-                with paddle.static.program_guard(main_program, startup_program):
-                    input_data = paddle.static.data(name='data', shape=[None, 3, 32, 32])
-                    label = paddle.static.data(name='label', shape=[None, 1])
-                    my_layer = MyLayer()
-                    prob = my_layer(input_data)
-                    loss = paddle.mean(paddle.nn.functional.square_error_cost(prob, label))
-
-                    optimizer = paddle.optimizer.SGD(learning_rate=0.1)
-                    # Calling paddle.incubate.asp.decorate() to wrap minimize() in optimizer, which
-                    # will insert necessary masking operations for ASP workflow.
-                    # In static graph mode, ASP creates related mask variables
-                    # during minimize().
-                    optimizer = paddle.incubate.asp.decorate(optimizer)
-                    optimizer.minimize(loss, startup_program)
-
-                device = paddle.device.get_device()
-                place = paddle.set_device(device)
-
-                exe = paddle.static.Executor(place)
-                exe.run(startup_program)
-
-                # Must call exe.run(startup_program) first before calling paddle.asp.prune_model()
-                paddle.incubate.asp.prune_model(my_layer, mask_algo='mask_2d_best')
-                # it also be accepted to call
-                # paddle.incubate.asp.prune_model(main_program, mask_algo='mask_2d_best')
-
-                for i in range(10):
-                    imgs = np.random.randn(64, 3, 32, 32).astype('float32')
-                    labels = np.random.randint(10, size=(64, 1)).astype('float32')
-                    exe.run(main_program, feed={'data':imgs, 'label':labels})
+            >>> for i in range(10):
+            ...     imgs = np.random.randn(64, 3, 32, 32).astype('float32')
+            ...     labels = np.random.randint(10, size=(64, 1)).astype('float32')
+            ...     exe.run(main_program, feed={'data':imgs, 'label':labels})
     """
     device = paddle.device.get_device()
     place = paddle.set_device(device)
 
     MaskAlgo_mapping = {
-        'mask_1d': asp.MaskAlgo.MASK_1D,
-        'mask_2d_greedy': asp.MaskAlgo.MASK_2D_GREEDY,
-        'mask_2d_best': asp.MaskAlgo.MASK_2D_BEST,
+        'mask_1d': MaskAlgo.MASK_1D,
+        'mask_2d_greedy': MaskAlgo.MASK_2D_GREEDY,
+        'mask_2d_best': MaskAlgo.MASK_2D_BEST,
     }
     assert (
         mask_algo in MaskAlgo_mapping
@@ -453,15 +476,13 @@ def prune_model(model, n=2, m=4, mask_algo='mask_1d', with_mask=True):
         if (
             hasattr(model, "distributed_info_")
             and model.distributed_info_["sharding_degree"] > 1
-            and paddle.fluid.is_compiled_with_cuda()
+            and paddle.base.is_compiled_with_cuda()
         ):
             gpu_id = int(os.environ.get('FLAGS_selected_gpus', 0))
             place = paddle.CUDAPlace(gpu_id)
     else:
         raise TypeError(
-            "model should be paddle.nn.Layer or paddle.static.Program, but got {}".format(
-                type(model)
-            )
+            f"model should be paddle.nn.Layer or paddle.static.Program, but got {type(model)}"
         )
 
     return prune_func(
@@ -476,39 +497,39 @@ def prune_model(model, n=2, m=4, mask_algo='mask_1d', with_mask=True):
 
 class ProgramASPInfo:
     r"""
-    ProgramASPInfo is a container to keep ASP relevant information of Pragrom. It contains three inner-variables:
-    1. __mask_vars (Dictionary): Key is parameter's name and vaule is its corresponding sparse mask Variable object, which is created by `ASPHelper.create_mask_variables`.
-    2. __masks (Dictionary): Key is parameter's name and vaule is its corressponding sparse mask Numpy array, which is created by `ASPHelper.prune_model`.
+    ProgramASPInfo is a container to keep ASP relevant information of Program. It contains three inner-variables:
+    1. __mask_vars (Dictionary): Key is parameter's name and value is its corresponding sparse mask Variable object, which is created by `ASPHelper.create_mask_variables`.
+    2. __masks (Dictionary): Key is parameter's name and value is its corresponding sparse mask Numpy array, which is created by `ASPHelper.prune_model`.
     3. __excluded_layers (List): It stores name of layers which should not involve into ASP workflow.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.__mask_vars = {}
         self.__masks = {}
         self.__excluded_layers = []
 
-    def update_mask_vars(self, param_name, var):
+    def update_mask_vars(self, param_name: str, var: Tensor) -> None:
         self.__mask_vars[param_name] = var
 
-    def update_masks(self, param_name, var):
+    def update_masks(self, param_name: str, var: npt.NDArray[Any]) -> None:
         self.__masks[param_name] = var
 
-    def update_excluded_layers(self, param_names):
+    def update_excluded_layers(self, param_names: list[str]) -> None:
         self.__excluded_layers.extend(copy.deepcopy(param_names))
 
-    def reset_excluded_layers(self):
+    def reset_excluded_layers(self) -> None:
         self.__excluded_layers = []
 
     @property
-    def mask_vars(self):
+    def mask_vars(self) -> dict[str, Tensor]:
         return self.__mask_vars
 
     @property
-    def masks(self):
+    def masks(self) -> dict[str, npt.NDArray[Any]]:
         return self.__masks
 
     @property
-    def excluded_layers(self):
+    def excluded_layers(self) -> list[str]:
         return self.__excluded_layers
 
 
@@ -526,7 +547,9 @@ class ASPHelper:
     __asp_info = {}
 
     @classmethod
-    def set_excluded_layers(cls, param_names, main_program):
+    def set_excluded_layers(
+        cls, param_names: list[str], main_program: Program
+    ) -> None:
         r"""
         This is the implementation of `asp.set_excluded_layers`, for details please see explanation in `asp.set_excluded_layers`.
         """
@@ -534,7 +557,7 @@ class ASPHelper:
         asp_info.update_excluded_layers(param_names)
 
     @classmethod
-    def reset_excluded_layers(cls, main_program=None):
+    def reset_excluded_layers(cls, main_program: Program | None = None) -> None:
         r"""
         This is the implementation of `asp.reset_excluded_layers`, for details please see explanation in `asp.reset_excluded_layers`.
         """
@@ -545,14 +568,14 @@ class ASPHelper:
             cls._get_program_asp_info(main_program).reset_excluded_layers()
 
     @staticmethod
-    def decorate(optimizer):
+    def decorate(optimizer: Optimizer) -> OptimizerWithSparsityGuarantee:
         r"""
         This is the implementation of `asp.decorate`, for details please see explanation in `asp.decorate`.
         """
         if paddle.in_dynamic_mode():
             # main_prog and startup_prog would be used with paddle.static.program_guard
             # to create ASP masks. Moreover, main_prog is a key to map paddle.static.Program
-            # to its own ASP informantion, like ASP mask variables. For dynamic graph, we use
+            # to its own ASP information, like ASP mask variables. For dynamic graph, we use
             # default_main_program as the key.
             main_prog = paddle.static.default_main_program()
             startup_prog = paddle.static.default_startup_program()
@@ -564,13 +587,13 @@ class ASPHelper:
     @classmethod
     def prune_model_by_program(
         cls,
-        place,
-        main_program=None,
-        n=2,
-        m=4,
-        mask_algo=asp.MaskAlgo.MASK_1D,
-        with_mask=True,
-    ):
+        place: PlaceLike,
+        main_program: Program | None = None,
+        n: int = 2,
+        m: int = 4,
+        mask_algo: MaskAlgo = MaskAlgo.MASK_1D,
+        with_mask: bool = True,
+    ) -> dict[str, npt.NDArray[Any]]:
         r"""
         This is the implementation of `asp.prune_model`, for details please see explanation in `asp.prune_model`.
         """
@@ -599,11 +622,9 @@ class ASPHelper:
                         ASPHelper._get_mask_name(param.name)
                     )
                     assert weight_mask_param is not None, (
-                        'Cannot find {} variable, please call optimizer.minimize ('
+                        f'Cannot find {ASPHelper._get_mask_name(param.name)} variable, please call optimizer.minimize ('
                         'paddle.incubate.asp.decorate(optimizer).minimize(loss)'
-                        ' and initialization (exe.run(startup_program)) first!'.format(
-                            ASPHelper._get_mask_name(param.name)
-                        )
+                        ' and initialization (exe.run(startup_program)) first!'
                     )
                     weight_mask_tensor = weight_mask_param.get_tensor()
                     weight_sparse_mask = weight_sparse_mask.astype(
@@ -616,13 +637,13 @@ class ASPHelper:
     @classmethod
     def prune_model_by_layer(
         cls,
-        place,
-        layer,
-        n=2,
-        m=4,
-        mask_algo=asp.MaskAlgo.MASK_1D,
-        with_mask=True,
-    ):
+        place: PlaceLike,
+        layer: Layer,
+        n: int = 2,
+        m: int = 4,
+        mask_algo: MaskAlgo = MaskAlgo.MASK_1D,
+        with_mask: bool = True,
+    ) -> dict[str, npt.NDArray[Any]]:
         r"""
         This is the implementation of `asp.prune_model`, for details please see explanation in `asp.prune_model`.
         """
@@ -650,10 +671,8 @@ class ASPHelper:
                             param.name, None
                         )
                         assert weight_mask_param is not None, (
-                            'Cannot find {} variable, please call asp.decorate() to'
-                            ' decorate your optimizer first!'.format(
-                                ASPHelper._get_mask_name(param.name)
-                            )
+                            f'Cannot find {ASPHelper._get_mask_name(param.name)} variable, please call asp.decorate() to'
+                            ' decorate your optimizer first!'
                         )
                         weight_mask_param.set_value(weight_sparse_mask)
 
@@ -679,7 +698,7 @@ class ASPHelper:
             )
 
     @staticmethod
-    def _get_mask_name(param_name):
+    def _get_mask_name(param_name: str) -> str:
         r"""
         Return mask name by given parameter name :attr:`param_name`.
 
@@ -691,7 +710,7 @@ class ASPHelper:
         return param_name + "." + ASPHelper.MASK_APPENDDED_NAME
 
     @staticmethod
-    def _get_not_ASP_relevant_vars(main_program):
+    def _get_not_ASP_relevant_vars(main_program: Program) -> list[Tensor]:
         r"""
         Get all parameters's Variables in :attr:`main_program` but excluded ASP mask Variables.
 
@@ -709,13 +728,15 @@ class ASPHelper:
         return var_list
 
     @classmethod
-    def _get_program_asp_info(cls, main_program):
+    def _get_program_asp_info(cls, main_program: Program) -> ProgramASPInfo:
         if main_program not in cls.__asp_info:
             cls.__asp_info[main_program] = ProgramASPInfo()
         return cls.__asp_info[main_program]
 
     @classmethod
-    def _is_supported_layer(cls, main_program, param_name):
+    def _is_supported_layer(
+        cls, main_program: Program, param_name: str
+    ) -> bool:
         r"""
         Verify if given :attr:`param_name` is supported by ASP.
 
@@ -726,19 +747,20 @@ class ASPHelper:
         Examples:
             .. code-block:: python
 
-              from paddle.incubate.asp import ASPHelper
+                >>> from paddle.incubate.asp import ASPHelper
+                >>> paddle.enable_static()
 
-              main_program = paddle.static.Program()
-              startup_program = paddle.static.Program()
+                >>> main_program = paddle.static.Program()
+                >>> startup_program = paddle.static.Program()
 
-              with paddle.static.program_guard(main_program, startup_program):
-                  input_data = paddle.static.data(name='data', shape=[None, 128])
-                  fc = paddle.static.nn.fc(x=input_data, num_flatten_dims=-1, size=32, activation=None)
+                >>> with paddle.static.program_guard(main_program, startup_program):
+                ...     input_data = paddle.static.data(name='data', shape=[None, 128])
+                ...     fc = paddle.static.nn.fc(x=input_data, num_flatten_dims=-1, size=32, activation=None)
 
-              for param in main_program.global_block().all_parameters():
-                  ASPHelper._is_supported_layer(main_program, param.name)
-              # fc_0.w_0 -> True
-              # fc_0.b_0 -> False
+                >>> for param in main_program.global_block().all_parameters():
+                ...     print(param.name,'->',ASPHelper._is_supported_layer(main_program, param.name))
+                fc_0.w_0 -> True
+                fc_0.b_0 -> False
         """
         param_name_list = param_name.split('.')
 
@@ -773,7 +795,10 @@ class ASPHelper:
         return False
 
     @classmethod
-    def _get_prune_func_by_name(cls, param_name):
+    def _get_prune_func_by_name(cls, param_name: str) -> Callable[
+        [npt.NDArray[Any], int, int, MaskAlgo, str],
+        tuple[npt.NDArray[Any], npt.NDArray[Any]],
+    ]:
         func = supported_layers_and_prune_func_map.get(param_name, None)
         param_name_no_weight_suffix = param_name.split('.')[0]
         if func is None:
@@ -792,13 +817,13 @@ class ASPHelper:
     @classmethod
     def _minimize(
         cls,
-        optimizer,
-        loss,
-        main_program=None,
-        startup_program=None,
-        parameter_list=None,
-        no_grad_set=None,
-    ):
+        optimizer: Optimizer,
+        loss: Tensor,
+        main_program: Program | None = None,
+        startup_program: Program | None = None,
+        parameter_list: Iterable[Tensor] | Iterable[str] | None = None,
+        no_grad_set: set[Tensor] | set[str] | None = None,
+    ) -> tuple[list[Operator], list[tuple[Tensor, Tensor]]]:
         r"""
         This function is a decorator of `minimize` function in `Optimizer`.
         There are three steps:
@@ -808,7 +833,7 @@ class ASPHelper:
         3. Insert masking ops in the end of parameters update.
 
         *Note*: Please use `ASP.decorate` instead when applying distributed training with `Fleet`.
-        (Due to there is a invisiable graphs optimization in `Fleet.minimize()` which make training graph
+        (Due to there is a invisible graphs optimization in `Fleet.minimize()` which make training graph
         cannot be modified anymore.)
 
         Args:
@@ -839,7 +864,7 @@ class ASPHelper:
 
     @classmethod
     @dygraph_only
-    def _step(cls, optimizer):
+    def _step(cls, optimizer: Optimizer) -> None:
         r"""
         This function is a decorator of `step` function in `Optimizer`.
         There are three steps:
@@ -848,7 +873,7 @@ class ASPHelper:
         2. Mask parameters with sparse masks.
 
         *Note*: Please use `ASP.decorate` instead when applying distributed training with `Fleet`.
-        (Due to there is a invisiable graphs optimization in `Fleet.minimize()` which make training graph
+        (Due to there is a invisible graphs optimization in `Fleet.minimize()` which make training graph
         cannot be modified anymore.)
 
         Args:
@@ -856,13 +881,18 @@ class ASPHelper:
         """
         optimizer.step()
         main_prog = paddle.static.default_main_program()
-        with paddle.fluid.dygraph.no_grad():
+        with paddle.base.dygraph.no_grad():
             ASPHelper._insert_sparse_mask_ops(
                 main_prog, optimizer._parameter_list
             )
 
     @classmethod
-    def _create_mask_variables(cls, main_program, startup_program, params):
+    def _create_mask_variables(
+        cls,
+        main_program: Program,
+        startup_program: Program,
+        params: Sequence[Tensor],
+    ) -> None:
         r"""
         Create sparse mask Tensors according to supported layers in :attr:`main_program`.
         This function is called in second step of `ASPHelper._minimize`
@@ -890,7 +920,9 @@ class ASPHelper:
                         asp_info.update_mask_vars(param.name, mask_param)
 
     @classmethod
-    def _insert_sparse_mask_ops(cls, main_program, params):
+    def _insert_sparse_mask_ops(
+        cls, main_program: Program, params: Sequence[Tensor]
+    ) -> None:
         r"""
         Insert masking ops in the end of parameters update.
         This function is called in third step of `ASPHelper._minimize`
@@ -909,7 +941,6 @@ class ASPHelper:
                     outputs={'Out': param},
                     attrs={
                         'axis': -1,
-                        'use_mkldnn': False,
                         OP_ROLE_KEY: int(OpRole.Optimize),
                     },
                 )
@@ -924,15 +955,19 @@ class OptimizerWithSparsityGuarantee:
     3. Call `ASPHelper._insert_sparse_mask_ops` to insert weight masking ops in the end of `loss`'s Program.
     """
 
-    def __init__(self, optimizer):
+    def __init__(self, optimizer: Optimizer) -> None:
         self._optimizer = optimizer
 
-    def __getattr__(self, item):
+    def __getattr__(self, item: str) -> Any:
         return getattr(self._optimizer, item)
 
     def minimize(
-        self, loss, startup_program=None, parameter_list=None, no_grad_set=None
-    ):
+        self,
+        loss: Tensor,
+        startup_program: Program | None = None,
+        parameter_list: Iterable[Tensor] | Iterable[str] | None = None,
+        no_grad_set: set[Tensor] | set[str] | None = None,
+    ) -> tuple[list[Operator], list[tuple[Tensor, Tensor]]]:
         r"""
         This function is to call `ASPHelper.minimize()` and return its return
 
@@ -954,7 +989,7 @@ class OptimizerWithSparsityGuarantee:
         )
 
     @dygraph_only
-    def step(self):
+    def step(self) -> None:
         r"""
         This function is a decorator of `step` function in `Optimizer`.
         There are three steps:
@@ -963,7 +998,7 @@ class OptimizerWithSparsityGuarantee:
         2. Mask parameters with sparse masks.
 
         *Note*: Please use `ASP.decorate` instead when applying distributed training with `Fleet`.
-        (Due to there is a invisiable graphs optimization in `Fleet.minimize()` which make training graph
+        (Due to there is a invisible graphs optimization in `Fleet.minimize()` which make training graph
         cannot be modified anymore.)
 
         Args:
@@ -972,7 +1007,7 @@ class OptimizerWithSparsityGuarantee:
         ASPHelper._step(self._optimizer)
 
     @dygraph_only
-    def state_dict(self):
+    def state_dict(self) -> dict[str, Tensor]:
         r"""
         This function is a decorator of `state_dict` function in `Optimizer`.
 
@@ -988,7 +1023,7 @@ class OptimizerWithSparsityGuarantee:
         return state_dict
 
     @dygraph_only
-    def set_state_dict(self, state_dict):
+    def set_state_dict(self, state_dict: dict[str, Tensor]) -> None:
         r"""
         This function is a decorator of `set_state_dict` function in `Optimizer`.
         Args:
@@ -1001,9 +1036,9 @@ class OptimizerWithSparsityGuarantee:
         )
         for param_name, var in asp_info.mask_vars.items():
             param_mask_name = ASPHelper._get_mask_name(param_name)
-            assert param_mask_name in state_dict, "The {} is not found.".format(
-                param_mask_name
-            )
+            assert (
+                param_mask_name in state_dict
+            ), f"The {param_mask_name} is not found."
             var.set_value(state_dict[param_mask_name])
             asp_info.update_masks(param_name, var.numpy())
         return self._optimizer.set_state_dict(state_dict)

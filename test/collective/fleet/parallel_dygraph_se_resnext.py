@@ -18,8 +18,7 @@ import numpy as np
 from test_dist_base import TestParallelDyGraphRunnerBase, runtime_main
 
 import paddle
-from paddle import fluid
-from paddle.fluid.dygraph.base import to_variable
+from paddle import base
 from paddle.nn import Linear
 
 batch_size = 64
@@ -56,9 +55,9 @@ def optimizer_setting(params, parameter_list=None):
     lr = params["lr"]
     num_epochs = params["num_epochs"]
 
-    if fluid.in_dygraph_mode():
+    if base.in_dygraph_mode():
         optimizer = paddle.optimizer.Momentum(
-            learning_rate=fluid.layers.cosine_decay(
+            learning_rate=base.layers.cosine_decay(
                 learning_rate=lr, step_each_epoch=step, epochs=num_epochs
             ),
             momentum=momentum_rate,
@@ -215,9 +214,7 @@ class SeResNeXt(paddle.nn.Layer):
         supported_layers = [50, 101, 152]
         assert (
             layers in supported_layers
-        ), "supported layers are {} but input layer is {}".format(
-            supported_layers, layers
-        )
+        ), f"supported layers are {supported_layers} but input layer is {layers}"
 
         if layers == 50:
             cardinality = 32
@@ -279,7 +276,7 @@ class SeResNeXt(paddle.nn.Layer):
             shortcut = False
             for i in range(depth[block]):
                 bottleneck_block = self.add_sublayer(
-                    'bb_%d_%d' % (block, i),
+                    f'bb_{block}_{i}',
                     BottleneckBlock(
                         num_channels=num_channels,
                         num_filters=num_filters[block],
@@ -344,8 +341,8 @@ class TestSeResNeXt(TestParallelDyGraphRunnerBase):
         )
         dy_x_data = dy_x_data / 255.0
         y_data = np.array([x[1] for x in data]).astype('int64').reshape(bs, 1)
-        img = to_variable(dy_x_data)
-        label = to_variable(y_data)
+        img = paddle.to_tensor(dy_x_data)
+        label = paddle.to_tensor(y_data)
         label.stop_gradient = True
 
         out = model(img)

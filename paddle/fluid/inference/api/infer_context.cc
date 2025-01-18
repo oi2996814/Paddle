@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "paddle/fluid/inference/api/infer_context.h"
+#include "paddle/fluid/platform/enforce.h"
 #include "paddle/phi/core/dense_tensor.h"
 #ifdef PADDLE_WITH_XPU
 #include "xpu/runtime.h"
@@ -136,10 +137,110 @@ void InferXPUContext::SetL3Info(size_t l3_size,
   }
 }
 
+void InferXPUContext::SetConvAutotuneInfo(std::string conv_autotune_file,
+                                          int conv_autotune_level,
+                                          bool conv_autotune_file_writeback,
+                                          const phi::Place& place) {
+  phi::backends::xpu::XPUDeviceGuard guard(place.GetDeviceId());
+
+  VLOG(5) << "XPU conv autotune level:" << conv_autotune_level;
+  VLOG(5) << "XPU conv autotune file:" << conv_autotune_file;
+  VLOG(5) << "XPU conv autotune file writeback:"
+          << conv_autotune_file_writeback;
+
+  if (!conv_autotune_file.empty()) {
+    int ret;
+    ret = x_context()->set_option("XPU_CONV_AUTOTUNE_FILE",
+                                  conv_autotune_file.c_str());
+    PADDLE_ENFORCE_EQ(
+        ret,
+        0,
+        common::errors::Unavailable("Failed to set XPU conv autotune file %s.",
+                                    conv_autotune_file));
+  }
+  if (conv_autotune_level > 0) {
+    int ret;
+    ret = x_context()->set_option(
+        "XPU_CONV_AUTOTUNE", (std::to_string(conv_autotune_level)).c_str());
+    PADDLE_ENFORCE_EQ(
+        ret,
+        0,
+        common::errors::Unavailable("Failed to set XPU conv autotune  %d.",
+                                    conv_autotune_level));
+  }
+  if (conv_autotune_file_writeback) {
+    int ret;
+    ret = x_context()->set_option(
+        "XPU_AUTOTUNE_WRITEBACK",
+        (std::to_string(conv_autotune_file_writeback)).c_str());
+    PADDLE_ENFORCE_EQ(ret,
+                      0,
+                      common::errors::Unavailable(
+                          "Failed to set XPU conv autotune writeback %d.",
+                          conv_autotune_file_writeback));
+  }
+}
+void InferXPUContext::SetContextOption(const char* name, const char* value) {
+  phi::backends::xpu::XPUDeviceGuard guard(GetPlace().GetDeviceId());
+  VLOG(5) << "XPU Set Option name:" << name << " value:" << value;
+  int ret;
+  ret = x_context()->set_option(name, value);
+  PADDLE_ENFORCE_EQ(
+      ret,
+      0,
+      common::errors::Unavailable("Failed to set XPU option %s.", name));
+}
+
+void InferXPUContext::SetFcAutotuneInfo(std::string fc_autotune_file,
+                                        int fc_autotune_level,
+                                        bool fc_autotune_file_writeback,
+                                        const phi::Place& place) {
+  phi::backends::xpu::XPUDeviceGuard guard(place.GetDeviceId());
+
+  VLOG(5) << "XPU fc autotune level:" << fc_autotune_level;
+  VLOG(5) << "XPU fc autotune file:" << fc_autotune_file;
+  VLOG(5) << "XPU fc autotune file writeback:" << fc_autotune_file_writeback;
+
+  if (!fc_autotune_file.empty()) {
+    int ret;
+    ret = x_context()->set_option("XPU_FC_AUTOTUNE_FILE",
+                                  fc_autotune_file.c_str());
+    PADDLE_ENFORCE_EQ(
+        ret,
+        0,
+        common::errors::Unavailable("Failed to set XPU fc autotune file %s.",
+                                    fc_autotune_file));
+  }
+  if (fc_autotune_level > 0) {
+    int ret;
+    ret = x_context()->set_option("XPU_FC_AUTOTUNE",
+                                  (std::to_string(fc_autotune_level)).c_str());
+    PADDLE_ENFORCE_EQ(
+        ret,
+        0,
+        common::errors::Unavailable("Failed to set XPU fc autotune  %d.",
+                                    fc_autotune_level));
+  }
+  if (fc_autotune_file_writeback) {
+    int ret;
+    ret = x_context()->set_option(
+        "XPU_FC_AUTOTUNE_WRITEBACK",
+        (std::to_string(fc_autotune_file_writeback)).c_str());
+    PADDLE_ENFORCE_EQ(ret,
+                      0,
+                      common::errors::Unavailable(
+                          "Failed to set XPU fc autotune writeback %d.",
+                          fc_autotune_file_writeback));
+  }
+}
+
 void InferXPUContext::L3CacheAutotune() {
   if (l3_autotune_size_ == 0) return;
   if (holder_map_.empty()) {
-    l3_plan_.RunAutotune(l3_blocks_, l3_size_);
+    bool ret = l3_plan_.RunAutotune(l3_blocks_, l3_size_);
+    if (!ret) {
+      return;
+    }
     auto* plan = l3_plan_.plan();
     int8_t* cur_l3_ptr = reinterpret_cast<int8_t*>(l3_ptr_);
     for (size_t i = 0; i < l3_blocks_.size(); i++) {
@@ -161,18 +262,28 @@ void InferXPUContext::L3CacheAutotune() {
         phi::Allocation* l3_holder =
             new phi::Allocation(l3_block->data(), l3_block->size(), place);
         holder_map_[holder] = std::make_pair(l3_holder, true);
+
+        if (output_holder_set_.find(holder) != output_holder_set_.end()) {
+          VLOG(4) << "Insert output tensor's l3 holder:" << l3_holder->ptr();
+          SetOutHolder(l3_holder);
+        }
       }
     }
   } else {
     for (auto& holders : holder_map_) {
       auto* holder = holders.first;
       auto& holder_pair = holders.second;
-      if (!holder_pair.second) {
+      if (!holder_pair.second &&
+          output_holder_set_.find(holder) == output_holder_set_.end()) {
         swap(*holder, *(holder_pair.first));
         holder_pair.second = true;
       }
     }
   }
+}
+
+void InferXPUContext::SetOutHolder(phi::Allocation* holder) {
+  output_holder_set_.insert(holder);
 }
 #endif
 

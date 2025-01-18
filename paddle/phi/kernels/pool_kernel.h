@@ -38,6 +38,22 @@ void Pool2dKernel(const Context& ctx,
                   DenseTensor* out);
 
 template <typename T, typename Context>
+void LPPool2dKernel(const Context& ctx,
+                    const DenseTensor& x,
+                    const IntArray& kernel_size,
+                    const std::vector<int>& strides,
+                    const std::vector<int>& paddings,
+                    bool ceil_mode,
+                    bool exclusive,
+                    const std::string& data_format,
+                    const std::string& pooling_type,
+                    bool global_pooling,
+                    bool adaptive,
+                    const std::string& padding_algorithm,
+                    const float norm_type,
+                    DenseTensor* out);
+
+template <typename T, typename Context>
 void Pool2dGPUDNNKernel(const Context& ctx,
                         const DenseTensor& x,
                         const IntArray& kernel_size,
@@ -60,6 +76,7 @@ void MaxPool2dWithIndexKernel(const Context& ctx,
                               const std::vector<int>& paddings,
                               bool global_pooling,
                               bool adaptive,
+                              bool ceil_mode,
                               DenseTensor* out,
                               DenseTensor* mask);
 
@@ -101,7 +118,28 @@ void MaxPool3dWithIndexKernel(const Context& ctx,
                               const std::vector<int>& paddings,
                               bool global_pooling,
                               bool adaptive,
+                              bool ceil_mode,
                               DenseTensor* out,
                               DenseTensor* mask);
+
+template <typename T, typename Context>
+void FractionalMaxPool2dKernel(const Context& ctx,
+                               const DenseTensor& x,
+                               const std::vector<int>& output_size,
+                               const std::vector<int>& kernel_size,
+                               float random_u,
+                               bool return_mask,
+                               DenseTensor* out,
+                               DenseTensor* mask);
+
+template <typename T, typename Context>
+void FractionalMaxPool3dKernel(const Context& ctx,
+                               const DenseTensor& x,
+                               const std::vector<int>& output_size,
+                               const std::vector<int>& kernel_size,
+                               float random_u,
+                               bool return_mask,
+                               DenseTensor* out,
+                               DenseTensor* mask);
 
 }  // namespace phi

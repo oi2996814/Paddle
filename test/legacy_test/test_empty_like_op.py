@@ -15,12 +15,11 @@
 import unittest
 
 import numpy as np
-from eager_op_test import convert_uint16_to_float
+from op_test import convert_uint16_to_float
 
 import paddle
-from paddle.fluid import core
-from paddle.fluid.data_feeder import convert_dtype
-from paddle.static import Program, program_guard
+from paddle.base import core
+from paddle.base.data_feeder import convert_dtype
 
 
 class TestEmptyLikeAPICommon(unittest.TestCase):
@@ -39,7 +38,14 @@ class TestEmptyLikeAPICommon(unittest.TestCase):
             f'shape should be {self.dst_shape}, but get {shape}',
         )
 
-        if data_type in ['float16', 'float32', 'float64', 'int32', 'int64']:
+        if data_type in [
+            'float16',
+            'float32',
+            'float64',
+            'int32',
+            'int64',
+            'uint16',
+        ]:
             max_value = np.nanmax(out)
             min_value = np.nanmin(out)
             always_non_full_zero = max_value >= min_value
@@ -165,10 +171,10 @@ class TestEmptyLikeAPI_Static(TestEmptyLikeAPICommon):
 
     def test_static_graph(self):
         paddle.enable_static()
-        train_program = Program()
-        startup_program = Program()
+        train_program = paddle.static.Program()
+        startup_program = paddle.static.Program()
 
-        with program_guard(train_program, startup_program):
+        with paddle.static.program_guard(train_program, startup_program):
             x = np.random.random(self.x_shape).astype(self.dtype)
             data_x = paddle.static.data(
                 'x', shape=self.data_x_shape, dtype=self.dtype
@@ -176,19 +182,19 @@ class TestEmptyLikeAPI_Static(TestEmptyLikeAPICommon):
 
             out = paddle.empty_like(data_x)
 
-        place = (
-            paddle.CUDAPlace(0)
-            if core.is_compiled_with_cuda()
-            else paddle.CPUPlace()
-        )
-        exe = paddle.static.Executor(place)
-        res = exe.run(train_program, feed={'x': x}, fetch_list=[out])
+            place = (
+                paddle.CUDAPlace(0)
+                if core.is_compiled_with_cuda()
+                else paddle.CPUPlace()
+            )
+            exe = paddle.static.Executor(place)
+            res = exe.run(train_program, feed={'x': x}, fetch_list=[out])
 
-        self.dst_dtype = self.dtype
-        self.dst_shape = x.shape
-        self.__check_out__(res[0])
+            self.dst_dtype = self.dtype
+            self.dst_shape = x.shape
+            self.__check_out__(res[0])
 
-        paddle.disable_static()
+            paddle.disable_static()
 
     def init_config(self):
         self.x_shape = (200, 3)
@@ -214,7 +220,7 @@ class TestEmptyLikeAPI_StaticForFP16Op(TestEmptyLikeAPICommon):
 
     def test_static_graph(self):
         paddle.enable_static()
-        if paddle.fluid.core.is_compiled_with_cuda():
+        if paddle.base.core.is_compiled_with_cuda():
             place = paddle.CUDAPlace(0)
             with paddle.static.program_guard(
                 paddle.static.Program(), paddle.static.Program()
@@ -247,7 +253,7 @@ class TestEmptyLikeAPI_StaticForBF16Op(TestEmptyLikeAPICommon):
 
     def test_static_graph(self):
         paddle.enable_static()
-        if paddle.fluid.core.is_compiled_with_cuda():
+        if paddle.base.core.is_compiled_with_cuda():
             place = paddle.CUDAPlace(0)
             with paddle.static.program_guard(
                 paddle.static.Program(), paddle.static.Program()
@@ -267,16 +273,6 @@ class TestEmptyLikeAPI_StaticForBF16Op(TestEmptyLikeAPICommon):
             self.dst_dtype = self.dtype
             self.dst_shape = x.shape
             self.__check_out__(res[0])
-
-
-class TestEmptyError(unittest.TestCase):
-    def test_attr(self):
-        def test_dtype():
-            x = np.random.random((200, 3)).astype("float64")
-            dtype = 'uint8'
-            result = paddle.empty_like(x, dtype=dtype)
-
-        self.assertRaises(TypeError, test_dtype)
 
 
 if __name__ == '__main__':

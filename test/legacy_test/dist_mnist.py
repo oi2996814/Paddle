@@ -18,7 +18,7 @@ import nets
 from test_dist_base import TestDistRunnerBase, runtime_main
 
 import paddle
-from paddle import fluid
+from paddle import base
 from paddle.incubate.distributed.fleet.collective import fleet
 
 paddle.enable_static()
@@ -27,8 +27,8 @@ DTYPE = "float32"
 paddle.dataset.mnist.fetch()
 
 # Fix seed for test
-fluid.default_startup_program().random_seed = 1
-fluid.default_main_program().random_seed = 1
+base.default_startup_program().random_seed = 1
+base.default_main_program().random_seed = 1
 
 
 def cnn_model(data):
@@ -39,7 +39,7 @@ def cnn_model(data):
         pool_size=2,
         pool_stride=2,
         act="relu",
-        param_attr=fluid.ParamAttr(
+        param_attr=base.ParamAttr(
             initializer=paddle.nn.initializer.Constant(value=0.01)
         ),
     )
@@ -50,21 +50,21 @@ def cnn_model(data):
         pool_size=2,
         pool_stride=2,
         act="relu",
-        param_attr=fluid.ParamAttr(
+        param_attr=base.ParamAttr(
             initializer=paddle.nn.initializer.Constant(value=0.01)
         ),
     )
 
     SIZE = 10
     input_shape = conv_pool_2.shape
-    param_shape = [reduce(lambda a, b: a * b, input_shape[1:], 1)] + [SIZE]
+    param_shape = [reduce(lambda a, b: a * b, input_shape[1:], 1), SIZE]
     scale = (2.0 / (param_shape[0] ** 2 * SIZE)) ** 0.5
 
     predict = paddle.static.nn.fc(
         x=conv_pool_2,
         size=SIZE,
         activation="softmax",
-        weight_attr=fluid.param_attr.ParamAttr(
+        weight_attr=base.param_attr.ParamAttr(
             initializer=paddle.nn.initializer.Constant(value=0.01)
         ),
     )
@@ -92,7 +92,7 @@ class TestDistMnist2x2(TestDistRunnerBase):
             input=predict, label=label, total=batch_size_tensor
         )
 
-        inference_program = fluid.default_main_program().clone()
+        inference_program = base.default_main_program().clone()
         # Optimization
         # TODO(typhoonzero): fix distributed adam optimizer
         # opt = paddle.optimizer.Adam(

@@ -18,8 +18,7 @@
 
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 constexpr EventsWaiter::EventId kEmptyEventId = 0;
 
@@ -104,7 +103,7 @@ std::string EventsWaiter::WaitEvent() {
                                         std::memory_order_seq_cst,
                                         std::memory_order_relaxed)) {
     PADDLE_THROW(
-        platform::errors::ResourceExhausted("Another thread is waiting."));
+        common::errors::ResourceExhausted("Another thread is waiting."));
   }
 
   auto w = cv_.GetWaiter(0);
@@ -215,5 +214,4 @@ std::string EventsWaiter::GetEventName(const EventId& id) {
   return iter->second.name;
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

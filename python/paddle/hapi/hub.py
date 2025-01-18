@@ -12,19 +12,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+import contextlib
+import errno
 import os
 import shutil
 import sys
+import warnings
 import zipfile
+from typing import TYPE_CHECKING, Literal
+from urllib.parse import urlparse
 
-from paddle.utils.download import get_path_from_url
+from typing_extensions import TypeAlias
+
+import paddle
+from paddle.utils.download import _download, get_path_from_url
+
+if TYPE_CHECKING:
+    import builtins
+    from typing import Any
 
 __all__ = []
 
-DEFAULT_CACHE_DIR = '~/.cache'
-VAR_DEPENDENCY = 'dependencies'
-MODULE_HUBCONF = 'hubconf.py'
-HUB_DIR = os.path.expanduser(os.path.join('~', '.cache', 'paddle', 'hub'))
+_Source: TypeAlias = Literal["github", "gitee", "local"]
+
+DEFAULT_CACHE_DIR: str = '~/.cache'
+VAR_DEPENDENCY: str = 'dependencies'
+MODULE_HUBCONF: str = 'hubconf.py'
+HUB_DIR: str = os.path.expanduser(os.path.join('~', '.cache', 'paddle', 'hub'))
 
 
 def _remove_if_exists(path):
@@ -53,13 +69,11 @@ def _import_module(name, repo_dir):
 
 def _git_archive_link(repo_owner, repo_name, branch, source):
     if source == 'github':
-        return 'https://github.com/{}/{}/archive/{}.zip'.format(
-            repo_owner, repo_name, branch
+        return (
+            f'https://github.com/{repo_owner}/{repo_name}/archive/{branch}.zip'
         )
     elif source == 'gitee':
-        return 'https://gitee.com/{}/{}/repository/archive/{}.zip'.format(
-            repo_owner, repo_name, branch
-        )
+        return f'https://gitee.com/{repo_owner}/{repo_name}/repository/archive/{branch}.zip'
 
 
 def _parse_repo_info(repo, source):
@@ -117,20 +131,19 @@ def _get_cache_or_reload(repo, force_reload, verbose=True, source='github'):
             hub_dir,
             check_exist=not force_reload,
             decompress=False,
-            method=('wget' if source == 'gitee' else 'get'),
         )
         shutil.move(fpath, cached_file)
 
         with zipfile.ZipFile(cached_file) as cached_zipfile:
-            extraced_repo_name = cached_zipfile.infolist()[0].filename
-            extracted_repo = os.path.join(hub_dir, extraced_repo_name)
+            extracted_repo_name = cached_zipfile.infolist()[0].filename
+            extracted_repo = os.path.join(hub_dir, extracted_repo_name)
             _remove_if_exists(extracted_repo)
             # Unzip the code and rename the base folder
             cached_zipfile.extractall(hub_dir)
 
         _remove_if_exists(cached_file)
         _remove_if_exists(repo_dir)
-        # rename the repo
+        # Rename the repo
         shutil.move(extracted_repo, repo_dir)
 
     return repo_dir
@@ -172,36 +185,38 @@ def _check_dependencies(m):
             )
 
 
-def list(repo_dir, source='github', force_reload=False):
+def list(
+    repo_dir: str,
+    source: _Source = 'github',
+    force_reload: bool = False,
+) -> builtins.list[str]:
     r"""
     List all entrypoints available in `github` hubconf.
 
     Args:
-        repo_dir(str): github or local path.
+        repo_dir(str): Github or local path.
 
-            github path (str): a str with format "repo_owner/repo_name[:tag_name]" with an optional
-            tag/branch. The default branch is `main` if not specified.
+            - github path (str): A string with format "repo_owner/repo_name[:tag_name]" with an optional
+              tag/branch. The default branch is `main` if not specified.
+            - local path (str): Local repo path.
 
-            local path (str): local repo path
+        source (str): `github` | `gitee` | `local`. Default is `github`.
+        force_reload (bool, optional): Whether to discard the existing cache and force a fresh download. Default is `False`.
 
-        source (str): `github` | `gitee` | `local`, default is `github`.
-        force_reload (bool, optional): whether to discard the existing cache and force a fresh download, default is `False`.
     Returns:
-        entrypoints: a list of available entrypoint names
+        entrypoints: A list of available entrypoint names.
 
-    Example:
+    Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            paddle.hub.list('lyuwenyu/paddlehub_demo:main', source='github', force_reload=False)
+            >>> paddle.hub.list('lyuwenyu/paddlehub_demo:main', source='github', force_reload=False)
 
     """
     if source not in ('github', 'gitee', 'local'):
         raise ValueError(
-            'Unknown source: "{}". Allowed values: "github" | "gitee" | "local".'.format(
-                source
-            )
+            f'Unknown source: "{source}". Allowed values: "github" | "gitee" | "local".'
         )
 
     if source in ('github', 'gitee'):
@@ -220,37 +235,40 @@ def list(repo_dir, source='github', force_reload=False):
     return entrypoints
 
 
-def help(repo_dir, model, source='github', force_reload=False):
+def help(
+    repo_dir: str,
+    model,
+    source: _Source = 'github',
+    force_reload: bool = False,
+) -> str:
     """
     Show help information of model
 
     Args:
-        repo_dir(str): github or local path.
+        repo_dir(str): Github or local path.
 
-            github path (str): a str with format "repo_owner/repo_name[:tag_name]" with an optional
-            tag/branch. The default branch is `main` if not specified.
+            - github path (str): A string with format "repo_owner/repo_name[:tag_name]" with an optional
+              tag/branch. The default branch is `main` if not specified.
+            - local path (str): Local repo path.
 
-            local path (str): local repo path.
+        model (str): Model name.
+        source (str): `github` | `gitee` | `local`. Default is `github`.
+        force_reload (bool, optional): Default is `False`.
 
-        model (str): model name.
-        source (str): `github` | `gitee` | `local`, default is `github`.
-        force_reload (bool, optional): default is `False`.
-    Return:
+    Returns:
         docs
 
-    Example:
+    Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            paddle.hub.help('lyuwenyu/paddlehub_demo:main', model='MM', source='github')
+            >>> paddle.hub.help('lyuwenyu/paddlehub_demo:main', model='MM', source='github')
 
     """
     if source not in ('github', 'gitee', 'local'):
         raise ValueError(
-            'Unknown source: "{}". Allowed values: "github" | "gitee" | "local".'.format(
-                source
-            )
+            f'Unknown source: "{source}". Allowed values: "github" | "gitee" | "local".'
         )
 
     if source in ('github', 'gitee'):
@@ -265,36 +283,41 @@ def help(repo_dir, model, source='github', force_reload=False):
     return entry.__doc__
 
 
-def load(repo_dir, model, source='github', force_reload=False, **kwargs):
+def load(
+    repo_dir: str,
+    model: str,
+    source: _Source = 'github',
+    force_reload: bool = False,
+    **kwargs: Any,
+) -> paddle.nn.Layer:
     """
     Load model
 
     Args:
-        repo_dir(str): github or local path.
+        repo_dir(str): Github or local path.
 
-            github path (str): a str with format "repo_owner/repo_name[:tag_name]" with an optional
-            tag/branch. The default branch is `main` if not specified.
+            - github path (str): A string with format "repo_owner/repo_name[:tag_name]" with an optional
+              tag/branch. The default branch is `main` if not specified.
+            - local path (str): Local repo path.
 
-            local path (str): local repo path.
+        model (str): Model name.
+        source (str): `github` | `gitee` | `local`. Default is `github`.
+        force_reload (bool, optional): Default is `False`.
+        **kwargs: Parameters using for model.
 
-        model (str): model name.
-        source (str): `github` | `gitee` | `local`, default is `github`.
-        force_reload (bool, optional): default is `False`.
-        **kwargs: parameters using for model
-    Return:
-        paddle model
-    Example:
+    Returns:
+        paddle model.
+
+    Examples:
         .. code-block:: python
 
-            import paddle
-            paddle.hub.load('lyuwenyu/paddlehub_demo:main', model='MM', source='github')
+            >>> import paddle
+            >>> paddle.hub.load('lyuwenyu/paddlehub_demo:main', model='MM', source='github')
 
     """
     if source not in ('github', 'gitee', 'local'):
         raise ValueError(
-            'Unknown source: "{}". Allowed values: "github" | "gitee" | "local".'.format(
-                source
-            )
+            f'Unknown source: "{source}". Allowed values: "github" | "gitee" | "local".'
         )
 
     if source in ('github', 'gitee'):
@@ -309,3 +332,128 @@ def load(repo_dir, model, source='github', force_reload=False, **kwargs):
     entry = _load_entry_from_hubconf(hub_module, model)
 
     return entry(**kwargs)
+
+
+def load_state_dict_from_url(
+    url: str,
+    model_dir: str | None = None,
+    check_hash: bool = False,
+    file_name: str | None = None,
+    map_location: (
+        Literal["cpu", "gpu", "xpu", "npu", "numpy", "np"] | None
+    ) = None,
+) -> Any:
+    """Download Paddle's model weights (i.e., state_dict)
+    from the specified URL and extract the downloaded file if necessary
+
+    Args:
+        url (str): URL of the object to download.
+        model_dir (Optional[str], optional): Directory in which to save the object.
+        check_hash (bool, optional): If True, the filename part of the URL should follow the naming convention filename-<sha256>.ext where <sha256> is the first eight or more digits of the SHA256 hash of the contents of the file. The hash is used to ensure unique names and to verify the contents of the file. Default: False.
+        file_name (Optional[str], optional): Name for the downloaded file. Filename from URL will be used if not set.
+        map_location (Optional[Literal["cpu", "gpu", "xpu", "npu", "numpy", "np"]], optional): Specifies how to remap storage locations. Default: None.
+
+    Returns:
+        Any: A target object that can be used in Paddle.
+
+    Examples:
+        .. code-block:: python
+
+            >>> import paddle
+            >>> paddle.hub.load_state_dict_from_url(url='https://paddle-hapi.bj.bcebos.com/models/resnet18.pdparams', model_dir="./paddle/test_load_from_url")
+            >>> paddle.hub.load_state_dict_from_url(url='https://x2paddle.bj.bcebos.com/resnet18.zip', model_dir="./paddle/test_file_is_zip")
+    """
+    if model_dir is None:
+        hub_dir = get_dir()
+        model_dir = os.path.join(hub_dir, 'checkpoints')
+
+    try:
+        os.makedirs(model_dir)
+    except OSError as e:
+        if e.errno == errno.EEXIST:
+            pass
+        else:
+            raise
+    parts = urlparse(url)
+    filename = os.path.basename(parts.path)
+    if file_name is not None:
+        filename = file_name
+    cached_file = os.path.join(model_dir, filename)
+    if not os.path.exists(cached_file):
+        sys.stderr.write(f'Downloading: "{url}" to {cached_file}\n')
+        hash_prefix = None
+        if check_hash:
+            hash_prefix = check_hash
+        _download(url, model_dir, hash_prefix)
+
+    if map_location:
+        assert map_location in ["cpu", "gpu", "xpu", "npu", "numpy", "np"]
+        if _is_legacy_zip_format(cached_file):
+            return _legacy_zip_load(cached_file, model_dir, map_location)
+        if map_location in ["numpy", "np"]:
+            return paddle.load(cached_file, return_numpy=True)
+        else:
+            with device_guard(map_location):
+                return paddle.load(cached_file)
+    else:
+        if _is_legacy_zip_format(cached_file):
+            return _legacy_zip_load(cached_file, model_dir)
+        return paddle.load(cached_file)
+
+
+def _is_legacy_zip_format(filename):
+    if zipfile.is_zipfile(filename):
+        infolist = zipfile.ZipFile(filename).infolist()
+        return len(infolist) == 1 and not infolist[0].is_dir()
+    return False
+
+
+def _legacy_zip_load(filename, model_dir, map_location=None):
+    with zipfile.ZipFile(filename) as f:
+        members = f.infolist()
+        if len(members) != 1:
+            raise RuntimeError(
+                'Only one file(not dir) is allowed in the zipfile'
+            )
+        f.extractall(model_dir)
+        extracted_name = members[0].filename
+        extracted_file = os.path.join(model_dir, extracted_name)
+    if map_location:
+        if map_location in ["numpy", "np"]:
+            return paddle.load(extracted_file, return_numpy=True)
+        else:
+            with device_guard(map_location):
+                return paddle.load(extracted_file)
+    else:
+        return paddle.load(extracted_file)
+
+
+def get_dir():
+    if os.getenv('PADDLE_HUB'):
+        warnings.warn(
+            'PADDLE_HUB is deprecated, please use env PADDLE_HOME instead'
+        )
+    return os.path.join(_get_paddle_home(), 'hub')
+
+
+def _get_paddle_home():
+    paddle_home = os.path.expanduser(
+        os.getenv(
+            'PADDLE_HOME',
+            os.path.join(os.getenv('XDG_CACHE_HOME', '~/.cache'), 'paddle'),
+        )
+    )
+    return paddle_home
+
+
+@contextlib.contextmanager
+def device_guard(device="cpu", dev_id=0):
+    origin_device = paddle.device.get_device()
+    if device == "cpu":
+        paddle.set_device(device)
+    elif device in ["gpu", "xpu", "npu"]:
+        paddle.set_device(f"{device}:{dev_id}")
+    try:
+        yield
+    finally:
+        paddle.set_device(origin_device)

@@ -14,11 +14,10 @@
 
 #include "paddle/fluid/framework/new_executor/garbage_collector/no_event_garbage_collector.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
-InterpreterCoreNoEventGarbageCollector::
-    InterpreterCoreNoEventGarbageCollector() {
+InterpreterCoreNoEventGarbageCollector::InterpreterCoreNoEventGarbageCollector()
+    : queue_(nullptr), ctxs_() {
   WorkQueueOptions options(/*name*/ "NoEventGarbageCollector",
                            /*num_threads*/ 1,
                            /*allow_spinning*/ true,
@@ -42,19 +41,17 @@ void InterpreterCoreNoEventGarbageCollector::Add(Variable* var,
 }
 
 void InterpreterCoreNoEventGarbageCollector::Add(
-    Variable* var, const platform::DeviceContext* ctx) {
+    Variable* var, const phi::DeviceContext* ctx) {
   if (UNLIKELY(max_memory_size_ < 0) || var == nullptr) {
     return;
   }
 
   if (var->IsType<phi::DenseTensor>()) {
     Add(var->GetMutable<phi::DenseTensor>()->MoveMemoryHolder(), ctx);
-  } else if (var->IsType<
-                 operators::reader::
-                     OrderedMultiDeviceLoDTensorBlockingQueueHolder>()) {
-    // TODO(xiongkun03) in old executor, this type of variable is not support
-    // eager deletion. so we just leave it here ?
-  } else if (var->IsType<LoDRankTable>()) {
+  } else if (
+      var->IsType<
+          operators::reader::
+              OrderedMultiDeviceDenseTensorBlockingQueueHolder>()) {  // NOLINT
     // TODO(xiongkun03) in old executor, this type of variable is not support
     // eager deletion. so we just leave it here ?
   } else if (var->IsType<phi::SelectedRows>()) {
@@ -63,8 +60,35 @@ void InterpreterCoreNoEventGarbageCollector::Add(
             ->MoveMemoryHolder(),
         ctx);
     var->GetMutable<phi::SelectedRows>()->mutable_rows()->clear();
-  } else if (var->IsType<LoDTensorArray>()) {
-    auto* tensor_arr = var->GetMutable<LoDTensorArray>();
+  } else if (var->IsType<phi::SparseCooTensor>()) {
+    Add(var->GetMutable<phi::SparseCooTensor>()
+            ->mutable_values()
+            ->MoveMemoryHolder(),
+        ctx);
+    Add(var->GetMutable<phi::SparseCooTensor>()
+            ->mutable_indices()
+            ->MoveMemoryHolder(),
+        ctx);
+    var->GetMutable<phi::SparseCooTensor>()->mutable_values()->clear();
+    var->GetMutable<phi::SparseCooTensor>()->mutable_indices()->clear();
+  } else if (var->IsType<phi::SparseCsrTensor>()) {
+    Add(var->GetMutable<phi::SparseCsrTensor>()
+            ->mutable_values()
+            ->MoveMemoryHolder(),
+        ctx);
+    Add(var->GetMutable<phi::SparseCsrTensor>()
+            ->mutable_cols()
+            ->MoveMemoryHolder(),
+        ctx);
+    Add(var->GetMutable<phi::SparseCsrTensor>()
+            ->mutable_crows()
+            ->MoveMemoryHolder(),
+        ctx);
+    var->GetMutable<phi::SparseCsrTensor>()->mutable_cols()->clear();
+    var->GetMutable<phi::SparseCsrTensor>()->mutable_crows()->clear();
+    var->GetMutable<phi::SparseCsrTensor>()->mutable_values()->clear();
+  } else if (var->IsType<phi::TensorArray>()) {
+    auto* tensor_arr = var->GetMutable<phi::TensorArray>();
     for (auto& t : *tensor_arr) {
       Add(t.MoveMemoryHolder(), ctx);
     }
@@ -73,14 +97,14 @@ void InterpreterCoreNoEventGarbageCollector::Add(
     // refer to executor.cc to see what old garbage collector does.
     // do nothing, because the sub scope will be deleted by sub-executor.
   } else {
-    PADDLE_THROW(platform::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "The variable(%s) is not supported in eager deletion.",
         framework::ToTypeName(var->Type())));
   }
 }
 
 void InterpreterCoreNoEventGarbageCollector::Add(
-    Garbage garbage, const platform::DeviceContext* ctx) {
+    Garbage garbage, const phi::DeviceContext* ctx) {
   if (!garbage) {
     return;
   }
@@ -89,7 +113,7 @@ void InterpreterCoreNoEventGarbageCollector::Add(
   } else {
     // lock guard
     std::lock_guard<memory::SpinLock> guard(spinlock_);
-    cur_memory_size_ += garbage->size();
+    cur_memory_size_ += static_cast<int64_t>(garbage->size());
     garbages_->emplace_back(std::move(garbage));
     ctxs_.insert(ctx);
 
@@ -107,5 +131,4 @@ void InterpreterCoreNoEventGarbageCollector::Add(
   }
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

@@ -15,9 +15,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/data_layout.h"
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 class BilinearInterpolateV2OpConverter : public OpConverter {
  public:
@@ -33,7 +31,7 @@ class BilinearInterpolateV2OpConverter : public OpConverter {
 
     auto input = engine_->GetITensor(input_name);
 
-    auto data_layout = phi::StringToDataLayout(
+    auto data_layout = common::StringToDataLayout(
         PADDLE_GET_CONST(std::string, op_desc.GetAttr("data_layout")));
     auto interp_method =
         PADDLE_GET_CONST(std::string, op_desc.GetAttr("interp_method"));
@@ -49,7 +47,11 @@ class BilinearInterpolateV2OpConverter : public OpConverter {
 
     auto layer = TRT_ENGINE_ADD_LAYER(engine_, Resize, *input);
     if (align_mode == 0) {
+#if IS_TRT_VERSION_GE(8600)
+      layer->setResizeMode(nvinfer1::InterpolationMode::kLINEAR);
+#else
       layer->setResizeMode(nvinfer1::ResizeMode::kLINEAR);
+#endif
     }
 #if IS_TRT_VERSION_GE(8000)
     if (align_corners == true) {
@@ -88,7 +90,7 @@ class BilinearInterpolateV2OpConverter : public OpConverter {
     }
 
     // axis are different in static/dynamic mode
-    bool with_dynamic = engine_->with_dynamic_shape();
+    bool with_dynamic = true;
     int h_axis = (data_layout == phi::DataLayout::kNCHW) + with_dynamic;
     int w_axis = (data_layout == phi::DataLayout::kNCHW) + 1 + with_dynamic;
 
@@ -97,14 +99,27 @@ class BilinearInterpolateV2OpConverter : public OpConverter {
       out_w = static_cast<int>(in_dim.d[w_axis] * scale_w);
     }
 
-    // Priority: Input(OutSize) > attr(out_h/out_w) > attr(scale)
+    // Priority: Input(OutSize) > Input(SizeTensor)> attr(out_h/out_w) >
+    // attr(scale)
     nvinfer1::ITensor* outsize_tensor = nullptr;
-    if (engine_->with_dynamic_shape() &&
-        resize_inputs.find("OutSize") != resize_inputs.end()) {
+    if (resize_inputs.find("OutSize") != resize_inputs.end()) {
       if (!op_desc.Input("OutSize").empty()) {
         outsize_tensor = engine_->GetITensor(op_desc.Input("OutSize")[0]);
       }
     }
+
+#if IS_TRT_VERSION_GE(8200)
+    if (outsize_tensor == nullptr) {
+      if (resize_inputs.find("SizeTensor") != resize_inputs.end()) {
+        if (op_desc.Input("SizeTensor").size() >= 2) {
+          auto* outsize_h = engine_->GetITensor(op_desc.Input("SizeTensor")[0]);
+          auto* outsize_w = engine_->GetITensor(op_desc.Input("SizeTensor")[1]);
+          outsize_tensor =
+              Concat(std::vector<nvinfer1::ITensor*>{outsize_h, outsize_w});
+        }
+      }
+    }
+#endif
 
     if (out_h > 0 && out_w > 0 && !(scale_w > 0. && scale_h > 0.)) {
       scale_h =
@@ -114,9 +129,7 @@ class BilinearInterpolateV2OpConverter : public OpConverter {
     }
 
     std::vector<float> scales;
-    if (engine_->with_dynamic_shape()) {
-      scales.push_back(1.f);
-    }
+    scales.push_back(1.f);
     if (data_layout == phi::DataLayout::kNCHW) {
       scales.push_back(1.f);
       scales.push_back(scale_h);
@@ -127,34 +140,28 @@ class BilinearInterpolateV2OpConverter : public OpConverter {
       scales.push_back(1.f);
     }
 
-    if (engine_->with_dynamic_shape()) {
-      if (outsize_tensor != nullptr) {
-        std::vector<nvinfer1::ITensor*> outsize_itensors;
-        auto* input_shape = Shape(input);
-        outsize_itensors.push_back(GetEleTensorOfShape(input_shape, 0));
+    if (outsize_tensor != nullptr) {
+      std::vector<nvinfer1::ITensor*> outsize_itensors;
+      auto* input_shape = Shape(input);
+      outsize_itensors.push_back(GetEleTensorOfShape(input_shape, 0));
 
-        if (data_layout == phi::DataLayout::kNCHW) {
-          outsize_itensors.push_back(GetEleTensorOfShape(input_shape, 1));
-          outsize_itensors.push_back(outsize_tensor);
-        } else if (data_layout == phi::DataLayout::kNHWC) {
-          outsize_itensors.push_back(outsize_tensor);
-          outsize_itensors.push_back(GetEleTensorOfShape(input_shape, 3));
-        }
-        layer->setInput(1, *Concat(outsize_itensors));
-      } else {
-        layer->setScales(scales.data(), scales.size());
+      if (data_layout == phi::DataLayout::kNCHW) {
+        outsize_itensors.push_back(GetEleTensorOfShape(input_shape, 1));
+        outsize_itensors.push_back(outsize_tensor);
+      } else if (data_layout == phi::DataLayout::kNHWC) {
+        outsize_itensors.push_back(outsize_tensor);
+        outsize_itensors.push_back(GetEleTensorOfShape(input_shape, 3));
       }
+      layer->setInput(1, *Concat(outsize_itensors));
     } else {
       layer->setScales(scales.data(), scales.size());
     }
 
-    RreplenishLayerAndOutput(
+    ReplenishLayerAndOutput(
         layer, "bilinear_interp_v2", {output_name}, test_mode);
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(bilinear_interp_v2, BilinearInterpolateV2OpConverter);

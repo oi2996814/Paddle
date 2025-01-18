@@ -14,10 +14,9 @@ limitations under the License. */
 
 #include "paddle/fluid/framework/device_worker.h"
 #include "paddle/fluid/operators/isfinite_op.h"
-#include "paddle/fluid/platform/cpu_helper.h"
+#include "paddle/phi/core/platform/cpu_helper.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 class OpDesc;
 class OperatorBase;
@@ -177,7 +176,7 @@ void DownpourWorkerOpt::Initialize(const TrainerDesc& desc) {
             << dest_table;
     copy_dense_tables_.emplace_back(src_table, dest_table);
   }
-  for (auto& m : copy_table_config_.table_denpendency_map()) {
+  for (auto& m : copy_table_config_.table_dependency_map()) {
     if (sparse_key_names_.find(m.key()) != sparse_key_names_.end()) {
       // currently only support one dependency
       for (auto& value : m.values()) {
@@ -197,7 +196,7 @@ void DownpourWorkerOpt::CreateThreadOperatorsWithRerank(
   auto& block = program.Block(0);
   std::vector<OpDesc*> ops = block.AllOps();
   // check if Independent between losses if not skip for now
-  int loss_num = loss_names_.size();
+  int loss_num = static_cast<int>(loss_names_.size());
   std::unordered_map<std::string, std::unordered_set<std::string>>
       loss_input_map;
   std::unordered_map<std::string, std::unordered_set<std::string>>
@@ -262,7 +261,7 @@ void DownpourWorkerOpt::CreateThreadOperatorsWithRerank(
     uint64_t tid =
         static_cast<uint64_t>(param_.program_config(0).pull_sparse_table_id(i));
     TableParameter table;
-    for (auto j : param_.sparse_table()) {
+    for (auto const& j : param_.sparse_table()) {
       if (j.table_id() == tid) {
         table = j;
         break;
@@ -307,7 +306,7 @@ void DownpourWorkerOpt::TrainFiles() {
   platform::SetNumThreads(1);
   device_reader_->Start();
   int batch_cnt = 0;
-  int cur_batch;
+  int cur_batch = 0;
   std::future<int32_t> pull_async_status;
   std::string async_wait_name = "";
   for (int i = 0; i < param_.program_config(0).pull_sparse_table_id_size();
@@ -315,7 +314,7 @@ void DownpourWorkerOpt::TrainFiles() {
     uint64_t tid =
         static_cast<uint64_t>(param_.program_config(0).pull_sparse_table_id(i));
     TableParameter table;
-    for (auto j : param_.sparse_table()) {
+    for (auto const& j : param_.sparse_table()) {
       if (j.table_id() == tid) {
         table = j;
         break;
@@ -344,7 +343,7 @@ void DownpourWorkerOpt::TrainFiles() {
       uint64_t tid = static_cast<uint64_t>(
           param_.program_config(0).pull_sparse_table_id(i));
       TableParameter table;
-      for (auto j : param_.sparse_table()) {
+      for (auto const& j : param_.sparse_table()) {
         if (j.table_id() == tid) {
           table = j;
           break;
@@ -437,15 +436,15 @@ void DownpourWorkerOpt::TrainFiles() {
       PADDLE_ENFORCE_EQ(
           framework::TensorContainsInf(*tensor),
           false,
-          platform::errors::InvalidArgument("The target tensor %s contains Inf "
-                                            "should check some layers output.",
-                                            var_name));
+          common::errors::InvalidArgument("The target tensor %s contains Inf "
+                                          "should check some layers output.",
+                                          var_name));
       PADDLE_ENFORCE_EQ(
           framework::TensorContainsNAN(*tensor),
           false,
-          platform::errors::InvalidArgument("The target tensor %s contains Nan "
-                                            "should check some layers output.",
-                                            var_name));
+          common::errors::InvalidArgument("The target tensor %s contains Nan "
+                                          "should check some layers output.",
+                                          var_name));
     }
 
     if (need_to_push_sparse_) {
@@ -455,7 +454,7 @@ void DownpourWorkerOpt::TrainFiles() {
         uint64_t tid = static_cast<uint64_t>(
             param_.program_config(0).push_sparse_table_id(i));
         TableParameter table;
-        for (auto i : param_.sparse_table()) {
+        for (auto const& i : param_.sparse_table()) {
           if (i.table_id() == tid) {
             table = i;
             break;
@@ -559,5 +558,4 @@ void DownpourWorkerOpt::TrainFiles() {
   }
 }
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace paddle::framework

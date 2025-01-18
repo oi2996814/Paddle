@@ -31,15 +31,15 @@ void zero_copy_run() {
   PD_AnalysisConfig *config = PD_NewAnalysisConfig();
   PD_DisableGpu(config);
   PD_SetCpuMathLibraryNumThreads(config, 10);
-  PD_SwitchUseFeedFetchOps(config, false);
   PD_SwitchSpecifyInputNames(config, true);
   PD_SwitchIrDebug(config, true);
   PD_SetModel(config, model_dir.c_str(), nullptr);
   bool use_feed_fetch = PD_UseFeedFetchOpsEnabled(config);
-  CHECK(!use_feed_fetch) << "NO";
+  PADDLE_ENFORCE_EQ(
+      use_feed_fetch, false, common::errors::PreconditionNotMet("NO"));
   bool specify_input_names = PD_SpecifyInputName(config);
-  CHECK(specify_input_names) << "NO";
-
+  PADDLE_ENFORCE_EQ(
+      specify_input_names, true, common::errors::PreconditionNotMet("NO"));
   const int batch_size = 1;
   const int channels = 3;
   const int height = 224;

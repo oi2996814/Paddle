@@ -16,7 +16,7 @@ import math
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 
 def quantize_max_abs(x, max_range):
@@ -102,7 +102,7 @@ class TestFakeChannelWiseDequantizeMaxAbsOpTwoScales(OpTest):
         self.outputs = {'Out': ydq}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_dygraph=False)
 
 
 class TestFakeChannelWiseDequantizeMaxAbsOpTwoScalesFloat16(
@@ -112,7 +112,7 @@ class TestFakeChannelWiseDequantizeMaxAbsOpTwoScalesFloat16(
         self.dtype = np.float16
 
     def test_check_output(self):
-        self.check_output(atol=1e-2)
+        self.check_output(check_dygraph=False, atol=1e-2)
 
 
 class TestFakeChannelWiseDequantizeMaxAbsOpOneScale(OpTest):
@@ -146,7 +146,7 @@ class TestFakeChannelWiseDequantizeMaxAbsOpOneScale(OpTest):
         self.outputs = {'Out': ydq}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_dygraph=False)
 
 
 class TestFakeChannelWiseDequantizeMaxAbsOpOneScale1(
@@ -164,7 +164,7 @@ class TestFakeChannelWiseDequantizeMaxAbsOpOneScaleFloat16(
         self.dtype = np.float16
 
     def test_check_output(self):
-        self.check_output(atol=1e-2)
+        self.check_output(check_dygraph=False, atol=1e-2)
 
 
 class TestFakeChannelWiseDequantizeMaxAbsOpOneScale1Float16(
@@ -174,7 +174,7 @@ class TestFakeChannelWiseDequantizeMaxAbsOpOneScale1Float16(
         self.dtype = np.float16
 
     def test_check_output(self):
-        self.check_output(atol=1e-2)
+        self.check_output(check_dygraph=False, atol=1e-2)
 
 
 class TestFakeDequantizeMaxAbsOp(OpTest):
@@ -198,7 +198,7 @@ class TestFakeDequantizeMaxAbsOp(OpTest):
         self.outputs = {'Out': ydq}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_dygraph=False)
 
 
 class TestFakeDequantizeMaxAbsOpDouble(TestFakeDequantizeMaxAbsOp):
@@ -217,7 +217,7 @@ class TestFakeDequantizeMaxAbsOpFloat16(TestFakeDequantizeMaxAbsOp):
         self.dtype = np.float16
 
     def test_check_output(self):
-        self.check_output(atol=1e-2)
+        self.check_output(check_dygraph=False, atol=1e-2)
 
 
 class TestChannelWiseDequantizeOp(OpTest):
@@ -247,7 +247,7 @@ class TestChannelWiseDequantizeOp(OpTest):
         self.outputs = {'Y': ydq}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_dygraph=False)
 
 
 class TestChannelWiseDequantizeOp1(TestChannelWiseDequantizeOp):
@@ -272,16 +272,42 @@ class TestDequantizeOp(OpTest):
         ydq = dequantize_max_abs(yq, scale, self.max_range)
         scale = np.array(scale).astype(self.data_type)
         zero_point = np.zeros(scale.shape, dtype="int32")
+        if isinstance(self.bit_length, tuple):
+            if (
+                self.bit_length[0] == 4
+                and self.bit_length[1] == 3
+                and len(self.bit_length) == 2
+            ):
+                self._qmin = -1 * 448
+                self._qmax = 448
+            elif (
+                self.bit_length[0] == 5
+                and self.bit_length[1] == 2
+                and len(self.bit_length) == 2
+            ):
+                self._qmin = -1 * 57344
+                self._qmax = 57344
+            else:
+                raise NotImplementedError(
+                    "Currently, only float8_e4m3 and float8_e5m2 formats are supported. Please set quant_bits to (4,3) or (5,2) for the corresponding format."
+                )
+        else:
+            self._qmax = (1 << (self.bit_length - 1)) - 1
+            self._qmin = -1 * self._qmax - 1
+        if isinstance(self.bit_length, tuple):
+            self.bit_length = self.bit_length[0] + self.bit_length[1] + 1
 
         self.inputs = {'X': yq, 'Scale': scale, 'ZeroPoint': zero_point}
         self.attrs = {
             'bit_length': self.bit_length,
             'quant_axis': self.quant_axis,
+            'qmin': self._qmin,
+            'qmax': self._qmax,
         }
         self.outputs = {'Y': ydq}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_dygraph=False)
 
 
 class TestDequantizeOpDouble(TestDequantizeOp):
@@ -319,11 +345,11 @@ class TestDequantizeOpHalf(TestDequantizeOp):
 
     def _get_places(self):
         import paddle
-        from paddle.fluid import core
+        from paddle.base import core
 
         if core.is_compiled_with_cuda():
-            place = paddle.fluid.core.CUDAPlace(0)
-            if paddle.fluid.core.is_float16_supported(place):
+            place = paddle.base.core.CUDAPlace(0)
+            if paddle.base.core.is_float16_supported(place):
                 return [place]
             else:
                 return []
@@ -335,6 +361,14 @@ class TestDequantizeOp5Bits(TestDequantizeOp):
     def set_args(self):
         self.bit_length = 5
         self.max_range = math.pow(2, self.bit_length - 1) - 1
+        self.data_type = "float32"
+        self.quant_axis = -1
+
+
+class TestDequantizeOpFP8(TestDequantizeOp):
+    def set_args(self):
+        self.bit_length = (4, 3)
+        self.max_range = 448
         self.data_type = "float32"
         self.quant_axis = -1
 

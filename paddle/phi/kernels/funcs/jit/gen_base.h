@@ -22,8 +22,7 @@
 #include <malloc.h>  // for _aligned_malloc
 #endif
 
-#include "gflags/gflags.h"
-#include "paddle/phi/core/flags.h"
+#include "paddle/common/flags.h"
 #include "paddle/phi/kernels/funcs/jit/kernel_base.h"
 
 PHI_DECLARE_bool(dump_jitcode);

@@ -15,9 +15,7 @@ limitations under the License. */
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 #include "paddle/fluid/inference/tensorrt/plugin/mish_op_plugin.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 /*
  * Mish OP
@@ -40,26 +38,16 @@ class MishOpConverter : public OpConverter {
             : 20.0f;
 
     nvinfer1::ILayer* layer = nullptr;
-    if (engine_->with_dynamic_shape()) {
-      bool with_fp16 =
-          engine_->WithFp16() && !engine_->disable_trt_plugin_fp16();
-      plugin::MishPluginDynamic* plugin =
-          new plugin::MishPluginDynamic(threshold, with_fp16);
-      layer = engine_->AddDynamicPlugin(&input, input_num, plugin);
-    } else {
-      bool with_fp16 =
-          engine_->WithFp16() && !engine_->disable_trt_plugin_fp16();
-      plugin::MishPlugin* plugin = new plugin::MishPlugin(threshold, with_fp16);
-      layer = engine_->AddPlugin(&input, input_num, plugin);
-    }
+    bool with_fp16 = engine_->WithFp16() && !engine_->disable_trt_plugin_fp16();
+    plugin::MishPluginDynamic* plugin =
+        new plugin::MishPluginDynamic(threshold, with_fp16);
+    layer = engine_->AddDynamicPlugin(&input, input_num, plugin);
 
     auto output_name = op_desc.Output("Out")[0];
-    RreplenishLayerAndOutput(layer, "mish", {output_name}, test_mode);
+    ReplenishLayerAndOutput(layer, "mish", {output_name}, test_mode);
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(mish, MishOpConverter);

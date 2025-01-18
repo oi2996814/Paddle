@@ -12,75 +12,121 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import atexit
-from . import io
-from .spawn import spawn  # noqa: F401
-from .launch.main import launch  # noqa: F401
-from .parallel import init_parallel_env  # noqa: F401
-from .parallel import get_rank  # noqa: F401
-from .parallel import get_world_size  # noqa: F401
-from .parallel import ParallelEnv  # noqa: F401
-from .parallel import DataParallel
-from .parallel_with_gloo import gloo_init_parallel_env
-from .parallel_with_gloo import gloo_barrier
-from .parallel_with_gloo import gloo_release
+import atexit  # noqa: F401
 
-from paddle.distributed.fleet.dataset import InMemoryDataset  # noqa: F401
-from paddle.distributed.fleet.dataset import QueueDataset  # noqa: F401
-from paddle.distributed.fleet.base.topology import ParallelMode  # noqa: F401
+from .value_patch import monkey_patch_value_in_dist
 
-from .collective import split  # noqa: F401
-from .collective import new_group  # noqa: F401
-from .collective import is_available
-from .communication import (
-    stream,
+monkey_patch_value_in_dist()
+from paddle.base.core import Placement, ReduceType
+from paddle.distributed.fleet.base.topology import ParallelMode
+from paddle.distributed.fleet.dataset import InMemoryDataset, QueueDataset
+
+from . import (
+    cloud_utils,  # noqa: F401
+    io,
+    rpc,  # noqa: F401
+)
+from .auto_parallel import shard_op  # noqa: F401
+from .auto_parallel.api import (
+    DistAttr,
+    DistModel,
+    ShardingStage1,
+    ShardingStage2,
+    ShardingStage3,
+    Strategy,
+    dtensor_from_fn,
+    in_auto_parallel_align_mode,  # noqa: F401
+    reshard,
+    shard_dataloader,
+    shard_layer,
+    shard_optimizer,
+    shard_scaler,
+    shard_tensor,
+    to_static,
+    unshard_dtensor,
+)
+from .auto_parallel.high_level_api import to_distributed
+from .auto_parallel.interface import get_mesh, set_mesh
+from .auto_parallel.intermediate.parallelize import parallelize
+from .auto_parallel.intermediate.pipeline_parallel import SplitPoint
+from .auto_parallel.intermediate.tensor_parallel import (
+    ColWiseParallel,
+    PrepareLayerInput,
+    PrepareLayerOutput,
+    RowWiseParallel,
+    SequenceParallelBegin,
+    SequenceParallelDisable,
+    SequenceParallelEnable,
+    SequenceParallelEnd,
+)
+from .auto_parallel.local_layer import LocalLayer
+from .auto_parallel.placement_type import (
+    Partial,
+    Replicate,
+    Shard,
+)
+from .auto_parallel.process_mesh import ProcessMesh
+from .checkpoint.load_state_dict import load_state_dict
+from .checkpoint.save_state_dict import save_state_dict
+from .collective import (
+    is_available,
+    new_group,
+    split,
+)
+from .communication import (  # noqa: F401
+    P2POp,
     ReduceOp,
     all_gather,
     all_gather_object,
     all_reduce,
     alltoall,
     alltoall_single,
+    barrier,
+    batch_isend_irecv,
     broadcast,
     broadcast_object_list,
-    reduce,
-    send,
-    scatter,
+    destroy_process_group,
     gather,
-    scatter_object_list,
+    get_backend,
+    get_group,
+    irecv,
+    is_initialized,
     isend,
     recv,
-    irecv,
-    batch_isend_irecv,
-    P2POp,
+    reduce,
     reduce_scatter,
-    is_initialized,
-    destroy_process_group,
-    get_group,
+    scatter,
+    scatter_object_list,
+    send,
+    stream,
     wait,
-    barrier,
-    get_backend,
-)  # noqa: F401
-
-from .auto_parallel.process_mesh import ProcessMesh  # noqa: F401
-from .auto_parallel.api import DistAttr  # noqa: F401
-
-from .auto_parallel import shard_op  # noqa: F401
-from .auto_parallel.api import shard_tensor  # noqa: F401
-
+)
+from .entry_attr import (
+    CountFilterEntry,
+    ProbabilityEntry,
+    ShowClickEntry,
+)
 from .fleet import BoxPSDataset  # noqa: F401
+from .launch.main import launch
+from .parallel import (  # noqa: F401
+    DataParallel,
+    ParallelEnv,
+    get_rank,
+    get_world_size,
+    init_parallel_env,
+)
+from .parallel_with_gloo import (
+    gloo_barrier,
+    gloo_init_parallel_env,
+    gloo_release,
+)
+from .sharding import (  # noqa: F401
+    group_sharded_parallel,
+    save_group_sharded_model,
+)
+from .spawn import spawn
 
-from .entry_attr import ProbabilityEntry  # noqa: F401
-from .entry_attr import CountFilterEntry  # noqa: F401
-from .entry_attr import ShowClickEntry  # noqa: F401
-
-from . import cloud_utils  # noqa: F401
-
-from .sharding import group_sharded_parallel  # noqa: F401
-from .sharding import save_group_sharded_model  # noqa: F401
-
-from . import rpc
-
-__all__ = [  # noqa
+__all__ = [
     "io",
     "spawn",
     "launch",
@@ -126,4 +172,38 @@ __all__ = [  # noqa
     "ProcessMesh",
     "DistAttr",
     "shard_tensor",
+    "dtensor_from_fn",
+    "reshard",
+    "shard_layer",
+    "shard_dataloader",
+    "ReduceType",
+    "Placement",
+    "Shard",
+    "Replicate",
+    "Partial",
+    "save_state_dict",
+    "load_state_dict",
+    "shard_optimizer",
+    "shard_scaler",
+    "ShardingStage1",
+    "ShardingStage2",
+    "ShardingStage3",
+    "to_static",
+    "Strategy",
+    "DistModel",
+    "LocalLayer",
+    "unshard_dtensor",
+    "parallelize",
+    "SequenceParallelEnd",
+    "SequenceParallelBegin",
+    "SequenceParallelEnable",
+    "SequenceParallelDisable",
+    "ColWiseParallel",
+    "RowWiseParallel",
+    "PrepareLayerOutput",
+    "PrepareLayerInput",
+    "SplitPoint",
+    "set_mesh",
+    "get_mesh",
+    "to_distributed",
 ]

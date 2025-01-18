@@ -21,9 +21,11 @@ limitations under the License. */
 #include "paddle/phi/backends/xpu/xpu_header.h"
 #include "paddle/phi/common/place.h"
 
+#include "paddle/phi/api/lib/kernel_dispatch.h"
+
 // TODO(wilber): The phi computing library requires a component to manage
 // flags.
-#include "paddle/phi/core/flags.h"
+#include "paddle/common/flags.h"
 
 PHI_DEFINE_EXPORTED_string(
     selected_xpus,
@@ -56,11 +58,11 @@ int GetDriverVersion() {
 
 //! Get the version of XPU Runtime
 int GetRuntimeVersion() {
-  uint32_t rumtime_version_major = 0;
-  uint32_t rumtime_version_minor = 0;
+  uint32_t runtime_version_major = 0;
+  uint32_t runtime_version_minor = 0;
   PADDLE_ENFORCE_XPU_SUCCESS(
-      xpu_get_runtime_version(&rumtime_version_major, &rumtime_version_minor));
-  int runtime_version = rumtime_version_major * 10 + rumtime_version_minor;
+      xpu_get_runtime_version(&runtime_version_major, &runtime_version_minor));
+  int runtime_version = runtime_version_major * 10 + runtime_version_minor;
   return runtime_version;
 }
 
@@ -102,7 +104,7 @@ void SetXPUDeviceId(int id) {
   PADDLE_ENFORCE_LT(
       id,
       GetXPUDeviceCount(),
-      phi::errors::InvalidArgument("id must less than XPU count"));
+      common::errors::InvalidArgument("id must less than XPU count"));
   PADDLE_ENFORCE_XPU_SUCCESS(xpu_set_device(id));
 }
 
@@ -195,10 +197,20 @@ XPUVersion get_xpu_version(int dev_id) {
   if (v == K100 || v == K200) {
     VLOG(1) << "KUNLUN device " << dev_id << " is XPU1\n";
     return XPU1;
-  } else {
+  } else if (v < KL3_BEGIN) {
     VLOG(1) << "KUNLUN device " << dev_id << " is XPU2\n";
     return XPU2;
+  } else {
+    VLOG(1) << "KUNLUN device " << dev_id << " is XPU3\n";
+    return XPU3;
   }
+}
+
+void set_xpu_debug_level(int level) {
+  auto* dev_ctx =
+      paddle::experimental::GetDeviceContextByBackend(phi::Backend::XPU);
+  auto* xpu_ctx = static_cast<const phi::XPUContext*>(dev_ctx);
+  PADDLE_ENFORCE_XPU_SUCCESS(xpu_ctx->x_context()->set_debug_level(level));
 }
 
 int get_xpu_max_ptr_size(int dev_id) {
@@ -211,9 +223,12 @@ int get_xpu_max_ptr_size(int dev_id) {
     case XPUVersion::XPU2:
       max_ptr_size = 6;
       break;
+    case XPUVersion::XPU3:
+      max_ptr_size = 12;
+      break;
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument(
-          "Only support get max ptr size of XPU1 or XPU2."));
+      PADDLE_THROW(common::errors::InvalidArgument(
+          "Only support get max ptr size of XPU1, XPU2 or XPU3."));
       break;
   }
   return max_ptr_size;

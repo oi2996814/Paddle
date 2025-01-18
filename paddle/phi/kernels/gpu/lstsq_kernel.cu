@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef PADDLE_WITH_HIP  // HIP not support cusolver
-
 #include <math.h>
 #include <algorithm>
 #include <complex>
@@ -61,22 +59,22 @@ void LstsqKernel(const Context& dev_ctx,
   T rcond = rcond_scalar.to<T>();
 
   DenseTensor* new_x = new DenseTensor();
-  new_x->Resize(phi::make_ddim({batch_count, m, n}));
+  new_x->Resize(common::make_ddim({batch_count, m, n}));
   dev_ctx.template Alloc<T>(new_x);
   phi::Copy<Context>(dev_ctx, x, dev_ctx.GetPlace(), true, new_x);
 
   DenseTensor* new_y = new DenseTensor();
-  new_y->Resize(phi::make_ddim({batch_count, m, nrhs}));
+  new_y->Resize(common::make_ddim({batch_count, m, nrhs}));
   dev_ctx.template Alloc<T>(new_y);
   phi::Copy<Context>(dev_ctx, y, dev_ctx.GetPlace(), true, new_y);
 
   // Prepare tau
-  auto tau_dims_vec = phi::vectorize<int>(x_dims);
+  auto tau_dims_vec = common::vectorize<int>(x_dims);
   tau_dims_vec.pop_back();
   tau_dims_vec[tau_dims_vec.size() - 1] = min_mn;
 
   DenseTensor* tau = new DenseTensor();
-  tau->Resize(phi::make_ddim(tau_dims_vec));
+  tau->Resize(common::make_ddim(tau_dims_vec));
   auto tau_data = dev_ctx.template Alloc<T>(tau);
 
   if (m >= n) {
@@ -108,7 +106,7 @@ void LstsqKernel(const Context& dev_ctx,
     DenseTensor slice_r =
         phi::funcs::Slice<T>(dev_ctx, trans_r, {-2}, {0}, {min_mn});
     DenseTensor* res_r = new DenseTensor();
-    res_r->Resize(phi::make_ddim({batch_count, min_mn, min_mn}));
+    res_r->Resize(common::make_ddim({batch_count, min_mn, min_mn}));
     dev_ctx.template Alloc<T>(res_r);
     phi::TrilTriuKernel<T>(dev_ctx, slice_r, 0, false, res_r);
 
@@ -133,7 +131,7 @@ void LstsqKernel(const Context& dev_ctx,
     DenseTensor slice_r =
         phi::funcs::Slice<T>(dev_ctx, trans_r, {-2}, {0}, {min_mn});
     DenseTensor* res_r = new DenseTensor();
-    res_r->Resize(phi::make_ddim({batch_count, min_mn, min_mn}));
+    res_r->Resize(common::make_ddim({batch_count, min_mn, min_mn}));
     dev_ctx.template Alloc<T>(res_r);
     phi::TrilTriuKernel<T>(dev_ctx, slice_r, 0, false, res_r);
 
@@ -161,17 +159,10 @@ void LstsqKernel(const Context& dev_ctx,
         dev_ctx, solu_tensor, dev_ctx.GetPlace(), true, solution);
   }
 
-  if (batch_count == 1) solution->Resize(phi::make_ddim({n, nrhs}));
+  if (batch_count == 1) solution->Resize(common::make_ddim({n, nrhs}));
   GetResidualsTensor<Context, T>(dev_ctx, x, y, solution, residuals);
 }
 
 }  // namespace phi
 
-PD_REGISTER_KERNEL(lstsq,  // cuda_only
-                   GPU,
-                   ALL_LAYOUT,
-                   phi::LstsqKernel,
-                   float,
-                   double) {}
-
-#endif  // not PADDLE_WITH_HIP
+PD_REGISTER_KERNEL(lstsq, GPU, ALL_LAYOUT, phi::LstsqKernel, float, double) {}

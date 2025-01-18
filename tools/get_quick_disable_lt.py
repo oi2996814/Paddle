@@ -18,20 +18,12 @@ import sys
 import httpx
 
 import paddle
+from paddle.base import core
+from paddle.device import cuda
 
 
-def download_file():
-    """Get disabled unit tests"""
+def get_disable_ut_by_url(url):
     ssl._create_default_https_context = ssl._create_unverified_context
-    sysstr = sys.platform
-    if sysstr == 'win32':
-        url = "https://sys-p0.bj.bcebos.com/prec/{}".format('disable_ut_win')
-    else:
-        url = "https://sys-p0.bj.bcebos.com/prec/{}".format('disable_ut')
-
-    if paddle.is_compiled_with_rocm():
-        url = "https://sys-p0.bj.bcebos.com/prec/{}".format('disable_ut_rocm')
-
     f = httpx.get(url, timeout=None, follow_redirects=True)
     data = f.text
     status_code = f.status_code
@@ -40,8 +32,57 @@ def download_file():
     else:
         lt = data.strip().split('\n')
         lt = '^' + '$|^'.join(lt) + '$'
-        print(lt)
-        sys.exit(0)
+        return lt
+
+
+def download_file():
+    """Get disabled unit tests"""
+    sysstr = sys.platform
+    if sysstr == 'win32':
+        url = "https://sys-p0.bj.bcebos.com/prec/{}".format('disable_ut_win')
+    else:
+        url = "https://sys-p0.bj.bcebos.com/prec/{}".format('disable_ut')
+
+    if paddle.is_compiled_with_rocm():
+        if cuda.get_device_name() == 'K100_AI':
+            url = "https://sys-p0.bj.bcebos.com/prec/{}".format(
+                'disable_ut_rocm_k100'
+            )
+        else:
+            url = "https://sys-p0.bj.bcebos.com/prec/{}".format(
+                'disable_ut_rocm'
+            )
+
+    disabled_ut_list = get_disable_ut_by_url(url)
+
+    if paddle.is_compiled_with_xpu():
+        xpu_version = core.get_xpu_device_version(0)
+        if xpu_version != core.XPUVersion.XPU3:
+            url = "https://sys-p0.bj.bcebos.com/prec/{}".format(
+                'disable_ut_xpu_kl2'
+            )
+            external_xpu = get_disable_ut_by_url(url)
+        else:
+            # part 1: "quick" list on bos
+            url = "https://sys-p0.bj.bcebos.com/prec/{}".format(
+                'quick_disable_ut_xpu_kl3'
+            )
+            external_xpu = get_disable_ut_by_url(url)
+
+            # part 2: local list
+            import os
+
+            paddle_root = os.getenv('PADDLE_ROOT')
+            file_path = paddle_root + "/tools/xpu/disable_ut_xpu_kl3.local"
+            with open(file_path, 'r') as file:
+                data = file.read()
+            local_list = data.strip().split('\n')
+            local_list = '^' + '$|^'.join(local_list) + '$'
+            external_xpu = external_xpu + "|" + local_list
+        disabled_ut_list = disabled_ut_list + "|" + external_xpu
+
+    print(disabled_ut_list)
+    sys.exit(0)
 
 
 if __name__ == '__main__':

@@ -61,12 +61,6 @@ std::vector<ir::Tensor> Matmul(
     float alpha = 1,
     const std::string& name = UniqName("T_Transform_Matmul_out"));
 
-// realized by sharing buffer
-ir::Tensor Reshape(const ir::Tensor& A,
-                   const std::vector<int>& new_shape,
-                   poly::StageMap stages,
-                   const std::string& name);
-
 ir::Tensor Concat(const ir::Tensor& A,
                   const ir::Tensor& B,
                   int axis = 0,
@@ -83,7 +77,7 @@ std::vector<ir::Tensor> MatmulV2(
     bool trans_b = false,
     float alpha = 1,
     const std::string& name = UniqName("T_Transform_MatmulV2_out"),
-    const common::Target& target = common::DefaultHostTarget());
+    const cinn::common::Target& target = cinn::common::DefaultHostTarget());
 
 std::vector<ir::Tensor> MatmulMKL(
     const ir::Tensor& A,
@@ -92,9 +86,11 @@ std::vector<ir::Tensor> MatmulMKL(
     bool trans_b = false,
     float alpha = 1,
     const std::string& name = UniqName("T_Transform_MatmulMKL_out"),
-    const common::Target& target = common::DefaultHostTarget());
+    const cinn::common::Target& target = cinn::common::DefaultHostTarget());
 
-int GetMulFactor(int shape, const Type& type, const common::Target& target);
+int GetMulFactor(int shape,
+                 const Type& type,
+                 const cinn::common::Target& target);
 
 /**
  * @brief basic PE that calculates a matrix multiplication
@@ -112,7 +108,7 @@ std::vector<ir::Tensor> MulBase(
     const ir::Tensor& A,
     const ir::Tensor& B,
     const std::string& name = UniqName("T_Transform_MulBase_out"),
-    const common::Target& target = common::DefaultHostTarget());
+    const cinn::common::Target& target = cinn::common::DefaultHostTarget());
 
 std::vector<ir::Tensor> Mul(const ir::Tensor& A,
                             const ir::Tensor& B,
@@ -125,7 +121,7 @@ std::vector<ir::Tensor> MulMKL(
     const ir::Tensor& A,
     const ir::Tensor& B,
     const std::string& name = UniqName("T_Transform_MulMKL_out"),
-    const common::Target& target = common::DefaultHostTarget());
+    const cinn::common::Target& target = cinn::common::DefaultHostTarget());
 
 ir::Tensor LayoutTransform(
     const ir::Tensor& input,
@@ -152,7 +148,7 @@ ir::Tensor Reverse(const ir::Tensor& input,
 /**
  * @brief Perform meta op Transpose
  * @param input The input tensor
- * @param axis tranpsoe axis
+ * @param axis transpose axis
  * @param output_name the name of the output tensor
  */
 ir::Tensor Transpose(
@@ -182,13 +178,21 @@ ir::Tensor Slice(const ir::Tensor& A,
                  const std::vector<Expr>& output_shape,
                  const std::string& output_name);
 
+ir::Tensor SliceSymbolic(const ir::Tensor& A,
+                         const std::vector<Expr>& starts,
+                         const std::vector<int>& axes,
+                         const std::vector<Expr>& strides,
+                         const std::vector<int>& decrease_axis,
+                         const std::vector<Expr>& output_shape,
+                         const std::string& output_name);
+
 /**
  * @brief Perform meta op SliceAssign
  * @param input The input tensor
  * @param assign The assign tensor
  * @param axis select axis
- * @param starts select reigon starts
- * @param strides select reigon strides
+ * @param starts select region starts
+ * @param strides select region strides
  * @param output_name the name of the output tensor
  */
 ir::Tensor SliceAssign(
@@ -202,8 +206,8 @@ ir::Tensor SliceAssign(
 /**
  * @brief Perform meta op Split
  * @param A The input tensor
- * @param axis split axis
  * @param output_shapes The output sub-tensors shape
+ * @param axis split axis
  * @param output_name the name of the output tensor
  */
 ir::Tensor Gather(const ir::Tensor& x,
@@ -213,17 +217,30 @@ ir::Tensor Gather(const ir::Tensor& x,
                   const std::string& name = UniqName("T_Transform_Gather_out"));
 
 /**
+ * @brief Perform meta op Split
+ * @param A The input tensor
+ * @param axis split axis
+ * @param output_shapes The output sub-tensors shape
+ * @param output_name the name of the output tensor
+ */
+ir::Tensor Gather(const ir::Tensor& x,
+                  const ir::Tensor& index,
+                  int axis,
+                  const std::vector<Expr>& output_shape,
+                  const std::string& name = UniqName("T_Transform_Gather_out"));
+
+/**
  * @brief Perform meta op ScatterAssign
  * @param input The input tensor
  * @param assign The assign tensor
- * @param indexs The indexs tensor
+ * @param index The index tensor
  * @param output_name the name of the output tensor
  */
 ir::Tensor ScatterAssign(
     const ir::Tensor& input,
     const ir::Tensor& updates,
     const ir::Tensor& index,
-    const common::Target& target,
+    const cinn::common::Target& target,
     const int axis = 0,
     const std::string& output_name = UniqName("T_Transform_ScatterAssign_out"));
 
@@ -231,13 +248,13 @@ ir::Tensor ScatterAssign(
  * @brief Perform meta op ScatterAdd
  * @param input The input tensor
  * @param updates The updates tensor
- * @param indexs The indexs tensor
+ * @param index The index tensor
  * @param output_name the name of the output tensor
  */
 ir::Tensor ScatterAdd(const ir::Tensor& input,
                       const ir::Tensor& updates,
                       const ir::Tensor& index,
-                      const common::Target& target,
+                      const cinn::common::Target& target,
                       const int axis,
                       const std::string& output_name);
 

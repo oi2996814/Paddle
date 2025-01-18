@@ -15,7 +15,7 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 import paddle
 
@@ -103,7 +103,7 @@ class TestNextafterOP(OpTest):
         self.outputs = {'out': out}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def init_dtype(self):
         self.dtype = np.float64

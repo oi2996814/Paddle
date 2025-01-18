@@ -21,11 +21,11 @@ limitations under the License. */
 #include <string>
 #include <thread>  // NOLINT
 
-#include "gflags/gflags.h"
 #include "glog/logging.h"
+#include "paddle/common/flags.h"
 #include "paddle/phi/core/enforce.h"
 
-DECLARE_bool(enable_host_event_recorder_hook);
+PHI_DECLARE_bool(enable_host_event_recorder_hook);
 
 namespace phi {
 
@@ -44,7 +44,7 @@ thread_local std::deque<int> block_id_stack;
 // Tracking the nested event stacks.
 thread_local std::deque<Event *> annotation_stack;
 #endif
-// stack to strore event sunch as pe and so on
+// stack to store event such as pe and so on
 static std::deque<Event *> main_thread_annotation_stack{};
 static std::deque<std::string> main_thread_annotation_stack_name{};
 
@@ -196,7 +196,7 @@ void CUPTIAPI bufferCompleted(CUcontext ctx,
       errors::PermissionDenied(
           "Only one thread is allowed to call bufferCompleted()."));
   CUptiResult status;
-  CUpti_Activity *record = NULL;
+  CUpti_Activity *record = nullptr;
   if (validSize > 0) {
     do {
       status = dynload::cuptiActivityGetNextRecord(buffer, validSize, &record);
@@ -317,7 +317,7 @@ void initCuptiCbidStr();
 
 class DeviceTracerImpl : public DeviceTracer {
  public:
-  DeviceTracerImpl() : enabled_(false) {
+  DeviceTracerImpl() : enabled_(false), start_ns_(0), end_ns_(0) {
 #ifdef PADDLE_WITH_CUPTI
     initCuptiCbidStr();
 #endif
@@ -571,10 +571,10 @@ class DeviceTracerImpl : public DeviceTracer {
         Event *e = c->second;
         Event *parent = e->parent();
         while (parent) {
-          parent->AddCudaElapsedTime(r.start_ns, r.end_ns);
+          parent->AddCudaElapsedTime(r.start_ns, r.end_ns);  // NOLINT
           parent = parent->parent();
         }
-        e->AddCudaElapsedTime(r.start_ns, r.end_ns);
+        e->AddCudaElapsedTime(r.start_ns, r.end_ns);  // NOLINT
       }
     }
     for (const auto &r : mem_records_) {
@@ -583,10 +583,10 @@ class DeviceTracerImpl : public DeviceTracer {
         Event *e = c->second;
         Event *parent = e->parent();
         while (parent) {
-          parent->AddCudaElapsedTime(r.start_ns, r.end_ns);
+          parent->AddCudaElapsedTime(r.start_ns, r.end_ns);  // NOLINT
           parent = parent->parent();
         }
-        e->AddCudaElapsedTime(r.start_ns, r.end_ns);
+        e->AddCudaElapsedTime(r.start_ns, r.end_ns);  // NOLINT
       }
     }
 #endif
@@ -797,8 +797,8 @@ void ClearCurAnnotation() {
   if (!main_thread_annotation_stack.empty()) {
     std::string name = annotation_stack.back()->name();
     std::string main_name = main_thread_annotation_stack.back()->name();
-    int main_name_len = main_name.length();
-    int name_len = name.length();
+    int main_name_len = static_cast<int>(main_name.length());
+    int name_len = static_cast<int>(name.length());
     int prefix_len = main_name_len - name_len;
 
     if ((prefix_len > 0 && main_name.at(prefix_len - 1) == '/' &&
@@ -825,7 +825,7 @@ void SetCurBlock(int block_id) { block_id_stack.push_back(block_id); }
 
 void ClearCurBlock() { block_id_stack.pop_back(); }
 
-int BlockDepth() { return block_id_stack.size(); }
+int BlockDepth() { return static_cast<int>(block_id_stack.size()); }
 
 uint32_t GetCurSystemThreadId() {
   std::stringstream ss;
@@ -834,7 +834,7 @@ uint32_t GetCurSystemThreadId() {
   return id;
 }
 
-void RecoreCurThreadId(uint64_t id) {
+void RecordCurThreadId(uint64_t id) {
   std::lock_guard<std::mutex> lock(system_thread_id_map_mutex);
   auto gid = GetCurSystemThreadId();
   system_thread_id_map[gid] = id;

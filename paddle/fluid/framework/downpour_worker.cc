@@ -15,25 +15,22 @@ limitations under the License. */
 #include "paddle/fluid/framework/device_worker.h"
 #include "paddle/fluid/framework/fleet/metrics.h"
 #include "paddle/fluid/operators/isfinite_op.h"
-#include "paddle/fluid/platform/cpu_helper.h"
+#include "paddle/phi/core/platform/cpu_helper.h"
 
 namespace phi {
 class DenseTensor;
 }  // namespace phi
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Variable;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 
 #if defined _WIN32 || defined __APPLE__
 #else
 #define _LINUX
 #endif
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 void DownpourWorker::Initialize(const TrainerDesc& desc) {
   param_ = desc.downpour_param();
   for (int i = 0; i < param_.sparse_table_size(); ++i) {
@@ -116,7 +113,7 @@ void DownpourWorker::Initialize(const TrainerDesc& desc) {
             << dest_table;
     copy_dense_tables_.emplace_back(src_table, dest_table);
   }
-  for (auto& m : copy_table_config_.table_denpendency_map()) {
+  for (auto& m : copy_table_config_.table_dependency_map()) {
     if (sparse_key_names_.find(m.key()) != sparse_key_names_.end()) {
       // currently only support one dependency
       for (auto& value : m.values()) {
@@ -130,11 +127,12 @@ void DownpourWorker::CollectLabelInfo(size_t table_idx) {
   if (no_cvm_) {
     return;
   }
-  uint64_t table_id = static_cast<uint64_t>(
-      param_.program_config(0).pull_sparse_table_id(table_idx));
+  uint64_t table_id =
+      static_cast<uint64_t>(param_.program_config(0).pull_sparse_table_id(
+          static_cast<int>(table_idx)));
 
   TableParameter table;
-  for (auto i : param_.sparse_table()) {
+  for (auto const& i : param_.sparse_table()) {
     if (i.table_id() == table_id) {
       table = i;
       break;
@@ -156,8 +154,10 @@ void DownpourWorker::CollectLabelInfo(size_t table_idx) {
       continue;
     }
     phi::DenseTensor* tensor = fea_var->GetMutable<phi::DenseTensor>();
-    CHECK(tensor != nullptr)
-        << "tensor of var " << sparse_key_names_[table_id][i] << " is null";
+    PADDLE_ENFORCE_NOT_NULL(
+        tensor,
+        common::errors::InvalidArgument("Tensor of var %s is null.",
+                                        sparse_key_names_[table_id][i]));
 
     // skip slots which do not have embedding
     Variable* emb_var =
@@ -180,16 +180,23 @@ void DownpourWorker::CollectLabelInfo(size_t table_idx) {
       }
     }
   }
-  CHECK(global_index == feature.size())
-      << "expect fea info size:" << feature.size() << " real:" << global_index;
+  PADDLE_ENFORCE_EQ(
+      global_index,
+      feature.size(),
+      common::errors::InvalidArgument(
+          "Expected feature info size does not match the actual global index. "
+          "Expected: %d, actual: %d.",
+          feature.size(),
+          global_index));
 }
 
 void DownpourWorker::FillSparseValue(size_t table_idx) {
-  uint64_t table_id = static_cast<uint64_t>(
-      param_.program_config(0).pull_sparse_table_id(table_idx));
+  uint64_t table_id =
+      static_cast<uint64_t>(param_.program_config(0).pull_sparse_table_id(
+          static_cast<int>(table_idx)));
 
   TableParameter table;
-  for (auto i : param_.sparse_table()) {
+  for (auto const& i : param_.sparse_table()) {
     if (i.table_id() == table_id) {
       table = i;
       break;
@@ -208,19 +215,21 @@ void DownpourWorker::FillSparseValue(size_t table_idx) {
       continue;
     }
     phi::DenseTensor* tensor = var->GetMutable<phi::DenseTensor>();
-    CHECK(tensor != nullptr) << "tensor of var " << slot_name << " is null";
+    PADDLE_ENFORCE_NOT_NULL(tensor,
+                            common::errors::InvalidArgument(
+                                "Tensor of var %s is null.", slot_name));
     int64_t* ids = tensor->data<int64_t>();
-    int len = tensor->numel();
+    int len = static_cast<int>(tensor->numel());
     Variable* var_emb = thread_scope_->FindVar(emb_slot_name);
     if (var_emb == nullptr) {
       continue;
     }
     phi::DenseTensor* tensor_emb = var_emb->GetMutable<phi::DenseTensor>();
     float* ptr = tensor_emb->mutable_data<float>({len, table.emb_dim()},
-                                                 platform::CPUPlace());
+                                                 phi::CPUPlace());
     memset(ptr, 0, sizeof(float) * len * table.emb_dim());
     auto& tensor_lod = tensor->lod()[0];
-    LoD data_lod{tensor_lod};
+    LegacyLoD data_lod{tensor_lod};
     tensor_emb->set_lod(data_lod);
 
     bool is_nid = (adjust_ins_weight_config_.need_adjust() &&
@@ -315,9 +324,13 @@ void DownpourWorker::AdjustInsWeight() {
   float* ins_weights = ins_weight_tensor->data<float>();
   size_t len = ins_weight_tensor->numel();  // len = batch size
   // here we assume nid_show slot only has one feasign in each instance
-  CHECK(len == nid_show_.size())
-      << "ins_weight size should be equal to "
-      << "nid_show size, " << len << " vs " << nid_show_.size();
+  PADDLE_ENFORCE_EQ(len,
+                    nid_show_.size(),
+                    common::errors::InvalidArgument(
+                        "ins_weight size should be equal to nid_show size. "
+                        "Expected: %d, but got: %d.",
+                        len,
+                        nid_show_.size()));
   float nid_adjw_threshold = adjust_ins_weight_config_.nid_adjw_threshold();
   float nid_adjw_ratio = adjust_ins_weight_config_.nid_adjw_ratio();
   int64_t nid_adjw_num = 0;
@@ -332,8 +345,9 @@ void DownpourWorker::AdjustInsWeight() {
     }
     float ins_weight = 1.0;
     if (nid_show >= 0 && nid_show < nid_adjw_threshold) {
-      ins_weight = log(M_E + (nid_adjw_threshold - nid_show) /
-                                 nid_adjw_threshold * nid_adjw_ratio);
+      ins_weight = static_cast<float>(
+          log(M_E + (nid_adjw_threshold - nid_show) / nid_adjw_threshold *
+                        nid_adjw_ratio));
       // count nid adjw insnum and weight
       ++nid_adjw_num;
       nid_adjw_weight += ins_weight;
@@ -354,15 +368,14 @@ void DownpourWorker::AdjustInsWeight() {
 
 void DownpourWorker::CopySparseTable() {
   for (auto& copy_sparse_table : copy_sparse_tables_) {
-    int64_t src_table = copy_sparse_table.first;
-    int64_t dest_table = copy_sparse_table.second;
+    int64_t src_table = static_cast<int64_t>(copy_sparse_table.first);
+    int64_t dest_table = static_cast<int64_t>(copy_sparse_table.second);
     int32_t feanum = 0;
     if (src_table == dest_table) {
       continue;
     } else if (!copy_table_config_.sparse_copy_by_feasign()) {
-      if (feasign_set_.find(src_table) == feasign_set_.end()) {
-        continue;
-      } else if (feasign_set_[src_table].empty()) {
+      if (feasign_set_.find(src_table) == feasign_set_.end() ||
+          feasign_set_[src_table].empty()) {
         continue;
       }
       feanum = fleet_ptr_->CopyTable(src_table, dest_table);
@@ -428,22 +441,33 @@ void DownpourWorker::CopyDenseVars() {
     VLOG(3) << "copy dense var from " << src_var_name << " to "
             << dest_var_name;
     Variable* src_var = thread_scope_->FindVar(src_var_name);
-    CHECK(src_var != nullptr) << src_var_name << " not found";  // NOLINT
+    PADDLE_ENFORCE_NOT_NULL(
+        src_var,
+        common::errors::InvalidArgument("%s not found.", src_var_name));
     phi::DenseTensor* src_tensor = src_var->GetMutable<phi::DenseTensor>();
-    CHECK(src_tensor != nullptr)
-        << src_var_name << " tensor is null";  // NOLINT
+    PADDLE_ENFORCE_NOT_NULL(
+        src_tensor,
+        common::errors::InvalidArgument("%s tensor is null.", src_var_name));
     float* src_data = src_tensor->data<float>();
 
     Variable* dest_var = thread_scope_->FindVar(dest_var_name);
-    CHECK(dest_var != nullptr) << dest_var_name << " not found";  // NOLINT
+    PADDLE_ENFORCE_NOT_NULL(
+        dest_var,
+        common::errors::InvalidArgument("%s not found.", dest_var_name));
     phi::DenseTensor* dest_tensor = dest_var->GetMutable<phi::DenseTensor>();
-    CHECK(dest_tensor != nullptr)
-        << dest_var_name << " tensor is null";  // NOLINT
+    PADDLE_ENFORCE_NOT_NULL(
+        dest_tensor,
+        common::errors::InvalidArgument("%s tensor is null.", dest_var_name));
     float* dest_data = dest_tensor->data<float>();
 
-    CHECK(src_tensor->numel() == dest_tensor->numel())
-        << "tensor numel not equal," << src_tensor->numel() << " vs "
-        << dest_tensor->numel();
+    PADDLE_ENFORCE_EQ(src_tensor->numel(),
+                      dest_tensor->numel(),
+                      common::errors::InvalidArgument(
+                          "Tensor element numbers are not equal. "
+                          "Source tensor element number: %d, "
+                          "Destination tensor element number: %d.",
+                          src_tensor->numel(),
+                          dest_tensor->numel()));
     for (int i = 0; i < src_tensor->numel(); i++) {
       dest_data[i] = src_data[i];
     }
@@ -484,7 +508,7 @@ void DownpourWorker::TrainFilesWithProfiler() {
   double push_sparse_time = 0.0;
   double push_dense_time = 0.0;
   double copy_table_time = 0.0;
-  int cur_batch;
+  int cur_batch = 0;
   int batch_cnt = 0;
   uint64_t total_inst = 0;
   timeline.Start();
@@ -512,7 +536,7 @@ void DownpourWorker::TrainFilesWithProfiler() {
       uint64_t tid = static_cast<uint64_t>(
           param_.program_config(0).pull_sparse_table_id(i));
       TableParameter table;
-      for (auto j : param_.sparse_table()) {
+      for (auto const& j : param_.sparse_table()) {
         if (j.table_id() == tid) {
           table = j;
           break;
@@ -584,11 +608,11 @@ void DownpourWorker::TrainFilesWithProfiler() {
       }
       PADDLE_ENFORCE_EQ(framework::TensorContainsInf(*tensor),
                         false,
-                        platform::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "phi::DenseTensor %s contains Inf.", var_name));
       PADDLE_ENFORCE_EQ(framework::TensorContainsNAN(*tensor),
                         false,
-                        platform::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "phi::DenseTensor %s contains NAN.", var_name));
     }
 
@@ -598,7 +622,7 @@ void DownpourWorker::TrainFilesWithProfiler() {
         uint64_t tid = static_cast<uint64_t>(
             param_.program_config(0).push_sparse_table_id(i));
         TableParameter table;
-        for (auto i : param_.sparse_table()) {
+        for (auto const& i : param_.sparse_table()) {
           if (i.table_id() == tid) {
             table = i;
             break;
@@ -768,7 +792,8 @@ void DownpourWorker::TrainFilesWithProfiler() {
         fprintf(stderr,
                 "push dense time percent: %f\n",
                 push_dense_time / total_time * 100);
-        fprintf(stderr, "%6.2f instances/s\n", total_inst / total_time);
+        fprintf(
+            stderr, "%6.2f instances/s\n", total_inst / total_time);  // NOLINT
       }
     }
     timeline.Start();
@@ -784,7 +809,7 @@ void DownpourWorker::TrainFilesWithProfiler() {
 /**
  * @brief add auc monitor
  */
-inline void AddAucMonitor(const Scope* scope, const platform::Place& place) {
+inline void AddAucMonitor(const Scope* scope, const phi::Place& place) {
   auto metric_ptr = Metric::GetInstance();
   auto& metric_list = metric_ptr->GetMetricList();
   for (auto iter = metric_list.begin(); iter != metric_list.end(); iter++) {
@@ -802,7 +827,7 @@ void DownpourWorker::TrainFiles() {
   platform::SetNumThreads(1);
   device_reader_->Start();
   int batch_cnt = 0;
-  int cur_batch;
+  int cur_batch = 0;
   while ((cur_batch = device_reader_->Next()) > 0) {
     if (copy_table_config_.need_copy()) {
       if (batch_cnt % copy_table_config_.batch_num() == 0) {
@@ -817,7 +842,7 @@ void DownpourWorker::TrainFiles() {
       uint64_t tid = static_cast<uint64_t>(
           param_.program_config(0).pull_sparse_table_id(i));
       TableParameter table;
-      for (auto j : param_.sparse_table()) {
+      for (auto const& j : param_.sparse_table()) {
         if (j.table_id() == tid) {
           table = j;
           break;
@@ -887,7 +912,7 @@ void DownpourWorker::TrainFiles() {
               continue;
             }
             s += param + ":" + std::to_string(len) + ":";
-            s += PrintLodTensor(tensor, 0, len);
+            s += PrintDenseTensor(tensor, 0, len);
             fprintf(stderr, "%s\n", s.c_str());
             fflush(stderr);
             s = "";
@@ -919,11 +944,11 @@ void DownpourWorker::TrainFiles() {
       }
       PADDLE_ENFORCE_EQ(framework::TensorContainsInf(*tensor),
                         false,
-                        platform::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "phi::DenseTensor %s contains Inf.", var_name));
       PADDLE_ENFORCE_EQ(framework::TensorContainsNAN(*tensor),
                         false,
-                        platform::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "phi::DenseTensor %s contains NAN.", var_name));
     }
 
@@ -934,7 +959,7 @@ void DownpourWorker::TrainFiles() {
         uint64_t tid = static_cast<uint64_t>(
             param_.program_config(0).push_sparse_table_id(i));
         TableParameter table;
-        for (auto i : param_.sparse_table()) {
+        for (auto const& i : param_.sparse_table()) {
           if (i.table_id() == tid) {
             table = i;
             break;
@@ -984,7 +1009,7 @@ void DownpourWorker::TrainFiles() {
               param_.program_config(0).push_dense_table_id(i));
           if (condvalue_set_.find(tid) != condvalue_set_.end()) {
             // common dense table must push dense
-            if (cond2table_map_[cond_value_batch[0]] != tid) {
+            if (cond2table_map_[static_cast<int>(cond_value_batch[0])] != tid) {
               // can't push dense
               continue;
             }
@@ -1080,5 +1105,4 @@ void DownpourWorker::TrainFiles() {
   }
 }
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace paddle::framework

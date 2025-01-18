@@ -17,24 +17,28 @@ limitations under the License. */
 #include <string>
 #include <vector>
 
-#include "gflags/gflags.h"
+#include "paddle/common/errors.h"
+#include "paddle/common/flags.h"
+#include "paddle/common/macros.h"
 #include "paddle/phi/backends/dynload/cudnn.h"
 #include "paddle/phi/common/bfloat16.h"
 #include "paddle/phi/common/float16.h"
 #include "paddle/phi/common/place.h"
 #include "paddle/phi/core/dense_tensor.h"
 #include "paddle/phi/core/enforce.h"
-#include "paddle/phi/core/errors.h"
-#include "paddle/phi/core/macros.h"
 
-DECLARE_bool(cudnn_deterministic);
+COMMON_DECLARE_bool(cudnn_deterministic);
 
 namespace phi {
 namespace backends {
 namespace gpu {
 
+#define CUDNN_VERSION_COMPUTE(major, minor, patch)     \
+  ((major) <= 8 ? (major)*1000 + (minor)*100 + (patch) \
+                : (major)*10000 + (minor)*100 + (patch))
+
 #define CUDNN_VERSION_MIN(major, minor, patch) \
-  (CUDNN_VERSION >= ((major)*1000 + (minor)*100 + (patch)))
+  (CUDNN_VERSION >= CUDNN_VERSION_COMPUTE(major, minor, patch))
 
 enum class DataLayout {  // Not use
   kNHWC,
@@ -73,7 +77,7 @@ inline cudnnPoolingMode_t GetPoolingMode(const PoolingMode& mode) {
       return CUDNN_POOLING_MAX;
     default:
       PADDLE_THROW(
-          phi::errors::Unimplemented("Unexpected CUDNN pooling mode."));
+          common::errors::Unimplemented("Unexpected CUDNN pooling mode."));
   }
 }
 
@@ -93,13 +97,32 @@ inline ActivationMode StringToActivationMode(const std::string& str) {
   } else if (str == "bandpass") {
     return ActivationMode::kBandPass;
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "Unknown CUDNN activation string: %s.", str));
   }
 }
 
 template <typename T>
 class CudnnDataType;
+
+// CUDNN_DATA_FLOAT8 is not valid before cudnn8.6
+#if CUDNN_VERSION_MIN(8, 6, 0) && CUDA_VERSION >= 11800
+template <>
+class CudnnDataType<phi::dtype::float8_e4m3fn> {
+ public:
+  static const cudnnDataType_t type = CUDNN_DATA_FP8_E4M3;
+  using ScalingParamType = const float;
+  using BatchNormParamType = float;
+  static ScalingParamType* kOne() {
+    static ScalingParamType v = 1.0;
+    return &v;
+  }
+  static ScalingParamType* kZero() {
+    static ScalingParamType v = 0.0;
+    return &v;
+  }
+};
+#endif
 
 // CUDNN_DATA_BFLOAT16 is not valid before cudnn8.1
 #if CUDNN_VERSION_MIN(8, 1, 0)
@@ -181,7 +204,7 @@ inline cudnnTensorFormat_t GetCudnnTensorFormat(
     case DataLayout::kNDHWC:
       return CUDNN_TENSOR_NHWC;  // add, liyamei
     default:
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "CUDNN has no equivalent dataLayout for input order."));
   }
   return CUDNN_TENSOR_NCHW;
@@ -370,7 +393,8 @@ class ScopedDropoutDescriptor {
       PADDLE_ENFORCE_GPU_SUCCESS(phi::dynload::cudnnSetDropoutDescriptor(
           desc_, handle, dropout_prob_, dropout_state_data, state_size, seed));
     } else {
-      auto dropout_state_dims = phi::vectorize<int64_t>(dropout_state_->dims());
+      auto dropout_state_dims =
+          common::vectorize<int64_t>(dropout_state_->dims());
       state_size = dropout_state_dims[0];
       PADDLE_ENFORCE_GPU_SUCCESS(phi::dynload::cudnnRestoreDropoutDescriptor(
           desc_, handle, dropout_prob_, dropout_state_data, state_size, 0));
@@ -466,7 +490,7 @@ class ScopedConvolutionDescriptor {
       const std::vector<int>& dilations) {
     PADDLE_ENFORCE_EQ(pads.size(),
                       strides.size(),
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The size of pads and strides should be equal. But "
                           "received size of pads is %d, size of strides is %d.",
                           pads.size(),
@@ -474,7 +498,7 @@ class ScopedConvolutionDescriptor {
     PADDLE_ENFORCE_EQ(
         pads.size(),
         dilations.size(),
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The size of pads and dilations should be equal. But received size "
             "of pads is %d, size of dilations is %d.",
             pads.size(),
@@ -523,7 +547,7 @@ class ScopedPoolingDescriptor {
                                              const std::vector<int>& strides) {
     PADDLE_ENFORCE_EQ(kernel.size(),
                       pads.size(),
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The size of kernel and pads should be equal. But "
                           "received size of kernel is %d, size of pads is %d.",
                           kernel.size(),
@@ -531,7 +555,7 @@ class ScopedPoolingDescriptor {
     PADDLE_ENFORCE_EQ(
         kernel.size(),
         strides.size(),
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The size of kernel and strides should be equal. But "
             "received size of kernel is %d, size of strides is %d.",
             kernel.size(),
@@ -622,7 +646,7 @@ class ScopedActivationDescriptor {
         mode = CUDNN_ACTIVATION_TANH;
         break;
       default:
-        PADDLE_THROW(phi::errors::Unimplemented(
+        PADDLE_THROW(common::errors::Unimplemented(
             "Unrecognized CUDNN activation mode: %d.",
             static_cast<int>(activation_mode)));
     }

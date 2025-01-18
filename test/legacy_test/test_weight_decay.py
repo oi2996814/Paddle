@@ -19,8 +19,8 @@ from functools import partial
 import numpy as np
 
 import paddle
-from paddle import fluid
-from paddle.fluid import compiler, core
+from paddle import base
+from paddle.base import compiler, core
 
 
 def get_places():
@@ -32,10 +32,10 @@ def get_places():
 
 @contextlib.contextmanager
 def prog_scope_guard(main_prog, startup_prog):
-    scope = fluid.core.Scope()
-    with fluid.unique_name.guard():
-        with fluid.scope_guard(scope):
-            with fluid.program_guard(main_prog, startup_prog):
+    scope = base.core.Scope()
+    with base.unique_name.guard():
+        with base.scope_guard(scope):
+            with base.program_guard(main_prog, startup_prog):
                 yield
 
 
@@ -52,7 +52,7 @@ def bow_net(
     """
     BOW net
     This model is from https://github.com/PaddlePaddle/models:
-    fluid/PaddleNLP/text_classification/nets.py
+    base/PaddleNLP/text_classification/nets.py
     """
     emb = paddle.static.nn.embedding(
         input=data, is_sparse=is_sparse, size=[dict_dim, emb_dim]
@@ -84,22 +84,21 @@ class TestWeightDecay(unittest.TestCase):
         self.learning_rate = 0.5
 
     def run_executor(self, place, feed_list, loss):
-        exe = fluid.Executor(place)
-        feeder = fluid.DataFeeder(feed_list=feed_list, place=place)
-        exe.run(fluid.default_startup_program())
-        main_prog = fluid.default_main_program()
+        exe = base.Executor(place)
+        feeder = base.DataFeeder(feed_list=feed_list, place=place)
+        exe.run(base.default_startup_program())
+        main_prog = base.default_main_program()
         loss_set = []
         for data in self.train_data:
             out = exe.run(
                 main_prog, feed=feeder.feed(data), fetch_list=[loss.name]
             )
 
-            print("loss              %s" % (np.average(out)))
             loss_set.append(np.average(out))
 
         return loss_set
 
-    def run_parallel_exe(
+    def run_standalone_exe(
         self,
         place,
         feed_list,
@@ -108,24 +107,20 @@ class TestWeightDecay(unittest.TestCase):
         use_fast_executor=False,
         use_ir_memory_optimize=False,
     ):
-        exe = fluid.Executor(place)
-        feeder = fluid.DataFeeder(feed_list=feed_list, place=place)
-        exe.run(fluid.default_startup_program())
+        exe = base.Executor(place)
+        feeder = base.DataFeeder(feed_list=feed_list, place=place)
+        exe.run(base.default_startup_program())
 
-        exec_strategy = fluid.ExecutionStrategy()
-        if use_fast_executor:
-            exec_strategy.use_experimental_executor = True
-
-        build_strategy = fluid.BuildStrategy()
+        build_strategy = base.BuildStrategy()
         build_strategy.reduce_strategy = (
-            fluid.BuildStrategy.ReduceStrategy.Reduce
+            base.BuildStrategy.ReduceStrategy.Reduce
             if use_reduce
-            else fluid.BuildStrategy.ReduceStrategy.AllReduce
+            else base.BuildStrategy.ReduceStrategy.AllReduce
         )
         build_strategy.memory_optimize = use_ir_memory_optimize
 
         train_cp = compiler.CompiledProgram(
-            fluid.default_main_program(), build_strategy=build_strategy
+            base.default_main_program(), build_strategy=build_strategy
         )
 
         loss_set = []
@@ -140,9 +135,9 @@ class TestWeightDecay(unittest.TestCase):
     def check_weight_decay(
         self, place, model, use_parallel_exe=False, use_reduce=False
     ):
-        main_prog = fluid.framework.Program()
-        startup_prog = fluid.framework.Program()
-        startup_prog.random_seed = 1
+        main_prog = base.Program()
+        startup_prog = base.Program()
+        paddle.seed(1)
         with prog_scope_guard(main_prog=main_prog, startup_prog=startup_prog):
             data = paddle.static.data(
                 name="words", shape=[-1, 1], dtype="int64", lod_level=1
@@ -167,7 +162,7 @@ class TestWeightDecay(unittest.TestCase):
                 paddle.assign(updated_p, output=params[0])
 
             if use_parallel_exe:
-                loss = self.run_parallel_exe(
+                loss = self.run_standalone_exe(
                     place, [data, label], loss=avg_cost, use_reduce=use_reduce
                 )
             else:
@@ -176,26 +171,29 @@ class TestWeightDecay(unittest.TestCase):
         return loss
 
     def test_weight_decay(self):
-        model = partial(bow_net, is_sparse=False)
-        for place in get_places():
-            loss = self.check_weight_decay(place, model, use_parallel_exe=False)
-
-            # TODO(zcd): should test use_reduce=True
-            loss2 = self.check_weight_decay(
-                place, model, use_parallel_exe=True, use_reduce=False
-            )
-
-            for i in range(len(loss)):
-                self.assertTrue(
-                    np.isclose(a=loss[i], b=loss2[i], rtol=5e-5),
-                    "Expect "
-                    + str(loss[i])
-                    + "\n"
-                    + "But Got"
-                    + str(loss2[i])
-                    + " in class "
-                    + self.__class__.__name__,
+        with paddle.pir_utils.OldIrGuard():
+            model = partial(bow_net, is_sparse=False)
+            for place in get_places():
+                loss = self.check_weight_decay(
+                    place, model, use_parallel_exe=False
                 )
+
+                # TODO(zcd): should test use_reduce=True
+                loss2 = self.check_weight_decay(
+                    place, model, use_parallel_exe=True, use_reduce=False
+                )
+
+                for i in range(len(loss)):
+                    self.assertTrue(
+                        np.isclose(a=loss[i], b=loss2[i], rtol=5e-5),
+                        "Expect "
+                        + str(loss[i])
+                        + "\n"
+                        + "But Got"
+                        + str(loss2[i])
+                        + " in class "
+                        + self.__class__.__name__,
+                    )
 
 
 if __name__ == '__main__':

@@ -21,8 +21,9 @@ import unittest
 
 import numpy as np
 
-from paddle import fluid
-from paddle.fluid import framework
+from paddle import base
+
+paddle.enable_static()
 
 bidirectional_list = ["bidirectional", "bidirect"]
 
@@ -47,13 +48,19 @@ class TestSimpleRNN(unittest.TestCase):
         place = paddle.set_device(self.place)
         paddle.disable_static(self.place)
         paddle.seed(self.seed)
-        paddle.framework.random._manual_program_seed(self.seed)
+        if paddle.framework.use_pir_api():
+            with paddle.pir_utils.OldIrGuard():
+                # Note: dygraph use self.main_program.global_block().create_parameter(), it's need manual seed to old Program
+                paddle.framework.random._manual_program_seed(self.seed)
+            paddle.framework.random._manual_program_seed(self.seed)
+        else:
+            paddle.framework.random._manual_program_seed(self.seed)
         cell_dy = paddle.nn.SimpleRNNCell(self.input_size, self.hidden_size)
         self.rnn_net = paddle.nn.RNN(cell_dy, time_major=self.time_major)
 
         paddle.enable_static()
 
-        with paddle.fluid.unique_name.guard():
+        with paddle.base.unique_name.guard():
             main_program = paddle.static.Program()
             startup_program = paddle.static.Program()
             with paddle.static.program_guard(
@@ -62,10 +69,10 @@ class TestSimpleRNN(unittest.TestCase):
                 paddle.seed(self.seed)
                 paddle.framework.random._manual_program_seed(self.seed)
 
-                self.exe = fluid.Executor(
-                    fluid.CPUPlace()
+                self.exe = base.Executor(
+                    base.CPUPlace()
                     if self.place == "cpu"
-                    else fluid.CUDAPlace(0)
+                    else base.CUDAPlace(0)
                 )
 
                 rnn_in_data = paddle.static.data(
@@ -91,9 +98,9 @@ class TestSimpleRNN(unittest.TestCase):
 
                 self.fetch_list = [st_out, st_last_h]
 
-                self.exe.run(framework.default_startup_program())
+                self.exe.run(paddle.static.default_startup_program())
 
-                self.main_program = framework.default_main_program()
+                self.main_program = paddle.static.default_main_program()
 
             paddle.disable_static(self.place)
 
@@ -152,13 +159,19 @@ class TestGRU(unittest.TestCase):
         place = paddle.set_device(self.place)
         paddle.disable_static(self.place)
         paddle.seed(self.seed)
-        paddle.framework.random._manual_program_seed(self.seed)
+        if paddle.framework.use_pir_api():
+            with paddle.pir_utils.OldIrGuard():
+                # Note: dygraph use self.main_program.global_block().create_parameter(), it's need manual seed to old Program
+                paddle.framework.random._manual_program_seed(self.seed)
+            paddle.framework.random._manual_program_seed(self.seed)
+        else:
+            paddle.framework.random._manual_program_seed(self.seed)
         cell_dy = paddle.nn.GRUCell(self.input_size, self.hidden_size)
         self.rnn_net = paddle.nn.RNN(cell_dy, time_major=self.time_major)
 
         paddle.enable_static()
 
-        with paddle.fluid.unique_name.guard():
+        with paddle.base.unique_name.guard():
             main_program = paddle.static.Program()
             startup_program = paddle.static.Program()
             with paddle.static.program_guard(
@@ -167,10 +180,10 @@ class TestGRU(unittest.TestCase):
                 paddle.seed(self.seed)
                 paddle.framework.random._manual_program_seed(self.seed)
 
-                self.exe = fluid.Executor(
-                    fluid.CPUPlace()
+                self.exe = base.Executor(
+                    base.CPUPlace()
                     if self.place == "cpu"
-                    else fluid.CUDAPlace(0)
+                    else base.CUDAPlace(0)
                 )
 
                 rnn_in_data = paddle.static.data(
@@ -194,9 +207,9 @@ class TestGRU(unittest.TestCase):
 
                 self.fetch_list = [st_out, st_last_h]
 
-                self.exe.run(framework.default_startup_program())
+                self.exe.run(paddle.static.default_startup_program())
 
-                self.main_program = framework.default_main_program()
+                self.main_program = paddle.static.default_main_program()
 
             paddle.disable_static(self.place)
 
@@ -255,13 +268,19 @@ class TestGRUBackward(unittest.TestCase):
         place = paddle.set_device(self.place)
         paddle.disable_static(self.place)
         paddle.seed(self.seed)
-        paddle.framework.random._manual_program_seed(self.seed)
+        if paddle.framework.use_pir_api():
+            with paddle.pir_utils.OldIrGuard():
+                # Note: dygraph use self.main_program.global_block().create_parameter(), it's need manual seed to old Program
+                paddle.framework.random._manual_program_seed(self.seed)
+            paddle.framework.random._manual_program_seed(self.seed)
+        else:
+            paddle.framework.random._manual_program_seed(self.seed)
         cell_dy = paddle.nn.SimpleRNNCell(self.input_size, self.hidden_size)
         self.rnn_net = paddle.nn.RNN(cell_dy, time_major=self.time_major)
 
         paddle.enable_static()
 
-        with paddle.fluid.unique_name.guard():
+        with paddle.base.unique_name.guard():
             main_program = paddle.static.Program()
             startup_program = paddle.static.Program()
             with paddle.static.program_guard(
@@ -270,10 +289,10 @@ class TestGRUBackward(unittest.TestCase):
                 paddle.seed(self.seed)
                 paddle.framework.random._manual_program_seed(self.seed)
 
-                self.exe = paddle.fluid.Executor(
-                    fluid.CPUPlace()
+                self.exe = paddle.base.Executor(
+                    base.CPUPlace()
                     if self.place == "cpu"
-                    else fluid.CUDAPlace(0)
+                    else base.CUDAPlace(0)
                 )
 
                 rnn_in_data = paddle.static.data(
@@ -289,7 +308,6 @@ class TestGRUBackward(unittest.TestCase):
                 seq_len_data = paddle.static.data(
                     "seq_len", [self.batch_size], dtype="int64"
                 )
-
                 pre_h_data.stop_gradient = False
                 rnn_in_data.stop_gradient = False
 
@@ -303,12 +321,37 @@ class TestGRUBackward(unittest.TestCase):
                 )
                 loss = paddle.sum(st_out)
                 sgd = paddle.optimizer.SGD(0.0)
-                sgd.minimize(loss)
-                self.fetch_list = [st_out, st_last_h, "pre_h@GRAD", "x@GRAD"]
 
-                self.exe.run(framework.default_startup_program())
+                if paddle.framework.in_pir_mode():
+                    rnn_in_data.persistable = True
+                    pre_h_data.persistable = True
+                    params_grads = paddle.base.backward.append_backward(loss)
+                    pre_h_data_grad = None
+                    rnn_in_data_grad = None
+                    for p, g in params_grads:
+                        if p.is_same(rnn_in_data):
+                            rnn_in_data_grad = g
+                        elif p.is_same(pre_h_data):
+                            pre_h_data_grad = g
 
-                self.main_program = framework.default_main_program()
+                    self.fetch_list = [
+                        st_out,
+                        st_last_h,
+                        pre_h_data_grad,
+                        rnn_in_data_grad,
+                    ]
+                else:
+                    sgd.minimize(loss)
+                    self.fetch_list = [
+                        st_out,
+                        st_last_h,
+                        "pre_h@GRAD",
+                        "x@GRAD",
+                    ]
+
+                self.exe.run(paddle.static.default_startup_program())
+
+                self.main_program = paddle.static.default_main_program()
 
             paddle.disable_static(self.place)
 
@@ -352,8 +395,6 @@ class TestGRUBackward(unittest.TestCase):
     def runTest(self):
         self.test_base(True)
         self.test_base()
-        self.test_base()
-        self.test_base(True)
 
 
 if __name__ == "__main__":

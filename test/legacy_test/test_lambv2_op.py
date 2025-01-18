@@ -17,14 +17,14 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
-from paddle.fluid.dygraph.base import switch_to_static_graph
+from paddle import base
+from paddle.base import core
+from paddle.base.dygraph.base import switch_to_static_graph
 
 
 class LAMBOptimizer(paddle.optimizer.Lamb):
     def _append_optimize_op(self, block, param_and_grad):
-        assert isinstance(block, fluid.framework.Block)
+        assert isinstance(block, (base.framework.Block, paddle.pir.Block))
         block.program._use_lamb = True
 
         m = moment1 = self._get_accumulator(
@@ -95,8 +95,6 @@ class LAMBOptimizer(paddle.optimizer.Lamb):
         paddle.assign(next_v, v)
         paddle.assign(next_param, param_and_grad[0])
 
-        return None
-
 
 class TestLambOpV2(unittest.TestCase):
     def test_lamb_op(self):
@@ -115,59 +113,62 @@ class TestLambOpV2(unittest.TestCase):
 
 
 class TestLambOpWithCombinedOp(unittest.TestCase):
+
     def test_lamb_op_with_multi_steps(self):
         paddle.enable_static()
 
         def _build_static_model(main, startup, seed=100):
-            with fluid.program_guard(main, startup):
-                main.random_seed = seed
-                startup.random_seed = seed
+            with base.program_guard(main, startup):
+                paddle.seed(seed)
                 x = paddle.static.data(
                     name='X', shape=[-1, 13], dtype='float32'
                 )
                 y = paddle.static.data(name='Y', shape=[-1, 1], dtype='float32')
-                prediction = paddle.static.nn.fc(x, size=1, activation=None)
+                linear = paddle.nn.Linear(
+                    in_features=x.shape[-1], out_features=1
+                )
+                prediction = linear(x)
                 loss = paddle.nn.functional.square_error_cost(
                     input=prediction, label=y
                 )
                 avg_loss = paddle.mean(loss)
             return avg_loss
 
-        place = fluid.CPUPlace()
+        place = base.CPUPlace()
         num_steps = 10
 
         for i in range(num_steps):
             feed_x = np.random.random(size=(10, 13)).astype('float32')
             feed_y = np.random.random(size=(10, 1)).astype('float32')
 
-            main_program = fluid.Program()
-            startup_program = fluid.Program()
-            with fluid.program_guard(main_program, startup_program):
+            main_program = paddle.static.Program()
+            startup_program = paddle.static.Program()
+            with base.program_guard(main_program, startup_program):
                 avg_loss = _build_static_model(main_program, startup_program)
                 lamb_kernel = paddle.optimizer.Lamb(learning_rate=0.2)
                 lamb_kernel.minimize(avg_loss)
 
-            executor = fluid.Executor(place)
+            executor = base.Executor(place)
             executor.run(startup_program)
             output = executor.run(
                 program=main_program,
                 feed={'X': feed_x, 'Y': feed_y},
-                fetch_list=[avg_loss.name],
+                fetch_list=[avg_loss],
             )
 
-            main = fluid.Program()
-            startup = fluid.Program()
-            with fluid.program_guard(main, startup):
+            main = paddle.static.Program()
+            startup = paddle.static.Program()
+            with base.program_guard(main, startup):
                 loss = _build_static_model(main, startup)
                 lamb = LAMBOptimizer(learning_rate=0.2)
                 lamb.minimize(loss)
 
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             exe.run(startup)
             out = exe.run(
                 program=main,
                 feed={'X': feed_x, 'Y': feed_y},
-                fetch_list=[loss.name],
+                fetch_list=[loss],
             )
 
             np.testing.assert_allclose(out, output, rtol=1e-05)
@@ -203,62 +204,134 @@ class TestLambOpV2Group(TestLambOpV2):
 
 class TestLambOpMultiPrecision(unittest.TestCase):
     def check_main(self, x_np, place, multi_precision=False, seed=10, n=10):
-        main_prog = paddle.static.Program()
-        startup_prog = paddle.static.Program()
-        with paddle.static.program_guard(main_prog, startup_prog):
-            paddle.seed(seed)
-            with paddle.static.amp.fp16_guard():
+        with paddle.pir_utils.OldIrGuard():
+            main_prog = paddle.static.Program()
+            startup_prog = paddle.static.Program()
+            with paddle.static.program_guard(main_prog, startup_prog):
+                paddle.seed(seed)
+                with paddle.static.amp.fp16_guard():
+                    x = paddle.static.data(
+                        name='x', shape=[None, 10], dtype='float32'
+                    )
+                    linear = paddle.nn.Linear(10, 2)
+                    hidden = linear(x)
+                    loss = paddle.mean(hidden)
+
+                original_optimizer = paddle.optimizer.Lamb(learning_rate=1e-3)
+                original_optimizer._multi_precision = multi_precision
+                if multi_precision:
+                    optimizer = paddle.static.amp.decorate(
+                        original_optimizer,
+                        use_pure_fp16=True,
+                        use_fp16_guard=True,
+                    )
+                else:
+                    optimizer = original_optimizer
+                optimizer.minimize(loss)
+
+            weight, bias = linear.weight, linear.bias
+            exe = paddle.static.Executor(place)
+            scope = paddle.static.Scope()
+            if x.dtype in (core.VarDesc.VarType.FP16, core.DataType.FLOAT16):
+                x_np = x_np.astype(np.float16)
+
+            def get_parameter(var):
+                name = var if isinstance(var, (str, bytes)) else var.name
+                params = original_optimizer._get_parameter(name, scope)
+                assert isinstance(params, (list, tuple))
+                params = list(params)
+                assert len(params) == 2
+                if multi_precision:
+                    params[0] = np.array(params[0])
+                    params[1] = np.array(params[1])
+                    np.testing.assert_array_equal(
+                        params[0], params[1].astype(np.float16)
+                    )
+                    return params[0].astype(np.float32)
+                else:
+                    self.assertIsNotNone(params[0])
+                    self.assertIsNone(params[1])
+                    params[0] = np.array(params[0])
+                    return params[0]
+
+            with paddle.static.scope_guard(scope):
+                exe.run(startup_prog)
+                if multi_precision:
+                    optimizer.amp_init(place)
+
+                weight_np, bias_np = None, None
+                for i in range(n):
+                    feed_dict = {'x': x_np}
+                    weight_np, bias_np = exe.run(
+                        main_prog, feed=feed_dict, fetch_list=[weight, bias]
+                    )
+                    weight_np = weight_np.astype('float32')
+                    bias_np = bias_np.astype('float32')
+                    np.testing.assert_array_equal(
+                        weight_np, get_parameter(weight)
+                    )
+                    np.testing.assert_array_equal(bias_np, get_parameter(bias))
+                return weight_np, bias_np
+
+    def check_amp_in_pir(
+        self, x_np, place, multi_precision=True, seed=10, n=10
+    ):
+        with paddle.pir_utils.IrGuard():
+            main_prog = paddle.static.Program()
+            startup_prog = paddle.static.Program()
+            with paddle.static.program_guard(main_prog, startup_prog):
+                paddle.seed(seed)
+
                 x = paddle.static.data(
                     name='x', shape=[None, 10], dtype='float32'
                 )
                 linear = paddle.nn.Linear(10, 2)
-                hidden = linear(x)
-                loss = paddle.mean(hidden)
-
-            original_optimizer = paddle.optimizer.Lamb(learning_rate=1e-3)
-            original_optimizer._multi_precision = multi_precision
-            if multi_precision:
-                optimizer = paddle.static.amp.decorate(
-                    original_optimizer, use_pure_fp16=True, use_fp16_guard=True
+                original_optimizer = paddle.optimizer.Lamb(
+                    learning_rate=0.001, parameters=linear.parameters()
                 )
-            else:
-                optimizer = original_optimizer
-            optimizer.minimize(loss)
 
-        weight, bias = linear.weight, linear.bias
-        exe = paddle.static.Executor(place)
-        scope = paddle.static.Scope()
-        x = main_prog.global_block().var(x.name)
-        if x.dtype == core.VarDesc.VarType.FP16:
-            x_np = x_np.astype(np.float16)
-
-        def get_parameter(var):
-            name = var if isinstance(var, (str, bytes)) else var.name
-            params = original_optimizer._get_parameter(name, scope)
-            assert isinstance(params, (list, tuple))
-            params = list(params)
-            assert len(params) == 2
-            if multi_precision:
-                params[0] = np.array(params[0])
-                params[1] = np.array(params[1])
-                np.testing.assert_array_equal(
-                    params[0], params[1].astype(np.float16)
+                linear, optimizer = paddle.amp.decorate(
+                    models=linear,
+                    optimizers=original_optimizer,
+                    level='O2',
                 )
-                return params[0].astype(np.float32)
-            else:
-                self.assertIsNotNone(params[0])
-                self.assertIsNone(params[1])
-                params[0] = np.array(params[0])
-                return params[0]
 
-        with paddle.static.scope_guard(scope):
+                with paddle.amp.auto_cast(
+                    level='O2', dtype='float16', use_promote=True
+                ):
+                    out = linear(x)
+                    loss = paddle.mean(out)
+                optimizer.minimize(loss)
+
+            weight, bias = linear.weight, linear.bias
+            exe = paddle.static.Executor(place)
+
+            def get_parameter(var):
+                name = var if isinstance(var, (str, bytes)) else var.name
+                params = original_optimizer._get_parameter(name)
+                assert isinstance(params, (list, tuple))
+                params = list(params)
+                assert len(params) == 2
+                if multi_precision:
+                    params[0] = np.array(params[0])
+                    params[1] = np.array(params[1])
+                    np.testing.assert_array_equal(
+                        params[0], params[1].astype(np.float16)
+                    )
+                    return params[0].astype(np.float32)
+                else:
+                    self.assertIsNotNone(params[0])
+                    self.assertIsNone(params[1])
+                    params[0] = np.array(params[0])
+                    return params[0]
+
             exe.run(startup_prog)
             if multi_precision:
                 optimizer.amp_init(place)
 
             weight_np, bias_np = None, None
             for i in range(n):
-                feed_dict = {x.name: x_np}
+                feed_dict = {'x': x_np}
                 weight_np, bias_np = exe.run(
                     main_prog, feed=feed_dict, fetch_list=[weight, bias]
                 )
@@ -266,6 +339,7 @@ class TestLambOpMultiPrecision(unittest.TestCase):
                 bias_np = bias_np.astype('float32')
                 np.testing.assert_array_equal(weight_np, get_parameter(weight))
                 np.testing.assert_array_equal(bias_np, get_parameter(bias))
+
             return weight_np, bias_np
 
     @switch_to_static_graph
@@ -277,8 +351,11 @@ class TestLambOpMultiPrecision(unittest.TestCase):
         x_np = np.random.random(size=[5, 10]).astype('float32')
         weight_1, bias_1 = self.check_main(x_np, place, multi_precision=False)
         weight_2, bias_2 = self.check_main(x_np, place, multi_precision=True)
+        weight_3, bias_3 = self.check_amp_in_pir(x_np, place)
         self.assertTrue(np.all(np.abs(weight_1 - weight_2) < 1e-3))
         self.assertTrue(np.all(np.abs(bias_1 - bias_2) < 1e-7))
+        self.assertTrue(np.all(np.abs(weight_1 - weight_3) < 1e-3))
+        self.assertTrue(np.all(np.abs(bias_1 - bias_3) < 1e-7))
 
 
 if __name__ == "__main__":

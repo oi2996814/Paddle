@@ -20,14 +20,16 @@ limitations under the License. */
 #include <string>
 #include <vector>
 
-#include "paddle/phi/core/distributed/auto_parallel/auto_parallel.pb.h"
 #include "paddle/phi/core/distributed/auto_parallel/device_mesh.h"
 #include "paddle/phi/core/distributed/auto_parallel/utils.h"
 #include "paddle/phi/core/enforce.h"
 
 namespace phi {
 namespace distributed {
+
 namespace auto_parallel {
+class ProcessMeshProto;
+}
 
 class ProcessMesh {
  public:
@@ -48,7 +50,7 @@ class ProcessMesh {
   int64_t ndim() const { return shape_.size(); }
 
   int64_t dim_size(int64_t dim) const {
-    int64_t cdim = canonical_dim(dim, shape_.size());
+    int64_t cdim = auto_parallel::canonical_dim(dim, shape_.size());
     return shape_[cdim];
   }
 
@@ -65,11 +67,13 @@ class ProcessMesh {
   bool empty() const { return (shape_.empty() || process_ids_.empty()); }
   bool contains(int64_t process_id) const;
 
+  size_t hash() const { return std::hash<std::string>{}(to_string()); }
+
   // ProcessMesh from_string(const std::string& mesh_str);
   std::string to_string() const;
 
-  static ProcessMesh from_proto(const ProcessMeshProto& proto);
-  ProcessMeshProto to_proto() const;
+  static ProcessMesh from_proto(const auto_parallel::ProcessMeshProto& proto);
+  void to_proto(auto_parallel::ProcessMeshProto* proto) const;
 
  private:
   std::vector<int64_t> shape_;
@@ -88,6 +92,21 @@ inline bool operator!=(const ProcessMesh& lhs, const ProcessMesh& rhs) {
   return !operator==(lhs, rhs);
 }
 
-}  // namespace auto_parallel
+// split the mesh into sub-meshes at the given axis
+std::vector<ProcessMesh> SplitMesh(const ProcessMesh& mesh, int axis);
+
+// return which dimension that the sub_mesh is splitted from the global_mesh,
+// if sub_mesh is not a subset of global_mesh, return -1
+int SubMeshDim(const ProcessMesh& global_mesh, const ProcessMesh& sub_mesh);
+
+// when the shapes of two meshes are different and their process_ids
+// are the same, check whether the only difference is that mesh 'a'
+// has an additional '1' on the splitted dim of its shape.
+// e.g. a.shape = [2], b.shape = [2, 1], and the process_ids are the
+// same, then they are equal.
+bool mesh_equal_ignore_shape1(const ProcessMesh& a,
+                              const ProcessMesh& b,
+                              int split_dim);
+
 }  // namespace distributed
 }  // namespace phi

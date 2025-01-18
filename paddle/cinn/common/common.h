@@ -24,29 +24,31 @@
 #include "paddle/cinn/common/shared.h"
 #include "paddle/cinn/common/target.h"
 #include "paddle/cinn/common/type.h"
+#include "paddle/cinn/utils/error.h"
+#include "paddle/common/enforce.h"
 
 namespace cinn {
 
 // export some general concepts.
-using common::Context;
-using common::make_shared;
-using common::Object;
-using common::ref_count;
-using common::Shared;
-using common::UniqName;
+using cinn::common::Context;
+using cinn::common::make_shared;
+using cinn::common::Object;
+using cinn::common::ref_count;
+using cinn::common::Shared;
+using cinn::common::UniqName;
 
 // Type related.
-using common::Bool;
-using common::Float;
-using common::Int;
-using common::UInt;
-using common::Void;
+using cinn::common::Bool;
+using cinn::common::Float;
+using cinn::common::Int;
+using cinn::common::UInt;
+using cinn::common::Void;
 
-using common::type_of;
+using cinn::common::type_of;
 
-using common::Target;
-using common::Type;
-using common::UnkTarget;
+using cinn::common::Target;
+using cinn::common::Type;
+using cinn::common::UnkTarget;
 
 template <typename T>
 T& Reference(const T* x) {
@@ -54,17 +56,56 @@ T& Reference(const T* x) {
 }
 
 static void CheckVarNameValid(const absl::string_view name) {
-  CHECK(!name.empty());
-  CHECK(name.find(' ') == std::string::npos &&   //
-        name.find('.') == std::string::npos &&   //
-        name.find('@') == std::string::npos &&   //
-        name.find('/') == std::string::npos &&   //
-        name.find('\t') == std::string::npos &&  //
-        name.find('\n') == std::string::npos &&  //
-        name.find('\r') == std::string::npos)
-      << "Some invalid character found";
-  CHECK(!common::IsAxisNameReserved(std::string(name)))
-      << "The name [" << name << "] is reserved for internal axis";
+  PADDLE_ENFORCE_EQ(name.empty(),
+                    false,
+                    ::common::errors::InvalidArgument(
+                        "Var name is empty. Please check your input"));
+  PADDLE_ENFORCE_EQ(
+      name.find(' '),
+      std::string::npos,
+      ::common::errors::InvalidArgument("Var name contains space. Received: "
+                                        "%s, which is invalid for var name.",
+                                        name));
+  PADDLE_ENFORCE_EQ(
+      name.find('.'),
+      std::string::npos,
+      ::common::errors::InvalidArgument(
+          "Var name contains dot. Received: %s, which is invalid for var name.",
+          name));
+  PADDLE_ENFORCE_EQ(
+      name.find('@'),
+      std::string::npos,
+      ::common::errors::InvalidArgument(
+          "Var name contains at. Received: %s, which is invalid for var name.",
+          name));
+  PADDLE_ENFORCE_EQ(
+      name.find('/'),
+      std::string::npos,
+      ::common::errors::InvalidArgument("Var name contains slash. Received: "
+                                        "%s, which is invalid for var name.",
+                                        name));
+  PADDLE_ENFORCE_EQ(
+      name.find('\t'),
+      std::string::npos,
+      ::common::errors::InvalidArgument(
+          "Var name contains tab. Received: %s, which is invalid for var name.",
+          name));
+  PADDLE_ENFORCE_EQ(
+      name.find('\n'),
+      std::string::npos,
+      ::common::errors::InvalidArgument("Var name contains newline. Received: "
+                                        "%s, which is invalid for var name.",
+                                        name));
+  PADDLE_ENFORCE_EQ(name.find('\r'),
+                    std::string::npos,
+                    ::common::errors::InvalidArgument(
+                        "Var name contains carriage return. Received: %s, "
+                        "which is invalid for var name.",
+                        name));
+  PADDLE_ENFORCE_EQ(cinn::common::IsAxisNameReserved(std::string(name)),
+                    false,
+                    ::common::errors::InvalidArgument(
+                        "The name [%s] is reserved for internal axis", name));
 }
 
 }  // namespace cinn

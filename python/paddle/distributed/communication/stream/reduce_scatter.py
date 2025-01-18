@@ -12,15 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import paddle
 import paddle.distributed as dist
 from paddle import framework
+from paddle.base import data_feeder
 from paddle.distributed.communication.group import (
     _get_global_group,
     _warn_cur_rank_not_in_group,
 )
 from paddle.distributed.communication.reduce import ReduceOp, _get_reduce_op
-from paddle.fluid import data_feeder
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from paddle import Tensor
+    from paddle.base.core import task
+    from paddle.distributed.communication.group import Group
+    from paddle.distributed.communication.reduce import _ReduceOp
 
 
 def _reduce_scatter_tensor_in_dygraph(
@@ -99,17 +111,16 @@ def _reduce_scatter_in_static_mode(tensor, tensor_or_tensor_list, group):
             'nranks': nranks,
         },
     )
-    return None
 
 
 def reduce_scatter(
-    tensor,
-    tensor_or_tensor_list,
-    op=ReduceOp.SUM,
-    group=None,
-    sync_op=True,
-    use_calc_stream=False,
-):
+    tensor: Tensor,
+    tensor_or_tensor_list: Tensor | Sequence[Tensor],
+    op: _ReduceOp = ReduceOp.SUM,
+    group: Group | None = None,
+    sync_op: bool = True,
+    use_calc_stream: bool = False,
+) -> task | None:
     """
 
     Reduce, then scatter a tensor (or a tensor list) across devices.
@@ -120,7 +131,7 @@ def reduce_scatter(
         tensor_or_tensor_list (Union[Tensor, List[Tensor]]): The input to scatter.
             If it is a tensor, it should be correctly-sized. If it is a list, it should contain correctly-sized tensors.
         op (ReduceOp.SUM|ReduceOp.MAX|ReduceOp.MIN|ReduceOp.PROD, optional): The reduction used. If none is given, use ReduceOp.SUM as default.
-        group (Group, optional): Communicate in which group. If none is given, use the global group as default.
+        group (Group|None, optional): Communicate in which group. If none is given, use the global group as default.
         sync_op (bool, optional): Indicate whether the communication is sync or not. If none is given, use true as default.
         use_calc_stream (bool, optional): Indicate whether the communication is done on calculation stream. If none is given, use false as default. This
             option is designed for high performance demand, be careful to turn it on except you are clearly know its meaning.
@@ -134,21 +145,22 @@ def reduce_scatter(
     Examples:
         .. code-block:: python
 
-            # required: distributed
-            import paddle
-            import paddle.distributed as dist
+            >>> # doctest: +REQUIRES(env: DISTRIBUTED)
+            >>> import paddle
+            >>> import paddle.distributed as dist
 
-            dist.init_parallel_env()
-            if dist.get_rank() == 0:
-                data1 = paddle.to_tensor([0, 1])
-                data2 = paddle.to_tensor([2, 3])
-            else:
-                data1 = paddle.to_tensor([4, 5])
-                data2 = paddle.to_tensor([6, 7])
-            dist.stream.reduce_scatter(data1, [data1, data2])
-            out = data1.numpy()
-            # [4, 6]  (2 GPUs, out for rank 0)
-            # [8, 10] (2 GPUs, out for rank 1)
+            >>> dist.init_parallel_env()
+            >>> if dist.get_rank() == 0:
+            ...     data1 = paddle.to_tensor([0, 1])
+            ...     data2 = paddle.to_tensor([2, 3])
+            >>> else:
+            ...     data1 = paddle.to_tensor([4, 5])
+            ...     data2 = paddle.to_tensor([6, 7])
+            >>> dist.stream.reduce_scatter(data1, [data1, data2])
+            >>> out = data1.numpy()
+            >>> print(out)
+            >>> # [4, 6]  (2 GPUs, out for rank 0)
+            >>> # [8, 10] (2 GPUs, out for rank 1)
     """
     if _warn_cur_rank_not_in_group(group):
         return
@@ -218,22 +230,23 @@ def _reduce_scatter_base(
     Examples:
         .. code-block:: python
 
-            # required: distributed
-            import paddle
-            import paddle.distributed as dist
+            >>> # doctest: +REQUIRES(env: DISTRIBUTED)
+            >>> import paddle
+            >>> import paddle.distributed as dist
 
-            dist.init_parallel_env()
-            if dist.get_rank() == 0:
-                data1 = paddle.to_tensor([7, 8, 9])
-                data2 = paddle.to_tensor([10, 11, 12])
-                dist.stream.scatter(data1, src=1)
-            else:
-                data1 = paddle.to_tensor([1, 2, 3])
-                data2 = paddle.to_tensor([4, 5, 6])
-                dist.stream.scatter(data1, [data1, data2], src=1)
-            out = data1.numpy()
-            # [1, 2, 3] (2 GPUs, out for rank 0)
-            # [4, 5, 6] (2 GPUs, out for rank 1)
+            >>> dist.init_parallel_env()
+            >>> if dist.get_rank() == 0:
+            ...     data1 = paddle.to_tensor([7, 8, 9])
+            ...     data2 = paddle.to_tensor([10, 11, 12])
+            ...     dist.stream.scatter(data1, src=1)
+            >>> else:
+            ...     data1 = paddle.to_tensor([1, 2, 3])
+            ...     data2 = paddle.to_tensor([4, 5, 6])
+            ...     dist.stream.scatter(data1, [data1, data2], src=1)
+            >>> out = data1.numpy()
+            >>> print(out)
+            >>> # [1, 2, 3] (2 GPUs, out for rank 0)
+            >>> # [4, 5, 6] (2 GPUs, out for rank 1)
     """
     if _warn_cur_rank_not_in_group(group):
         return

@@ -23,13 +23,15 @@ template <typename T, typename Context>
 void CumprodKernel(const Context& dev_ctx,
                    const DenseTensor& input,
                    int dim,
+                   bool exclusive,
+                   bool reverse,
                    DenseTensor* out) {
   using XPUType = typename XPUTypeTrait<T>::Type;
   const DenseTensor* x = &input;
   auto* x_data = x->data<T>();
   auto* out_data = dev_ctx.template Alloc<T>(out);
   DDim shape = x->dims();
-  std::vector<int64_t> xshape = phi::vectorize<int64_t>(shape);
+  std::vector<int64_t> xshape = common::vectorize<int64_t>(shape);
 
   if (dim < 0) dim += xshape.size();
   if (shape.size() == 0) {

@@ -30,8 +30,8 @@ limitations under the License. */
 namespace phi {
 namespace funcs {
 
-// SelectedRows + SelectedRows will simplely concat value and rows.
-// The real computation happens in dealing with LoDTensor.
+// SelectedRows + SelectedRows will simply concat value and rows.
+// The real computation happens in dealing with DenseTensor.
 template <typename DeviceContext, typename T>
 struct SelectedRowsAdd {
   void operator()(const DeviceContext& context,
@@ -77,7 +77,7 @@ struct SelectedRowsAddToTensor {
 };
 
 namespace scatter {
-// functors for manuplating SelectedRows data
+// functors for manipulating SelectedRows data
 template <typename DeviceContext, typename T>
 struct MergeAdd {
   // unary functor, merge by adding duplicated rows in

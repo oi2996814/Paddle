@@ -115,8 +115,8 @@ see: http://www.paddlepaddle.org/documentation/docs/zh/1.6/user_guides/howto/tra
         "--backend",
         type=str,
         default=os.environ.get('PADDLE_DISTRI_BACKEND', 'auto'),
-        help="Specifize the backend, can be gloo|nccl|bkcl|auto|heter. "
-        "Default value is auto which perfers nccl or bkcl.",
+        help="Specify the backend, can be gloo|nccl|bkcl|auto|heter. "
+        "Default value is auto which prefers nccl or bkcl.",
     )
     base_group.add_argument(
         "--nproc_per_node",
@@ -141,7 +141,7 @@ see: http://www.paddlepaddle.org/documentation/docs/zh/1.6/user_guides/howto/tra
             default=None,
             help="It's for gpu training."
             "For example:"
-            "--gpus=\"0,1,2,3\" will launch four training processes each bound to one gpu.",
+            '--gpus="0,1,2,3" will launch four training processes each bound to one gpu.',
         )
         base_group.add_argument("--selected_gpus", dest="gpus")
 
@@ -151,7 +151,7 @@ see: http://www.paddlepaddle.org/documentation/docs/zh/1.6/user_guides/howto/tra
             type=str,
             default=None,
             help="It's for xpu training. For example: "
-            "--xpus=\"0,1,2,3\" will launch four training processes each bound to one xpu.",
+            '--xpus="0,1,2,3" will launch four training processes each bound to one xpu.',
         )
         base_group.add_argument("--selected_xpus", dest="xpus")
 
@@ -274,9 +274,7 @@ def get_cluster_from_args(args, device_mode, devices_per_proc):
     node_rank = node_ips.index(node_ip)
 
     logger.debug(
-        "parsed from args: node_ips:{} node_ip:{} node_rank:{}".format(
-            node_ips, node_ip, node_rank
-        )
+        f"parsed from args: node_ips:{node_ips} node_ip:{node_ip} node_rank:{node_rank}"
     )
 
     free_ports = None
@@ -298,7 +296,7 @@ def get_cluster_from_args(args, device_mode, devices_per_proc):
 
     trainer_endpoints = []
     for ip in node_ips:
-        trainer_endpoints.append(["%s:%d" % (ip, port) for port in free_ports])
+        trainer_endpoints.append([f"{ip}:{port}" for port in free_ports])
     return get_cluster(
         node_ips, node_ip, trainer_endpoints, device_mode, devices_per_proc
     )
@@ -307,8 +305,7 @@ def get_cluster_from_args(args, device_mode, devices_per_proc):
 def cpuonly_check(args):
     if args.ips and len(args.ips.split(',')) > 1:
         raise RuntimeError(
-            "CPUONLY launch only support single trainer, that is len(ips)=1, but got %s."
-            % args.ips
+            f"CPUONLY launch only support single trainer, that is len(ips)=1, but got {args.ips}."
         )
     if args.run_mode:
         assert (
@@ -331,9 +328,7 @@ def get_cluster_info(args):
         )
     trainers_num = cloud_utils.get_trainers_num()
     logger.debug(
-        "parsed from args trainerss_num:{} mode:{} devices:{}".format(
-            trainers_num, device_mode, devices_per_proc
-        )
+        f"parsed from args trainers_num:{trainers_num} mode:{device_mode} devices:{devices_per_proc}"
     )
 
     cuda_visible_devices = os.getenv("CUDA_VISIBLE_DEVICES")
@@ -348,7 +343,7 @@ def get_cluster_info(args):
     if args.enable_auto_mapping:
         assert (
             args.cluster_topo_path is not None
-        ), "The cluster topology must be provied when enabling auto mapping."
+        ), "The cluster topology must be provided when enabling auto mapping."
         rank_mapping_path = args.rank_mapping_path or os.getenv(
             "PADDLE_RANK_MAPPING_PATH"
         )
@@ -357,7 +352,7 @@ def get_cluster_info(args):
             os.environ["PADDLE_ENABLE_ELASTIC"] = str(
                 enable_elastic(args, device_mode)
             )
-            cwd = pathlib.Path().resolve()
+            cwd = pathlib.Path().cwd()
             rank_mapping_path = os.path.join(
                 cwd, "auto_parallel_rank_mapping.json"
             )
@@ -533,9 +528,7 @@ def which_distributed_mode(args):
 
     if len(has_ps_args) > 0:
         logger.info(
-            "Run parameter-sever mode. pserver arguments:{}, accelerators count:{}".format(
-                has_ps_args, accelerators
-            )
+            f"Run parameter-sever mode. pserver arguments:{has_ps_args}, accelerators count:{accelerators}"
         )
         has_ps_heter_args = list(set(has_ps_args) & set(ps_heter_args))
         has_coordinator_args = list(set(has_ps_args) & set(coordinator_args))
@@ -545,9 +538,7 @@ def which_distributed_mode(args):
             return DistributeMode.PS
     elif len(has_collective_args) > 0:
         logger.info(
-            "Run collective mode. gpu arguments:{}, cuda count:{}".format(
-                has_collective_args, accelerators
-            )
+            f"Run collective mode. gpu arguments:{has_collective_args}, cuda count:{accelerators}"
         )
         return DistributeMode.COLLECTIVE
     else:

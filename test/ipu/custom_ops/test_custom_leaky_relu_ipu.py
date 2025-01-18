@@ -24,7 +24,7 @@ import paddle.static
 from paddle.utils.cpp_extension import load
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from op_test_ipu import IPUOpTest, np_dtype_to_fluid_str
+from op_test_ipu import IPUOpTest, np_dtype_to_base_str
 
 
 def load_custom_ops():
@@ -60,7 +60,7 @@ class TestBase(IPUOpTest):
         self.feed_shape = [x.shape for x in self.feed.values()]
         self.feed_list = list(self.feed.keys())
         self.feed_dtype = [
-            np_dtype_to_fluid_str(x.dtype) for x in self.feed.values()
+            np_dtype_to_base_str(x.dtype) for x in self.feed.values()
         ]
 
     def set_attrs(self):
@@ -71,8 +71,7 @@ class TestBase(IPUOpTest):
         main_prog = paddle.static.Program()
         startup_prog = paddle.static.Program()
         SEED = self.SEED
-        main_prog.random_seed = SEED
-        startup_prog.random_seed = SEED
+        paddle.seed(SEED)
         custom_ops = load_custom_ops()
 
         with paddle.static.scope_guard(scope):

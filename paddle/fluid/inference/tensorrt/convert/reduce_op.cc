@@ -21,16 +21,14 @@ limitations under the License. */
 
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 class ReduceOpConverter : public OpConverter {
  public:
   void operator()(const framework::proto::OpDesc& op,
                   const framework::Scope& scope,
                   bool test_mode) override {
-    VLOG(4) << "convert a paddle " << op_type << " op to tensorrt reduce layer";
+    VLOG(4) << "Convert " << op_type << " op to tensorrt reduce layer";
     framework::OpDesc op_desc(op, nullptr);
     auto reduce_type = ops_.find(op_type);
     auto* x = engine_->GetITensor(op_desc.Input("X").front());
@@ -38,9 +36,25 @@ class ReduceOpConverter : public OpConverter {
     int input_dims = input_shape.nbDims;
 
     bool keep_dim = PADDLE_GET_CONST(bool, op_desc.GetAttr("keep_dim"));
-    std::vector<int32_t> dim =
-        PADDLE_GET_CONST(std::vector<int32_t>, op_desc.GetAttr("dim"));
+
+    std::vector<int32_t> dim;
+    if (op_desc.GetProtoAttr("dim").type() ==
+        framework::proto::AttrType::INTS) {
+      dim = PADDLE_GET_CONST(std::vector<int32_t>, op_desc.GetAttr("dim"));
+    } else if (op_desc.GetProtoAttr("dim").type() ==
+               framework::proto::AttrType::LONGS) {
+      std::vector<int64_t> tem_dim =
+          PADDLE_GET_CONST(std::vector<int64_t>, op_desc.GetAttr("dim"));
+      for (size_t i = 0; i < tem_dim.size(); i++) {
+        dim.push_back(static_cast<int32_t>(tem_dim[i]));
+      }
+    }
+
     bool reduce_all = PADDLE_GET_CONST(bool, op_desc.GetAttr("reduce_all"));
+
+    if (dim.size() == 0) {
+      reduce_all = true;
+    }
 
     nvinfer1::IReduceLayer* layer = nullptr;
     if (reduce_all) {
@@ -61,7 +75,6 @@ class ReduceOpConverter : public OpConverter {
           if (x < 0) {
             res |= 1 << (x + input_dims);
           } else {
-            if (!engine_->with_dynamic_shape()) x = x - 1;
             res |= 1 << x;
           }
         }
@@ -78,7 +91,7 @@ class ReduceOpConverter : public OpConverter {
     auto output_name = op_desc.Output("Out")[0];
     // Ensure that the output type and input type are consistent.
     layer->getOutput(0)->setType(layer->getInput(0)->getType());
-    RreplenishLayerAndOutput(layer, op_type, {output_name}, test_mode);
+    ReplenishLayerAndOutput(layer, op_type, {output_name}, test_mode);
   }
 
  protected:
@@ -144,8 +157,19 @@ class ReduceAnyOpConverter : public ReduceOpConverter {
     int input_dims = input_shape.nbDims;
     // Discriminate DataType between int and bool.
     bool keep_dim = PADDLE_GET_CONST(bool, op_desc.GetAttr("keep_dim"));
-    std::vector<int32_t> dim =
-        PADDLE_GET_CONST(std::vector<int32_t>, op_desc.GetAttr("dim"));
+
+    std::vector<int32_t> dim;
+    if (op_desc.GetProtoAttr("dim").type() ==
+        framework::proto::AttrType::INTS) {
+      dim = PADDLE_GET_CONST(std::vector<int32_t>, op_desc.GetAttr("dim"));
+    } else if (op_desc.GetProtoAttr("dim").type() ==
+               framework::proto::AttrType::LONGS) {
+      std::vector<int64_t> tem_dim =
+          PADDLE_GET_CONST(std::vector<int64_t>, op_desc.GetAttr("dim"));
+      for (size_t i = 0; i < tem_dim.size(); i++) {
+        dim.push_back(static_cast<int32_t>(tem_dim[i]));
+      }
+    }
     bool reduce_all = PADDLE_GET_CONST(bool, op_desc.GetAttr("reduce_all"));
 
     if (reduce_all) {
@@ -166,7 +190,6 @@ class ReduceAnyOpConverter : public ReduceOpConverter {
           if (x < 0) {
             res |= 1 << (x + input_dims);
           } else {
-            if (!engine_->with_dynamic_shape()) x = x - 1;
             res |= 1 << x;
           }
         }
@@ -189,7 +212,7 @@ class ReduceAnyOpConverter : public ReduceOpConverter {
     // Ensure that the output type and input type are consistent.
     layer->getOutput(0)->setType(cast_layer->getInput(0)->getType());
 
-    RreplenishLayerAndOutput(layer, op_type, {output_name}, test_mode);
+    ReplenishLayerAndOutput(layer, op_type, {output_name}, test_mode);
   };
 };
 
@@ -198,9 +221,7 @@ class ReduceAllOpConverter : public ReduceAnyOpConverter {
   ReduceAllOpConverter() { op_type = "reduce_all"; }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(reduce_sum, ReduceSumOpConverter);
 REGISTER_TRT_OP_CONVERTER(reduce_mean, ReduceMeanOpConverter);

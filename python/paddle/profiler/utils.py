@@ -12,14 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import functools
 import sys
 from contextlib import ContextDecorator, contextmanager
-from typing import Any
+from typing import TYPE_CHECKING
 from warnings import warn
 
-from paddle.fluid import core
-from paddle.fluid.core import TracerEventType, _RecordEvent
+from paddle.base import core
+from paddle.base.core import TracerEventType, _RecordEvent
+
+if TYPE_CHECKING:
+    import types
+
+    from typing_extensions import Self
+
+    from paddle.base.core import _ProfilerResult
 
 _is_profiler_used = False
 _has_optimizer_wrapped = False
@@ -49,42 +58,52 @@ class RecordEvent(ContextDecorator):
         .. code-block:: python
             :name: code-example1
 
-            import paddle
-            import paddle.profiler as profiler
-            # method1: using context manager
-            with profiler.RecordEvent("record_add"):
-                data1 = paddle.randn(shape=[3])
-                data2 = paddle.randn(shape=[3])
-                result = data1 + data2
-            # method2: call begin() and end()
-            record_event = profiler.RecordEvent("record_add")
-            record_event.begin()
-            data1 = paddle.randn(shape=[3])
-            data2 = paddle.randn(shape=[3])
-            result = data1 + data2
-            record_event.end()
+            >>> import paddle
+            >>> import paddle.profiler as profiler
+            >>> # method1: using context manager
+            >>> paddle.seed(2023)
+            >>> with profiler.RecordEvent("record_add"):
+            ...     data1 = paddle.randn(shape=[3])
+            ...     data2 = paddle.randn(shape=[3])
+            ...     result = data1 + data2
+            >>> # method2: call begin() and end()
+            >>> record_event = profiler.RecordEvent("record_add")
+            >>> record_event.begin()
+            >>> data1 = paddle.randn(shape=[3])
+            >>> data2 = paddle.randn(shape=[3])
+            >>> result = data1 + data2
+            >>> record_event.end()
 
     Note:
         RecordEvent will take effect only when :ref:`Profiler <api_paddle_profiler_Profiler>` is on and at the state of `RECORD`.
     """
 
+    name: str
+    event_type: TracerEventType
+    event: _RecordEvent | None
+
     def __init__(
         self,
         name: str,
         event_type: TracerEventType = TracerEventType.PythonUserDefined,
-    ):
+    ) -> None:
         self.name = name
         self.event_type = event_type
         self.event = None
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         self.begin()
         return self
 
-    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: types.TracebackType | None,
+    ) -> None:
         self.end()
 
-    def begin(self):
+    def begin(self) -> None:
         r"""
         Record the time of beginning.
 
@@ -93,14 +112,15 @@ class RecordEvent(ContextDecorator):
             .. code-block:: python
                 :name: code-example2
 
-                import paddle
-                import paddle.profiler as profiler
-                record_event = profiler.RecordEvent("record_sub")
-                record_event.begin()
-                data1 = paddle.randn(shape=[3])
-                data2 = paddle.randn(shape=[3])
-                result = data1 - data2
-                record_event.end()
+                >>> import paddle
+                >>> import paddle.profiler as profiler
+                >>> record_event = profiler.RecordEvent("record_sub")
+                >>> record_event.begin()
+                >>> paddle.seed(2023)
+                >>> data1 = paddle.randn(shape=[3])
+                >>> data2 = paddle.randn(shape=[3])
+                >>> result = data1 - data2
+                >>> record_event.end()
         """
         if not _is_profiler_used:
             return
@@ -115,8 +135,8 @@ class RecordEvent(ContextDecorator):
         else:
             self.event = _RecordEvent(self.name, self.event_type)
 
-    def end(self):
-        r'''
+    def end(self) -> None:
+        r"""
         Record the time of ending.
 
         Examples:
@@ -124,20 +144,21 @@ class RecordEvent(ContextDecorator):
             .. code-block:: python
                 :name: code-example3
 
-                import paddle
-                import paddle.profiler as profiler
-                record_event = profiler.RecordEvent("record_mul")
-                record_event.begin()
-                data1 = paddle.randn(shape=[3])
-                data2 = paddle.randn(shape=[3])
-                result = data1 * data2
-                record_event.end()
-        '''
+                >>> import paddle
+                >>> import paddle.profiler as profiler
+                >>> record_event = profiler.RecordEvent("record_mul")
+                >>> record_event.begin()
+                >>> paddle.seed(2023)
+                >>> data1 = paddle.randn(shape=[3])
+                >>> data2 = paddle.randn(shape=[3])
+                >>> result = data1 * data2
+                >>> record_event.end()
+        """
         if self.event:
             self.event.end()
 
 
-def load_profiler_result(filename: str):
+def load_profiler_result(filename: str) -> _ProfilerResult:
     r"""
     Load dumped profiler data back to memory.
 
@@ -150,16 +171,18 @@ def load_profiler_result(filename: str):
     Examples:
         .. code-block:: python
 
-            # required: gpu
-            import paddle.profiler as profiler
-            with profiler.Profiler(
-                    targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
-                    scheduler = (3, 10)) as p:
-                for iter in range(10):
-                    #train()
-                    p.step()
-            p.export('test_export_protobuf.pb', format='pb')
-            profiler_result = profiler.load_profiler_result('test_export_protobuf.pb')
+            >>> # doctest: +REQUIRES(env:GPU)
+            >>> import paddle.profiler as profiler
+            >>> import paddle
+            >>> paddle.device.set_device('gpu')
+            >>> with profiler.Profiler(
+            ...         targets=[profiler.ProfilerTarget.CPU, profiler.ProfilerTarget.GPU],
+            ...         scheduler = (3, 10)) as p:
+            ...     for iter in range(10):
+            ...         #train()
+            ...         p.step()
+            >>> p.export('test_export_protobuf.pb', format='pb')
+            >>> profiler_result = profiler.load_profiler_result('test_export_protobuf.pb')
     """
     return core.load_profiler_result(filename)
 
@@ -169,9 +192,9 @@ def in_profiler_mode():
 
 
 def wrap_optimizers():
-    def optimizer_warpper(func):
+    def optimizer_wrapper(func):
         @functools.wraps(func)
-        def warpper(*args, **kwargs):
+        def wrapper(*args, **kwargs):
             if in_profiler_mode():
                 with RecordEvent(
                     'Optimization Step', event_type=TracerEventType.Optimization
@@ -180,7 +203,7 @@ def wrap_optimizers():
             else:
                 return func(*args, **kwargs)
 
-        return warpper
+        return wrapper
 
     global _has_optimizer_wrapped
     if _has_optimizer_wrapped:
@@ -191,21 +214,23 @@ def wrap_optimizers():
         if classname != 'Optimizer':
             classobject = getattr(optimizer, classname)
             if getattr(classobject, 'step', None) is not None:
-                classobject.step = optimizer_warpper(classobject.step)
+                classobject.step = optimizer_wrapper(classobject.step)
     _has_optimizer_wrapped = True
 
 
 @contextmanager
 def _nvprof_range(iter_id, start, end, exit_after_prof=True):
-    '''
+    """
     A range profiler interface (not public yet).
     Examples:
         .. code-block:: python
-            model = Model()
-            for i in range(max_iter):
-                paddle.fluid.profiler._nvprof_range(i, 10, 20):
-                    out = model(in)
-    '''
+
+            >>> import paddle
+            >>> model = Model()
+            >>> for i in range(max_iter):
+            ...     with paddle.profiler.utils._nvprof_range(i, 10, 20):
+            ...         out = model(in)
+    """
     if start >= end:
         yield
         return
@@ -224,3 +249,29 @@ def _nvprof_range(iter_id, start, end, exit_after_prof=True):
             core.nvprof_stop()
             if exit_after_prof:
                 sys.exit()
+
+
+@contextmanager
+def job_schedule_profiler_range(iter_id, start, end, exit_after_prof=True):
+    if start >= end:
+        yield False
+        return
+
+    try:
+        if iter_id >= start and iter_id < end:
+            yield True
+        else:
+            yield False
+    finally:
+        if iter_id == end - 1:
+            if exit_after_prof:
+                sys.exit()
+
+
+def switch_job_schedule_profiler(
+    model, iter_id, start, end, exit_after_prof=True
+):
+    with job_schedule_profiler_range(
+        iter_id, start, end, exit_after_prof
+    ) as status:
+        model._engine.enable_job_schedule_profiler = status

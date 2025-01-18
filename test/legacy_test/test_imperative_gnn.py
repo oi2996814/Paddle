@@ -20,9 +20,8 @@ from test_imperative_base import new_program_scope
 
 import paddle
 import paddle.nn.functional as F
-from paddle import fluid
-from paddle.fluid import core
-from paddle.fluid.dygraph.base import to_variable
+from paddle import base
+from paddle.base import core
 from paddle.optimizer import Adam
 
 
@@ -66,10 +65,10 @@ class TestDygraphGNN(unittest.TestCase):
     def test_gnn_float32(self):
         paddle.seed(90)
         paddle.framework.random._manual_program_seed(90)
-        startup = fluid.Program()
-        main = fluid.Program()
+        startup = base.Program()
+        main = base.Program()
 
-        scope = fluid.core.Scope()
+        scope = base.core.Scope()
         with new_program_scope(main=main, startup=startup, scope=scope):
             features = paddle.static.data(
                 name='features', shape=[1, 100, 50], dtype='float32'
@@ -94,10 +93,10 @@ class TestDygraphGNN(unittest.TestCase):
 
             adam = Adam(learning_rate=1e-3)
             adam.minimize(loss)
-            exe = fluid.Executor(
-                fluid.CPUPlace()
+            exe = base.Executor(
+                base.CPUPlace()
                 if not core.is_compiled_with_cuda()
-                else fluid.CUDAPlace(0)
+                else base.CUDAPlace(0)
             )
             exe.run(startup)
             static_loss = exe.run(
@@ -113,9 +112,11 @@ class TestDygraphGNN(unittest.TestCase):
                 scope.find_var(model.gc.weight.name).get_tensor()
             )
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             paddle.seed(90)
-            paddle.framework.random._manual_program_seed(90)
+            with paddle.pir_utils.OldIrGuard():
+                # Note: dygraph use self.main_program.global_block().create_parameter(), it's need manual seed to old Program
+                paddle.framework.random._manual_program_seed(90)
 
             features = np.ones([1, 100, 50], dtype=np.float32)
             # Use selected rows when it's supported.
@@ -123,12 +124,12 @@ class TestDygraphGNN(unittest.TestCase):
             labels = np.ones([100, 1], dtype=np.int64)
 
             model = GCN('test_gcn', 50)
-            logits = model(to_variable(features), to_variable(adj))
+            logits = model(paddle.to_tensor(features), paddle.to_tensor(adj))
             logits = paddle.reshape(logits, logits.shape[1:])
             # In other example, it's nll with log_softmax. However, paddle's
             # log_loss only supports binary classification now.
             loss = paddle.nn.functional.softmax_with_cross_entropy(
-                logits, to_variable(labels)
+                logits, paddle.to_tensor(labels)
             )
             loss = paddle.sum(loss)
             loss.backward()
@@ -139,9 +140,11 @@ class TestDygraphGNN(unittest.TestCase):
             loss_value = loss.numpy()
             model_gc_weight_value = model.gc.weight.numpy()
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             paddle.seed(90)
-            paddle.framework.random._manual_program_seed(90)
+            with paddle.pir_utils.OldIrGuard():
+                # Note: dygraph use self.main_program.global_block().create_parameter(), it's need manual seed to old Program
+                paddle.framework.random._manual_program_seed(90)
 
             features2 = np.ones([1, 100, 50], dtype=np.float32)
             # Use selected rows when it's supported.
@@ -149,12 +152,14 @@ class TestDygraphGNN(unittest.TestCase):
             labels2 = np.ones([100, 1], dtype=np.int64)
 
             model2 = GCN('test_gcn', 50)
-            logits2 = model2(to_variable(features2), to_variable(adj2))
+            logits2 = model2(
+                paddle.to_tensor(features2), paddle.to_tensor(adj2)
+            )
             logits2 = paddle.reshape(logits2, logits2.shape[1:])
             # In other example, it's nll with log_softmax. However, paddle's
             # log_loss only supports binary classification now.
             loss2 = paddle.nn.functional.softmax_with_cross_entropy(
-                logits2, to_variable(labels2)
+                logits2, paddle.to_tensor(labels2)
             )
             loss2 = paddle.sum(loss2)
             loss2.backward()

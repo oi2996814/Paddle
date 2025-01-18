@@ -15,7 +15,7 @@ import math
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 
 def add_position_encoding(input, alpha=1.0, beta=1.0):
@@ -55,7 +55,7 @@ class TestAddPositionEncodingTensorOp(OpTest):
         self.init_input_output()
 
         self.inputs = {
-            'X': OpTest.np_dtype_to_fluid_dtype(self.x),
+            'X': OpTest.np_dtype_to_base_dtype(self.x),
         }
         self.outputs = {'Out': self.out}
         self.attrs = {'alpha': self.alpha, 'beta': self.beta}
@@ -83,14 +83,14 @@ class TestAddPositionEncodingTensorOp(OpTest):
         self.out = add_position_encoding(self.x, self.alpha, self.beta)
 
 
-class TestAddPositionEncodingLoDTensorOp(OpTest):
+class TestAddPositionEncodingDenseTensorOp(OpTest):
     """
-    This class is to test the AddPositionEncodingLoDTensorOp
+    This class is to test the AddPositionEncodingDenseTensorOp
     """
 
     def setUp(self):
         """
-        the prepared section for add position encoding LoDTensor op
+        the prepared section for add position encoding DenseTensor op
         """
         self.op_type = "add_position_encoding"
         self.dtype = np.float64

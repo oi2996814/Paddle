@@ -26,7 +26,7 @@ from CspFileReader import (
     getLogger,
 )
 
-from paddle.fluid.proto.profiler import profiler_pb2
+from paddle.base.proto.profiler import profiler_pb2
 
 
 class profileFileReader(FileReader):
@@ -43,10 +43,10 @@ class profileFileReader(FileReader):
 
         for fileName in taskList:
             rankId = self.getRankId(fileName)
-            profile_dict["trainerRank.%03d" % (rankId)] = self._parseSingleFile(
+            profile_dict[f"trainerRank.{rankId:03}"] = self._parseSingleFile(
                 fileName
             )
-            self._logger.info("I finish processing %s!" % fileName)
+            self._logger.info(f"I finish processing {fileName}!")
 
         if q is not None:
             q.put(profile_dict)
@@ -147,8 +147,7 @@ class profileFileReader(FileReader):
         fileFist = self.getFileListByGroup(groupId)
 
         self._logger.info(
-            "using [%d] process to do this work, total task num is %d!"
-            % (processNum, len(fileFist))
+            f"using [{processNum}] process to do this work, total task num is {len(fileFist)}!"
         )
         processPool = []
         pidList = []
@@ -169,16 +168,14 @@ class profileFileReader(FileReader):
             subproc.start()
             pidList.append(subproc.pid)
             self._logger.info(
-                "[pipeline info]: process [%d] has been started, total task num is %d ..."
-                % (subproc.pid, len(task))
+                f"[pipeline info]: process [{subproc.pid}] has been started, total task num is {len(task)} ..."
             )
 
         for t in processPool:
             t.join()
             pidList.remove(t.pid)
             self._logger.info(
-                "[pipeline info]: process [%d] has exited! remained %d process!"
-                % (t.pid, len(pidList))
+                f"[pipeline info]: process [{t.pid}] has exited! remained {len(pidList)} process!"
             )
 
         pipeLineInfo = {}
@@ -187,9 +184,7 @@ class profileFileReader(FileReader):
         metaInfo['name'] = 'process_name'
         metaInfo['ph'] = 'M'
         metaInfo['pid'] = 0
-        metaInfo['args'] = {
-            'name': "%02d_pipeLineInfo" % PIPELINEINFO_TRACE_NUM
-        }
+        metaInfo['args'] = {'name': f"{PIPELINEINFO_TRACE_NUM:02}_pipeLineInfo"}
 
         for t in processPool:
             for k, v in q.get().items():
@@ -220,13 +215,12 @@ class profileFileReader(FileReader):
                         # -1 device id represents CUDA API(RunTime) call.(e.g. cudaLaunch, cudaMemcpy)
                         if event.device_id == -1:
                             chrome_trace.emit_pid(
-                                "%02d_%s:cuda_api" % (lineNum, k), pid
+                                f"{lineNum:02}_{k}:cuda_api", pid
                             )
                             lineNum = lineNum + 1
                         else:
                             chrome_trace.emit_pid(
-                                "%02d_%s:cpu:block:%d"
-                                % (lineNum, k, event.device_id),
+                                f"{lineNum:02}_{k}:cpu:block:{event.device_id}",
                                 pid,
                             )
                             lineNum = lineNum + 1
@@ -238,8 +232,7 @@ class profileFileReader(FileReader):
 
                             devices[(k, event.device_id, "GPUKernel")] = pid
                             chrome_trace.emit_pid(
-                                "%02d_%s:gpu:%d"
-                                % (lineNum, k, event.device_id),
+                                f"{lineNum:02}_{k}:gpu:{event.device_id}",
                                 pid,
                             )
                             lineNum = lineNum + 1
@@ -255,8 +248,7 @@ class profileFileReader(FileReader):
 
                             mem_devices[(k, mevent.device_id, "GPU")] = pid
                             chrome_trace.emit_pid(
-                                "%02d_memory usage on %s:gpu:%d"
-                                % (lineNum, k, mevent.device_id),
+                                f"{lineNum:02}_memory usage on {k}:gpu:{mevent.device_id}",
                                 pid,
                             )
                             lineNum = lineNum + 1
@@ -267,8 +259,7 @@ class profileFileReader(FileReader):
 
                         mem_devices[(k, mevent.device_id, "CPU")] = pid
                         chrome_trace.emit_pid(
-                            "%02d_memory usage on %s:cpu:%d"
-                            % (lineNum, k, mevent.device_id),
+                            f"{lineNum:02}_memory usage on {k}:cpu:{mevent.device_id}",
                             pid,
                         )
                         lineNum = lineNum + 1
@@ -286,8 +277,7 @@ class profileFileReader(FileReader):
                                 (k, mevent.device_id, "CUDAPinnedPlace")
                             ] = pid
                             chrome_trace.emit_pid(
-                                "%02d_memory usage on %s:cudapinnedplace:%d"
-                                % (lineNum, k, mevent.device_id),
+                                f"{lineNum:02}_memory usage on {k}:cudapinnedplace:{mevent.device_id}",
                                 pid,
                             )
                             lineNum = lineNum + 1
@@ -297,7 +287,7 @@ class profileFileReader(FileReader):
 
                     mem_devices[(k, 0, "CPU")] = pid
                     chrome_trace.emit_pid(
-                        "%02d_memory usage on %s:cpu:%d" % (lineNum, k, 0), pid
+                        f"{lineNum:02}_memory usage on {k}:cpu:{0}", pid
                     )
                     lineNum = lineNum + 1
                 if (k, 0, "GPU") not in mem_devices:
@@ -307,7 +297,7 @@ class profileFileReader(FileReader):
 
                     mem_devices[(k, 0, "GPU")] = pid
                     chrome_trace.emit_pid(
-                        "%02d_memory usage on %s:gpu:%d" % (lineNum, k, 0), pid
+                        f"{lineNum:02}_memory usage on {k}:gpu:{0}", pid
                     )
                     lineNum = lineNum + 1
                 if (k, 0, "CUDAPinnedPlace") not in mem_devices:
@@ -316,8 +306,7 @@ class profileFileReader(FileReader):
 
                     mem_devices[(k, 0, "CUDAPinnedPlace")] = pid
                     chrome_trace.emit_pid(
-                        "%02d_memory usage on %s:cudapinnedplace:%d"
-                        % (lineNum, k, 0),
+                        f"{lineNum:02}_memory usage on {k}:cudapinnedplace:{0}",
                         pid,
                     )
                     lineNum = lineNum + 1
@@ -484,16 +473,14 @@ class profileFileReader(FileReader):
             subproc.start()
             pidList.append(subproc.pid)
             self._logger.info(
-                "[op info]: process [%d] has been started, total task num is %d ..."
-                % (subproc.pid, 1)
+                f"[op info]: process [{subproc.pid}] has been started, total task num is {1} ..."
             )
 
         for t in processPool:
             t.join()
             pidList.remove(t.pid)
             self._logger.info(
-                "[op info]: process [%d] has exited! remained %d process!"
-                % (t.pid, len(pidList))
+                f"[op info]: process [{t.pid}] has exited! remained {len(pidList)} process!"
             )
 
         opInfo = {}
@@ -502,10 +489,7 @@ class profileFileReader(FileReader):
 
     def parseFileByGroup(self, groupId, processNum=8):
         fileFist = self.getFileListByGroup(groupId)
-        if processNum == 0:
-            return self._parseTask(fileFist)
-        else:
-            return self._parseTask(fileFist)
+        return self._parseTask(fileFist)
 
 
 def test_profileFileReader():

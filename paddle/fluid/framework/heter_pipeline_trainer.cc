@@ -17,10 +17,9 @@
 #include "paddle/fluid/framework/data_feed_factory.h"
 #include "paddle/fluid/framework/device_worker_factory.h"
 #include "paddle/fluid/framework/trainer.h"
-#include "paddle/fluid/framework/trainer_desc.pb.h"
+#include "paddle/phi/core/framework/trainer_desc.pb.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 class Variable;
 
@@ -43,7 +42,7 @@ void HeterPipelineTrainer::ResetDataset(Dataset* dataset) {
     // change thread num is not supported
     PADDLE_ENFORCE_EQ(thread_num_,
                       readers.size(),
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "change Dataset thread_num is not supported"));
     int cnt = -1;
     for (auto& worker_pair : workers_) {
@@ -159,11 +158,11 @@ void HeterPipelineTrainer::InitDumpEnv() {
 }
 
 void HeterPipelineTrainer::InitTrainerEnv(const ProgramDesc& main_program,
-                                          const platform::Place& place) {
+                                          const phi::Place& place) {
   place_ = place;
   PADDLE_ENFORCE_NOT_NULL(
       root_scope_,
-      platform::errors::InvalidArgument("root_scope_ can not be nullptr"));
+      common::errors::InvalidArgument("root_scope_ can not be nullptr"));
   // initialize mini_scopes & micro_scopes
   mini_scopes_.reset(new MiniScope{});
   micro_scopes_.reset(new MicroScope{});
@@ -335,6 +334,5 @@ Scope* HeterPipelineTrainer::GetWorkerScope(int thread_id) {
   }
 }
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace paddle::framework
 #endif

@@ -16,12 +16,13 @@ limitations under the License. */
 #include "paddle/fluid/distributed/ps/wrapper/fleet.h"
 #endif
 
+#include "paddle/fluid/framework/threadpool.h"
+
 #include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/fluid/framework/device_worker_factory.h"
 #include "paddle/fluid/framework/trainer.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 void DistMultiTrainer::Initialize(const TrainerDesc &trainer_desc,
                                   Dataset *dataset) {
@@ -36,7 +37,7 @@ void DistMultiTrainer::Initialize(const TrainerDesc &trainer_desc,
   const std::vector<paddle::framework::DataFeed *> readers =
       dataset->GetReaders();
   RegisterHeterCallback();
-  thread_num_ = readers.size();
+  thread_num_ = static_cast<int>(readers.size());
   workers_.resize(thread_num_);
   for (int i = 0; i < trainer_desc.downpour_param().stat_var_names_size();
        i++) {
@@ -92,17 +93,44 @@ void DistMultiTrainer::InitDumpEnv() {
   }
 }
 
+inline std::vector<std::shared_ptr<phi::ThreadPool>> &GetThreadPool(
+    int thread_num) {
+  static std::vector<std::shared_ptr<phi::ThreadPool>> thread_pools;
+  if (!thread_pools.empty()) {
+    return thread_pools;
+  }
+  thread_pools.resize(thread_num);
+  for (int i = 0; i < thread_num; ++i) {
+    thread_pools[i].reset(new phi::ThreadPool(1));
+  }
+  return thread_pools;
+}
+
 void DistMultiTrainer::InitTrainerEnv(const ProgramDesc &main_program,
-                                      const platform::Place &place) {
+                                      const phi::Place &place) {
+  auto pool = GetThreadPool(thread_num_);
+  std::vector<std::future<void>> wait_futures;
+  PADDLE_ENFORCE_EQ(static_cast<int>(pool.size()),
+                    thread_num_,
+                    common::errors::InvalidArgument(
+                        "static_cast<int>(pool.size()) is invalid, "
+                        "expected %d but received %d.",
+                        thread_num_,
+                        static_cast<int>(pool.size())));
   for (int i = 0; i < thread_num_; ++i) {
-    workers_[i]->SetPlace(place);
-    workers_[i]->SetReaderPlace(place);
-    workers_[i]->SetRootScope(root_scope_);
-    workers_[i]->CreateDeviceResource(main_program);  // Program
-    workers_[i]->BindingDataFeedMemory();
+    wait_futures.emplace_back(pool[i]->Run([this, i, &main_program, &place]() {
+      workers_[i]->SetPlace(place);
+      workers_[i]->SetReaderPlace(place);
+      workers_[i]->SetRootScope(root_scope_);
+      workers_[i]->CreateDeviceResource(main_program);  // Program
+      workers_[i]->BindingDataFeedMemory();
 #if defined(PADDLE_WITH_PSLIB) || defined(PADDLE_WITH_PSCORE)
-    workers_[i]->CacheProgram(main_program);
+      workers_[i]->CacheProgram(main_program);
 #endif
+    }));
+  }
+  for (auto &th : wait_futures) {
+    th.get();
   }
   // Scope* -> thread id, it will be used in push_dense op
   for (int i = 0; i < thread_num_; ++i) {
@@ -129,13 +157,26 @@ void DistMultiTrainer::InitOtherEnv(const ProgramDesc &main_program) {
 }
 
 void DistMultiTrainer::Run() {
-  for (int thidx = 0; thidx < thread_num_; ++thidx) {
-    if (!debug_) {
-      threads_.emplace_back(&DeviceWorker::TrainFiles, workers_[thidx].get());
+  auto pool = GetThreadPool(thread_num_);
+  std::vector<std::future<void>> wait_futures;
+  PADDLE_ENFORCE_EQ(static_cast<int>(pool.size()),
+                    thread_num_,
+                    common::errors::InvalidArgument(
+                        "static_cast<int>(pool.size()) is invalid, "
+                        "expected %d but received %d.",
+                        thread_num_,
+                        static_cast<int>(pool.size())));
+  for (int i = 0; i < thread_num_; ++i) {
+    if (!debug_) {  // NOLINT
+      wait_futures.emplace_back(
+          pool[i]->Run([this, i]() { workers_[i]->TrainFiles(); }));
     } else {
-      threads_.emplace_back(&DeviceWorker::TrainFilesWithProfiler,
-                            workers_[thidx].get());
+      wait_futures.emplace_back(
+          pool[i]->Run([this, i]() { workers_[i]->TrainFilesWithProfiler(); }));
     }
+  }
+  for (auto &th : wait_futures) {
+    th.get();
   }
 }
 
@@ -144,9 +185,6 @@ Scope *DistMultiTrainer::GetWorkerScope(int thread_id) {
 }
 
 void DistMultiTrainer::Finalize() {
-  for (auto &th : threads_) {
-    th.join();
-  }
   for (size_t i = 0; i < need_merge_var_names_.size(); i++) {
     Variable *root_var = root_scope_->FindVar(need_merge_var_names_[i]);
     if (root_var == nullptr) {
@@ -204,5 +242,4 @@ void DistMultiTrainer::MergeToRootScope(phi::DenseTensor *root_tensor,
     root_data[i] += data[i];
   }
 }
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

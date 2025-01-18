@@ -21,8 +21,7 @@
 #include "paddle/phi/kernels/funcs/eigen/eigen_function.h"
 #include "paddle/phi/kernels/sparse/empty_kernel.h"
 
-namespace phi {
-namespace sparse {
+namespace phi::sparse {
 
 template <typename T, typename Context>
 void TransposeCooKernel(const Context& dev_ctx,
@@ -179,7 +178,7 @@ void TransposeCsrKernel(const Context& dev_ctx,
         int64_t x_cols_offset = 0;
         int out_cols_index = 0;
         for (int i = 0; i < x.dims()[0]; ++i) {
-          int x_crows_index = i * (x_n_rows + 1);
+          int x_crows_index = static_cast<int>(i * (x_n_rows + 1));
           int64_t start = x_crows_data[x_crows_index + k];
           int64_t end = x_crows_data[x_crows_index + 1 + k];
           out_crows_data[i + 1] = end - start;
@@ -201,8 +200,7 @@ void TransposeCsrKernel(const Context& dev_ctx,
     }
   }
 }
-}  // namespace sparse
-}  // namespace phi
+}  // namespace phi::sparse
 
 PD_REGISTER_KERNEL(transpose_coo,
                    CPU,

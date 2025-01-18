@@ -15,7 +15,7 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 from test_fusion_gru_op import fusion_gru
 from test_fusion_lstm_op import ACTIVATION
 
@@ -150,7 +150,11 @@ class TestFusionGRUINT8MKLDNNOp(OpTest):
         }
 
     def test_check_output(self):
-        self.check_output(check_dygraph=False, atol=self.error_margin)
+        self.check_output(
+            check_dygraph=False,
+            atol=self.error_margin,
+            check_pir_onednn=self.check_pir_onednn,
+        )
 
 
 class TestFusionGRUINT8MKLDNNOp2(TestFusionGRUINT8MKLDNNOp):

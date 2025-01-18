@@ -76,7 +76,7 @@ class AutoTuneBase {
     } else {
       bool use_autotune = AutoTuneStatus::Instance().UseAutoTune();
       if (use_autotune) {
-        // All avaliable kernels have ran while picking the best kernel,
+        // All available kernels have ran while picking the best kernel,
         // so there may be no need for another kernel run.
         auto best_idx = PickBestKernel(ctx, args...);
         cache.Set(key, best_idx);
@@ -95,7 +95,7 @@ class AutoTuneBase {
     PADDLE_ENFORCE_GT(
         kernels_.size(),
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "kernel num must be greater than 0, now is %d", kernels_.size()));
   }
 
@@ -105,8 +105,8 @@ class AutoTuneBase {
     size_t best_idx = 0;
     float min_time = std::numeric_limits<float>::max();
 
-    // Time cost test estabulished in default stream.
-    for (int i = 0; i < kernels_.size(); ++i) {
+    // Time cost test established in default stream.
+    for (size_t i = 0; i < kernels_.size(); ++i) {
       auto time = RunAndMeasureKernel<Context>(ctx, i, args...);
       if (time < min_time) {
         min_time = time;
@@ -244,7 +244,7 @@ class GatherGemmScatterAutoTuner
     size_t best_idx = NO_KERNEL_WORKS;
     float min_time = std::numeric_limits<float>::max();
 
-    // Time cost test estabulished in default stream.
+    // Time cost test established in default stream.
     for (int i = 0; i < this->kernels_.size(); ++i) {
       float time = 0;
       // Some kernels may require more shared memory than available, skip these
@@ -285,7 +285,7 @@ MakeGatherGemmScatterTuner(ReturnType (*func)(T, T, Args...)) {
                                     Args...>::Instance(func);
 }
 
-// Define the auto_tuner inital object.
+// Define the auto_tuner initial object.
 #define DEFINE_AUTOTUNER_COMMON_OBJ(name)                                \
   template <typename T, typename ReturnType, typename... Args>           \
   class name##AutoTuner                                                  \
@@ -305,7 +305,7 @@ MakeGatherGemmScatterTuner(ReturnType (*func)(T, T, Args...)) {
     }                                                                    \
   };
 
-// Define the auto_tuner inital function.
+// Define the auto_tuner initial function.
 #define DEFINE_AUTOTUNER_FN(name)                                    \
   template <typename T, typename ReturnType, typename... Args>       \
   static name##AutoTuner<T, ReturnType, Args...>* Make##name##Tuner( \

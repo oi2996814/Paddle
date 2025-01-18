@@ -71,6 +71,12 @@ if(NOT WIN32 AND ${CMAKE_CXX_COMPILER_VERSION} VERSION_GREATER 12.0)
       git checkout -- . && git checkout ${GTEST_TAG} && patch -Nd
       ${SOURCE_DIR}/googletest/src < ${native_src})
 endif()
+if(NOT WIN32
+   AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
+   AND ${CMAKE_CXX_COMPILER_VERSION} VERSION_GREATER_EQUAL 13.0)
+  message(STATUS "GCC version is >= 13.0, adding -Wno-dangling-pointer")
+  set(GTEST_CMAKE_CXX_FLAGS "${GTEST_CMAKE_CXX_FLAGS} -Wno-dangling-pointer")
+endif()
 if(WIN32)
   ExternalProject_Add(
     extern_gtest

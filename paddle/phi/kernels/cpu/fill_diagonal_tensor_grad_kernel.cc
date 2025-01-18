@@ -27,7 +27,7 @@ void FillDiagonalTensorGradKernel(const Context& ctx,
                                   int dim1,
                                   int dim2,
                                   DenseTensor* x_grad) {
-  auto matrows = 1;
+  int matrows = 1;
 
   if (x_grad) {
     auto* data = ctx.template Alloc<T>(x_grad);
@@ -35,12 +35,12 @@ void FillDiagonalTensorGradKernel(const Context& ctx,
     auto dx_dims = x_grad->dims();
     for (int i = 0; i < dx_dims.size(); i++) {
       if (i != dim1 && i != dim2) {
-        matrows *= dx_dims[i];
+        matrows *= static_cast<int>(dx_dims[i]);
       }
     }
 
-    std::array<int64_t, 2> new_dims;
-    std::array<int64_t, 2> strides;
+    std::array<int64_t, 2> new_dims = {};
+    std::array<int64_t, 2> strides = {};
     std::vector<int64_t> matdim;
     matdim.resize(matrows);
     CalMatDims(dx_dims,
@@ -76,6 +76,7 @@ PD_REGISTER_KERNEL(fill_diagonal_tensor_grad,
                    double,
                    int64_t,
                    int,
+                   int16_t,
                    int8_t,
                    uint8_t,
                    phi::dtype::float16,

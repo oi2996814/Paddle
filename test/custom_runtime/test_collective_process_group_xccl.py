@@ -49,11 +49,12 @@ def start_local_trainers(
     os.system("rm -rf log && mkdir -p log")
     for idx, t in enumerate(pod.trainers):
         proc_env = {
-            "FLAGS_selected_custom_cpus": "%s"
-            % ",".join([str(g) for g in t.gpus]),
-            "PADDLE_TRAINER_ID": "%d" % t.rank,
-            "PADDLE_CURRENT_ENDPOINT": "%s" % t.endpoint,
-            "PADDLE_TRAINERS_NUM": "%d" % cluster.trainers_nranks(),
+            "FLAGS_selected_custom_cpus": "{}".format(
+                ",".join([str(g) for g in t.gpus])
+            ),
+            "PADDLE_TRAINER_ID": str(t.rank),
+            "PADDLE_CURRENT_ENDPOINT": str(t.endpoint),
+            "PADDLE_TRAINERS_NUM": str(cluster.trainers_nranks()),
             "PADDLE_TRAINER_ENDPOINTS": ",".join(cluster.trainers_endpoints()),
             "PADDLE_DISTRI_CUSTOM_DEVICE_TYPE": "custom_cpu",
         }
@@ -69,7 +70,7 @@ def start_local_trainers(
 
         print(f"start trainer proc:{cmd} env:{proc_env}")
 
-        fn = open("workerlog.%d" % idx, "a")
+        fn = open(f"workerlog.{idx}", "a")
         proc = subprocess.Popen(
             cmd.split(" "), env=current_env, stdout=fn, stderr=fn
         )
@@ -108,7 +109,7 @@ def get_cluster_from_args(selected_gpus):
 
     trainer_endpoints = []
     for ip in node_ips:
-        trainer_endpoints.append(["%s:%d" % (ip, port) for port in free_ports])
+        trainer_endpoints.append([f"{ip}:{port}" for port in free_ports])
     return get_cluster(node_ips, node_ip, trainer_endpoints, selected_gpus)
 
 
@@ -167,9 +168,7 @@ class TestProcessGroup(TestMultipleCustomCPU):
         # only valid in current process
         os.environ['CUSTOM_DEVICE_ROOT'] = os.path.join(
             cur_dir,
-            '{}/PaddleCustomDevice/backends/custom_cpu/build'.format(
-                self.temp_dir.name
-            ),
+            f'{self.temp_dir.name}/PaddleCustomDevice/backends/custom_cpu/build',
         )
         os.environ['FLAGS_selected_custom_cpus'] = '0,1'
         os.environ['CUSTOM_CPU_VISIBLE_DEVICES'] = '0,1'

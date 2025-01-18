@@ -161,21 +161,6 @@ int xpu_activation_backward(const Context& dev_ctx,
 }
 
 template <typename T>
-struct XPUExpGradFunctor : public funcs::BaseActivationFunctor<T> {
-  using XPUType = typename XPUTypeTrait<T>::Type;
-  template <typename Context>
-  void operator()(const Context& dev_ctx,
-                  const DenseTensor* x,
-                  const DenseTensor* out,
-                  const DenseTensor* dout,
-                  DenseTensor* dx) const {
-    int r = xpu_activation_backward<Context, T, XPUType>(
-        dev_ctx, x, out, dout, dx, xpu::exp_grad<XPUType>);
-    PADDLE_ENFORCE_XDNN_SUCCESS(r, "exp_grad");
-  }
-};
-
-template <typename T>
 struct XPULogGradFunctor : public funcs::BaseActivationFunctor<T> {
   template <typename Context>
   void operator()(const Context& dev_ctx,
@@ -195,7 +180,7 @@ struct XPULogGradFunctor : public funcs::BaseActivationFunctor<T> {
         dev_ctx.x_context(), tmp, x->numel(), static_cast<T>(1.0));
     PADDLE_ENFORCE_XDNN_SUCCESS(r, "constant");
 
-    auto x_dims = vectorize<int>(x->dims());
+    auto x_dims = common::vectorize<int>(x->dims());
 
     // use [1] to replace [], because xpu not support []
     if (x_dims.size() == 0) {
@@ -379,10 +364,19 @@ struct XPUSiluGradFunctor : public funcs::BaseActivationFunctor<T> {
     XPUType* x_grad = reinterpret_cast<XPUType*>(dx->data<T>());
 
     if (std::getenv("XPU_PADDLE_ACT_LUT") != nullptr) {
-      int r = xpu::fast_swish_grad(
-          dev_ctx.x_context(), x_data, y_grad, x_grad, dx->numel());
-      PADDLE_ENFORCE_XDNN_SUCCESS(r, "fast_swish_grad");
+      if (!std::is_same<T, ::phi::dtype::bfloat16>::value) {
+        // use fast_swish_grad if NOT bf16
+        int r = xpu::fast_swish_grad(
+            dev_ctx.x_context(), x_data, y_grad, x_grad, dx->numel());
+        PADDLE_ENFORCE_XDNN_SUCCESS(r, "fast_swish_grad");
+      } else {
+        // use plain swish_grad
+        int r = xpu::swish_grad(
+            dev_ctx.x_context(), x_data, y_grad, x_grad, dx->numel());
+        PADDLE_ENFORCE_XDNN_SUCCESS(r, "swish_grad");
+      }
     } else {
+      // use plain swish_grad
       int r = xpu::swish_grad(
           dev_ctx.x_context(), x_data, y_grad, x_grad, dx->numel());
       PADDLE_ENFORCE_XDNN_SUCCESS(r, "swish_grad");
@@ -399,24 +393,13 @@ struct XPUSigmoidGradFunctor : public funcs::BaseActivationFunctor<T> {
                   const DenseTensor* out,
                   const DenseTensor* dout,
                   DenseTensor* dx) const {
-    int r = xpu_activation_backward<Context, T, XPUType>(
-        dev_ctx, x, out, dout, dx, xpu::sigmoid_grad<XPUType>);
+    dev_ctx.template Alloc<T>(dx);
+    const XPUType* y_data = reinterpret_cast<const XPUType*>(out->data<T>());
+    const XPUType* y_grad = reinterpret_cast<const XPUType*>(dout->data<T>());
+    XPUType* x_grad = reinterpret_cast<XPUType*>(dx->data<T>());
+    int r = xpu::sigmoid_grad(
+        dev_ctx.x_context(), y_data, y_grad, x_grad, dx->numel());
     PADDLE_ENFORCE_XDNN_SUCCESS(r, "sigmoid_grad");
-  }
-};
-
-template <typename T>
-struct XPUTanhGradFunctor : public funcs::BaseActivationFunctor<T> {
-  using XPUType = typename XPUTypeTrait<T>::Type;
-  template <typename Context>
-  void operator()(const Context& dev_ctx,
-                  const DenseTensor* x,
-                  const DenseTensor* out,
-                  const DenseTensor* dout,
-                  DenseTensor* dx) const {
-    int r = xpu_activation_backward<Context, T, XPUType>(
-        dev_ctx, x, out, dout, dx, xpu::tanh_grad<XPUType>);
-    PADDLE_ENFORCE_XDNN_SUCCESS(r, "tanh_grad");
   }
 };
 
@@ -456,15 +439,16 @@ void PowGradKernel(const Context& dev_ctx,
                    const DenseTensor& dout,
                    const Scalar& factor,
                    DenseTensor* dx) {
+  using XPUType = typename XPUTypeTrait<T>::Type;
   dev_ctx.template Alloc<T>(dx);
   const T* x_data = x.data<T>();
   const T* y_grad = dout.data<T>();
   T* x_grad = dx->data<T>();
 
   // check dims: all dims should equal
-  auto x_dims = vectorize<int>(x.dims());
-  auto dy_dims = vectorize<int>(dout.dims());
-  auto dx_dims = vectorize<int>(dx->dims());
+  auto x_dims = common::vectorize<int>(x.dims());
+  auto dy_dims = common::vectorize<int>(dout.dims());
+  auto dx_dims = common::vectorize<int>(dx->dims());
   PADDLE_ENFORCE_EQ(x_dims,
                     dy_dims,
                     errors::PreconditionNotMet("x_dims should match dy_dims."));
@@ -474,10 +458,12 @@ void PowGradKernel(const Context& dev_ctx,
   float pow_factor = factor.to<float>();
 
   auto xpu_context = dev_ctx.x_context();
-  // int pow_grad(Context* ctx, const T* x, const T* dy, T* dx, int len, float
-  // factor);
-  int r =
-      xpu::pow_grad(xpu_context, x_data, y_grad, x_grad, x.numel(), pow_factor);
+  int r = xpu::pow_grad(xpu_context,
+                        reinterpret_cast<const XPUType*>(x_data),
+                        reinterpret_cast<const XPUType*>(y_grad),
+                        reinterpret_cast<XPUType*>(x_grad),
+                        x.numel(),
+                        pow_factor);
   PADDLE_ENFORCE_XDNN_SUCCESS(r, "pow_grad");
 }
 
@@ -611,13 +597,27 @@ struct XPUCosGradFunctor : public funcs::BaseActivationFunctor<T> {
   }
 };
 
-DEFINE_XPU_ACTIVATION_GRAD_KERNEL_DEPOUT(Exp, XPUExpGradFunctor);
+template <typename T>
+struct XPURsqrtGradFunctor : public funcs::BaseActivationFunctor<T> {
+  using XPUType = typename XPUTypeTrait<T>::Type;
+  template <typename Context>
+  void operator()(const Context& dev_ctx,
+                  const DenseTensor* x,
+                  const DenseTensor* out,
+                  const DenseTensor* dout,
+                  DenseTensor* dx) const {
+    int r = xpu_activation_backward<Context, T, XPUType>(
+        dev_ctx, x, out, dout, dx, xpu::rsqrt_grad<XPUType>);
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "rsqrt_grad");
+  }
+};
+
 DEFINE_XPU_ACTIVATION_GRAD_KERNEL_DEPOUT(Reciprocal, XPUReciprocalGradFunctor);
 DEFINE_XPU_ACTIVATION_GRAD_KERNEL_DEPOUT(Sigmoid, XPUSigmoidGradFunctor);
 DEFINE_XPU_ACTIVATION_GRAD_KERNEL_DEPOUT(Sqrt, XPUSqrtGradFunctor);
-DEFINE_XPU_ACTIVATION_GRAD_KERNEL_DEPOUT(Tanh, XPUTanhGradFunctor);
 DEFINE_XPU_ACTIVATION_GRAD_KERNEL_DEPOUT(Relu, XPUReluGradFunctor);
 DEFINE_XPU_ACTIVATION_GRAD_KERNEL_DEPOUT(Relu6, XPURelu6GradFunctor);
+DEFINE_XPU_ACTIVATION_GRAD_KERNEL_DEPOUT(Rsqrt, XPURsqrtGradFunctor);
 
 DEFINE_XPU_ACTIVATION_GRAD_KERNEL_DEPX(Log, XPULogGradFunctor);
 DEFINE_XPU_ACTIVATION_GRAD_KERNEL_DEPX(Square, XPUSquareGradFunctor);
@@ -668,6 +668,38 @@ void SiluGradKernel(const Context& dev_ctx,
   ActivationGradXPUImpl<T, Context, XPUSiluGradFunctor<T>>(
       dev_ctx, &x, &out, &dout, dx, functor);
 }
+
+template <typename T, typename Context>
+void ExpGradKernel(const Context& dev_ctx,
+                   const DenseTensor& out,
+                   const DenseTensor& dout,
+                   DenseTensor* dx) {
+  using XPUType = typename XPUTypeTrait<T>::Type;
+  dev_ctx.template Alloc<T>(dx);
+  const XPUType* y_data = reinterpret_cast<const XPUType*>(out.data<T>());
+  const XPUType* y_grad = reinterpret_cast<const XPUType*>(dout.data<T>());
+  XPUType* x_grad = reinterpret_cast<XPUType*>(dx->data<T>());
+
+  int r =
+      xpu::exp_grad(dev_ctx.x_context(), y_data, y_grad, x_grad, dx->numel());
+  PADDLE_ENFORCE_XDNN_SUCCESS(r, "exp_grad");
+}
+
+template <typename T, typename Context>
+void TanhGradKernel(const Context& dev_ctx,
+                    const DenseTensor& out,
+                    const DenseTensor& dout,
+                    DenseTensor* dx) {
+  using XPUType = typename XPUTypeTrait<T>::Type;
+  dev_ctx.template Alloc<T>(dx);
+  const XPUType* y_data = reinterpret_cast<const XPUType*>(out.data<T>());
+  const XPUType* y_grad = reinterpret_cast<const XPUType*>(dout.data<T>());
+  XPUType* x_grad = reinterpret_cast<XPUType*>(dx->data<T>());
+
+  int r =
+      xpu::tanh_grad(dev_ctx.x_context(), y_data, y_grad, x_grad, dx->numel());
+  PADDLE_ENFORCE_XDNN_SUCCESS(r, "tanh_grad");
+}
 }  // namespace phi
 
 PD_REGISTER_KERNEL(relu_grad,
@@ -675,13 +707,15 @@ PD_REGISTER_KERNEL(relu_grad,
                    ALL_LAYOUT,
                    phi::ReluGradKernel,
                    float,
-                   phi::dtype::float16) {}
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}
 PD_REGISTER_KERNEL(silu_grad,
                    XPU,
                    ALL_LAYOUT,
                    phi::SiluGradKernel,
                    float,
-                   phi::dtype::float16) {}
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}
 
 #define PD_REGISTER_ACTIVATION_GRAD_KERNEL(name, func) \
   PD_REGISTER_KERNEL(name, XPU, ALL_LAYOUT, phi::func, float) {}
@@ -691,7 +725,16 @@ PD_REGISTER_KERNEL(tanh_grad,
                    ALL_LAYOUT,
                    phi::TanhGradKernel,
                    float,
-                   phi::dtype::float16) {}
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}
+
+PD_REGISTER_KERNEL(exp_grad,
+                   XPU,
+                   ALL_LAYOUT,
+                   phi::ExpGradKernel,
+                   float,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}
 
 PD_REGISTER_KERNEL(square_grad,
                    XPU,
@@ -700,19 +743,51 @@ PD_REGISTER_KERNEL(square_grad,
                    float,
                    phi::dtype::float16) {}
 
-PD_REGISTER_ACTIVATION_GRAD_KERNEL(exp_grad, ExpGradKernel)
+PD_REGISTER_KERNEL(swish_grad,
+                   XPU,
+                   ALL_LAYOUT,
+                   phi::SwishGradKernel,
+                   float,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}
+
+PD_REGISTER_KERNEL(hardswish_grad,
+                   XPU,
+                   ALL_LAYOUT,
+                   phi::HardSwishGradKernel,
+                   float,
+                   phi::dtype::float16) {}
+
+PD_REGISTER_KERNEL(sigmoid_grad,
+                   XPU,
+                   ALL_LAYOUT,
+                   phi::SigmoidGradKernel,
+                   float,
+                   phi::dtype::float16) {}
+
+PD_REGISTER_KERNEL(pow_grad,
+                   XPU,
+                   ALL_LAYOUT,
+                   phi::PowGradKernel,
+                   float,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}
+
+PD_REGISTER_KERNEL(rsqrt_grad,
+                   XPU,
+                   ALL_LAYOUT,
+                   phi::RsqrtGradKernel,
+                   float,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}
+
 PD_REGISTER_ACTIVATION_GRAD_KERNEL(log_grad, LogGradKernel)
 PD_REGISTER_ACTIVATION_GRAD_KERNEL(leaky_relu_grad, LeakyReluGradKernel)
 PD_REGISTER_ACTIVATION_GRAD_KERNEL(hardsigmoid_grad, HardSigmoidGradKernel)
-PD_REGISTER_ACTIVATION_GRAD_KERNEL(hardswish_grad, HardSwishGradKernel)
 PD_REGISTER_ACTIVATION_GRAD_KERNEL(reciprocal_grad, ReciprocalGradKernel)
 PD_REGISTER_ACTIVATION_GRAD_KERNEL(relu6_grad, Relu6GradKernel)
-PD_REGISTER_ACTIVATION_GRAD_KERNEL(sigmoid_grad, SigmoidGradKernel)
 PD_REGISTER_ACTIVATION_GRAD_KERNEL(sqrt_grad, SqrtGradKernel)
 PD_REGISTER_ACTIVATION_GRAD_KERNEL(mish_grad, MishGradKernel)
-PD_REGISTER_ACTIVATION_GRAD_KERNEL(swish_grad, SwishGradKernel)
 PD_REGISTER_ACTIVATION_GRAD_KERNEL(softplus_grad, SoftplusGradKernel)
 PD_REGISTER_ACTIVATION_GRAD_KERNEL(sin_grad, SinGradKernel)
 PD_REGISTER_ACTIVATION_GRAD_KERNEL(cos_grad, CosGradKernel)
-
-PD_REGISTER_KERNEL(pow_grad, XPU, ALL_LAYOUT, phi::PowGradKernel, float) {}

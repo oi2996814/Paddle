@@ -20,8 +20,8 @@ from functools import cmp_to_key, reduce
 import numpy as np
 
 import paddle
-from paddle.fluid import core, unique_name
-from paddle.fluid.framework import (
+from paddle.base import core, unique_name
+from paddle.base.framework import (
     Parameter,
     Program,
     default_startup_program,
@@ -48,47 +48,47 @@ class PipelineOptimizer:
     Examples:
         .. code-block:: python
 
-            import paddle
-            import paddle.fluid as fluid
-            import paddle.fluid.layers as layers
-            import numpy as np
+            >>> import paddle
+            >>> import paddle.base as base
+            >>> import paddle.base.layers as layers
+            >>> import numpy as np
 
-            paddle.enable_static()
-            with fluid.device_guard("gpu:0"):
-                x = paddle.static.data(name='x', shape=[-1, 1], dtype='int64', lod_level=0)
-                y = paddle.static.data(name='y', shape=[-1, 1], dtype='int64', lod_level=0)
-                data_loader = fluid.io.DataLoader.from_generator(
-                    feed_list=[x, y],
-                    capacity=64,
-                    use_double_buffer=True,
-                    iterable=False)
+            >>> paddle.enable_static()
+            >>> with base.device_guard("gpu:0"):
+            ...     x = paddle.static.data(name='x', shape=[-1, 1], dtype='int64')
+            ...     y = paddle.static.data(name='y', shape=[-1, 1], dtype='int64')
+            ...     data_loader = base.io.DataLoader.from_generator(
+            ...         feed_list=[x, y],
+            ...         capacity=64,
+            ...         use_double_buffer=True,
+            ...         iterable=False)
 
-                emb_x = layers.embedding(input=x, param_attr=fluid.ParamAttr(name="embx"), size=[10,2], is_sparse=False)
-                emb_y = layers.embedding(input=y, param_attr=fluid.ParamAttr(name="emby",learning_rate=0.9), size=[10,2], is_sparse=False)
+            ...     emb_x = layers.embedding(input=x, param_attr=base.ParamAttr(name="embx"), size=[10,2], is_sparse=False)
+            ...     emb_y = layers.embedding(input=y, param_attr=base.ParamAttr(name="emby",learning_rate=0.9), size=[10,2], is_sparse=False)
 
-            with fluid.device_guard("gpu:1"):
-                concat = layers.concat([emb_x, emb_y], axis=1)
-                fc = paddle.static.nn.fc(x=concat, name="fc", size=1, num_flatten_dims=1, bias_attr=False)
-                loss = paddle.mean(fc)
-            optimizer = paddle.optimizer.SGD(learning_rate=0.5)
-            optimizer = paddle.incubate.optimizer.PipelineOptimizer(optimizer)
-            optimizer.minimize(loss)
+            >>> with base.device_guard("gpu:1"):
+            ...     concat = layers.concat([emb_x, emb_y], axis=1)
+            ...     fc = paddle.static.nn.fc(x=concat, name="fc", size=1, num_flatten_dims=1, bias_attr=False)
+            ...     loss = paddle.mean(fc)
+            >>> optimizer = paddle.optimizer.SGD(learning_rate=0.5)
+            >>> optimizer = paddle.incubate.optimizer.PipelineOptimizer(optimizer)
+            >>> optimizer.minimize(loss)
 
-            def train_reader():
-                for _ in range(4):
-                    x = np.random.random(size=[1]).astype('int64')
-                    y = np.random.random(size=[1]).astype('int64')
-                    yield x, y
-            data_loader.set_sample_generator(train_reader, batch_size=1)
+            >>> def train_reader():
+            ...     for _ in range(4):
+            ...         x = np.random.random(size=[1]).astype('int64')
+            ...         y = np.random.random(size=[1]).astype('int64')
+            ...         yield x, y
+            >>> data_loader.set_sample_generator(train_reader, batch_size=1)
 
-            place = fluid.CUDAPlace(0)
-            exe = fluid.Executor(place)
-            exe.run(fluid.default_startup_program())
-            batch_size = 1
-            data_loader.start()
-            exe.train_from_dataset(
-                    fluid.default_main_program())
-            data_loader.reset()
+            >>> place = paddle.CUDAPlace(0)
+            >>> exe = paddle.static.Executor(place)
+            >>> exe.run(paddle.static.default_startup_program())
+            >>> batch_size = 1
+            >>> data_loader.start()
+            >>> exe.train_from_dataset(
+            ...         paddle.static.default_main_program())
+            >>> data_loader.reset()
     """
 
     def __init__(self, optimizer, num_microbatches=1, start_cpu_core_id=0):
@@ -105,9 +105,7 @@ class PipelineOptimizer:
             raise ValueError(
                 "The 'optimizer' parameter for "
                 "PipelineOptimizer must be an instance of "
-                "{}, but the given type is {}.".format(
-                    valid_optimizers, type(optimizer)
-                )
+                f"{valid_optimizers}, but the given type is {type(optimizer)}."
             )
         self._optimizer = optimizer
 
@@ -167,15 +165,17 @@ class PipelineOptimizer:
             offset += 1
         block._insert_op(
             op_idx + 1 + offset,
-            type='c_allreduce_max'
-            if op.type == "reduce_any"
-            else 'c_allreduce_sum',
-            inputs={'X': temp_var if op.type == "reduce_any" else out_var},
-            outputs={'Out': temp_var if op.type == "reduce_any" else out_var},
+            type='all_reduce',
+            inputs={'x': temp_var if op.type == "reduce_any" else out_var},
+            outputs={'out': temp_var if op.type == "reduce_any" else out_var},
             attrs={
                 'ring_id': self.global_ring_id,
                 self._op_role_key: self._op_role.Optimize,
-                'use_calc_stream': True,
+                'reduce_type': (
+                    paddle.distributed.ReduceOp.MAX
+                    if op.type == "reduce_any"
+                    else paddle.distributed.ReduceOp.SUM
+                ),
             },
         )
         offset += 1
@@ -483,13 +483,13 @@ class PipelineOptimizer:
         if device:
             assert device[0:3] == 'gpu', (
                 "Now, only gpu devices are "
-                "supported in pipeline parallemism."
+                "supported in pipeline parallelism."
             )
         return device
 
     def _add_op_device_attr_for_op(self, op, idx, block):
         """
-        Add op_device attrribute for ops that have not that attribute set.
+        Add op_device attribute for ops that have not that attribute set.
         We use "gpu:all" to represent the op should be put on all
         sub-programs, such as lr-related ops. Note that: "gpu:all"
         is only used by pipeline as an indicator.
@@ -511,9 +511,7 @@ class PipelineOptimizer:
             post_op = self._find_post_op(idx, out_name)
             assert post_op.has_attr(
                 'op_device'
-            ), "{} has no op_device attr for var {}".format(
-                post_op.type, out_name
-            )
+            ), f"{post_op.type} has no op_device attr for var {out_name}"
             device = post_op.attr(self._op_device_key)
             assert device, "The post op must have op_device set."
             op._set_attr(self._op_device_key, device)
@@ -605,15 +603,15 @@ class PipelineOptimizer:
             ]
             assert op.type in other_known_ops, (
                 "For other ops without "
-                "op_device set, they must be one of {}, but it "
-                "is {}".format(other_known_ops, op.type)
+                f"op_device set, they must be one of {other_known_ops}, but it "
+                f"is {op.type}"
             )
             assert self._is_optimize_op(op)
             op._set_attr(self._op_device_key, f"{self._device}:all")
 
     def _add_op_device_attr(self, block):
         """
-        Add op_device attrribute for ops in block that have
+        Add op_device attribute for ops in block that have
         not that attribute set.
         """
         for idx, op in enumerate(list(block.ops)):
@@ -664,21 +662,15 @@ class PipelineOptimizer:
             op_role = op.attr(self._op_role_key)
             assert (
                 int(op_role) in valid_op_role_value
-            ), "op_role {} for op {} must be one of {}".format(
-                op_role, op.type, valid_op_role_value
-            )
+            ), f"op_role {op_role} for op {op.type} must be one of {valid_op_role_value}"
 
             assert op.has_attr(
                 self._op_device_key
-            ), "op ({}) has no {} attribute.".format(
-                op.type, self._op_device_key
-            )
+            ), f"op ({op.type}) has no {self._op_device_key} attribute."
 
             device = op.attr(self._op_device_key)
-            assert (
-                device
-            ), "op_device attribute for op " "{} has not been set.".format(
-                op.type
+            assert device, (
+                "op_device attribute for op " f"{op.type} has not been set."
             )
             if device == f"{self._device}:all":
                 continue
@@ -754,22 +746,18 @@ class PipelineOptimizer:
                     is_backward = self._is_backward_op(op)
                     assert is_forward or is_backward, (
                         'send/recv in pipeline should only be inserted in forward or backward,'
-                        'please check the op_role of op={}'.format(op)
+                        f'please check the op_role of op={op}'
                     )
 
                     if is_forward:
                         assert prev_id < cur_id, (
                             "In forward, send/recv can only be passed forward, but now "
-                            "prev_stage={} great than cur_stage={}, please check op_device of op={}".format(
-                                prev_id, cur_id, op
-                            )
+                            f"prev_stage={prev_id} great than cur_stage={cur_id}, please check op_device of op={op}"
                         )
                     elif is_backward:
                         assert prev_id > cur_id, (
                             "In backward, send/recv can only be passed backward, but now "
-                            "prev_stage={} less than cur_stage={}, please check op_device of op={}".format(
-                                prev_id, cur_id, op
-                            )
+                            f"prev_stage={prev_id} less than cur_stage={cur_id}, please check op_device of op={op}"
                         )
 
                 def _insert_send_recv(cur_id, prev_id):
@@ -903,9 +891,11 @@ class PipelineOptimizer:
                         )
                         block._insert_op_without_sync(
                             index=index + extra_index_info['index'],
-                            type='send_v2'
-                            if not use_mp or is_param
-                            else 'partial_send',
+                            type=(
+                                'send_v2'
+                                if not use_mp or is_param
+                                else 'partial_send'
+                            ),
                             inputs={'X': var},
                             attrs={
                                 self._op_device_key: prev_dev,
@@ -944,9 +934,11 @@ class PipelineOptimizer:
                             extra_index_info['index'] += 1
                         block._insert_op_without_sync(
                             index=index + extra_index_info['index'],
-                            type='recv_v2'
-                            if not use_mp or is_param
-                            else 'partial_recv',
+                            type=(
+                                'recv_v2'
+                                if not use_mp or is_param
+                                else 'partial_recv'
+                            ),
                             outputs={'Out': [var]},
                             attrs={
                                 'out_shape': var_shape,
@@ -982,7 +974,7 @@ class PipelineOptimizer:
                     else:
                         raise ValueError(
                             "Now only 'F-then-B' and '1F1B' are supported."
-                            "The given value is {}.".format(self.schedule_mode)
+                            f"The given value is {self.schedule_mode}."
                         )
 
                 _insert_send_recv(
@@ -1001,7 +993,7 @@ class PipelineOptimizer:
             if self._is_loss_grad_op(op):
                 assert op.type == 'fill_constant', (
                     "loss_grad_op must be fill_constant op, "
-                    "but this op is {}".format(op.type)
+                    f"but this op is {op.type}"
                 )
                 assert op.has_attr('value')
                 loss_scale = float(op.attr('value'))
@@ -1019,9 +1011,9 @@ class PipelineOptimizer:
             if op.type == 'cast' or op.type == "c_sync_comm_stream":
                 continue
             # append "MERGED" to the names of parameter gradients,
-            # and mofify the op_role_var attribute (by rename_arg func).
+            # and modify the op_role_var attribute (by rename_arg func).
             for name in in_out_names:
-                if not core.grad_var_suffix() in name:
+                if core.grad_var_suffix() not in name:
                     continue
                 param_name = name.strip(core.grad_var_suffix())
                 new_grad_name = name + "@MERGED"
@@ -1293,7 +1285,7 @@ class PipelineOptimizer:
                     # To meet the requirement, 128 fp16 or 64 float will be aligned
                     # Think the total shape of the input tensors if [64],
                     # if the dtype is float, then the shape of the fuse var is [64]
-                    # however if the dytpe if fp16, the shape of the fuse var is [128],
+                    # however if the dtype if fp16, the shape of the fuse var is [128],
                     # which will cause the fused vars' shape vary between each other.
                     # To make sure the shape of the fused vars are identical,
                     # we set the dtype of float and fp16 both to 2.
@@ -1308,7 +1300,7 @@ class PipelineOptimizer:
                     # and the value in those sections are nan/inf, it will trigger the nan/inf check.
                     # To avoid these problematic triggers, set constant is needed for npu
                     "set_constant": core.is_compiled_with_custom_device('npu'),
-                    "constant": float(0.0),
+                    "constant": 0.0,
                 },
             )
             offset += 1
@@ -1326,7 +1318,7 @@ class PipelineOptimizer:
                 attrs={
                     "user_defined_size_of_dtype": 2,
                     "set_constant": True,
-                    "constant": float(0.0),
+                    "constant": 0.0,
                     "copy_data": False,
                     "use_align": True,
                     "dtype": merged_grads[0].dtype,
@@ -1580,8 +1572,8 @@ class PipelineOptimizer:
                         continue
                     if var_name in op.desc.output_arg_names():
                         assert var_name not in write_info, (
-                            "two sections write the same var({}): second "
-                            "op {}.".format(var_name, op)
+                            f"two sections write the same var({var_name}): second "
+                            f"op {op}."
                         )
                         write_info[var_name] = prog
                         break
@@ -1820,7 +1812,7 @@ class PipelineOptimizer:
             "However, some backward op don't need this var(NoNeedBufferVars), "
             "there will be no error at this time.\n"
             "So please check these persistable vars which changed in "
-            "forward and used in backward:\n{}".format(used_in_backward)
+            f"forward and used in backward:\n{used_in_backward}"
         )
 
     def minimize(

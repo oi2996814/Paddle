@@ -18,7 +18,7 @@ import subprocess
 import time
 import unittest
 
-from paddle import fluid
+from paddle import base
 from paddle.distributed.utils.launch_utils import (
     TrainerProc,
     find_free_ports,
@@ -43,7 +43,7 @@ def get_cluster_from_args(selected_gpus):
 
     trainer_endpoints = []
     for ip in node_ips:
-        trainer_endpoints.append(["%s:%d" % (ip, port) for port in free_ports])
+        trainer_endpoints.append([f"{ip}:{port}" for port in free_ports])
     return get_cluster(node_ips, node_ip, trainer_endpoints, selected_gpus)
 
 
@@ -70,10 +70,12 @@ def start_local_trainers(
     procs = []
     for t in pod.trainers:
         proc_env = {
-            "FLAGS_selected_gpus": "%s" % ",".join([str(g) for g in t.gpus]),
-            "PADDLE_TRAINER_ID": "%d" % t.rank,
-            "PADDLE_CURRENT_ENDPOINT": "%s" % t.endpoint,
-            "PADDLE_TRAINERS_NUM": "%d" % cluster.trainers_nranks(),
+            "FLAGS_selected_gpus": "{}".format(
+                ",".join([str(g) for g in t.gpus])
+            ),
+            "PADDLE_TRAINER_ID": str(t.rank),
+            "PADDLE_CURRENT_ENDPOINT": str(t.endpoint),
+            "PADDLE_TRAINERS_NUM": str(cluster.trainers_nranks()),
             "PADDLE_TRAINER_ENDPOINTS": ",".join(cluster.trainers_endpoints()),
         }
 
@@ -105,7 +107,7 @@ def start_local_trainers(
 
 class TestMultipleGpus(unittest.TestCase):
     def run_mnist_2gpu(self, target_file_name):
-        if fluid.core.get_cuda_device_count() == 0:
+        if base.core.get_cuda_device_count() == 0:
             return
 
         selected_gpus = get_gpus('0,1')
@@ -129,14 +131,8 @@ class TestMultipleGpus(unittest.TestCase):
                 break
             time.sleep(3)
 
-    def test_hapi_multiple_gpus_static(self):
-        self.run_mnist_2gpu('dist_hapi_mnist_static.py')
-
     def test_hapi_multiple_gpus_dynamic(self):
         self.run_mnist_2gpu('dist_hapi_mnist_dynamic.py')
-
-    def test_hapi_amp_static(self):
-        self.run_mnist_2gpu('dist_hapi_pure_fp16_static.py')
 
 
 if __name__ == "__main__":

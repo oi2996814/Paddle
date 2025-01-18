@@ -50,19 +50,19 @@ def custom_relu_static(
     paddle.set_device(device)
 
     with static.scope_guard(static.Scope()):
-        with static.program_guard(static.Program()):
-            x = static.data(name='X', shape=[None, 8], dtype=dtype)
+        with paddle.static.program_guard(paddle.static.Program()):
+            x = paddle.static.data(name='X', shape=[None, 8], dtype=dtype)
             x.stop_gradient = False
             out = func(x) if use_func else paddle.nn.functional.relu(x)
             static.append_backward(out)
 
-            exe = static.Executor()
-            exe.run(static.default_startup_program())
+            exe = paddle.static.Executor()
+            exe.run(paddle.static.default_startup_program())
             # in static graph mode, x data has been covered by out
             out_v = exe.run(
-                static.default_main_program(),
+                paddle.static.default_main_program(),
                 feed={'X': np_x},
-                fetch_list=[out.name],
+                fetch_list=[out],
             )
 
     paddle.disable_static()
@@ -147,13 +147,10 @@ class TestNewCustomOpSetUpInstall(unittest.TestCase):
         cur_dir = os.path.dirname(os.path.abspath(__file__))
         # compile, install the custom op egg into site-packages under background
         if os.name == 'nt':
-            cmd = 'cd /d {} && python custom_relu_setup.py install'.format(
-                cur_dir
-            )
+            cmd = f'cd /d {cur_dir} && python custom_relu_setup.py install'
         else:
-            cmd = 'cd {} && {} custom_relu_setup.py install'.format(
-                cur_dir, sys.executable
-            )
+            site_dir = site.getsitepackages()[0]
+            cmd = f'cd {cur_dir} && {sys.executable} custom_relu_setup.py install --install-lib={site_dir}'
         run_cmd(cmd)
 
         # NOTE(Aurelius84): Normally, it's no need to add following codes for users.
@@ -169,9 +166,9 @@ class TestNewCustomOpSetUpInstall(unittest.TestCase):
         custom_egg_path = [
             x for x in os.listdir(site_dir) if 'custom_relu_module_setup' in x
         ]
-        assert len(custom_egg_path) == 1, "Matched egg number is %d." % len(
-            custom_egg_path
-        )
+        assert (
+            len(custom_egg_path) == 1
+        ), f"Matched egg number is {len(custom_egg_path)}."
         sys.path.append(os.path.join(site_dir, custom_egg_path[0]))
 
         # usage: import the package directly
@@ -259,33 +256,34 @@ class TestNewCustomOpSetUpInstall(unittest.TestCase):
 
     def _test_static_save_and_run_inference_predictor(self):
         paddle.enable_static()
-        np_data = np.random.random((1, 1, 28, 28)).astype("float32")
-        np_label = np.random.random((1, 1)).astype("int64")
-        path_prefix = "custom_op_inference/custom_relu"
-        from paddle.inference import Config, create_predictor
+        with paddle.pir_utils.OldIrGuard():
+            np_data = np.random.random((1, 1, 28, 28)).astype("float32")
+            np_label = np.random.random((1, 1)).astype("int64")
+            path_prefix = "custom_op_inference/custom_relu"
+            from paddle.inference import Config, create_predictor
 
-        for device in self.devices:
-            predict = custom_relu_static_inference(
-                self.custom_ops[0], device, np_data, np_label, path_prefix
-            )
-            # load inference model
-            config = Config(
-                path_prefix + ".pdmodel", path_prefix + ".pdiparams"
-            )
-            predictor = create_predictor(config)
-            input_tensor = predictor.get_input_handle(
-                predictor.get_input_names()[0]
-            )
-            input_tensor.reshape(np_data.shape)
-            input_tensor.copy_from_cpu(np_data.copy())
-            predictor.run()
-            output_tensor = predictor.get_output_handle(
-                predictor.get_output_names()[0]
-            )
-            predict_infer = output_tensor.copy_to_cpu()
-            predict = np.array(predict).flatten()
-            predict_infer = np.array(predict_infer).flatten()
-            check_output_allclose(predict, predict_infer, "predict")
+            for device in self.devices:
+                predict = custom_relu_static_inference(
+                    self.custom_ops[0], device, np_data, np_label, path_prefix
+                )
+                # load inference model
+                config = Config(
+                    path_prefix + ".pdmodel", path_prefix + ".pdiparams"
+                )
+                predictor = create_predictor(config)
+                input_tensor = predictor.get_input_handle(
+                    predictor.get_input_names()[0]
+                )
+                input_tensor.reshape(np_data.shape)
+                input_tensor.copy_from_cpu(np_data.copy())
+                predictor.run()
+                output_tensor = predictor.get_output_handle(
+                    predictor.get_output_names()[0]
+                )
+                predict_infer = output_tensor.copy_to_cpu()
+                predict = np.array(predict).flatten()
+                predict_infer = np.array(predict_infer).flatten()
+                check_output_allclose(predict, predict_infer, "predict")
         paddle.disable_static()
 
     def _test_double_grad_dynamic(self):

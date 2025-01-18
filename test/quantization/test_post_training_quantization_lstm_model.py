@@ -22,7 +22,7 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle import fluid
+from paddle import base
 from paddle.dataset.common import download
 from paddle.static.quantization import PostTrainingQuantization
 
@@ -45,11 +45,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
         try:
             os.system("mkdir -p " + self.int8_model_path)
         except Exception as e:
-            print(
-                "Failed to create {} due to {}".format(
-                    self.int8_model_path, str(e)
-                )
-            )
+            print(f"Failed to create {self.int8_model_path} due to {e}")
             sys.exit(-1)
 
     def tearDown(self):
@@ -57,8 +53,8 @@ class TestPostTrainingQuantization(unittest.TestCase):
 
     def cache_unzipping(self, target_folder, zip_path):
         if not os.path.exists(target_folder):
-            cmd = 'mkdir {0} && tar xf {1} -C {0}'.format(
-                target_folder, zip_path
+            cmd = (
+                f'mkdir {target_folder} && tar xf {zip_path} -C {target_folder}'
             )
             os.system(cmd)
 
@@ -80,9 +76,9 @@ class TestPostTrainingQuantization(unittest.TestCase):
                     if plen is None or len(plen) != 4:
                         break
 
-                    alllen = struct.unpack('i', plen)[0]
-                    label_len = alllen & 0xFFFF
-                    seq_len = (alllen >> 16) & 0xFFFF
+                    all_len = struct.unpack('i', plen)[0]
+                    label_len = all_len & 0xFFFF
+                    seq_len = (all_len >> 16) & 0xFFFF
 
                     label = in_file.read(4 * label_len)
                     label = np.frombuffer(label, dtype=np.int32).reshape(
@@ -97,7 +93,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
                     )
                     lod_feat = [feat.shape[0]]
 
-                    minputs = fluid.create_lod_tensor(feat, [lod_feat], place)
+                    minputs = base.create_lod_tensor(feat, [lod_feat], place)
                     yield [minputs]
 
         return reader
@@ -110,9 +106,9 @@ class TestPostTrainingQuantization(unittest.TestCase):
                     if plen is None or len(plen) != 4:
                         break
 
-                    alllen = struct.unpack('i', plen)[0]
-                    label_len = alllen & 0xFFFF
-                    seq_len = (alllen >> 16) & 0xFFFF
+                    all_len = struct.unpack('i', plen)[0]
+                    label_len = all_len & 0xFFFF
+                    seq_len = (all_len >> 16) & 0xFFFF
 
                     label = in_file.read(4 * label_len)
                     label = np.frombuffer(label, dtype=np.int32).reshape(
@@ -127,7 +123,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
                     )
                     lod_feat = [feat.shape[0]]
 
-                    minputs = fluid.create_lod_tensor(feat, [lod_feat], place)
+                    minputs = base.create_lod_tensor(feat, [lod_feat], place)
                     yield minputs, label
 
         return reader
@@ -253,9 +249,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
         data_path = os.path.join(data_path, data_name)
 
         print(
-            "Start FP32 inference for {} on {} samples ...".format(
-                model_name, infer_iterations
-            )
+            f"Start FP32 inference for {model_name} on {infer_iterations} samples ..."
         )
         (fp32_latency, fp32_acc) = self.run_program(
             fp32_model_path,
@@ -266,9 +260,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
         )
 
         print(
-            "Start post training quantization for {} on {} samples ...".format(
-                model_name, quant_iterations
-            )
+            f"Start post training quantization for {model_name} on {quant_iterations} samples ..."
         )
         self.generate_quantized_model(
             fp32_model_path,
@@ -287,9 +279,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
         )
 
         print(
-            "Start INT8 inference for {} on {} samples ...".format(
-                model_name, infer_iterations
-            )
+            f"Start INT8 inference for {model_name} on {infer_iterations} samples ..."
         )
         (int8_latency, int8_acc) = self.run_program(
             self.int8_model_path,
@@ -301,14 +291,10 @@ class TestPostTrainingQuantization(unittest.TestCase):
 
         print(f"---Post training quantization of {algo} method---")
         print(
-            "FP32 {}: batch_size {}, latency {} s, acc {}.".format(
-                model_name, 1, fp32_latency, fp32_acc
-            )
+            f"FP32 {model_name}: batch_size {1}, latency {fp32_latency} s, acc {fp32_acc}."
         )
         print(
-            "INT8 {}: batch_size {}, latency {} s, acc1 {}.\n".format(
-                model_name, 1, int8_latency, int8_acc
-            )
+            f"INT8 {model_name}: batch_size {1}, latency {int8_latency} s, acc1 {int8_acc}.\n"
         )
         sys.stdout.flush()
 

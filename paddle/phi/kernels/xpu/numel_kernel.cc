@@ -22,11 +22,16 @@ PD_REGISTER_KERNEL(numel,
                    XPU,
                    ALL_LAYOUT,
                    phi::NumelKernel,
+                   uint8_t,
                    int16_t,
                    int,
                    int64_t,
                    phi::dtype::float16,
+                   phi::dtype::bfloat16,
                    float,
-                   bool) {
+                   double,
+                   bool,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {
   kernel->OutputAt(0).SetDataType(phi::DataType::INT64);
 }

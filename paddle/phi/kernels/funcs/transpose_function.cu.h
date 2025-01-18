@@ -227,13 +227,13 @@ bool SelectProperTileSize(std::vector<std::pair<int, int>>* tiles) {
   PADDLE_ENFORCE_LE(
       TSIZE,
       16,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The tile size should smaller than 16, but received is:%d.", TSIZE));
 
   PADDLE_ENFORCE_EQ(
       (TSIZE & (TSIZE - 1)),
       0,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Data types should be powers of 2, but reived size is:%d.", TSIZE));
 
   const int kMaxLongSideLen = 1024;
@@ -313,7 +313,7 @@ struct NarrowDims2TransposeDispatch {
     PADDLE_ENFORCE_EQ(
         (tile_long & (tile_long - 1)),
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The length of the longer side of the tile should be power of 2."
             " But received value is:%d.",
             tile_long));
@@ -378,7 +378,7 @@ struct NarrowDims2TransposeDispatch<
     PADDLE_ENFORCE_EQ(
         (tile_long & (tile_long - 1)),
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The length of the longer side of the tile should be power of 2."
             " But received value is:%d.",
             tile_long));
@@ -428,7 +428,7 @@ struct NarrowDims2TransposeDispatch<
     PADDLE_ENFORCE_EQ(
         (tile_long & (tile_long - 1)),
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The length of the longer side of the tile should be power of 2,"
             " but received is:%d.",
             tile_long));
@@ -456,7 +456,7 @@ void SwapDim1And2InNarrow(const phi::GPUContext& d,
   PADDLE_ENFORCE_EQ(
       ret,
       true,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "SelectProperTileSize should return true, but return value is:%d.",
           ret));
 
@@ -656,7 +656,7 @@ inline void CombineTransposeDim3(const DDim& shape,
                                  std::vector<int>* new_dims) {
   PADDLE_ENFORCE_EQ(shape.size(),
                     perm.size(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         " shape should have the save dim with perm, but"
                         " received shape size is:%d, perm size is:%d.",
                         shape.size(),
@@ -931,7 +931,7 @@ class IdxHelper<uint32_t, Rank> {
   phi::kps::details::FastDivMod divmoder_[Rank];
 };
 
-// Transform index between memory offset and shape coodinate.
+// Transform index between memory offset and shape coordinate.
 template <typename IndexT, int Rank>
 class IdxAndOffsetHelper {
  public:
@@ -1454,8 +1454,8 @@ inline void PermuteWithEigen(
     phi::DenseTensor temp_in;
 
     temp_in.ShareBufferWith(in);
-    temp_in.Resize(phi::make_ddim(simplifier.GetSrcDims()));
-    out->Resize(phi::make_ddim(simplifier.GetDstDims()));
+    temp_in.Resize(common::make_ddim(simplifier.GetSrcDims()));
+    out->Resize(common::make_ddim(simplifier.GetDstDims()));
 
     TransCompute<phi::GPUContext, T>(
         simplifier.GetRank(), ctx, temp_in, out, simplifier.GetPerm());
@@ -1476,7 +1476,7 @@ void TransposeGPUKernelDriver(const phi::GPUContext& ctx,
   bool ret = TransposeSimple<T>::Run(ctx, in, perm, out, numel);
   if (!ret) {
     auto simplifier = phi::funcs::PermuteDimsSimplifier(
-        rank, numel, perm, phi::vectorize<int64_t>(in.dims()));
+        rank, numel, perm, common::vectorize<int64_t>(in.dims()));
     auto* tuner = phi::autotune::MakeTransposeTuner<T>(PermuteWithEigen<T>);
     tuner->AddCallBack(PermuteAndTranspose<T>);
 

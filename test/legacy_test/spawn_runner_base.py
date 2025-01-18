@@ -16,10 +16,10 @@ import unittest
 
 import numpy as np
 
+import paddle
+
 # used by model.run_trainer in test_dist_base
 from legacy_test.test_dist_base import RUN_STEP
-
-import paddle
 
 
 # NOTE: compatible TestParallelDyGraphRunnerBase args
@@ -83,7 +83,5 @@ class TestDistSpawnRunner(unittest.TestCase):
                 dist_loss,
                 delta=delta,
                 msg="The results of single-card execution and multi-card execution are inconsistent."
-                "signal-card loss is:\n{}\nmulti-card average loss is:\n{}\n".format(
-                    loss, dist_loss
-                ),
+                f"signal-card loss is:\n{loss}\nmulti-card average loss is:\n{dist_loss}\n",
             )

@@ -16,14 +16,11 @@
 
 #include "glog/logging.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Scope;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 
-namespace paddle {
-namespace details {
+namespace paddle::details {
 
 // Should be called after the parameters are loaded.
 void TensorArrayBatchCleaner::CollectTensorArrays(framework::Scope *scope) {
@@ -33,9 +30,9 @@ void TensorArrayBatchCleaner::CollectTensorArrays(framework::Scope *scope) {
       // TODO(Superjomn) should avoid the case when a TensorArray is a
       // parameter.
       if (var_name == "feed" || var_name == "fetch") continue;
-      if (var->IsType<framework::LoDTensorArray>()) {
+      if (var->IsType<phi::TensorArray>()) {
         VLOG(4) << "collect " << var_name;
-        arrays_.push_back(var->GetMutable<framework::LoDTensorArray>());
+        arrays_.push_back(var->GetMutable<phi::TensorArray>());
       }
     }
     for (auto *kid : scope->kids()) {
@@ -77,5 +74,4 @@ void TensorArrayBatchCleaner::ResetNoTensorVars() {
   }
 }
 
-}  // namespace details
-}  // namespace paddle
+}  // namespace paddle::details

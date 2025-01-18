@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16, paddle_static_guard
+from op_test import OpTest, convert_float_to_uint16, paddle_static_guard
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 
 class TestUniqueOp(OpTest):
@@ -221,6 +221,8 @@ class TestUniqueOpAxisNone(TestUniqueOp):
             return_counts=True,
             axis=None,
         )
+        if np.lib.NumpyVersion(np.__version__) >= "2.0.0":
+            inverse = inverse.flatten()
         self.attrs = {
             'dtype': int(core.VarDesc.VarType.INT32),
             "return_index": True,
@@ -273,6 +275,8 @@ class TestUniqueOpAxisNeg(TestUniqueOp):
             return_counts=True,
             axis=-1,
         )
+        if np.lib.NumpyVersion(np.__version__) >= "2.0.0":
+            inverse = inverse.flatten()
         self.attrs = {
             'dtype': int(core.VarDesc.VarType.INT32),
             "return_index": True,
@@ -325,6 +329,8 @@ class TestUniqueOpAxis1(TestUniqueOp):
             return_counts=True,
             axis=1,
         )
+        if np.lib.NumpyVersion(np.__version__) >= "2.0.0":
+            inverse = inverse.flatten()
         self.attrs = {
             'dtype': int(core.VarDesc.VarType.INT32),
             "return_index": True,
@@ -389,6 +395,8 @@ class TestUniqueAPI(unittest.TestCase):
             return_counts=True,
             axis=0,
         )
+        if np.lib.NumpyVersion(np.__version__) >= "2.0.0":
+            np_inverse = np_inverse.flatten()
         self.assertTrue((out.numpy() == np_out).all(), True)
         self.assertTrue((index.numpy() == np_index).all(), True)
         self.assertTrue((inverse.numpy() == np_inverse).all(), True)

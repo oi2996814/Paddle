@@ -15,7 +15,7 @@
 import unittest
 
 import paddle
-from paddle import fluid
+from paddle import base
 from paddle.incubate.distributed.fleet import role_maker
 from paddle.incubate.distributed.fleet.parameter_server.distribute_transpiler import (
     fleet,
@@ -31,9 +31,7 @@ class TestPyramidHashOpApi(unittest.TestCase):
         num_voc = 128
         embed_dim = 64
         x_shape, x_lod = [16, 10], [[3, 5, 2, 6]]
-        x = paddle.static.data(
-            name='x', shape=x_shape, dtype='int32', lod_level=1
-        )
+        x = paddle.static.data(name='x', shape=x_shape, dtype='int32')
         hash_embd = search_pyramid_hash(
             input=x,
             num_emb=embed_dim,
@@ -47,11 +45,11 @@ class TestPyramidHashOpApi(unittest.TestCase):
             black_list_len=2800,
             seed=3,
             lr=0.002,
-            param_attr=fluid.ParamAttr(
+            param_attr=base.ParamAttr(
                 name="PyramidHash_emb_0",
                 learning_rate=0,
             ),
-            param_attr_wl=fluid.ParamAttr(
+            param_attr_wl=base.ParamAttr(
                 name="Filter",
                 learning_rate=0,
             ),

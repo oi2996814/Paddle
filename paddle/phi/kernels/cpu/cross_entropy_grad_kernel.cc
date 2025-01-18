@@ -43,20 +43,20 @@ void CrossEntropyWithSoftmaxGradCPUKernel(const CPUContext& dev_ctx,
 
   const int rank = logit_grad->dims().size();
   const int axis_v = phi::funcs::CanonicalAxis(axis, rank);
-  int axis_dim = logit_grad->dims()[axis_v];
+  int axis_dim = static_cast<int>(logit_grad->dims()[axis_v]);
   PADDLE_ENFORCE_GT(
       axis_dim,
       0,
-      phi::errors::InvalidArgument(
-          "The axis dimention should be larger than 0, but received "
-          "axis dimention is %d.",
+      common::errors::InvalidArgument(
+          "The axis dimension should be larger than 0, but received "
+          "axis dimension is %d.",
           axis_dim));
 
   const int n = phi::funcs::SizeToAxis(axis_v, logit_grad->dims());
   PADDLE_ENFORCE_GT(
       n,
       0,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The size of axis should be larger than 0, but received "
           "SizeToAxis of logit_grad is %d.",
           n));
@@ -92,7 +92,7 @@ void CrossEntropyWithSoftmaxGradCPUKernel(const CPUContext& dev_ctx,
         for (int j = 0; j < remain; j++) {  // for each sample_other_dims
           int idx = i * remain + j;  // this sample's label_idx. for 1d case,
                                      // remain=1 and j=0, so, idx = i
-          auto lbl = static_cast<int64_t>(label_data[idx]);
+          auto lbl = static_cast<int64_t>(label_data[idx]);  // NOLINT
           if (lbl == ignore_index) {
             for (int k = 0; k < axis_dim; ++k) {  // for each class id's label
               logit_grad_data[i * d + k * remain + j] = 0;
@@ -144,7 +144,7 @@ void CrossEntropyWithSoftmaxGradCPUKernel(const CPUContext& dev_ctx,
       for (int j = 0; j < remain; j++) {  // for each sample_other_dims
         int idx = i * remain + j;  // this sample's label_idx. for 1d case,
                                    // remain=1 and j=0, so, idx = i
-        auto lbl = static_cast<int64_t>(label_data[idx]);
+        auto lbl = static_cast<int64_t>(label_data[idx]);  // NOLINT
         if (lbl == ignore_index) {
           for (int k = 0; k < axis_dim; ++k) {  // for each class id's label
             logit_grad_data[i * d + k * remain + j] = 0;
@@ -185,8 +185,8 @@ void CrossEntropyWithSoftmaxGradKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         dtype,
         phi::CppTypeToDataType<T>::Type(),
-        phi::errors::InvalidArgument("The Input(Label) should be with the "
-                                     "same data type as kernel data type."));
+        common::errors::InvalidArgument("The Input(Label) should be with the "
+                                        "same data type as kernel data type."));
     CrossEntropyWithSoftmaxGradCPUKernel<T, T>(dev_ctx,
                                                label,
                                                softmax,

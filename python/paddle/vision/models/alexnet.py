@@ -12,12 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import math
+from typing import (
+    TYPE_CHECKING,
+    TypedDict,
+)
+
+from typing_extensions import NotRequired, Unpack
 
 import paddle
 import paddle.nn.functional as F
 from paddle import nn
-from paddle.fluid.param_attr import ParamAttr
+from paddle.base.param_attr import ParamAttr
 from paddle.nn import Conv2D, Dropout, Linear, MaxPool2D, ReLU
 from paddle.nn.initializer import Uniform
 from paddle.utils.download import get_weights_path_from_url
@@ -31,19 +39,26 @@ model_urls = {
 
 __all__ = []
 
+if TYPE_CHECKING:
+    from paddle import Tensor
+    from paddle._typing import Size2
+
+    class _AlexNetOptions(TypedDict):
+        num_classes: NotRequired[int]
+
 
 class ConvPoolLayer(nn.Layer):
     def __init__(
         self,
-        input_channels,
-        output_channels,
-        filter_size,
-        stride,
-        padding,
-        stdv,
-        groups=1,
-        act=None,
-    ):
+        input_channels: int,
+        output_channels: int,
+        filter_size: Size2,
+        stride: Size2,
+        padding: Size2,
+        stdv: float,
+        groups: int = 1,
+        act: str | None = None,
+    ) -> None:
         super().__init__()
 
         self.relu = ReLU() if act == "relu" else None
@@ -60,7 +75,7 @@ class ConvPoolLayer(nn.Layer):
         )
         self._pool = MaxPool2D(kernel_size=3, stride=2, padding=0)
 
-    def forward(self, inputs):
+    def forward(self, inputs: Tensor) -> Tensor:
         x = self._conv(inputs)
         if self.relu is not None:
             x = self.relu(x)
@@ -75,7 +90,7 @@ class AlexNet(nn.Layer):
 
     Args:
         num_classes (int, optional): Output dim of last fc layer. If num_classes <= 0, last fc layer
-                            will not be defined. Default: 1000.
+            will not be defined. Default: 1000.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of AlexNet model.
@@ -83,19 +98,19 @@ class AlexNet(nn.Layer):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import AlexNet
+            >>> import paddle
+            >>> from paddle.vision.models import AlexNet
 
-            alexnet = AlexNet()
-
-            x = paddle.rand([1, 3, 224, 224])
-            out = alexnet(x)
-
-            print(out.shape)
-            # [1, 1000]
+            >>> alexnet = AlexNet()
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = alexnet(x)
+            >>> print(out.shape)
+            [1, 1000]
     """
 
-    def __init__(self, num_classes=1000):
+    num_classes: int
+
+    def __init__(self, num_classes: int = 1000) -> None:
         super().__init__()
         self.num_classes = num_classes
         stdv = 1.0 / math.sqrt(3 * 11 * 11)
@@ -149,7 +164,7 @@ class AlexNet(nn.Layer):
                 bias_attr=ParamAttr(initializer=Uniform(-stdv, stdv)),
             )
 
-    def forward(self, inputs):
+    def forward(self, inputs: Tensor) -> Tensor:
         x = self._conv1(inputs)
         x = self._conv2(x)
         x = self._conv3(x)
@@ -171,15 +186,15 @@ class AlexNet(nn.Layer):
         return x
 
 
-def _alexnet(arch, pretrained, **kwargs):
+def _alexnet(
+    arch: str, pretrained: bool, **kwargs: Unpack[_AlexNetOptions]
+) -> AlexNet:
     model = AlexNet(**kwargs)
 
     if pretrained:
         assert (
             arch in model_urls
-        ), "{} model do not have a pretrained model now, you should set pretrained=False".format(
-            arch
-        )
+        ), f"{arch} model do not have a pretrained model now, you should set pretrained=False"
         weight_path = get_weights_path_from_url(
             model_urls[arch][0], model_urls[arch][1]
         )
@@ -190,14 +205,16 @@ def _alexnet(arch, pretrained, **kwargs):
     return model
 
 
-def alexnet(pretrained=False, **kwargs):
+def alexnet(
+    pretrained: bool = False, **kwargs: Unpack[_AlexNetOptions]
+) -> AlexNet:
     """AlexNet model from
     `"ImageNet Classification with Deep Convolutional Neural Networks"
     <https://proceedings.neurips.cc/paper/2012/file/c399862d3b9d6b76c8436e924a68c45b-Paper.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
-                            on ImageNet. Default: False.
+            on ImageNet. Default: False.
         **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`AlexNet <api_paddle_vision_AlexNet>`.
 
     Returns:
@@ -206,19 +223,19 @@ def alexnet(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import alexnet
+            >>> import paddle
+            >>> from paddle.vision.models import alexnet
 
-            # build model
-            model = alexnet()
+            >>> # Build model
+            >>> model = alexnet()
 
-            # build model and load imagenet pretrained weight
-            # model = alexnet(pretrained=True)
+            >>> # Build model and load imagenet pretrained weight
+            >>> # model = alexnet(pretrained=True)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     return _alexnet('alexnet', pretrained, **kwargs)

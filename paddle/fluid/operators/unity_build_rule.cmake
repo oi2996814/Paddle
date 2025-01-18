@@ -29,22 +29,22 @@ register_unity_group(
   bmm_op.cc
   bpr_loss_op.cc
   cast_op.cc
-  mkldnn/cast_mkldnn_op.cc
+  onednn/cast_onednn_op.cc
   cholesky_op.cc
   chunk_eval_op.cc
   clip_by_norm_op.cc
   clip_op.cc
   coalesce_tensor_op.cc
-  mkldnn/activation_mkldnn_op.cc
-  mkldnn/interpolate_mkldnn_op.cc
-  mkldnn/pool_mkldnn_op.cc
-  mkldnn/softmax_mkldnn_op.cc)
+  onednn/activation_onednn_op.cc
+  onednn/interpolate_onednn_op.cc
+  onednn/pool_onednn_op.cc
+  onednn/softmax_onednn_op.cc)
 register_unity_group(
   cc
   center_loss_op.cc
-  mkldnn/concat_mkldnn_op.cc
-  mkldnn/conv_mkldnn_op.cc
-  mkldnn/conv_transpose_mkldnn_op.cc
+  onednn/concat_onednn_op.cc
+  onednn/conv_onednn_op.cc
+  onednn/conv_transpose_onednn_op.cc
   correlation_op.cc
   cos_sim_op.cc
   crf_decoding_op.cc
@@ -67,9 +67,8 @@ register_unity_group(
   deformable_conv_v1_op.cc
   deformable_psroi_pooling_op.cc
   delete_var_op.cc
-  dequantize_abs_max_op.cc
   dequantize_op.cc
-  mkldnn/dequantize_mkldnn_op.cc)
+  onednn/dequantize_onednn_op.cc)
 register_unity_group(
   cc
   dequeue_op.cc
@@ -92,13 +91,12 @@ register_unity_group(
   expand_v2_op.cc
   fake_dequantize_op.cc
   fc_op.cc
-  mkldnn/fc_mkldnn_op.cc
+  onednn/fc_onednn_op.cc
   fill_any_like_op.cc
   fill_constant_batch_size_like_op.cc
   fill_constant_op.cc
   fill_op.cc
-  fill_zeros_like_op.cc
-  filter_by_instag_op.cc)
+  fill_zeros_like_op.cc)
 register_unity_group(
   cc
   flatten_op.cc
@@ -106,7 +104,7 @@ register_unity_group(
   gather_nd_op.cc
   gather_tree_op.cc
   gaussian_random_batch_size_like_op.cc
-  mkldnn/gaussian_random_mkldnn_op.cc
+  onednn/gaussian_random_onednn_op.cc
   group_norm_op.cc
   gru_op.cc)
 register_unity_group(
@@ -124,7 +122,6 @@ register_unity_group(
   isfinite_v2_op.cc)
 register_unity_group(
   cc
-  inplace_abn_op.cc
   interpolate_v2_op.cc
   inverse_op.cc
   is_empty_op.cc
@@ -133,41 +130,34 @@ register_unity_group(
   l1_norm_op.cc
   label_smooth_op.cc
   generated_op
-  mkldnn/layer_norm_mkldnn_op.cc
-  mkldnn/layer_norm_mkldnn_op.cc
   linspace_op.cc
   load_combine_op.cc
   load_op.cc)
 register_unity_group(
   cc
   lod_array_length_op.cc
-  lod_rank_table_op.cc
   lod_reset_op.cc
   lod_tensor_to_array_op.cc
   log_softmax_op.cc
   lookup_table_dequant_op.cc
   lrn_op.cc
-  mkldnn/lrn_mkldnn_op.cc
-  lstm_unit_op.cc
-  lstmp_op.cc)
+  onednn/lrn_onednn_op.cc
+  lstm_unit_op.cc)
 register_unity_group(
   cc
   log_loss_op.cc
   lookup_table_v2_op.cc
-  margin_rank_loss_op.cc
   masked_select_op.cc
   match_matrix_tensor_op.cc
   matmul_op.cc
-  mkldnn/matmul_mkldnn_op.cc
+  onednn/matmul_onednn_op.cc
   max_sequence_len_op.cc
   maxout_op.cc
-  merge_lod_tensor_op.cc
   merge_selected_rows_op.cc
   meshgrid_op.cc)
 register_unity_group(
   cc
   concat_op.cc
-  conv_shift_op.cc
   dequantize_log_op.cc
   dropout_op.cc
   expand_op.cc
@@ -178,7 +168,6 @@ register_unity_group(
   matmul_v2_op.cc)
 register_unity_group(
   cc
-  mean_iou_op.cc
   mean_op.cc
   minus_op.cc
   mish_op.cc
@@ -203,7 +192,6 @@ register_unity_group(
   positive_negative_pair_op.cc
   prelu_op.cc
   print_op.cc
-  prroi_pool_op.cc
   psroi_pool_op.cc
   pull_box_extended_sparse_op.cc
   pull_box_sparse_op.cc
@@ -213,30 +201,27 @@ register_unity_group(
   cc
   push_dense_op.cc
   quantize_op.cc
-  mkldnn/quantize_mkldnn_op.cc
+  onednn/quantize_onednn_op.cc
   queue_generator_op.cc
-  random_crop_op.cc
   range_op.cc
   rank_attention_op.cc
   rank_loss_op.cc
   recurrent_op.cc
   reorder_lod_tensor_by_rank_op.cc
   requantize_op.cc
-  mkldnn/requantize_mkldnn_op.cc
+  onednn/requantize_onednn_op.cc
   reshape_op.cc
   reverse_op.cc)
 register_unity_group(
   cc
-  rnn_memory_helper_op.cc
   roi_align_op.cc
   roll_op.cc
   run_program_op.cc
-  sample_logits_op.cc
   sampling_id_op.cc
   save_combine_op.cc
   save_op.cc
   scale_op.cc
-  mkldnn/scale_mkldnn_op.cc
+  onednn/scale_onednn_op.cc
   scatter_nd_add_op.cc
   scatter_op.cc
   seed_op.cc
@@ -258,9 +243,7 @@ register_unity_group(
   slice_op.cc)
 register_unity_group(
   cc
-  space_to_depth_op.cc
   spectral_norm_op.cc
-  split_lod_tensor_op.cc
   split_op.cc
   split_selected_rows_op.cc
   spp_op.cc
@@ -269,7 +252,7 @@ register_unity_group(
   stack_op.cc
   strided_slice_op.cc
   sum_op.cc
-  mkldnn/sum_mkldnn_op.cc
+  onednn/sum_onednn_op.cc
   tdm_child_op.cc
   tdm_sampler_op.cc
   teacher_student_sigmoid_loss_op.cc
@@ -282,13 +265,11 @@ register_unity_group(
   top_k_v2_op.cc
   trace_op.cc
   transpose_op.cc
-  mkldnn/transpose_mkldnn_op.cc
-  tree_conv_op.cc
+  onednn/transpose_onednn_op.cc
   unbind_op.cc
   unfold_op.cc)
 register_unity_group(
   cc
-  smooth_l1_loss_op.cc
   uniform_random_batch_size_like_op.cc
   unique_op.cc
   unique_with_counts_op.cc
@@ -328,7 +309,7 @@ register_unity_group(
   unbind_op.cu.cc
   unpool_op.cu.cc
   unsqueeze_op.cu.cc)
-register_unity_group(cc arg_max_op.cc arg_min_op.cc squared_l2_distance_op.cc)
+register_unity_group(cc arg_max_op.cc arg_min_op.cc)
 register_unity_group(
   cc
   linear_chain_crf_op.cc
@@ -379,8 +360,7 @@ register_unity_group(
   unzip_op.cu
   data_norm_op.cu
   deformable_conv_op.cu
-  deformable_conv_v1_op.cu
-  dequantize_abs_max_op.cu)
+  deformable_conv_v1_op.cu)
 register_unity_group(
   cu
   dgc_clip_by_norm_op.cu
@@ -415,7 +395,6 @@ register_unity_group(
   isfinite_v2_op.cu)
 register_unity_group(
   cu
-  inplace_abn_op.cu
   interpolate_v2_op.cu
   isfinite_op.cu
   l1_norm_op.cu
@@ -434,18 +413,10 @@ register_unity_group(
   rank_loss_op.cu
   real_op.cu)
 register_unity_group(
-  cu
-  log_loss_op.cu
-  lookup_table_v2_op.cu
-  margin_rank_loss_op.cu
-  masked_select_op.cu
-  lstmp_op.cu
-  shuffle_channel_op.cu
-  softmax_cudnn_op.cu
-  squared_l2_distance_op.cu)
+  cu log_loss_op.cu lookup_table_v2_op.cu masked_select_op.cu
+  shuffle_channel_op.cu softmax_cudnn_op.cu)
 register_unity_group(
   cu
-  conv_shift_op.cu
   dequantize_log_op.cu
   dropout_op.cu
   fake_quantize_op.cu
@@ -455,7 +426,6 @@ register_unity_group(
   softmax_with_cross_entropy_op.cu)
 register_unity_group(
   cu
-  mean_iou_op.cu
   mean_op.cu
   minus_op.cu
   mish_op.cu
@@ -474,23 +444,15 @@ register_unity_group(
   partial_sum_op.cu
   pixel_shuffle_op.cu
   prelu_op.cu
-  prroi_pool_op.cu
   run_program_op.cu
   pull_box_extended_sparse_op.cu
   pull_box_sparse_op.cu)
-register_unity_group(
-  cu
-  random_crop_op.cu
-  range_op.cu
-  reverse_op.cu
-  partial_concat_op.cu
-  kldiv_loss_op.cu
-  instance_norm_op.cu)
+register_unity_group(cu range_op.cu reverse_op.cu partial_concat_op.cu
+                     kldiv_loss_op.cu instance_norm_op.cu)
 register_unity_group(
   cu
   roi_align_op.cu
   roll_op.cu
-  sample_logits_op.cu
   sampling_id_op.cu
   save_combine_op.cu
   save_op.cu
@@ -509,7 +471,6 @@ register_unity_group(
   slice_op.cu)
 register_unity_group(
   cu
-  space_to_depth_op.cu
   spectral_norm_op.cu
   split_op.cu
   split_selected_rows_op.cu
@@ -517,23 +478,12 @@ register_unity_group(
   sum_op.cu
   temporal_shift_op.cu
   arg_max_op.cu)
-register_unity_group(
-  cu
-  row_conv_op.cu
-  tree_conv_op.cu
-  tril_triu_op.cu
-  unfold_op.cu
-  arg_min_op.cu
-  crop_tensor_op.cu)
-register_unity_group(
-  cu
-  smooth_l1_loss_op.cu
-  uniform_random_batch_size_like_op.cu
-  unstack_op.cu
-  where_index_op.cu
-  where_op.cu
-  layer_norm_op.cu)
+register_unity_group(cu row_conv_op.cu tril_triu_op.cu unfold_op.cu
+                     arg_min_op.cu crop_tensor_op.cu)
+register_unity_group(cu uniform_random_batch_size_like_op.cu unstack_op.cu
+                     where_index_op.cu where_op.cu layer_norm_op.cu)
 register_unity_group(cu expand_as_op.cu stack_op.cu)
+
 # The following groups are to make better use of `/MP` which MSVC's parallel
 # compilation instruction when compiling in Unity Build.
 register_unity_group(cu activation_op.cu)

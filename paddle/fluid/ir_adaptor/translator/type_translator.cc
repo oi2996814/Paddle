@@ -14,13 +14,12 @@
 
 #include "paddle/fluid/ir_adaptor/translator/type_translator.h"
 
-#include "paddle/fluid/framework/framework.pb.h"
-#include "paddle/fluid/ir/dialect/pd_type.h"
-#include "paddle/fluid/ir/dialect/pd_type_storage.h"
-#include "paddle/ir/core/builtin_type.h"
+#include "paddle/fluid/pir/dialect/operator/ir/op_type.h"
+#include "paddle/fluid/pir/dialect/operator/ir/type_storage.h"
+#include "paddle/phi/core/framework/framework.pb.h"
+#include "paddle/pir/include/core/builtin_type.h"
 
-namespace paddle {
-namespace translator {
+namespace paddle::translator {
 
 using OpDesc = paddle::framework::OpDesc;
 using BlockDesc = paddle::framework::BlockDesc;
@@ -30,97 +29,168 @@ using DenseTensorType = paddle::dialect::DenseTensorType;
 using DenseTensorTypeStorage = paddle::dialect::DenseTensorTypeStorage;
 using SelectedRowsType = paddle::dialect::SelectedRowsType;
 using SelectedRowsTypeStorage = paddle::dialect::SelectedRowsTypeStorage;
+using SparseCooTensorType = paddle::dialect::SparseCooTensorType;
+using SparseCooTensorTypeStorage = paddle::dialect::SparseCooTensorTypeStorage;
+using SparseCsrTensorType = paddle::dialect::SparseCsrTensorType;
+using SparseCsrTensorTypeStorage = paddle::dialect::SparseCsrTensorTypeStorage;
+using DataLayout = DenseTensorTypeStorage::DataLayout;
+using LegacyLoD = DenseTensorTypeStorage::LegacyLoD;
 
 TypeTranslator::TypeTranslator() {
+  const auto& HandleTensor = [&](pir::IrContext* ctx,
+                                 const VarDesc& var_desc) -> pir::Type {
+    VLOG(10) << "[vartype translating]"
+             << "[" << var_desc.Name() << "] from DENSE_TENSOR";
+    const pir::Type dtype =
+        this->operator[](var_desc.GetDataType())(ctx, var_desc);
+    const auto dim = common::make_ddim(var_desc.GetShape());
+    const auto layout = DataLayout::NCHW;
+    const LegacyLoD lod = {};
+    const size_t offset = 0;
+    return DenseTensorType::get(ctx, dtype, dim, layout, lod, offset);
+  };
+  const auto& HandleTensorArray = [&](pir::IrContext* ctx,
+                                      const VarDesc& var_desc) -> pir::Type {
+    VLOG(10) << "[vartype translating]"
+             << "[" << var_desc.Name() << "] from DENSE_TENSOR_ARRAY";
+    const pir::Type dtype =
+        this->operator[](var_desc.GetDataType())(ctx, var_desc);
+    const auto dims = common::make_ddim(var_desc.GetShape());
+    const auto layout = DataLayout::NCHW;
+    return paddle::dialect::DenseTensorArrayType::get(ctx, dtype, dims, layout);
+  };
+
+  const auto& HandleSelectedRows = [&](pir::IrContext* ctx,
+                                       const VarDesc& var_desc) -> pir::Type {
+    VLOG(10) << "[vartype translating]"
+             << "[" << var_desc.Name() << "] from SELECTED_ROWS";
+    const pir::Type dtype =
+        this->operator[](var_desc.GetDataType())(ctx, var_desc);
+    const auto dim = common::make_ddim(var_desc.GetShape());
+    const auto layout = DataLayout::NCHW;
+    const LegacyLoD lod = {};
+    const size_t offset = 0;
+    pir::Type SelectedRows =
+        SelectedRowsType::get(ctx, dtype, dim, layout, lod, offset);
+    return SelectedRows;
+  };
+
+  const auto& HandleSparseCooTensor =
+      [&](pir::IrContext* ctx, const VarDesc& var_desc) -> pir::Type {
+    VLOG(10) << "[vartype translating]"
+             << "[" << var_desc.Name() << "] from SPARSE_COO";
+    const pir::Type dtype =
+        this->operator[](var_desc.GetDataType())(ctx, var_desc);
+    const auto dim = common::make_ddim(var_desc.GetShape());
+    const LegacyLoD lod = {};
+    const size_t offset = 0;
+    bool coalesced = false;
+    const auto non_zero_dims = common::make_ddim(var_desc.GetShape());
+    const auto layout = DataLayout::NCHW;
+    pir::DenseTensorType non_zero_indices =
+        DenseTensorType::get(ctx, dtype, dim, layout, lod, offset);
+    pir::DenseTensorType non_zero_elements =
+        DenseTensorType::get(ctx, dtype, dim, layout, lod, offset);
+    pir::Type SparseCooTensor = SparseCooTensorType::get(ctx,
+                                                         dtype,
+                                                         dim,
+                                                         non_zero_dims,
+                                                         layout,
+                                                         non_zero_indices,
+                                                         non_zero_elements,
+                                                         coalesced);
+    return SparseCooTensor;
+  };
+
+  const auto& HandleSparseCsrTensor =
+      [&](pir::IrContext* ctx, const VarDesc& var_desc) -> pir::Type {
+    VLOG(10) << "[vartype translating]"
+             << "[" << var_desc.Name() << "] from SPARSE_CSR";
+    const pir::Type dtype =
+        this->operator[](var_desc.GetDataType())(ctx, var_desc);
+    const auto dim = common::make_ddim(var_desc.GetShape());
+    const LegacyLoD lod = {};
+    const size_t offset = 0;
+    const auto layout = DataLayout::NCHW;
+    pir::DenseTensorType non_zero_crows =
+        DenseTensorType::get(ctx, dtype, dim, layout, lod, offset);
+    pir::DenseTensorType non_zero_cols =
+        DenseTensorType::get(ctx, dtype, dim, layout, lod, offset);
+    pir::DenseTensorType non_zero_elements =
+        DenseTensorType::get(ctx, dtype, dim, layout, lod, offset);
+    pir::Type SparseCsrTensor = SparseCsrTensorType::get(ctx,
+                                                         dtype,
+                                                         dim,
+                                                         layout,
+                                                         non_zero_crows,
+                                                         non_zero_cols,
+                                                         non_zero_elements);
+    return SparseCsrTensor;
+  };
+
   handlers = {
       {VarType::BOOL,
-       [&](ir::IrContext* ctx, const VarDesc& var_desc) -> ir::Type {
-         return ir::BoolType::get(ctx);
+       [&](pir::IrContext* ctx, const VarDesc& var_desc) -> pir::Type {
+         return pir::BoolType::get(ctx);
        }},
       {VarType::UINT8,
-       [&](ir::IrContext* ctx, const VarDesc& var_desc) -> ir::Type {
-         return ir::UInt8Type::get(ctx);
+       [&](pir::IrContext* ctx, const VarDesc& var_desc) -> pir::Type {
+         return pir::UInt8Type::get(ctx);
        }},
       {VarType::INT8,
-       [&](ir::IrContext* ctx, const VarDesc& var_desc) -> ir::Type {
-         return ir::Int8Type::get(ctx);
+       [&](pir::IrContext* ctx, const VarDesc& var_desc) -> pir::Type {
+         return pir::Int8Type::get(ctx);
        }},
       {VarType::INT16,
-       [&](ir::IrContext* ctx, const VarDesc& var_desc) -> ir::Type {
-         return ir::Int16Type::get(ctx);
+       [&](pir::IrContext* ctx, const VarDesc& var_desc) -> pir::Type {
+         return pir::Int16Type::get(ctx);
        }},
       {VarType::INT32,
-       [&](ir::IrContext* ctx, const VarDesc& var_desc) -> ir::Type {
-         return ir::Int32Type::get(ctx);
+       [&](pir::IrContext* ctx, const VarDesc& var_desc) -> pir::Type {
+         return pir::Int32Type::get(ctx);
        }},
       {VarType::INT64,
-       [&](ir::IrContext* ctx, const VarDesc& var_desc) -> ir::Type {
-         return ir::Int64Type::get(ctx);
+       [&](pir::IrContext* ctx, const VarDesc& var_desc) -> pir::Type {
+         return pir::Int64Type::get(ctx);
        }},
       {VarType::FP16,
-       [&](ir::IrContext* ctx, const VarDesc& var_desc) -> ir::Type {
-         return ir::Float16Type::get(ctx);
+       [&](pir::IrContext* ctx, const VarDesc& var_desc) -> pir::Type {
+         return pir::Float16Type::get(ctx);
        }},
       {VarType::FP32,
-       [&](ir::IrContext* ctx, const VarDesc& var_desc) -> ir::Type {
-         return ir::Float32Type::get(ctx);
+       [&](pir::IrContext* ctx, const VarDesc& var_desc) -> pir::Type {
+         return pir::Float32Type::get(ctx);
        }},
       {VarType::FP64,
-       [&](ir::IrContext* ctx, const VarDesc& var_desc) -> ir::Type {
-         return ir::Float64Type::get(ctx);
+       [&](pir::IrContext* ctx, const VarDesc& var_desc) -> pir::Type {
+         return pir::Float64Type::get(ctx);
        }},
       {VarType::BF16,
-       [&](ir::IrContext* ctx, const VarDesc& var_desc) -> ir::Type {
-         return ir::BFloat16Type::get(ctx);
+       [&](pir::IrContext* ctx, const VarDesc& var_desc) -> pir::Type {
+         return pir::BFloat16Type::get(ctx);
        }},
       {VarType::COMPLEX64,
-       [&](ir::IrContext* ctx, const VarDesc& var_desc) -> ir::Type {
-         return ir::Complex64Type::get(ctx);
+       [&](pir::IrContext* ctx, const VarDesc& var_desc) -> pir::Type {
+         return pir::Complex64Type::get(ctx);
        }},
       {VarType::COMPLEX128,
-       [&](ir::IrContext* ctx, const VarDesc& var_desc) -> ir::Type {
-         return ir::Complex128Type::get(ctx);
+       [&](pir::IrContext* ctx, const VarDesc& var_desc) -> pir::Type {
+         return pir::Complex128Type::get(ctx);
        }},
-      {VarType::LOD_TENSOR,
-       [&](ir::IrContext* ctx, const VarDesc& var_desc) -> ir::Type {
-         VLOG(10) << "[vartype translating]"
-                  << "[" << var_desc.Name() << "] from LOD_TENSOR";
-
-         ir::Type dtype =
-             this->operator[](var_desc.GetDataType())(ctx, var_desc);
-         DenseTensorTypeStorage::Dim dim = phi::make_ddim(var_desc.GetShape());
-         DenseTensorTypeStorage::DataLayout layout =
-             DenseTensorTypeStorage::DataLayout::UNDEFINED;
-         DenseTensorTypeStorage::LoD lod = {};
-         size_t offset = 0;
-         return DenseTensorType::get(ctx, dtype, dim, layout, lod, offset);
+      {VarType::FP8_E4M3FN,
+       [&](pir::IrContext* ctx, const VarDesc& var_desc) -> pir::Type {
+         return pir::Float8E4M3FNType::get(ctx);
        }},
-      {VarType::LOD_TENSOR_ARRAY,
-       [&](ir::IrContext* ctx, const VarDesc& var_desc) -> ir::Type {
-         VLOG(10) << "[vartype translating]"
-                  << "[" << var_desc.Name() << "] from LOD_TENSOR_ARRAY";
-
-         return ir::VectorType::get(ctx, std::vector<ir::Type>{});
+      {VarType::FP8_E5M2,
+       [&](pir::IrContext* ctx, const VarDesc& var_desc) -> pir::Type {
+         return pir::Float8E5M2Type::get(ctx);
        }},
-      {VarType::SELECTED_ROWS,
-       [&](ir::IrContext* ctx, const VarDesc& var_desc) -> ir::Type {
-         VLOG(10) << "[vartype translating]"
-                  << "[" << var_desc.Name() << "] from SELECTED_ROWS";
-
-         ir::Type dtype =
-             this->operator[](var_desc.GetDataType())(ctx, var_desc);
-
-         SelectedRowsTypeStorage::Dim dim = phi::make_ddim(var_desc.GetShape());
-         SelectedRowsTypeStorage::DataLayout layout =
-             SelectedRowsTypeStorage::DataLayout::UNDEFINED;
-         SelectedRowsTypeStorage::LoD lod = {};
-         size_t offset = 0;
-         ir::Type SelectedRows =
-             SelectedRowsType::get(ctx, dtype, dim, layout, lod, offset);
-         return SelectedRows;
-       }},
+      {VarType::DENSE_TENSOR, HandleTensor},
+      {VarType::DENSE_TENSOR_ARRAY, HandleTensorArray},
+      {VarType::SELECTED_ROWS, HandleSelectedRows},
+      {VarType::SPARSE_COO, HandleSparseCooTensor},
+      {VarType::SPARSE_CSR, HandleSparseCsrTensor},
   };
 }
 
-}  // namespace translator
-}  // namespace paddle
+}  // namespace paddle::translator

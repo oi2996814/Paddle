@@ -18,17 +18,15 @@
 #include <unordered_map>
 #include <vector>
 
+#include "paddle/common/errors.h"
+#include "paddle/common/layout.h"
 #include "paddle/fluid/framework/block_desc.h"
 #include "paddle/fluid/framework/data_layout_transform.h"
 #include "paddle/fluid/framework/ir/graph_helper.h"
 #include "paddle/fluid/framework/ir/node.h"
 #include "paddle/phi/common/data_type.h"
-#include "paddle/phi/common/layout.h"
-#include "paddle/phi/core/errors.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 namespace {
 
@@ -55,7 +53,10 @@ void DoInsertTransposeOp(ir::Graph *graph,
       desc.SetAttr("mkldnn_data_type", std::string{"float32"});
       desc.Flush();
     };
-    CHECK_NOTNULL(block_desc);
+    PADDLE_ENFORCE_NOT_NULL(block_desc,
+                            common::errors::InvalidArgument(
+                                "During the trt_support_nhwc_pass, the "
+                                "block description should not be null."));
     if (cache->count(prev_node) == 0) {
       framework::OpDesc op_desc(block_desc);
       if (from_layout == phi::DataLayout::kNCHW) {
@@ -126,11 +127,31 @@ bool ModelLayoutIsNHWC(const std::vector<ir::Node *> &op_nodes) {
   return false;
 }
 
+// Do additional check if OP's weight is not persistable
+typedef std::string OP_NAME;
+typedef std::string WEIGHT_NAME;
+typedef std::unordered_map<OP_NAME, WEIGHT_NAME> OP_WEIGHT_NAME;
+bool IsWeight(ir::Node *op_node,
+              ir::Node *var_node,
+              const OP_WEIGHT_NAME &op_weight_pair) {
+  if (var_node->Var()->Persistable()) return true;
+  auto *op_desc = op_node->Op();
+  std::string op_type = op_desc->Type();
+  std::string var_name = var_node->Var()->Name();
+  if (op_weight_pair.count(op_type)) {
+    if (var_name ==
+        op_desc->Input(op_weight_pair.find(op_type)->second).front()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 void TrtSupportNHWCPass::ApplyImpl(Graph *graph) const {
   PADDLE_ENFORCE_NOT_NULL(graph,
-                          platform::errors::PreconditionNotMet(
+                          common::errors::PreconditionNotMet(
                               "During the trt_support_nhwc_pass, the graph "
                               "should not be null."));
   FusePassBase::Init("trt_support_nhwc_pass", graph);
@@ -155,13 +176,16 @@ void TrtSupportNHWCPass::ApplyImpl(Graph *graph) const {
                                                     "bilinear_interp_v2",
                                                     "nearest_interp",
                                                     "nearest_interp_v2"};
+  // Op's weight could be temporary variable, so we save the name of OP's weight
+  // input
+  OP_WEIGHT_NAME op_weight_pair{{"conv2d", "Filter"}};
   // Ops must run under the original layout even though it has
   // data_format/data_layout attribute, otherwise it will be very troublesome!
   std::unordered_set<std::string> must_original_layout_ops{
       "affine_channel", "softmax", "temporal_shift"};
   // OPs unrelated to layout are consistent according to the layout of input
   // var！
-  std::unordered_set<std::string> any_layout_ops{"relu"};
+  std::unordered_set<std::string> any_layout_ops{"relu", "elementwise_add"};
   //
   //
   // TODO(liuyuanle): Add other op if needed!
@@ -179,7 +203,12 @@ void TrtSupportNHWCPass::ApplyImpl(Graph *graph) const {
   auto *block_desc = (*iter)->Op()->Block();
 
   for (auto *op_node : op_nodes) {
-    CHECK_EQ(op_node->IsOp(), true);
+    PADDLE_ENFORCE_EQ(op_node->IsOp(),
+                      true,
+                      common::errors::InvalidArgument(
+                          "op_node->IsOp() is False, which means that "
+                          "%p may be an invalid option.",
+                          op_node));
     auto *op_desc = op_node->Op();
 
     std::string data_format;
@@ -192,8 +221,12 @@ void TrtSupportNHWCPass::ApplyImpl(Graph *graph) const {
     bool input_shape_4{true};
     auto op_inputs = op_node->inputs;
     for (auto *in_var_node : op_inputs) {
-      CHECK_EQ(in_var_node->IsVar(), true);
-      if (in_var_node->Var()->Persistable()) continue;
+      PADDLE_ENFORCE_EQ(in_var_node->IsVar(),
+                        true,
+                        common::errors::InvalidArgument(
+                            "in_var_node->IsVar() is False, which means that "
+                            "inputs may be not a valid variable."));
+      if (IsWeight(op_node, in_var_node, op_weight_pair)) continue;
 
       auto input_shape = in_var_node->Var()->GetShape();
       input_shape_4 &= (input_shape.size() == 4);
@@ -220,7 +253,12 @@ void TrtSupportNHWCPass::ApplyImpl(Graph *graph) const {
       // Update output var of current op
       auto op_outputs = op_node->outputs;
       for (auto *out_var_node : op_outputs) {
-        CHECK_EQ(out_var_node->IsVar(), true);
+        PADDLE_ENFORCE_EQ(
+            out_var_node->IsVar(),
+            true,
+            common::errors::InvalidArgument(
+                "out_var_node->IsVar() is False, which means that "
+                "outputs may be not a valid variable."));
         if (out_var_node->Var()->Persistable()) continue;
 
         auto from_shape = out_var_node->Var()->GetShape();
@@ -259,7 +297,12 @@ void TrtSupportNHWCPass::ApplyImpl(Graph *graph) const {
           }
           auto op_inputs = op_node->inputs;
           for (auto *in_var_node : op_inputs) {
-            CHECK_EQ(in_var_node->IsVar(), true);
+            PADDLE_ENFORCE_EQ(
+                in_var_node->IsVar(),
+                true,
+                common::errors::InvalidArgument(
+                    "in_var_node->IsVar() is False, which means that "
+                    "inputs may be not a valid variable."));
             if (in_var_node->Var()->Persistable()) {
               if (std::find(weight_names.cbegin(),
                             weight_names.cend(),
@@ -278,7 +321,7 @@ void TrtSupportNHWCPass::ApplyImpl(Graph *graph) const {
       UpdateWeightVars();
       UpdateOutputVars();
     } else {
-      PADDLE_THROW(platform::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "During the trt_support_nhwc_pass, %s op not supported. Please "
           "update the supported op lists.",
           op_desc->Type()));
@@ -288,10 +331,19 @@ void TrtSupportNHWCPass::ApplyImpl(Graph *graph) const {
   auto ProcessAnyLayoutOps = [&] {
     // Process any layout ops
     for (auto *op_node : op_nodes) {
-      CHECK_EQ(op_node->IsOp(), true);
+      PADDLE_ENFORCE_EQ(op_node->IsOp(),
+                        true,
+                        common::errors::InvalidArgument(
+                            "op_node->IsOp() is False, which means that "
+                            "%p may be an invalid option.",
+                            op_node));
       auto op_inputs = op_node->inputs;
       for (auto *in_var_node : op_inputs) {
-        CHECK_EQ(in_var_node->IsVar(), true);
+        PADDLE_ENFORCE_EQ(in_var_node->IsVar(),
+                          true,
+                          common::errors::InvalidArgument(
+                              "in_var_node->IsVar() is False, which means that "
+                              "inputs may be not a valid variable."));
         if (transposed_ops.count(op_node)) continue;
 
         if (vars_to_nchw.count(in_var_node) &&
@@ -300,7 +352,12 @@ void TrtSupportNHWCPass::ApplyImpl(Graph *graph) const {
           // Update output var of current op
           auto op_outputs = op_node->outputs;
           for (auto *out_var_node : op_outputs) {
-            CHECK_EQ(out_var_node->IsVar(), true);
+            PADDLE_ENFORCE_EQ(
+                out_var_node->IsVar(),
+                true,
+                common::errors::InvalidArgument(
+                    "out_var_node->IsVar() is False, which means that "
+                    "outputs may be not a valid variable."));
             if (out_var_node->Var()->Persistable()) continue;
 
             auto from_shape = out_var_node->Var()->GetShape();
@@ -319,14 +376,24 @@ void TrtSupportNHWCPass::ApplyImpl(Graph *graph) const {
   auto InsertTransposeOp = [&] {
     // Insert transpose op
     for (auto *op_node : op_nodes) {
-      CHECK_EQ(op_node->IsOp(), true);
+      PADDLE_ENFORCE_EQ(op_node->IsOp(),
+                        true,
+                        common::errors::InvalidArgument(
+                            "op_node->IsOp() is False, which means that "
+                            "%p may be an invalid option.",
+                            op_node));
 
       if (transposed_ops.count(op_node)) {
         auto op_inputs = op_node->inputs;
         for (auto *in_var_node : op_inputs) {
-          CHECK_EQ(in_var_node->IsVar(), true);
+          PADDLE_ENFORCE_EQ(
+              in_var_node->IsVar(),
+              true,
+              common::errors::InvalidArgument(
+                  "in_var_node->IsVar() is False, which means that "
+                  "inputs may be not a valid variable."));
 
-          if (in_var_node->Var()->Persistable()) continue;
+          if (IsWeight(op_node, in_var_node, op_weight_pair)) continue;
           if (vars_to_nchw.count(in_var_node)) continue;
 
           DoInsertTransposeOp(graph,
@@ -340,7 +407,12 @@ void TrtSupportNHWCPass::ApplyImpl(Graph *graph) const {
       } else {
         auto op_inputs = op_node->inputs;
         for (auto *in_var_node : op_inputs) {
-          CHECK_EQ(in_var_node->IsVar(), true);
+          PADDLE_ENFORCE_EQ(
+              in_var_node->IsVar(),
+              true,
+              common::errors::InvalidArgument(
+                  "in_var_node->IsVar() is False, which means that "
+                  "inputs may be not a valid variable."));
 
           if (vars_to_nchw.count(in_var_node)) {
             DoInsertTransposeOp(graph,
@@ -360,8 +432,6 @@ void TrtSupportNHWCPass::ApplyImpl(Graph *graph) const {
   AddStatis(transposed_ops.size());
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(trt_support_nhwc_pass, paddle::framework::ir::TrtSupportNHWCPass);

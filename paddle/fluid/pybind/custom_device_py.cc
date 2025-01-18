@@ -17,26 +17,25 @@
 #include <string>
 #include <vector>
 
-#include "paddle/fluid/platform/device_context.h"
 #include "paddle/phi/backends/device_manager.h"
 #include "paddle/phi/backends/event.h"
 #include "paddle/phi/backends/stream.h"
+#include "paddle/phi/core/platform/device_context.h"
 
 namespace py = pybind11;
 
-namespace paddle {
-namespace pybind {
+namespace paddle::pybind {
 void BindCustomDevicePy(py::module *m_ptr) {
   auto &m = *m_ptr;
   // Bind Methods
   m.def("_get_device_min_chunk_size", [](const std::string &device_type) {
-    auto place = paddle::platform::CustomPlace(device_type);
+    auto place = phi::CustomPlace(device_type);
     return phi::DeviceManager::GetMinChunkSize(place);
   });
   m.def(
       "_get_device_total_memory",
       [](const std::string &device_type, int device_id) {
-        auto place = paddle::platform::CustomPlace(
+        auto place = phi::CustomPlace(
             device_type,
             device_id == -1 ? phi::DeviceManager::GetDevice(device_type)
                             : device_id);
@@ -50,16 +49,16 @@ void BindCustomDevicePy(py::module *m_ptr) {
       "_get_current_custom_device_stream",
       [](const std::string &device_type, int device_id) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
-        auto place = paddle::platform::CustomPlace(
+        auto place = phi::CustomPlace(
             device_type,
             device_id == -1 ? phi::DeviceManager::GetDevice(device_type)
                             : device_id);
 
         return static_cast<const phi::CustomContext *>(
-                   paddle::platform::DeviceContextPool::Instance().Get(place))
+                   phi::DeviceContextPool::Instance().Get(place))
             ->GetStream();
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit _get_current_custom_device_stream."));
 #endif
@@ -73,16 +72,16 @@ void BindCustomDevicePy(py::module *m_ptr) {
          int device_id,
          std::shared_ptr<phi::stream::Stream> stream) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
-        auto place = paddle::platform::CustomPlace(
+        auto place = phi::CustomPlace(
             device_type,
             device_id == -1 ? phi::DeviceManager::GetDevice(device_type)
                             : device_id);
         static_cast<phi::CustomContext *>(
-            paddle::platform::DeviceContextPool::Instance().Get(place))
+            phi::DeviceContextPool::Instance().Get(place))
             ->SetStream(stream);
         return stream;
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit _set_current_custom_device_stream."));
 #endif
@@ -93,13 +92,13 @@ void BindCustomDevicePy(py::module *m_ptr) {
   m.def("_synchronize_custom_device",
         [](const std::string &device_type, int device_id) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
-          auto place = paddle::platform::CustomPlace(
+          auto place = phi::CustomPlace(
               device_type,
               device_id == -1 ? phi::DeviceManager::GetDevice(device_type)
                               : device_id);
           phi::DeviceManager::SynchronizeDevice(place);
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit _synchronize_custom_device."));
 #endif
@@ -110,33 +109,30 @@ void BindCustomDevicePy(py::module *m_ptr) {
       The handle of the custom device stream.
 
       Parameters:
-        device(paddle.CustomPlace()|str): The device which wanted to allocate the stream.
-
-        device_id(int, optional): The id of the device which wanted to allocate the stream.
-        If device is None or negative integer, device will be the current device.
-        If device is positive integer, it must less than the device count. Default: None.
-
-        priority(int|None, optional): The priority of stream. The priority can be 1(high) or 2(normal).
-        If priority is None, the priority is 2(normal). Default: None.
-
-        blocking(int|None, optional): Whether the stream is executed synchronously. Default: False.
+          device(paddle.CustomPlace()|str): The device which wanted to allocate the stream.
+          device_id(int, optional): The id of the device which wanted to allocate the stream.
+              If device is None or negative integer, device will be the current device.
+              If device is positive integer, it must less than the device count. Default: None.
+          priority(int|None, optional): The priority of stream. The priority can be 1(high) or 2(normal).
+              If priority is None, the priority is 2(normal). Default: None.
+          blocking(int|None, optional): Whether the stream is executed synchronously. Default: False.
 
       Examples:
-        .. code-block:: python
+          .. code-block:: python
 
-            # required: custom_device
-            import paddle
-            s3 = paddle.device.custom.Stream('custom_cpu')
-            s2 = paddle.device.custom.Stream('custom_cpu', 0)
-            s1 = paddle.device.custom.Stream(paddle.CustomPlace('custom_cpu'))
-            s1 = paddle.device.custom.Stream(paddle.CustomPlace('custom_cpu'), 1)
-            s1 = paddle.device.custom.Stream(paddle.CustomPlace('custom_cpu'), 1, True)
+              >>> # doctest: +REQUIRES(env:CUSTOM_DEVICE)
+              >>> import paddle
+              >>> s3 = paddle.device.custom.Stream('custom_cpu')
+              >>> s2 = paddle.device.custom.Stream('custom_cpu', 0)
+              >>> s1 = paddle.device.custom.Stream(paddle.CustomPlace('custom_cpu'))
+              >>> s1 = paddle.device.custom.Stream(paddle.CustomPlace('custom_cpu'), 1)
+              >>> s1 = paddle.device.custom.Stream(paddle.CustomPlace('custom_cpu'), 1, True)
 
-  )DOC")
+      )DOC")
       .def(
           "__init__",
           [](phi::stream::Stream &self,
-             const platform::CustomPlace &place,
+             const phi::CustomPlace &place,
              int priority,
              bool blocking) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
@@ -148,7 +144,7 @@ void BindCustomDevicePy(py::module *m_ptr) {
                     blocking ? phi::stream::Stream::Flag::kDefaultFlag
                              : phi::stream::Stream::Flag::kStreamNonBlocking));
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit CustomDeviceStream."));
 #endif
@@ -175,7 +171,7 @@ void BindCustomDevicePy(py::module *m_ptr) {
                     blocking ? phi::stream::Stream::Flag::kDefaultFlag
                              : phi::stream::Stream::Flag::kStreamNonBlocking));
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit CustomDeviceStream."));
 #endif
@@ -190,28 +186,28 @@ void BindCustomDevicePy(py::module *m_ptr) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
             self.WaitEvent(event);
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit CustomDeviceStream."));
 #endif
           },
           R"DOC(
-      Makes all future work submitted to stream wait for all work captured in event.
+          Makes all future work submitted to stream wait for all work captured in event.
 
-      Parameters:
-        event(CustomDeviceEvent): The event to wait on.
+          Parameters:
+              event(CustomDeviceEvent): The event to wait on.
 
-      Examples:
-        .. code-block:: python
+          Examples:
+              .. code-block:: python
 
-          # required: custom_device
-          import paddle
-          place = paddle.CustomPlace('custom_cpu', 0)
-          s = paddle.device.custom.Stream(place)
-          event = paddle.device.custom.Event(place)
-          s.wait_event(event)
+                  >>> # doctest: +REQUIRES(env:CUSTOM_DEVICE)
+                  >>> import paddle
+                  >>> place = paddle.CustomPlace('custom_cpu', 0)
+                  >>> s = paddle.device.custom.Stream(place)
+                  >>> event = paddle.device.custom.Event(place)
+                  >>> s.wait_event(event)
 
-           )DOC")
+          )DOC")
       .def(
           "wait_stream",
           [](const phi::stream::Stream &self, phi::stream::Stream *other) {
@@ -221,78 +217,79 @@ void BindCustomDevicePy(py::module *m_ptr) {
             event.Record(other);
             self.WaitEvent(&event);
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit CustomDeviceStream."));
 #endif
           },
           R"DOC(
-      Synchronizes with the given stream.
+          Synchronizes with the given stream.
 
-      Parameters:
-        stream(CUDAStream): The stream to synchronize with.
+          Parameters:
+              stream(CUDAStream): The stream to synchronize with.
 
-      Examples:
-        .. code-block:: python
+          Examples:
+              .. code-block:: python
 
-            # required: custom_device
-            import paddle
-            place = paddle.CustomPlace('custom_cpu', 0)
-            s1 = paddle.device.custom.Stream(place)
-            s2 = paddle.device.custom.Stream(place)
-            s1.wait_stream(s2)
+                  >>> # doctest: +REQUIRES(env:CUSTOM_DEVICE)
+                  >>> import paddle
+                  >>> place = paddle.CustomPlace('custom_cpu', 0)
+                  >>> s1 = paddle.device.custom.Stream(place)
+                  >>> s2 = paddle.device.custom.Stream(place)
+                  >>> s1.wait_stream(s2)
 
-           )DOC")
+          )DOC")
       .def(
           "query",
           [](const phi::stream::Stream &self) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
             return self.Query();
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit CustomDeviceStream."));
 #endif
           },
           R"DOC(
-      Return the status whether if all operations in stream have completed.
+          Return the status whether if all operations in stream have completed.
 
-      Returns: A boolean value.
+          Returns:
+              A boolean value.
 
-      Examples:
-        .. code-block:: python
+          Examples:
+              .. code-block:: python
 
-            # required: custom_device
-            import paddle
-            place = paddle.CustomPlace('custom_cpu', 0)
-            s = paddle.device.custom.Stream(place)
-            is_done = s.query()
+                  >>> # doctest: +REQUIRES(env:CUSTOM_DEVICE)
+                  >>> import paddle
+                  >>> place = paddle.CustomPlace('custom_cpu', 0)
+                  >>> s = paddle.device.custom.Stream(place)
+                  >>> is_done = s.query()
 
-           )DOC")
+          )DOC")
       .def(
           "synchronize",
           [](const phi::stream::Stream &self) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
             self.Synchronize();
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit CustomDeviceStream."));
 #endif
           },
           R"DOC(
-      Waits for stream tasks to complete.
+          Waits for stream tasks to complete.
 
-      Examples:
-        .. code-block:: python
+          Examples:
+              .. code-block:: python
 
-            # required: custom_device
-            import paddle
-            place = paddle.CustomPlace('custom_cpu', 0)
-            s = paddle.device.custom.Stream(place)
-            s.synchronize()
+                  >>> # doctest: +REQUIRES(env:CUSTOM_DEVICE)
+                  >>> import paddle
+                  >>> place = paddle.CustomPlace('custom_cpu', 0)
+                  >>> s = paddle.device.custom.Stream(place)
+                  >>> s.synchronize()
 
-           )DOC")
+          )DOC")
       .def(
           "record_event",
           [](const phi::stream::Stream &self, phi::event::Event *event) {
@@ -304,31 +301,31 @@ void BindCustomDevicePy(py::module *m_ptr) {
             event->Record(&self);
             return event;
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit CustomDeviceStream."));
 #endif
           },
           R"DOC(
-      Record an event in the stream.
+          Record an event in the stream.
 
-      Parameters:
-          event(CustomDeviceEvent, optional): The event to be record. If event is None, a new event is created.
-          Default: None.
+          Parameters:
+              event(CustomDeviceEvent, optional): The event to be record. If event is None, a new event is created.
+                  Default: None.
 
-      Returns:
-          The record event.
+          Returns:
+              The record event.
 
-      Examples:
-        .. code-block:: python
+          Examples:
+              .. code-block:: python
 
-            # required: custom_device
-            import paddle
-            place = paddle.CustomPlace('custom_cpu', 0)
-            s = paddle.device.custom.Stream(place)
-            event = s.record_event()
+                  >>> # doctest: +REQUIRES(env:CUSTOM_DEVICE)
+                  >>> import paddle
+                  >>> place = paddle.CustomPlace('custom_cpu', 0)
+                  >>> s = paddle.device.custom.Stream(place)
+                  >>> event = s.record_event()
 
-           )DOC",
+          )DOC",
           py::arg("event") = nullptr)
       .def_property_readonly(
           "raw_stream",
@@ -337,32 +334,32 @@ void BindCustomDevicePy(py::module *m_ptr) {
             VLOG(10) << self.raw_stream();
             return reinterpret_cast<std::uintptr_t>(self.raw_stream());
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit CustomDeviceStream."));
 #endif
           },
           R"DOC(
-      return the raw stream of type CustomDeviceStream as type int.
+          return the raw stream of type CustomDeviceStream as type int.
 
-      Examples:
-        .. code-block:: python
+          Examples:
+            .. code-block:: python
 
-            # required: custom_device
-            import paddle
-            import ctypes
-            stream  = paddle.device.custom.current_stream().raw_stream
-            print(stream)
+                >>> # doctest: +REQUIRES(env:CUSTOM_DEVICE)
+                >>> import paddle
+                >>> import ctypes
+                >>> stream  = paddle.device.custom.current_stream().raw_stream
+                >>> print(stream)
 
-            ptr = ctypes.c_void_p(stream)  # convert back to void*
-            print(ptr)
+                >>> ptr = ctypes.c_void_p(stream)  # convert back to void*
+                >>> print(ptr)
 
-           )DOC")
+          )DOC")
       .def_property_readonly("place", [](const phi::stream::Stream &self) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
         return reinterpret_cast<const phi::CustomPlace &>(self.GetPlace());
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit CustomDeviceStream."));
 #endif
@@ -373,31 +370,27 @@ void BindCustomDevicePy(py::module *m_ptr) {
       The handle of the custom device event.
 
       Parameters:
-        device(paddle.CustomPlace()|str): The device which wanted to allocate the stream.
-
-        device_id(int, optional): The id of the device which wanted to allocate the stream.
-        If device is None or negative integer, device will be the current device.
-        If device is positive integer, it must less than the device count. Default: None.
-
-        enable_timing(bool, optional): Whether the event will measure time. Default: False.
-
-        blocking(bool, optional): Whether the wait() func will be blocking. Default: False;
-
-        interprocess(bool, optional): Whether the event can be shared between processes. Default: False.
+          device(paddle.CustomPlace()|str): The device which wanted to allocate the stream.
+          device_id(int, optional): The id of the device which wanted to allocate the stream.
+              If device is None or negative integer, device will be the current device.
+              If device is positive integer, it must less than the device count. Default: None.
+          enable_timing(bool, optional): Whether the event will measure time. Default: False.
+          blocking(bool, optional): Whether the wait() func will be blocking. Default: False.
+          interprocess(bool, optional): Whether the event can be shared between processes. Default: False.
 
       Examples:
-        .. code-block:: python
+          .. code-block:: python
 
-            # required: custom_device
-            import paddle
-            place = paddle.CustomPlace('custom_cpu', 0)
-            event = paddle.device.custom.Event(place)
+              >>> # doctest: +REQUIRES(env:CUSTOM_DEVICE)
+              >>> import paddle
+              >>> place = paddle.CustomPlace('custom_cpu', 0)
+              >>> event = paddle.device.custom.Event(place)
 
-  )DOC")
+      )DOC")
       .def(
           "__init__",
           [](phi::event::Event &self,
-             const platform::CustomPlace &place,
+             const phi::CustomPlace &place,
              bool enable_timing,
              bool blocking,
              bool interprocess) {
@@ -415,7 +408,7 @@ void BindCustomDevicePy(py::module *m_ptr) {
             new (&self) phi::event::Event();
             self.Init(place, flag);
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit CustomDeviceEvent."));
 #endif
@@ -451,7 +444,7 @@ void BindCustomDevicePy(py::module *m_ptr) {
                                     : device_id),
                 flag);
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit CustomDeviceEvent."));
 #endif
@@ -466,15 +459,15 @@ void BindCustomDevicePy(py::module *m_ptr) {
           [](phi::event::Event &self, phi::stream::Stream *stream) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
             if (stream == nullptr) {
-              stream = static_cast<const phi::CustomContext *>(
-                           paddle::platform::DeviceContextPool::Instance().Get(
-                               self.GetPlace()))
-                           ->GetStream()
-                           .get();
+              stream =
+                  static_cast<const phi::CustomContext *>(
+                      phi::DeviceContextPool::Instance().Get(self.GetPlace()))
+                      ->GetStream()
+                      .get();
             }
             self.Record(stream);
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit CustomDeviceEvent."));
 #endif
@@ -483,25 +476,25 @@ void BindCustomDevicePy(py::module *m_ptr) {
           Records the event in the given stream.
 
           Parameters:
-            stream(CustomDeviceStream, optional): The handle of custom device stream. If None, the stream is the current stream. Default: None.
+              stream(CustomDeviceStream, optional): The handle of custom device stream. If None, the stream is the current stream. Default: None.
 
           Examples:
-            .. code-block:: python
+              .. code-block:: python
 
-              # required: custom_device
-              import paddle
-              place = paddle.CustomPlace('custom_cpu', 0)
-              event = paddle.device.custom.Event(place)
-              event.record()
+                  >>> # doctest: +REQUIRES(env:CUSTOM_DEVICE)
+                  >>> import paddle
+                  >>> place = paddle.CustomPlace('custom_cpu', 0)
+                  >>> event = paddle.device.custom.Event(place)
+                  >>> event.record()
 
-        )DOC")
+          )DOC")
       .def(
           "query",
           [](const phi::event::Event &self) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
             return self.Query();
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit CustomDeviceEvent."));
 #endif
@@ -509,25 +502,26 @@ void BindCustomDevicePy(py::module *m_ptr) {
           R"DOC(
           Queries the event's status.
 
-          Returns: A boolean which indicates all work currently captured by the event has been completed.
+          Returns:
+              A boolean which indicates all work currently captured by the event has been completed.
 
           Examples:
-            .. code-block:: python
+              .. code-block:: python
 
-                # required: custom_device
-                import paddle
-                place = paddle.CustomPlace('custom_cpu', 0)
-                event = paddle.device.cuda.Event(place)
-                is_done = event.query()
+                  >>> # doctest: +REQUIRES(env:CUSTOM_DEVICE)
+                  >>> import paddle
+                  >>> place = paddle.CustomPlace('custom_cpu', 0)
+                  >>> event = paddle.device.cuda.Event(place)
+                  >>> is_done = event.query()
 
-           )DOC")
+          )DOC")
       .def(
           "synchronize",
           [](const phi::event::Event &self) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
             self.Synchronize();
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit CustomDeviceEvent."));
 #endif
@@ -536,15 +530,15 @@ void BindCustomDevicePy(py::module *m_ptr) {
             Waits for an event to complete.
 
             Examples:
-              .. code-block:: python
+                .. code-block:: python
 
-                # required: custom_device
-                import paddle
-                place = paddle.CustomPlace('custom_cpu', 0)
-                event = paddle.device.custom.Event(place)
-                event.synchronize()
+                    >>> # doctest: +REQUIRES(env:CUSTOM_DEVICE)
+                    >>> import paddle
+                    >>> place = paddle.CustomPlace('custom_cpu', 0)
+                    >>> event = paddle.device.custom.Event(place)
+                    >>> event.synchronize()
 
-           )DOC")
+          )DOC")
       .def_property_readonly(
           "raw_event",
           [](const phi::event::Event &self) {
@@ -552,38 +546,37 @@ void BindCustomDevicePy(py::module *m_ptr) {
             VLOG(10) << self.raw_event();
             return reinterpret_cast<std::uintptr_t>(self.raw_event());
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit CustomDeviceEvent."));
 #endif
           },
           R"DOC(
-      return the raw event of type CustomDeviceEvent as type int.
+          return the raw event of type CustomDeviceEvent as type int.
 
-      Examples:
-        .. code-block:: python
+          Examples:
+              .. code-block:: python
 
-            # required: custom_device
-            import paddle
-            import ctypes
-            place = paddle.CustomPlace('custom_cpu', 0)
-            event = paddle.device.custom.Event(place)
-            raw_event = event.raw_event
-            print(raw_event)
+                  >>> # doctest: +REQUIRES(env:CUSTOM_DEVICE)
+                  >>> import paddle
+                  >>> import ctypes
+                  >>> place = paddle.CustomPlace('custom_cpu', 0)
+                  >>> event = paddle.device.custom.Event(place)
+                  >>> raw_event = event.raw_event
+                  >>> print(raw_event)
 
-            ptr = ctypes.c_void_p(raw_event)  # convert back to void*
-            print(ptr)
+                  >>> ptr = ctypes.c_void_p(raw_event)  # convert back to void*
+                  >>> print(ptr)
 
-           )DOC")
+          )DOC")
       .def_property_readonly("place", [](const phi::event::Event &self) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
         return reinterpret_cast<const phi::CustomPlace &>(self.GetPlace());
 #else
-        PADDLE_THROW(platform::errors::Unavailable(
+        PADDLE_THROW(common::errors::Unavailable(
             "Paddle is not compiled with CustomDevice. "
             "Cannot visit CustomDeviceEvent."));
 #endif
       });
 }
-}  // namespace pybind
-}  // namespace paddle
+}  // namespace paddle::pybind

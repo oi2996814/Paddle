@@ -11,12 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
+
+from typing_extensions import Unpack
 
 import paddle
 from paddle import nn
-from paddle.fluid.param_attr import ParamAttr
+from paddle.base.param_attr import ParamAttr
 from paddle.nn import (
     AdaptiveAvgPool2D,
     AvgPool2D,
@@ -29,9 +33,32 @@ from paddle.nn import (
 from paddle.nn.initializer import Uniform
 from paddle.utils.download import get_weights_path_from_url
 
+if TYPE_CHECKING:
+    from typing import Literal, TypedDict
+
+    from typing_extensions import NotRequired
+
+    from paddle import Tensor
+    from paddle._typing import Size2
+
+    _DenseNetArch = Literal[
+        "densenet121",
+        "densenet161",
+        "densenet169",
+        "densenet201",
+        "densenet264",
+    ]
+
+    class _DenseNetOptions(TypedDict):
+        bn_size: NotRequired[int]
+        dropout: NotRequired[float]
+        num_classes: NotRequired[int]
+        with_pool: NotRequired[bool]
+
+
 __all__ = []
 
-model_urls = {
+model_urls: dict[str, tuple[str, str]] = {
     'densenet121': (
         'https://paddle-imagenet-models-name.bj.bcebos.com/dygraph/DenseNet121_pretrained.pdparams',
         'db1b239ed80a905290fd8b01d3af08e4',
@@ -58,14 +85,14 @@ model_urls = {
 class BNACConvLayer(nn.Layer):
     def __init__(
         self,
-        num_channels,
-        num_filters,
-        filter_size,
-        stride=1,
-        pad=0,
-        groups=1,
-        act="relu",
-    ):
+        num_channels: int,
+        num_filters: int,
+        filter_size: Size2,
+        stride: Size2 = 1,
+        pad: Size2 = 0,
+        groups: int = 1,
+        act: str = "relu",
+    ) -> None:
         super().__init__()
         self._batch_norm = BatchNorm(num_channels, act=act)
 
@@ -80,14 +107,18 @@ class BNACConvLayer(nn.Layer):
             bias_attr=False,
         )
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         y = self._batch_norm(input)
         y = self._conv(y)
         return y
 
 
 class DenseLayer(nn.Layer):
-    def __init__(self, num_channels, growth_rate, bn_size, dropout):
+    dropout: float
+
+    def __init__(
+        self, num_channels: int, growth_rate: int, bn_size: int, dropout: float
+    ) -> None:
         super().__init__()
         self.dropout = dropout
 
@@ -110,7 +141,7 @@ class DenseLayer(nn.Layer):
         if dropout:
             self.dropout_func = Dropout(p=dropout, mode="downscale_in_infer")
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         conv = self.bn_ac_func1(input)
         conv = self.bn_ac_func2(conv)
         if self.dropout:
@@ -120,9 +151,17 @@ class DenseLayer(nn.Layer):
 
 
 class DenseBlock(nn.Layer):
+    dropout: float
+
     def __init__(
-        self, num_channels, num_layers, bn_size, growth_rate, dropout, name=None
-    ):
+        self,
+        num_channels: int,
+        num_layers: int,
+        bn_size: int,
+        growth_rate: int,
+        dropout: float,
+        name: str | None = None,
+    ) -> None:
         super().__init__()
         self.dropout = dropout
         self.dense_layer_func = []
@@ -142,7 +181,7 @@ class DenseBlock(nn.Layer):
             )
             pre_channel = pre_channel + growth_rate
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         conv = input
         for func in self.dense_layer_func:
             conv = func(conv)
@@ -150,7 +189,7 @@ class DenseBlock(nn.Layer):
 
 
 class TransitionLayer(nn.Layer):
-    def __init__(self, num_channels, num_output_features):
+    def __init__(self, num_channels: int, num_output_features: int) -> None:
         super().__init__()
 
         self.conv_ac_func = BNACConvLayer(
@@ -163,7 +202,7 @@ class TransitionLayer(nn.Layer):
 
         self.pool2d_avg = AvgPool2D(kernel_size=2, stride=2, padding=0)
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         y = self.conv_ac_func(input)
         y = self.pool2d_avg(y)
         return y
@@ -172,14 +211,14 @@ class TransitionLayer(nn.Layer):
 class ConvBNLayer(nn.Layer):
     def __init__(
         self,
-        num_channels,
-        num_filters,
-        filter_size,
-        stride=1,
-        pad=0,
-        groups=1,
-        act="relu",
-    ):
+        num_channels: int,
+        num_filters: int,
+        filter_size: Size2,
+        stride: Size2 = 1,
+        pad: Size2 = 0,
+        groups: int = 1,
+        act: str = "relu",
+    ) -> None:
         super().__init__()
 
         self._conv = Conv2D(
@@ -194,7 +233,7 @@ class ConvBNLayer(nn.Layer):
         )
         self._batch_norm = BatchNorm(num_filters, act=act)
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         y = self._conv(input)
         y = self._batch_norm(y)
         return y
@@ -209,7 +248,7 @@ class DenseNet(nn.Layer):
         bn_size (int, optional): Expansion of growth rate in the middle layer. Default: 4.
         dropout (float, optional): Dropout rate. Default: :math:`0.0`.
         num_classes (int, optional): Output dim of last fc layer. If num_classes <= 0, last fc layer
-                            will not be defined. Default: 1000.
+            will not be defined. Default: 1000.
         with_pool (bool, optional): Use pool before the last fc layer or not. Default: True.
 
     Returns:
@@ -218,36 +257,37 @@ class DenseNet(nn.Layer):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import DenseNet
+            >>> import paddle
+            >>> from paddle.vision.models import DenseNet
 
-            # build model
-            densenet = DenseNet()
+            >>> # Build model
+            >>> densenet = DenseNet()
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = densenet(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = densenet(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
+
+    num_classes: int
+    with_pool: bool
 
     def __init__(
         self,
-        layers=121,
-        bn_size=4,
-        dropout=0.0,
-        num_classes=1000,
-        with_pool=True,
-    ):
+        layers: int = 121,
+        bn_size: int = 4,
+        dropout: float = 0.0,
+        num_classes: int = 1000,
+        with_pool: bool = True,
+    ) -> None:
         super().__init__()
         self.num_classes = num_classes
         self.with_pool = with_pool
         supported_layers = [121, 161, 169, 201, 264]
         assert (
             layers in supported_layers
-        ), "supported layers are {} but input layer is {}".format(
-            supported_layers, layers
-        )
+        ), f"supported layers are {supported_layers} but input layer is {layers}"
         densenet_spec = {
             121: (64, 32, [6, 12, 24, 16]),
             161: (96, 48, [6, 12, 36, 24]),
@@ -315,7 +355,7 @@ class DenseNet(nn.Layer):
                 bias_attr=ParamAttr(),
             )
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         conv = self.conv1_func(input)
         conv = self.pool2d_max(conv)
 
@@ -336,14 +376,17 @@ class DenseNet(nn.Layer):
         return y
 
 
-def _densenet(arch, layers, pretrained, **kwargs):
+def _densenet(
+    arch: _DenseNetArch,
+    layers: int,
+    pretrained: bool,
+    **kwargs: Unpack[_DenseNetOptions],
+) -> DenseNet:
     model = DenseNet(layers=layers, **kwargs)
     if pretrained:
         assert (
             arch in model_urls
-        ), "{} model do not have a pretrained model now, you should set pretrained=False".format(
-            arch
-        )
+        ), f"{arch} model do not have a pretrained model now, you should set pretrained=False"
         weight_path = get_weights_path_from_url(
             model_urls[arch][0], model_urls[arch][1]
         )
@@ -354,14 +397,16 @@ def _densenet(arch, layers, pretrained, **kwargs):
     return model
 
 
-def densenet121(pretrained=False, **kwargs):
+def densenet121(
+    pretrained: bool = False, **kwargs: Unpack[_DenseNetOptions]
+) -> DenseNet:
     """DenseNet 121-layer model from
     `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
-                            on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`DenseNet <api_paddle_vision_DenseNet>`.
+            on ImageNet. Default: False.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`DenseNet <api_paddle_vision_models_DenseNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of DenseNet 121-layer model.
@@ -369,32 +414,34 @@ def densenet121(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import densenet121
+            >>> import paddle
+            >>> from paddle.vision.models import densenet121
 
-            # build model
-            model = densenet121()
+            >>> # Build model
+            >>> model = densenet121()
 
-            # build model and load imagenet pretrained weight
-            # model = densenet121(pretrained=True)
+            >>> # Build model and load imagenet pretrained weight
+            >>> # model = densenet121(pretrained=True)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     return _densenet('densenet121', 121, pretrained, **kwargs)
 
 
-def densenet161(pretrained=False, **kwargs):
+def densenet161(
+    pretrained: bool = False, **kwargs: Unpack[_DenseNetOptions]
+) -> DenseNet:
     """DenseNet 161-layer model from
     `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
-                            on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`DenseNet <api_paddle_vision_DenseNet>`.
+            on ImageNet. Default: False.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`DenseNet <api_paddle_vision_models_DenseNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of DenseNet 161-layer model.
@@ -402,25 +449,34 @@ def densenet161(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            from paddle.vision.models import densenet161
+            >>> import paddle
+            >>> from paddle.vision.models import densenet161
 
-            # build model
-            model = densenet161()
+            >>> # Build model
+            >>> model = densenet161()
 
-            # build model and load imagenet pretrained weight
-            # model = densenet161(pretrained=True)
+            >>> # Build model and load imagenet pretrained weight
+            >>> # model = densenet161(pretrained=True)
+
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
+
+            >>> print(out.shape)
+            [1, 1000]
     """
     return _densenet('densenet161', 161, pretrained, **kwargs)
 
 
-def densenet169(pretrained=False, **kwargs):
+def densenet169(
+    pretrained: bool = False, **kwargs: Unpack[_DenseNetOptions]
+) -> DenseNet:
     """DenseNet 169-layer model from
     `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
-                            on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`DenseNet <api_paddle_vision_DenseNet>`.
+            on ImageNet. Default: False.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`DenseNet <api_paddle_vision_models_DenseNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of DenseNet 169-layer model.
@@ -428,32 +484,34 @@ def densenet169(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import densenet169
+            >>> import paddle
+            >>> from paddle.vision.models import densenet169
 
-            # build model
-            model = densenet169()
+            >>> # Build model
+            >>> model = densenet169()
 
-            # build model and load imagenet pretrained weight
-            # model = densenet169(pretrained=True)
+            >>> # Build model and load imagenet pretrained weight
+            >>> # model = densenet169(pretrained=True)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     return _densenet('densenet169', 169, pretrained, **kwargs)
 
 
-def densenet201(pretrained=False, **kwargs):
+def densenet201(
+    pretrained: bool = False, **kwargs: Unpack[_DenseNetOptions]
+) -> DenseNet:
     """DenseNet 201-layer model from
     `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
-                            on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`DenseNet <api_paddle_vision_DenseNet>`.
+            on ImageNet. Default: False.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`DenseNet <api_paddle_vision_models_DenseNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of DenseNet 201-layer model.
@@ -461,31 +519,33 @@ def densenet201(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import densenet201
+            >>> import paddle
+            >>> from paddle.vision.models import densenet201
 
-            # build model
-            model = densenet201()
+            >>> # Build model
+            >>> model = densenet201()
 
-            # build model and load imagenet pretrained weight
-            # model = densenet201(pretrained=True)
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> # Build model and load imagenet pretrained weight
+            >>> # model = densenet201(pretrained=True)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     return _densenet('densenet201', 201, pretrained, **kwargs)
 
 
-def densenet264(pretrained=False, **kwargs):
+def densenet264(
+    pretrained: bool = False, **kwargs: Unpack[_DenseNetOptions]
+) -> DenseNet:
     """DenseNet 264-layer model from
     `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
-                            on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`DenseNet <api_paddle_vision_DenseNet>`.
+            on ImageNet. Default: False.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`DenseNet <api_paddle_vision_models_DenseNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of DenseNet 264-layer model.
@@ -493,19 +553,19 @@ def densenet264(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import densenet264
+            >>> import paddle
+            >>> from paddle.vision.models import densenet264
 
-            # build model
-            model = densenet264()
+            >>> # Build model
+            >>> model = densenet264()
 
-            # build model and load imagenet pretrained weight
-            # model = densenet264(pretrained=True)
+            >>> # Build model and load imagenet pretrained weight
+            >>> # model = densenet264(pretrained=True)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     return _densenet('densenet264', 264, pretrained, **kwargs)

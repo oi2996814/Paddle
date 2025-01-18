@@ -19,10 +19,7 @@
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/op_version_registry.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
-namespace patterns {
+namespace paddle::framework::ir::patterns {
 
 static void ReplaceOutputVar(Node* op, Node* old_var, Node* new_var) {
   if (op->IsOp() && op->Op()) {
@@ -53,9 +50,9 @@ PDNode* MultiHeadMatmulRoformerPattern::operator()() {
   auto* mul0_out_var =
       pattern->NewNode(mul0_out_repr())->assert_is_ops_output(matmul_ops);
 
-  decltype(mul0) eltadd0;
-  decltype(mul0) eltadd0_b_var;
-  decltype(mul0) eltadd0_out_var;
+  decltype(mul0) eltadd0 = nullptr;
+  decltype(mul0) eltadd0_b_var = nullptr;
+  decltype(mul0) eltadd0_out_var = nullptr;
 
   mul0_out_var->AsIntermediate()->assert_is_op_input("elementwise_add");
 
@@ -165,9 +162,9 @@ PDNode* MultiHeadMatmulRoformerPattern::operator()() {
   auto* mul1_out_var =
       pattern->NewNode(mul1_out_repr())->assert_is_ops_output(matmul_ops);
 
-  decltype(mul1) eltadd1;
-  decltype(mul1) eltadd1_b_var;
-  decltype(mul1) eltadd1_out_var;
+  decltype(mul1) eltadd1 = nullptr;
+  decltype(mul1) eltadd1_b_var = nullptr;
+  decltype(mul1) eltadd1_out_var = nullptr;
 
   mul1_out_var->AsIntermediate()->assert_is_op_input("elementwise_add");
   eltadd1 = pattern->NewNode(eltadd1_repr())->assert_is_op("elementwise_add");
@@ -232,9 +229,9 @@ PDNode* MultiHeadMatmulRoformerPattern::operator()() {
   auto* mul2_out_var =
       pattern->NewNode(mul2_out_repr())->assert_is_ops_output(matmul_ops);
 
-  decltype(mul2) eltadd2;
-  decltype(mul2) eltadd2_b_var;
-  decltype(mul2) eltadd2_out_var;
+  decltype(mul2) eltadd2 = nullptr;
+  decltype(mul2) eltadd2_b_var = nullptr;
+  decltype(mul2) eltadd2_out_var = nullptr;
 
   mul2_out_var->AsIntermediate()->assert_is_op_input("elementwise_add");
   eltadd2 = pattern->NewNode(eltadd2_repr())->assert_is_op("elementwise_add");
@@ -310,7 +307,8 @@ PDNode* MultiHeadMatmulRoformerPattern::operator()() {
 
   return transpose2_2_out_var;
 }
-}  // namespace patterns
+}  // namespace paddle::framework::ir::patterns
+namespace paddle::framework::ir {
 
 MultiHeadMatmulRoformerFusePass::MultiHeadMatmulRoformerFusePass() {
   AddOpCompat(OpCompat("elementwise_add"))
@@ -401,7 +399,7 @@ int MultiHeadMatmulRoformerFusePass::BuildFusion(Graph* graph,
 
   multihead_pattern();
   // Create New OpDesc
-  auto fuse_creater = [&](Node* input0,
+  auto fuse_creator = [&](Node* input0,
                           Node* input_cos,
                           Node* input_sin,
                           Node* mul0,
@@ -441,16 +439,16 @@ int MultiHeadMatmulRoformerFusePass::BuildFusion(Graph* graph,
     auto* bv_tensor =
         scope->FindVar(eltadd2_b->Name())->GetMutable<phi::DenseTensor>();
 
-    auto* wq_data = wq_tensor->mutable_data<float>(platform::CPUPlace());
-    auto* wk_data = wk_tensor->mutable_data<float>(platform::CPUPlace());
-    auto* wv_data = wv_tensor->mutable_data<float>(platform::CPUPlace());
-    auto* bq_data = bq_tensor->mutable_data<float>(platform::CPUPlace());
-    auto* bk_data = bk_tensor->mutable_data<float>(platform::CPUPlace());
-    auto* bv_data = bv_tensor->mutable_data<float>(platform::CPUPlace());
+    auto* wq_data = wq_tensor->mutable_data<float>(phi::CPUPlace());
+    auto* wk_data = wk_tensor->mutable_data<float>(phi::CPUPlace());
+    auto* wv_data = wv_tensor->mutable_data<float>(phi::CPUPlace());
+    auto* bq_data = bq_tensor->mutable_data<float>(phi::CPUPlace());
+    auto* bk_data = bk_tensor->mutable_data<float>(phi::CPUPlace());
+    auto* bv_data = bv_tensor->mutable_data<float>(phi::CPUPlace());
 
     auto combined_w_dims =
-        phi::make_ddim({wq_tensor->dims()[0], 3, wq_tensor->dims()[1]});
-    auto combined_bias_dims = phi::make_ddim({3, bq_tensor->dims()[0]});
+        common::make_ddim({wq_tensor->dims()[0], 3, wq_tensor->dims()[1]});
+    auto combined_bias_dims = common::make_ddim({3, bq_tensor->dims()[0]});
 
     // reuse the mul0_w and eltadd_0_b nodes for the combined nodes.
     auto* combined_w_desc = mul0_w->Var();
@@ -464,10 +462,11 @@ int MultiHeadMatmulRoformerFusePass::BuildFusion(Graph* graph,
     phi::DenseTensor tmp_combined_w_tensor;
     tmp_combined_w_tensor.Resize(combined_w_dims);
     auto* tmp_combined_w_data =
-        tmp_combined_w_tensor.mutable_data<float>(platform::CPUPlace());
+        tmp_combined_w_tensor.mutable_data<float>(phi::CPUPlace());
 
     std::vector<float*> w_vec = {wq_data, wk_data, wv_data};
-    int dims_h = combined_w_dims[0], dims_w = combined_w_dims[2];
+    int dims_h = static_cast<int>(combined_w_dims[0]),
+        dims_w = static_cast<int>(combined_w_dims[2]);
     // Combine the three fc weights together.
     for (int i = 0; i < dims_h; i++) {
       for (int j = 0; j < 3; j++) {
@@ -480,8 +479,7 @@ int MultiHeadMatmulRoformerFusePass::BuildFusion(Graph* graph,
     }
 
     wq_tensor->Resize(combined_w_dims);
-    auto* new_combined_w_data =
-        wq_tensor->mutable_data<float>(platform::CPUPlace());
+    auto* new_combined_w_data = wq_tensor->mutable_data<float>(phi::CPUPlace());
     memcpy(new_combined_w_data,
            tmp_combined_w_data,
            sizeof(float) * wq_tensor->numel());
@@ -491,7 +489,7 @@ int MultiHeadMatmulRoformerFusePass::BuildFusion(Graph* graph,
     phi::DenseTensor tmp_combined_bias_tensor;
     tmp_combined_bias_tensor.Resize(combined_bias_dims);
     auto* tmp_combined_bias_data =
-        tmp_combined_bias_tensor.mutable_data<float>(platform::CPUPlace());
+        tmp_combined_bias_tensor.mutable_data<float>(phi::CPUPlace());
 
     size_t bias_size = bq_tensor->numel();
     memcpy(tmp_combined_bias_data, bq_data, sizeof(float) * bias_size);
@@ -503,7 +501,7 @@ int MultiHeadMatmulRoformerFusePass::BuildFusion(Graph* graph,
 
     bq_tensor->Resize(combined_bias_dims);
     auto* new_combined_bias_data =
-        bq_tensor->mutable_data<float>(platform::CPUPlace());
+        bq_tensor->mutable_data<float>(phi::CPUPlace());
     memcpy(new_combined_bias_data,
            tmp_combined_bias_data,
            sizeof(float) * bq_tensor->numel());
@@ -651,7 +649,7 @@ int MultiHeadMatmulRoformerFusePass::BuildFusion(Graph* graph,
     if (is_fc_params_shared) {
       return;
     }
-    fuse_creater(input0,
+    fuse_creator(input0,
                  input_cos,
                  input_sin,
                  mul0,
@@ -747,7 +745,7 @@ void MultiHeadMatmulRoformerFusePass::ApplyImpl(Graph* graph) const {
   auto* scope = param_scope();
   PADDLE_ENFORCE_NOT_NULL(
       scope,
-      platform::errors::Fatal(
+      common::errors::Fatal(
           "During the multiheadMatmul pass, The scope should not be null."));
 
   int fusion_count = BuildFusion(graph, name_scope_, scope);
@@ -757,9 +755,7 @@ void MultiHeadMatmulRoformerFusePass::ApplyImpl(Graph* graph) const {
   AddStatis(fusion_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(multihead_matmul_roformer_fuse_pass,
               paddle::framework::ir::MultiHeadMatmulRoformerFusePass);

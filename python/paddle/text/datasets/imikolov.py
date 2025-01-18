@@ -11,15 +11,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import collections
 import tarfile
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
 from paddle.dataset.common import _check_exists_and_download
 from paddle.io import Dataset
 
+if TYPE_CHECKING:
+    import numpy.typing as npt
+
+    _ImikolovDataType = Literal["NGRAM", "SEQ"]
+    _ImikolovDataSetMode = Literal["train", "test"]
 __all__ = []
 
 URL = 'https://dataset.bj.bcebos.com/imikolov%2Fsimple-examples.tgz'
@@ -31,12 +38,12 @@ class Imikolov(Dataset):
     Implementation of imikolov dataset.
 
     Args:
-        data_file(str): path to data tar file, can be set None if
-            :attr:`download` is True. Default None
+        data_file(str|None): path to data tar file, can be set None if
+            :attr:`download` is True. Default None.
         data_type(str): 'NGRAM' or 'SEQ'. Default 'NGRAM'.
         window_size(int): sliding window size for 'NGRAM' data. Default -1.
         mode(str): 'train' 'test' mode. Default 'train'.
-        min_word_freq(int): minimal word frequence for building word dictionary. Default 50.
+        min_word_freq(int): minimal word frequencies for building word dictionary. Default 50.
         download(bool): whether to download dataset automatically if
             :attr:`data_file` is not set. Default True
 
@@ -47,39 +54,57 @@ class Imikolov(Dataset):
 
         .. code-block:: python
 
-            import paddle
-            from paddle.text.datasets import Imikolov
+            >>> # doctest: +TIMEOUT(60)
+            >>> import paddle
+            >>> from paddle.text.datasets import Imikolov
 
-            class SimpleNet(paddle.nn.Layer):
-                def __init__(self):
-                    super().__init__()
+            >>> class SimpleNet(paddle.nn.Layer):
+            ...     def __init__(self):
+            ...         super().__init__()
+            ...
+            ...     def forward(self, src, trg):
+            ...         return paddle.sum(src), paddle.sum(trg)
 
-                def forward(self, src, trg):
-                    return paddle.sum(src), paddle.sum(trg)
 
+            >>> imikolov = Imikolov(mode='train', data_type='SEQ', window_size=2)
 
-            imikolov = Imikolov(mode='train', data_type='SEQ', window_size=2)
-
-            for i in range(10):
-                src, trg = imikolov[i]
-                src = paddle.to_tensor(src)
-                trg = paddle.to_tensor(trg)
-
-                model = SimpleNet()
-                src, trg = model(src, trg)
-                print(src.shape, trg.shape)
+            >>> for i in range(10):
+            ...     src, trg = imikolov[i]
+            ...     src = paddle.to_tensor(src)
+            ...     trg = paddle.to_tensor(trg)
+            ...
+            ...     model = SimpleNet()
+            ...     src, trg = model(src, trg)
+            ...     print(src.item(), trg.item())
+            2076 2075
+            2076 2075
+            675 674
+            4 3
+            464 463
+            2076 2075
+            865 864
+            2076 2075
+            2076 2075
+            1793 1792
 
     """
 
+    data_file: str | None
+    data_type: _ImikolovDataType
+    window_size: int
+    mode: _ImikolovDataSetMode
+    min_word_freq: int
+    word_idx: dict[str, int]
+
     def __init__(
         self,
-        data_file=None,
-        data_type='NGRAM',
-        window_size=-1,
-        mode='train',
-        min_word_freq=50,
-        download=True,
-    ):
+        data_file: str | None = None,
+        data_type: _ImikolovDataType = 'NGRAM',
+        window_size: int = -1,
+        mode: _ImikolovDataSetMode = 'train',
+        min_word_freq: int = 50,
+        download: bool = True,
+    ) -> None:
         assert data_type.upper() in [
             'NGRAM',
             'SEQ',
@@ -122,7 +147,7 @@ class Imikolov(Dataset):
 
         return word_freq
 
-    def _build_work_dict(self, cutoff):
+    def _build_work_dict(self, cutoff: int) -> dict[str, int]:
         train_filename = './simple-examples/data/ptb.train.txt'
         test_filename = './simple-examples/data/ptb.valid.txt'
         with tarfile.open(self.data_file) as tf:
@@ -144,7 +169,7 @@ class Imikolov(Dataset):
 
         return word_idx
 
-    def _load_anno(self):
+    def _load_anno(self) -> None:
         self.data = []
         with tarfile.open(self.data_file) as tf:
             filename = f'./simple-examples/data/ptb.{self.mode}.txt'
@@ -154,7 +179,7 @@ class Imikolov(Dataset):
             for l in f:
                 if self.data_type == 'NGRAM':
                     assert self.window_size > -1, 'Invalid gram length'
-                    l = ['<s>'] + l.strip().split() + ['<e>']
+                    l = ["<s>", *l.strip().split(), "<e>"]
                     if len(l) >= self.window_size:
                         l = [self.word_idx.get(w, UNK) for w in l]
                         for i in range(self.window_size, len(l) + 1):
@@ -162,16 +187,18 @@ class Imikolov(Dataset):
                 elif self.data_type == 'SEQ':
                     l = l.strip().split()
                     l = [self.word_idx.get(w, UNK) for w in l]
-                    src_seq = [self.word_idx['<s>']] + l
-                    trg_seq = l + [self.word_idx['<e>']]
+                    src_seq = [self.word_idx["<s>"], *l]
+                    trg_seq = [*l, self.word_idx["<e>"]]
                     if self.window_size > 0 and len(src_seq) > self.window_size:
                         continue
                     self.data.append((src_seq, trg_seq))
                 else:
                     raise AssertionError('Unknow data type')
 
-    def __getitem__(self, idx):
+    def __getitem__(
+        self, idx: int
+    ) -> tuple[npt.NDArray[np.int_], npt.NDArray[np.int_]]:
         return tuple([np.array(d) for d in self.data[idx]])
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.data)

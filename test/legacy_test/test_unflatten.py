@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
@@ -23,7 +24,7 @@ def numpy_unflatten(x, axis, shape):
     if isinstance(shape, (list, tuple)):
         if len(shape) == 0:
             raise ValueError("The input for shape cannot be empty.")
-        if isinstance(shape, list) or isinstance(shape, tuple):
+        if isinstance(shape, (list, tuple)):
             if np.min(shape) < -1:
                 raise ValueError(f"invalid shape dimension {np.min(shape)}.")
             if shape.count(-1) > 1:
@@ -36,15 +37,11 @@ def numpy_unflatten(x, axis, shape):
                 sizes = np.prod(shape)
                 if sizes != x.shape[axis]:
                     raise ValueError(
-                        "The product of the elements in shape{} is not equal to {}.".format(
-                            shape, x.shape[axis]
-                        )
+                        f"The product of the elements in shape{shape} is not equal to {x.shape[axis]}."
                     )
     else:
         raise TypeError(
-            "The data type of x should be one of ['List', 'Tuple', 'Tensor'], but got {}".format(
-                type(shape)
-            )
+            f"The data type of x should be one of ['List', 'Tuple', 'Tensor'], but got {type(shape)}"
         )
     length = len(x.shape)
     if axis < 0:
@@ -72,7 +69,13 @@ class TestUnflattenAPI(unittest.TestCase):
         self.set_api()
         self.set_args()
         self.get_output()
-        self.places = [paddle.CPUPlace()]
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.device.is_compiled_with_cuda()
+        ):
+            self.places.append(paddle.CPUPlace())
         if paddle.device.is_compiled_with_cuda():
             self.places.append(paddle.CUDAPlace(0))
 
@@ -93,7 +96,13 @@ class TestUnflattenAPI(unittest.TestCase):
 
     def test_static(self):
         paddle.enable_static()
-        places = [paddle.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.device.is_compiled_with_cuda()
+        ):
+            places.append(paddle.CPUPlace())
         if paddle.device.is_compiled_with_cuda():
             places.append(paddle.CUDAPlace(0))
         for place in places:
@@ -264,39 +273,61 @@ class TestLayer(unittest.TestCase):
 
     def setUp(self):
         self.set_args()
-        self.places = [paddle.CPUPlace()]
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.device.is_compiled_with_cuda()
+        ):
+            self.places.append(paddle.CPUPlace())
         if paddle.device.is_compiled_with_cuda():
             self.places.append(paddle.CUDAPlace(0))
 
     def test_layer(self):
-        paddle.enable_static()
-        places = [paddle.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.device.is_compiled_with_cuda()
+        ):
+            places.append(paddle.CPUPlace())
         if paddle.device.is_compiled_with_cuda():
             places.append(paddle.CUDAPlace(0))
         for place in places:
-            with paddle.static.program_guard(
-                paddle.static.Program(), paddle.static.Program()
-            ):
-                x = paddle.static.data(
-                    name="x", dtype=self.x.dtype, shape=self.x.shape
-                )
-                exe = paddle.static.Executor(place)
-                unflatten = paddle.nn.Unflatten(self.axis, self.shape)
-                out = unflatten(x)
-                static_ret = exe.run(
-                    paddle.static.default_main_program(),
-                    feed={"x": self.x, "axis": self.axis, "shape": self.shape},
-                    fetch_list=[out],
-                )[0]
-        for place in self.places:
             paddle.disable_static()
             x = paddle.to_tensor(self.x, dtype='float32', place=place)
             unflatten = paddle.nn.Unflatten(self.axis, self.shape)
-            dy_ret_value = unflatten(self.x)
-        np.testing.assert_array_equal(static_ret, dy_ret_value)
+            dy_ret_value = unflatten(x)
+
+            paddle.enable_static()
+
+            def test_static_or_pir_mode():
+                with paddle.static.program_guard(
+                    paddle.static.Program(), paddle.static.Program()
+                ):
+                    x = paddle.static.data(
+                        name="x", dtype=self.x.dtype, shape=self.x.shape
+                    )
+                    exe = paddle.static.Executor(place)
+                    unflatten = paddle.nn.Unflatten(self.axis, self.shape)
+                    out = unflatten(x)
+                    static_ret = exe.run(
+                        paddle.static.default_main_program(),
+                        feed={
+                            "x": self.x,
+                            "axis": self.axis,
+                            "shape": self.shape,
+                        },
+                        fetch_list=[out],
+                    )[0]
+
+                np.testing.assert_array_equal(static_ret, dy_ret_value)
+
+            test_static_or_pir_mode()
 
 
 class TestLayerName(unittest.TestCase):
+
     def test_name(self):
         self.x = np.random.randn(3, 4, 4, 5).astype('float32')
         self.axis = 1

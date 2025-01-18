@@ -13,14 +13,18 @@
 // limitations under the License.
 
 #include "paddle/fluid/prim/utils/utils.h"
-#include "paddle/fluid/platform/flags.h"
+#include "paddle/common/flags.h"
 #include "paddle/fluid/prim/utils/static/static_global_utils.h"
 
-PADDLE_DEFINE_EXPORTED_bool(prim_enabled, false, "enable_prim or not");
-namespace paddle {
-namespace prim {
+PHI_DEFINE_EXPORTED_bool(prim_enabled, false, "enable_prim or not");
+PHI_DEFINE_EXPORTED_bool(prim_all, false, "enable prim_all or not");
+PHI_DEFINE_EXPORTED_bool(prim_forward, false, "enable prim_forward or not");
+PHI_DEFINE_EXPORTED_bool(prim_backward, false, "enable prim_backward not");
+
+namespace paddle::prim {
 bool PrimCommonUtils::IsBwdPrimEnabled() {
-  return StaticCompositeContext::Instance().IsBwdPrimEnabled();
+  bool res = StaticCompositeContext::Instance().IsBwdPrimEnabled();
+  return res || FLAGS_prim_all || FLAGS_prim_backward;
 }
 
 void PrimCommonUtils::SetBwdPrimEnabled(bool enable_prim) {
@@ -36,7 +40,8 @@ void PrimCommonUtils::SetEagerPrimEnabled(bool enable_prim) {
 }
 
 bool PrimCommonUtils::IsFwdPrimEnabled() {
-  return StaticCompositeContext::Instance().IsFwdPrimEnabled();
+  bool res = StaticCompositeContext::Instance().IsFwdPrimEnabled();
+  return res || FLAGS_prim_all || FLAGS_prim_forward;
 }
 
 void PrimCommonUtils::SetFwdPrimEnabled(bool enable_prim) {
@@ -55,6 +60,13 @@ void PrimCommonUtils::AddSkipCompOps(const std::string& op_type) {
   StaticCompositeContext::Instance().AddSkipCompOps(op_type);
 }
 
+void PrimCommonUtils::SetPrimBackwardBlacklist(
+    const std::unordered_set<std::string>& op_types) {
+  for (const auto& item : op_types) {
+    StaticCompositeContext::Instance().AddSkipCompOps(item);
+  }
+}
+
 void PrimCommonUtils::RemoveSkipCompOps(const std::string& op_type) {
   StaticCompositeContext::Instance().RemoveSkipCompOps(op_type);
 }
@@ -64,5 +76,4 @@ void PrimCommonUtils::SetTargetGradName(
   StaticCompositeContext::Instance().SetTargetGradName(m);
 }
 
-}  // namespace prim
-}  // namespace paddle
+}  // namespace paddle::prim

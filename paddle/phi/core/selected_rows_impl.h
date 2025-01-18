@@ -21,8 +21,8 @@ limitations under the License. */
 #include <utility>
 #include <vector>
 
+#include "paddle/common/ddim.h"
 #include "paddle/phi/common/place.h"
-#include "paddle/phi/core/ddim.h"
 #include "paddle/phi/core/dense_tensor.h"
 #include "paddle/phi/core/enforce.h"
 #include "paddle/phi/core/utils/rw_lock.h"
@@ -80,7 +80,7 @@ class SelectedRowsImpl {
   int64_t Index(int64_t key) const {
     auto it = std::find(rows_.begin(), rows_.end(), key);
     if (it == rows_.end()) {
-      PADDLE_THROW(phi::errors::NotFound(
+      PADDLE_THROW(common::errors::NotFound(
           "Input id (%lld) is not in current rows table.", key));
     }
     return static_cast<int64_t>(std::distance(rows_.begin(), it));
@@ -142,9 +142,9 @@ class SelectedRowsImpl {
    * @brief Get complete Dims before
    */
   phi::DDim GetCompleteDims() const {
-    std::vector<int64_t> dims = vectorize(value_->dims());
+    std::vector<int64_t> dims = common::vectorize(value_->dims());
     dims[0] = height_;
-    return phi::make_ddim(dims);
+    return common::make_ddim(dims);
   }
 
   /// \brief Returns the number of elements contained in tensor.
@@ -178,6 +178,10 @@ class SelectedRowsImpl {
   /// \brief Test whether the metadata is valid.
   /// \return Whether the metadata is valid.
   bool valid() const noexcept { return value_->valid(); }
+
+  /// \brief Test whether the holder is created.
+  /// \return Whether the holder is created.
+  bool has_allocation() const { return value_->has_allocation(); }
 
   /// \brief Test whether the storage is allocated.
   /// return Whether the storage is allocated.

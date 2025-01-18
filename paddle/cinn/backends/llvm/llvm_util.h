@@ -30,6 +30,7 @@
 #include <utility>
 
 #include "paddle/cinn/common/type.h"
+#include "paddle/common/enforce.h"
 
 namespace cinn {
 namespace backends {
@@ -48,7 +49,7 @@ inline llvm::StringRef AsStringRef(absl::string_view str) {
   return llvm::StringRef(str.data(), str.size());
 }
 
-llvm::Type *CinnTypeToLLVMType(common::Type t,
+llvm::Type *CinnTypeToLLVMType(cinn::common::Type t,
                                llvm::Module *m,
                                bool is_vec = false);
 

@@ -20,7 +20,7 @@
 #include "paddle/fluid/framework/ir/fuse_pass_base.h"
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/inference/analysis/analysis_pass.h"
-#include "paddle/fluid/platform/place.h"
+#include "paddle/phi/common/place.h"
 
 namespace paddle {
 namespace inference {
@@ -28,7 +28,7 @@ namespace analysis {
 
 /*
  * There are some ops (while, conditional_block_op etc) which have different
- * optimization points under predicion and training conditions.
+ * optimization points under prediction and training conditions.
  * So, We added the corresponding inference impl to these ops separately.
  * This pass replaces these ops with corresponding inference ops.
  */

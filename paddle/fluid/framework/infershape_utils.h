@@ -70,7 +70,7 @@ class CompatMetaTensor : public phi::MetaTensor {
   bool operator!() const override { return !initialized_; }
 
  private:
-  const LoD& GetRuntimeLoD() const {
+  const LegacyLoD& GetRuntimeLoD() const {
     auto* var = PADDLE_GET_CONST(Variable*, var_);
     return var->Get<phi::DenseTensor>().lod();
   }
@@ -84,13 +84,13 @@ class CompatMetaTensor : public phi::MetaTensor {
     PADDLE_ENFORCE_EQ(
         is_runtime_,
         true,
-        platform::errors::Unavailable(
-            "Only can get phi::DenseTensor from MetaTensor in rumtime."));
+        common::errors::Unavailable(
+            "Only can get phi::DenseTensor from MetaTensor in runtime."));
     auto* var = PADDLE_GET_CONST(Variable*, var_);
     PADDLE_ENFORCE_EQ(
         var->IsType<phi::SelectedRows>(),
         true,
-        platform::errors::Unavailable(
+        common::errors::Unavailable(
             "The phi::DenseTensor in MetaTensor is not SelectedRows."));
     return var->Get<phi::SelectedRows>();
   }
@@ -151,6 +151,7 @@ CompatInferMetaContext BuildInferMetaContext(InferShapeContext* ctx,
           paddle::framework::BuildInferMetaContext(ctx, #op_type);  \
       fn(&infer_meta_context);                                      \
     }                                                               \
+    void infer_meta_(phi::InferMetaContext* ctx) const { fn(ctx); } \
   }
 
 }  // namespace framework

@@ -16,36 +16,37 @@ limitations under the License. */
 
 #include <string>
 
-#include "paddle/fluid/distributed/collective/process_group.h"
 #include "paddle/fluid/framework/data_type.h"
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/op_registry.h"
-#include "paddle/fluid/memory/memcpy.h"
-#include "paddle/fluid/memory/memory.h"
 #include "paddle/phi/api/include/tensor.h"
+#include "paddle/phi/core/distributed/collective/process_group.h"
+#include "paddle/phi/core/distributed/comm_context_manager.h"
+#include "paddle/phi/core/memory/memcpy.h"
+#include "paddle/phi/core/memory/memory.h"
 
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL) || \
     defined(PADDLE_WITH_XPU_BKCL)
-#include "paddle/fluid/platform/collective_helper.h"
+#include "paddle/common/flags.h"
+#include "paddle/phi/core/platform/collective_helper.h"
 #endif
 
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 #include "paddle/fluid/platform/device/gpu/nccl_helper.h"
-#endif
-
-#if defined(PADDLE_WITH_XPU_BKCL)
+#include "paddle/phi/core/distributed/nccl_comm_context.h"
+#elif defined(PADDLE_WITH_XPU_BKCL)
 #include "paddle/fluid/platform/device/xpu/bkcl_helper.h"
+#include "paddle/phi/core/distributed/bkcl_comm_context.h"
 #endif
 
 #if defined(PADDLE_WITH_GLOO)
-#include <gloo/allreduce.h>
-#include "paddle/fluid/framework/fleet/gloo_wrapper.h"
+#include "paddle/phi/core/distributed/gloo_comm_context.h"
 #endif
 
 namespace paddle {
 namespace operators {
 
-enum ReduceType { kRedSum, kRedMax, kRedMin, kRedProd };
+enum ReduceType { kRedSum, kRedMax, kRedMin, kRedProd, kRedAvg };
 
 class CAllReduceOp : public framework::OperatorWithKernel {
  public:
@@ -82,52 +83,22 @@ class CAllReduceOpCPUKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
 #if defined(PADDLE_WITH_GLOO)
-    auto in = ctx.Input<phi::DenseTensor>("X");
+    auto& dev_ctx = ctx.device_context<phi::CPUContext>();
+    auto x = *(ctx.Input<phi::DenseTensor>("X"));
     auto out = ctx.Output<phi::DenseTensor>("Out");
+    out->Resize(x.dims());
+    dev_ctx.Alloc<T>(out);
 
-    auto place = ctx.GetPlace();
-    int64_t send_numel = in->numel();
-    const T* send_buff = in->data<T>();
-    T* recv_buff = out->mutable_data<T>(in->dims(), place);
-    auto gloo = paddle::framework::GlooWrapper::GetInstance();
-    PADDLE_ENFORCE_EQ(
-        gloo->IsInitialized(),
-        true,
-        platform::errors::PreconditionNotMet(
-            "You must initialize the gloo environment first to use it."));
-    gloo::AllreduceOptions opts(gloo->GetContext());
-    opts.setInput(const_cast<T*>(send_buff), send_numel);
-    opts.setOutput(recv_buff, send_numel);
-    switch (red_type) {
-      case kRedSum:
-        opts.setReduceFunction(
-            static_cast<void (*)(void*, const void*, const void*, size_t)>(
-                &gloo::sum<T>));
-        break;
-      case kRedMax:
-        opts.setReduceFunction(
-            static_cast<void (*)(void*, const void*, const void*, size_t)>(
-                &gloo::max<T>));
-        break;
-      case kRedMin:
-        opts.setReduceFunction(
-            static_cast<void (*)(void*, const void*, const void*, size_t)>(
-                &gloo::min<T>));
-        break;
-      case kRedProd:
-        opts.setReduceFunction(
-            static_cast<void (*)(void*, const void*, const void*, size_t)>(
-                &gloo::product<T>));
-        break;
-      default:
-        PADDLE_ENFORCE_EQ(true,
-                          false,
-                          platform::errors::InvalidArgument(
-                              "Invalid reduce type: %d.", red_type));
-    }
-    gloo::allreduce(opts);
+    auto comm_ctx = static_cast<phi::distributed::GlooCommContext*>(
+        dev_ctx.GetCommContext());
+    PADDLE_ENFORCE_NE(comm_ctx,
+                      nullptr,
+                      ::common::errors::Unavailable(
+                          "NCCLCommContext is nullptr, collective op should "
+                          "has ring_id attr."));
+    comm_ctx->AllReduce(out, x, static_cast<int>(red_type));
 #else
-    PADDLE_THROW(platform::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "PaddlePaddle should compile with GLOO by setting WITH_GLOO=ON"));
 #endif
   }
@@ -145,13 +116,13 @@ class CAllReduceOpXPUKernel : public framework::OpKernel<T> {
     if (ctx.HasInput("Cond")) {
       auto cond = ctx.Input<phi::DenseTensor>("Cond");
       auto place = cond->place();
-      PADDLE_ENFORCE_EQ(platform::is_cpu_place(place),
+      PADDLE_ENFORCE_EQ(place.GetType() == phi::AllocationType::CPU,
                         true,
-                        platform::errors::PreconditionNotMet(
+                        common::errors::PreconditionNotMet(
                             "The input `cond` tensor should be on cpu place"));
       PADDLE_ENFORCE_EQ(cond->numel(),
                         1,
-                        platform::errors::PreconditionNotMet(
+                        common::errors::PreconditionNotMet(
                             "The input `cond` should be shape [1]"));
       if (!cond->data<bool>()[0]) {
         VLOG(4) << "Skip all reduce Op since cond is 0";
@@ -161,26 +132,70 @@ class CAllReduceOpXPUKernel : public framework::OpKernel<T> {
 
     auto in = ctx.Input<phi::DenseTensor>("X");
     auto out = ctx.Output<phi::DenseTensor>("Out");
+    int rid = ctx.Attr<int>("ring_id");
 
     auto place = ctx.GetPlace();
-    BKCLDataType dtype =
-        platform::ToBKCLDataType(framework::TransToProtoVarType(in->dtype()));
-    int64_t numel = in->numel();
-    const void* sendbuff = in->data<T>();
     out->Resize(in->dims());
-    void* recvbuff = out->mutable_data<T>(place);
 
-    int rid = ctx.Attr<int>("ring_id");
-    auto comm = platform::BKCLCommContext::Instance().Get(rid, place);
+    auto map = phi::distributed::ProcessGroupMapFromGid::getInstance();
+    if (map->has(rid)) {
+      // Use ProcessGroup
+      phi::distributed::ProcessGroup* pg = map->get(rid);
+      phi::distributed::AllreduceOptions opts;
+      switch (red_type) {
+        case kRedSum:
+          opts.reduce_op = phi::distributed::ReduceOp::SUM;
+          break;
+
+        case kRedMax:
+          opts.reduce_op = phi::distributed::ReduceOp::MAX;
+          break;
+
+        case kRedMin:
+          opts.reduce_op = phi::distributed::ReduceOp::MIN;
+          break;
+
+        case kRedProd:
+          opts.reduce_op = phi::distributed::ReduceOp::PRODUCT;
+          break;
+
+        default:
+          PADDLE_THROW(common::errors::InvalidArgument(
+              "Invalid reduce type: %d", red_type));
+      }
+
+      auto task = pg->AllReduce(out, *in, opts, false, true);
+      task->Wait();
+      return;
+    }
 
     XPUStream stream = nullptr;
+    platform::BKCLComm* comm = nullptr;
+    phi::distributed::BKCLCommContext* comm_ctx = nullptr;
+
+    const auto& comm_context_manager =
+        phi::distributed::CommContextManager::GetInstance();
+
+    PADDLE_ENFORCE_EQ(comm_context_manager.Has(std::to_string(rid)),
+                      true,
+                      common::errors::InvalidArgument(
+                          "You choose to use new communication library. "
+                          "But ring_id(%d) is "
+                          "not found in comm_context_manager.",
+                          std::to_string(rid)));
+    comm_ctx = static_cast<phi::distributed::BKCLCommContext*>(
+        comm_context_manager.Get(std::to_string(rid)));
+    PADDLE_ENFORCE_NE(comm_ctx,
+                      nullptr,
+                      common::errors::Unavailable(
+                          "BKCLCommContext is nullptr, collective op should "
+                          "has ring_id attr."));
+    stream = comm_ctx->GetStream();
+    VLOG(3) << "new comm_context_manager has rid " << rid;
+
     if (ctx.Attr<bool>("use_calc_stream")) {
-      auto dev_ctx = platform::DeviceContextPool::Instance().Get(place);
-      stream = static_cast<platform::XPUDeviceContext*>(dev_ctx)
-                   ->x_context()
-                   ->xpu_stream;
-    } else {
-      stream = comm->stream();
+      auto dev_ctx = phi::DeviceContextPool::Instance().Get(place);
+      stream = static_cast<phi::XPUContext*>(dev_ctx)->x_context()->xpu_stream;
     }
 
     BKCLOp bkcl_red_type = BKCL_ADD;
@@ -202,22 +217,13 @@ class CAllReduceOpXPUKernel : public framework::OpKernel<T> {
         break;
 
       default:
-        PADDLE_THROW(platform::errors::InvalidArgument(
-            "Invalid reduce type: %d", red_type));
+        PADDLE_THROW(common::errors::InvalidArgument("Invalid reduce type: %d",
+                                                     red_type));
     }
 
-    PADDLE_ENFORCE_EQ(
-        bkcl_all_reduce(comm->comm(),
-                        sendbuff,
-                        recvbuff,
-                        numel,
-                        dtype,
-                        bkcl_red_type,
-                        stream),
-        BKCL_SUCCESS,
-        platform::errors::PreconditionNotMet("BKCL all reduce failed"));
+    comm_ctx->AllReduce(out, *in, bkcl_red_type, stream);
 #else
-    PADDLE_THROW(platform::errors::PreconditionNotMet(
+    PADDLE_THROW(common::errors::PreconditionNotMet(
         "PaddlePaddle should be compiled with XPU."));
 #endif
   }
@@ -234,13 +240,13 @@ class CAllReduceOpCUDAKernel : public framework::OpKernel<T> {
     if (ctx.HasInput("Cond")) {
       auto cond = ctx.Input<phi::DenseTensor>("Cond");
       auto place = cond->place();
-      PADDLE_ENFORCE_EQ(platform::is_cpu_place(place),
+      PADDLE_ENFORCE_EQ(place.GetType() == phi::AllocationType::CPU,
                         true,
-                        platform::errors::PreconditionNotMet(
+                        common::errors::PreconditionNotMet(
                             "The input `cond` tensor should be on cpu place"));
       PADDLE_ENFORCE_EQ(cond->numel(),
                         1,
-                        platform::errors::PreconditionNotMet(
+                        common::errors::PreconditionNotMet(
                             "The input `cond` should be shape [1]"));
       if (!cond->data<bool>()[0]) {
         VLOG(4) << "Skip all reduce Op since cond is 0";
@@ -253,64 +259,75 @@ class CAllReduceOpCUDAKernel : public framework::OpKernel<T> {
     auto out = ctx.Output<phi::DenseTensor>("Out");
     int rid = ctx.Attr<int>("ring_id");
 
-    auto place = ctx.GetPlace();
-    ncclDataType_t dtype =
-        platform::ToNCCLDataType(framework::TransToProtoVarType(in->dtype()));
+    ncclDataType_t dtype = phi::ToNCCLDataType(in->dtype());
     int64_t numel = in->numel();
     const void* sendbuff = in->data<T>();
     out->Resize(in->dims());
-    void* recvbuff = out->mutable_data<T>(place);
 
-    auto map = distributed::ProcessGroupMapFromGid::getInstance();
+    auto map = phi::distributed::ProcessGroupMapFromGid::getInstance();
     if (map->has(rid)) {
       // Use ProcessGroup
-      distributed::ProcessGroup* pg = map->get(rid);
-      std::vector<phi::DenseTensor> in_tensor;
-      std::vector<phi::DenseTensor> out_tensor;
-      in_tensor.push_back(*in);
-      out_tensor.push_back(*out);
-
-      distributed::AllreduceOptions opts;
+      phi::distributed::ProcessGroup* pg = map->get(rid);
+      phi::distributed::AllreduceOptions opts;
       switch (red_type) {
         case kRedSum:
-          opts.reduce_op = distributed::ReduceOp::SUM;
+          opts.reduce_op = phi::distributed::ReduceOp::SUM;
           break;
 
         case kRedMax:
-          opts.reduce_op = distributed::ReduceOp::MAX;
+          opts.reduce_op = phi::distributed::ReduceOp::MAX;
           break;
 
         case kRedMin:
-          opts.reduce_op = distributed::ReduceOp::MIN;
+          opts.reduce_op = phi::distributed::ReduceOp::MIN;
           break;
 
         case kRedProd:
-          opts.reduce_op = distributed::ReduceOp::PRODUCT;
+          opts.reduce_op = phi::distributed::ReduceOp::PRODUCT;
           break;
 
         default:
-          PADDLE_THROW(platform::errors::InvalidArgument(
+          PADDLE_THROW(common::errors::InvalidArgument(
               "Invalid reduce type: %d", red_type));
       }
 
-      auto task = pg->AllReduce(in_tensor, out_tensor, opts);
+      auto task = pg->AllReduce(out, *in, opts, false, true);
       task->Wait();
       return;
     }
 
-    auto comm = platform::NCCLCommContext::Instance().Get(rid, place);
-
     gpuStream_t stream = nullptr;
+    platform::NCCLComm* comm = nullptr;
+    phi::distributed::NCCLCommContext* comm_ctx = nullptr;
+
+    const auto& comm_context_manager =
+        phi::distributed::CommContextManager::GetInstance();
+
+    PADDLE_ENFORCE_EQ(comm_context_manager.Has(std::to_string(rid)),
+                      true,
+                      common::errors::InvalidArgument(
+                          "You choose to use new communication library. "
+                          "But ring_id(%d) is "
+                          "not found in comm_context_manager.",
+                          std::to_string(rid)));
+    comm_ctx = static_cast<phi::distributed::NCCLCommContext*>(
+        comm_context_manager.Get(std::to_string(rid)));
+    PADDLE_ENFORCE_NE(comm_ctx,
+                      nullptr,
+                      common::errors::Unavailable(
+                          "NCCLCommContext is nullptr, collective op should "
+                          "has ring_id attr."));
+    stream = comm_ctx->GetStream();
+    VLOG(3) << "new comm_context_manager has rid " << rid;
+
     if (ctx.Attr<bool>("use_calc_stream")) {
       // should not use global ctx for calc stream.
-      // auto dev_ctx = platform::DeviceContextPool::Instance().Get(place);
+      // auto dev_ctx = phi::DeviceContextPool::Instance().Get(place);
       // stream = static_cast<phi::GPUContext*>(dev_ctx)->stream();
       stream = ctx.cuda_device_context().stream();
-    } else {
-      stream = comm->stream();
     }
     VLOG(10) << "all reduce buffer:" << sendbuff << ", numel:" << numel
-             << ", redtype:" << static_cast<int>(red_type)
+             << ", reduce type:" << static_cast<int>(red_type)
              << ", dtype:" << dtype << ", comm:" << comm
              << ", stream:" << stream;
 
@@ -332,15 +349,21 @@ class CAllReduceOpCUDAKernel : public framework::OpKernel<T> {
         nccl_red_type = ncclProd;
         break;
 
+#if (NCCL_VERSION_CODE >= 21000 && CUDA_VERSION >= 11000) || \
+    defined(PADDLE_WITH_HIP)
+      case kRedAvg:
+        nccl_red_type = ncclAvg;
+        break;
+#endif
+
       default:
-        PADDLE_THROW(platform::errors::InvalidArgument(
-            "Invalid reduce type: %d", red_type));
+        PADDLE_THROW(common::errors::InvalidArgument("Invalid reduce type: %d",
+                                                     red_type));
     }
 
-    PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(
-        sendbuff, recvbuff, numel, dtype, nccl_red_type, comm->comm(), stream));
+    comm_ctx->AllReduce(out, *in, nccl_red_type, stream);
 #else
-    PADDLE_THROW(platform::errors::PreconditionNotMet(
+    PADDLE_THROW(common::errors::PreconditionNotMet(
         "PaddlePaddle should compile with GPU."));
 #endif
   }

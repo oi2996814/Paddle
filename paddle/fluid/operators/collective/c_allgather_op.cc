@@ -16,24 +16,29 @@ limitations under the License. */
 
 #include <memory>
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class CAllGatherOp : public framework::OperatorWithKernel {
  public:
   using framework::OperatorWithKernel::OperatorWithKernel;
   void InferShape(framework::InferShapeContext *ctx) const override {
-    OP_INOUT_CHECK(ctx->HasInput("X"), "Input", "X", "AllGather");
-    OP_INOUT_CHECK(ctx->HasOutput("Out"), "Input", "Out", "AllGather");
+    PADDLE_ENFORCE_EQ(ctx->HasInput("X"),
+                      true,
+                      common::errors::PreconditionNotMet(
+                          "Input 'X' of AllGather must be provided."));
+    PADDLE_ENFORCE_EQ(ctx->HasOutput("Out"),
+                      true,
+                      common::errors::PreconditionNotMet(
+                          "Output 'Out' of AllGather must be provided."));
     int nranks = ctx->Attrs().Get<int>("nranks");
-    PADDLE_ENFORCE_GE(nranks,
-                      2,
-                      platform::errors::InvalidArgument(
-                          "The value of nranks should be >=2."));
-    framework::DDim dim = ctx->GetInputDim("X");
+    PADDLE_ENFORCE_GE(
+        nranks,
+        2,
+        common::errors::InvalidArgument("The value of nranks should be >=2."));
+    phi::DDim dim = ctx->GetInputDim("X");
     // 0D use stack/unstack while others use concat/split
     if (dim.size() == 0) {
-      dim = phi::make_ddim({nranks});
+      dim = common::make_ddim({nranks});
     } else {
       dim[0] = dim[0] * nranks;
       if (dim[0] < 0) dim[0] = -1;
@@ -64,25 +69,10 @@ reference: https://docs.nvidia.com/deeplearning/sdk/nccl-developer-guide/docs/us
   }
 };
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
-namespace plat = paddle::platform;
 
 REGISTER_OP_WITHOUT_GRADIENT(c_allgather,
                              ops::CAllGatherOp,
                              ops::CAllGatherOpMaker);
-
-PD_REGISTER_STRUCT_KERNEL(c_allgather,
-                          CPU,
-                          ALL_LAYOUT,
-                          ops::CAllGatherOpCPUKernel,
-                          float,
-                          double,
-                          int,
-                          int8_t,
-                          int64_t,
-                          uint8_t,
-                          bool,
-                          plat::float16) {}

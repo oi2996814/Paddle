@@ -61,14 +61,14 @@ void NMSKernel(const Context& dev_ctx,
   PADDLE_ENFORCE_EQ(
       boxes.dims().size(),
       2,
-      phi::errors::InvalidArgument("The shape [%s] of boxes must be (N, 4).",
-                                   boxes.dims()));
+      common::errors::InvalidArgument("The shape [%s] of boxes must be (N, 4).",
+                                      boxes.dims()));
 
   PADDLE_ENFORCE_EQ(
       boxes.dims()[1],
       4,
-      phi::errors::InvalidArgument("The shape [%s] of boxes must be (N, 4).",
-                                   boxes.dims()));
+      common::errors::InvalidArgument("The shape [%s] of boxes must be (N, 4).",
+                                      boxes.dims()));
 
   const int64_t num_boxes = boxes.dims()[0];
   const auto blocks_per_line = CeilDivide(num_boxes, threadsPerBlock);
@@ -103,7 +103,7 @@ void NMSKernel(const Context& dev_ctx,
       }
     }
   }
-  output->Resize(phi::make_ddim({last_box_num}));
+  output->Resize(common::make_ddim({last_box_num}));
   auto* output_data = dev_ctx.template Alloc<int64_t>(output);
   memory_utils::Copy(dev_ctx.GetPlace(),
                      output_data,

@@ -14,11 +14,14 @@ limitations under the License. */
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 
-#include "paddle/phi/api/include/dll_decl.h"
-#include "paddle/phi/core/macros.h"
+#include "paddle/common/enforce.h"
+#include "paddle/common/macros.h"
+#include "paddle/utils/test_macros.h"
+
 namespace paddle {
 enum class PlaceType;
 }
@@ -35,7 +38,7 @@ enum class AllocationType : int8_t {
   CUSTOM = 9,
 };
 
-class CustomRegisteredDeviceMap {
+class TEST_API CustomRegisteredDeviceMap {
  public:
   static CustomRegisteredDeviceMap& Instance();
 
@@ -52,9 +55,10 @@ class CustomRegisteredDeviceMap {
 const char* AllocationTypeStr(AllocationType type);
 
 /// \brief The place is used to specify where the data is stored.
-class PADDLE_API Place {
+class TEST_API Place {
  public:
-  Place() : device(0), alloc_type_(AllocationType::UNDEFINED) {}
+  Place()
+      : device(0), alloc_type_(AllocationType::UNDEFINED), device_type_id_(0) {}
 
   explicit Place(AllocationType type,
                  int8_t id,
@@ -64,11 +68,7 @@ class PADDLE_API Place {
         device_type_id_(phi::CustomRegisteredDeviceMap::Instance()
                             .GetOrRegisterGlobalDeviceTypeId(dev_type)) {}
 
-  explicit Place(AllocationType type, const std::string& dev_type = "")
-      : device(0),
-        alloc_type_(type),
-        device_type_id_(phi::CustomRegisteredDeviceMap::Instance()
-                            .GetOrRegisterGlobalDeviceTypeId(dev_type)) {}
+  explicit Place(AllocationType type, const std::string& dev_type = "");
 
   // See NOTE [ Why need to temporarily adapt to PlaceType? ]
   Place(paddle::PlaceType type);  // NOLINT
@@ -95,7 +95,7 @@ class PADDLE_API Place {
 
   std::string DebugString() const;
 
-  struct Hash {
+  struct TEST_API Hash {
     // Note: Now the number of bits we need does not exceed 32 bits, so there is
     // no need to use 64 bits. If needed in the future, it can be expanded,
     // but now we don’t over-design.
@@ -137,7 +137,6 @@ class GPUPlace : public Place {
   GPUPlace() : Place(AllocationType::GPU, 0) {}
   explicit GPUPlace(int device_id) : Place(AllocationType::GPU, device_id) {}
 
-  GPUPlace(const GPUPlace&) = default;
   GPUPlace(const Place& place)  // NOLINT
       : Place(AllocationType::GPU, place.GetDeviceId()) {}
 };
@@ -188,10 +187,31 @@ class CustomPlace : public Place {
   }
 };
 
-std::ostream& operator<<(std::ostream&, const Place&);
+TEST_API std::ostream& operator<<(std::ostream&, const Place&);
 
 Place GetPinnedPlace(const Place& place);
 
+using PlaceList = std::vector<Place>;
+
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+class PlaceHelper {
+ public:
+  static std::string GetDeviceType(const Place& place);
+  static size_t GetDeviceId(const Place& place);
+  static Place CreatePlace(const std::string& dev_type, size_t dev_id = 0);
+};
+#endif
+
+TEST_API bool is_gpu_place(const Place&);
+bool is_xpu_place(const Place&);
+bool is_ipu_place(const Place&);
+TEST_API bool is_cpu_place(const Place&);
+bool is_cuda_pinned_place(const Place&);
+bool is_custom_place(const Place& p);
+bool is_accelerat_place(const Place& p);
+bool places_are_same_class(const Place&, const Place&);
+bool is_same_place(const Place&, const Place&);
+bool is_accelerat_allocation_type(AllocationType type);
 }  // namespace phi
 
 namespace paddle {

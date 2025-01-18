@@ -17,15 +17,15 @@
 #include <cmath>
 #include <vector>
 
-#include "paddle/cinn/common/arithmatic.h"
+#include "paddle/cinn/common/arithmetic.h"
 #include "paddle/cinn/common/cas.h"
 #include "paddle/cinn/common/ir_util.h"
 #include "paddle/cinn/common/type.h"
+#include "paddle/cinn/ir/ir_mutator.h"
+#include "paddle/cinn/ir/ir_printer.h"
+#include "paddle/cinn/ir/ir_visitor.h"
 #include "paddle/cinn/ir/op/ir_operators.h"
 #include "paddle/cinn/ir/utils/ir_copy.h"
-#include "paddle/cinn/ir/utils/ir_mutator.h"
-#include "paddle/cinn/ir/utils/ir_printer.h"
-#include "paddle/cinn/ir/utils/ir_visitor.h"
 #include "paddle/cinn/optim/ir_simplify.h"
 
 namespace cinn {
@@ -74,12 +74,12 @@ struct PolyForWithSimpleConditionToForMutator : public ir::IRMutator<Expr*> {
     auto* le_n = node->condition.As<ir::LE>();
 
     if (lt_n) {
-      if (lt_n->b() != common::make_const(0)) {
+      if (lt_n->b() != cinn::common::make_const(0)) {
         node->condition = lt_n->a() - lt_n->b() < 0;
       }
     }
     if (le_n) {
-      if (le_n->b() != common::make_const(0)) {
+      if (le_n->b() != cinn::common::make_const(0)) {
         node->condition = le_n->a() - le_n->b() <= 0;
       }
     }
@@ -98,18 +98,35 @@ struct PolyForWithSimpleConditionToForMutator : public ir::IRMutator<Expr*> {
     if (!can_extract_extent) {
       if (node->condition.As<ir::LE>()) {
         auto le = node->condition.As<ir::LE>();
-        CHECK(le->a().As<ir::Sub>());
-        CHECK_EQ(le->b().As<ir::IntImm>()->value, 0UL);
+
+        PADDLE_ENFORCE_NOT_NULL(
+            le->a().As<ir::Sub>(),
+            ::common::errors::InvalidArgument("The value of le is incorrect."
+                                              "Expected value is 0"));
+        PADDLE_ENFORCE_EQ(le->b().As<ir::IntImm>()->value,
+                          0UL,
+                          ::common::errors::InvalidArgument(
+                              "The value of le is incorrect."
+                              "Expected value is 0, but receive %d.",
+                              le->b().As<ir::IntImm>()->value));
         auto sub = le->a().As<ir::Sub>();
         node->condition = ir::LE::Make(sub->a(), sub->b());
       } else if (node->condition.As<ir::LT>()) {
         auto lt = node->condition.As<ir::LT>();
-        CHECK(lt->a().As<ir::Sub>());
-        CHECK_EQ(lt->b().As<ir::IntImm>()->value, 0UL);
+        PADDLE_ENFORCE_NOT_NULL(
+            lt->a().As<ir::Sub>(),
+            ::common::errors::InvalidArgument("The value of lt is incorrect."
+                                              "Expected value is 0"));
+        PADDLE_ENFORCE_EQ(lt->b().As<ir::IntImm>()->value,
+                          0UL,
+                          ::common::errors::InvalidArgument(
+                              "The value of lt is incorrect."
+                              "Expected value is 0, but receive %d.",
+                              lt->b().As<ir::IntImm>()->value));
         auto sub = lt->a().As<ir::Sub>();
         node->condition = ir::LT::Make(sub->a(), sub->b());
       } else {
-        LOG(FATAL) << "Unkown Type!";
+        PADDLE_THROW(::common::errors::InvalidArgument("Unkown Type!"));
       }
 
       lt_n = node->condition.As<ir::LT>();
@@ -119,9 +136,15 @@ struct PolyForWithSimpleConditionToForMutator : public ir::IRMutator<Expr*> {
 
     Expr lhs = lt_n ? lt_n->a() : le_n->a();
     Expr rhs = lt_n ? lt_n->b() : PlusOneWithMinMax(le_n->b());
-    rhs = common::AutoSimplify(rhs);
+    rhs = cinn::common::AutoSimplify(rhs);
 
-    if (op->is_vectorized()) CHECK(op->vectorize_info().valid());
+    if (op->is_vectorized())
+      PADDLE_ENFORCE_EQ(
+          op->vectorize_info().valid(),
+          true,
+          ::common::errors::InvalidArgument(
+              "The value of op->vectorize_info().valid() is incorrect."
+              "Expected value is true"));
 
     Expr new_for = ir::For::Make(op->iterator,
                                  op->init,

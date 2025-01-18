@@ -15,6 +15,7 @@
 import copy
 
 from paddle.common_ops_import import check_dtype, check_variable_and_dtype
+from paddle.distributed.utils.stream_utils import ExecutionStreamType
 from paddle.framework import core
 from paddle.static import Operator
 
@@ -166,21 +167,15 @@ class DistributedPNormImpl0(DistributedOperatorImpl):
 
         # check validation of inputs / outputs
         for input_name in src_op.desc.input_names():
-            assert input_name in kwargs, "input [{}] is not given".format(
-                input_name
-            )
+            assert input_name in kwargs, f"input [{input_name}] is not given"
             assert len(kwargs[input_name]) == len(
                 src_op.desc.input(input_name)
             ), f"number of tensor for input [{input_name}] is not match"
         for output_name in src_op.desc.output_names():
-            assert output_name in kwargs, "input [{}] is not given".format(
-                output_name
-            )
+            assert output_name in kwargs, f"input [{output_name}] is not given"
             assert len(kwargs[output_name]) == len(
                 src_op.desc.output(output_name)
-            ), "number of tensor for input [{}] is not match".format(
-                output_name
-            )
+            ), f"number of tensor for input [{output_name}] is not match"
 
         if rank_id not in op_dist_attr.process_mesh.process_ids:
             rank_id = _get_corresponding_rank(
@@ -206,29 +201,30 @@ class DistributedPNormImpl0(DistributedOperatorImpl):
             X_var.dtype, 'dtype', ['float16', 'float32', 'float64'], 'norm'
         )
 
-        # 2. insert c_allgather op
-        # create c_allgather output var
+        # 2. insert all_gather op
+        # create all_gather output var
         allgather_out = main_block.create_var(
-            name=".".join(["c_allgather", X_var.name]),
+            name=".".join(["all_gather", X_var.name]),
             dtype=X_var.dtype,
             shape=X_var.shape,
-            type=core.VarDesc.VarType.LOD_TENSOR,
+            type=core.VarDesc.VarType.DENSE_TENSOR,
             persistable=False,
             stop_gradient=X_var.stop_gradient,
         )
         # set allgather_out tensor dist_attr
         allgather_out_dist_attr = TensorDistAttr()
         allgather_out_dist_attr.process_mesh = op_dist_attr.process_mesh
+        allgather_out_dist_attr.chunk_id = op_dist_attr.chunk_id
         allgather_out_dist_attr.dims_mapping = [
             -1 for i in range(len(allgather_out.shape))
         ]
         ctx.set_tensor_dist_attr_for_program(
             allgather_out, allgather_out_dist_attr
         )
-        c_allgather_op = main_block.append_op(
-            type='c_allgather',
-            inputs={'X': [X_var]},
-            outputs={'Out': [allgather_out]},
+        all_gather_op = main_block.append_op(
+            type='all_gather',
+            inputs={'x': [X_var]},
+            outputs={'out': [allgather_out]},
             attrs={
                 'ring_id': group.id,
                 'use_calc_stream': True,
@@ -236,16 +232,20 @@ class DistributedPNormImpl0(DistributedOperatorImpl):
                 'op_role': src_op.attr('op_role'),
             },
         )
-        # set c_allgather op dist_attr
+        # set all_gather op dist_attr
         allgather_op_dist_attr = OperatorDistAttr()
         allgather_op_dist_attr.process_mesh = op_dist_attr.process_mesh
+        allgather_op_dist_attr.chunk_id = op_dist_attr.chunk_id
         allgather_op_dist_attr.set_input_dims_mapping(
             X_var.name, in_dims_mapping
         )
         allgather_op_dist_attr.set_output_dims_mapping(
             allgather_out.name, allgather_out_dist_attr.dims_mapping
         )
-        ctx.set_op_dist_attr_for_program(c_allgather_op, allgather_op_dist_attr)
+        allgather_op_dist_attr.execution_stream = (
+            ExecutionStreamType.DefaultStream.value
+        )
+        ctx.set_op_dist_attr_for_program(all_gather_op, allgather_op_dist_attr)
 
         # 3. copy p_norm op desc and reset input name
         # rename input
@@ -279,34 +279,28 @@ class DistributedPNormImpl0(DistributedOperatorImpl):
 
         # check validation of inputs / outputs
         for input_name in backward_op.desc.input_names():
-            assert input_name in kwargs, "input [{}] is not given".format(
-                input_name
-            )
+            assert input_name in kwargs, f"input [{input_name}] is not given"
             assert len(kwargs[input_name]) == len(
                 backward_op.desc.input(input_name)
             ), f"number of tensor for input [{input_name}] is not match"
         for output_name in backward_op.desc.output_names():
-            assert output_name in kwargs, "input [{}] is not given".format(
-                output_name
-            )
+            assert output_name in kwargs, f"input [{output_name}] is not given"
             assert len(kwargs[output_name]) == len(
                 backward_op.desc.output(output_name)
-            ), "number of tensor for input [{}] is not match".format(
-                output_name
-            )
+            ), f"number of tensor for input [{output_name}] is not match"
 
         X_var = main_block._var_recursive(kwargs['X'][0])
         X_grad_var = main_block._var_recursive(kwargs['X@GRAD'][0])
 
         # 1. copy p_norm_grad op and reset input name and output name
         new_kwargs = copy.deepcopy(kwargs)
-        new_kwargs['X'] = [".".join(["c_allgather", X_var.name])]
+        new_kwargs['X'] = [".".join(["all_gather", X_var.name])]
         new_X_var = main_block._var_recursive(new_kwargs['X'][0])
         new_X_grad = main_block.create_var(
-            name=".".join(["c_allgather", X_grad_var.name]),
+            name=".".join(["all_gather", X_grad_var.name]),
             dtype=X_grad_var.dtype,
             shape=new_X_var.shape,
-            type=core.VarDesc.VarType.LOD_TENSOR,
+            type=core.VarDesc.VarType.DENSE_TENSOR,
             persistable=False,
             stop_gradient=X_grad_var.stop_gradient,
         )
@@ -378,6 +372,7 @@ class DistributedPNormImpl0(DistributedOperatorImpl):
         )
         slice_op_dist_attr = OperatorDistAttr()
         slice_op_dist_attr.process_mesh = op_dist_attr.process_mesh
+        slice_op_dist_attr.chunk_id = op_dist_attr.chunk_id
         slice_op_dist_attr.set_input_dims_mapping(
             new_X_grad.name, new_X_var_dist_attr.dims_mapping
         )

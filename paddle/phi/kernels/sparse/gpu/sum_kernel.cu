@@ -137,11 +137,16 @@ __global__ void SumCsr3DCudaKernel(const int64_t* x_crows_data,
                                    int64_t* out_crows_data,
                                    int64_t* out_cols_data,
                                    T* out_values_data) {
+  {
+    CUDA_KERNEL_LOOP_TYPE(index, x_dim0 * x_dim1, int64_t) {
+      out_cols_data[index] = 0;
+    }
+  }
+
   CUDA_KERNEL_LOOP_TYPE(index, x_dim0 * (x_dim1 + 1), int64_t) {
     int64_t batch = index / (x_dim1 + 1);
     int64_t number = index % (x_dim1 + 1);
     out_crows_data[index] = number;
-    out_cols_data[index] = 0;
 
     if (number != x_dim1) {
       T sum_value = 0;
@@ -154,6 +159,8 @@ __global__ void SumCsr3DCudaKernel(const int64_t* x_crows_data,
       for (int64_t j = x_crows_data[index]; j < x_crows_data[index + 1]; ++j) {
         sum_value += x_values_data[j + x_values_data_offset];
       }
+
+      // `index - batch` would never exceed x_dim0 * x_dim1.
       out_values_data[index - batch] = sum_value;
     }
   }
@@ -175,10 +182,10 @@ void SumCooGPU0Kernel(const Context& dev_ctx,
   DenseTensor out_indices;
   DenseTensor out_values;
   if (keep_dim) {
-    out_dims = make_ddim(std::vector<int64_t>(x_dims.size(), 1));
+    out_dims = common::make_ddim(std::vector<int64_t>(x_dims.size(), 1));
     out_indices = Empty<IntT, Context>(dev_ctx, {sparse_dim, 1});
   } else {
-    out_dims = make_ddim({1});
+    out_dims = common::make_ddim({1});
     out_indices = Empty<IntT, Context>(dev_ctx, {1, 1});
   }
   phi::funcs::SetConstant<Context, IntT> set_out_indices;
@@ -213,7 +220,7 @@ void SumCooGPU1Kernel(const Context& dev_ctx,
       dims.emplace_back(1);
     }
   }
-  out_dims = make_ddim(dims);
+  out_dims = common::make_ddim(dims);
 
   if (dim >= sparse_dim) {
     out_indices = x_indices;
@@ -308,9 +315,9 @@ void SumCsr0Kernel(const Context& dev_ctx,
   DenseTensor out_crows, out_cols, out_values;
   DDim out_dims;
   if (keep_dim && x.dims().size() == 3) {
-    out_dims = make_ddim({1, 1, 1});
+    out_dims = common::make_ddim({1, 1, 1});
   } else {
-    out_dims = make_ddim({1, 1});
+    out_dims = common::make_ddim({1, 1});
   }
   out_crows = Empty<int64_t, Context>(dev_ctx, {2});  // crows = [0, 1]
   out_cols = Empty<int64_t, Context>(dev_ctx, {1});   // crows = [0]
@@ -351,7 +358,7 @@ void SumCsr1Kernel(const Context& dev_ctx,
     out_values = Empty<T, Context>(dev_ctx, {x_dim0});
     auto* out_cols_data = out_cols.data<int64_t>();
     auto* out_values_data = out_values.data<T>();
-    out_dims = make_ddim({x_dim0, 1});
+    out_dims = common::make_ddim({x_dim0, 1});
     auto config =
         phi::backends::gpu::GetGpuLaunchConfig1D(dev_ctx, x_dim0 + 1, 1);
     SumCsr2DCudaKernel<T><<<config.block_per_grid.x,
@@ -370,16 +377,16 @@ void SumCsr1Kernel(const Context& dev_ctx,
     auto* out_cols_data = out_cols.data<int64_t>();
     auto* out_values_data = out_values.data<T>();
     if (keep_dim) {
-      out_dims = make_ddim({x_dim0, x_dim1, 1});
+      out_dims = common::make_ddim({x_dim0, x_dim1, 1});
     } else {
-      out_dims = make_ddim({x_dim0, x_dim1});
+      out_dims = common::make_ddim({x_dim0, x_dim1});
     }
 
     DenseTensor x_crows_reshape =
         Reshape<int64_t, Context>(dev_ctx, x_crows, {x_dim0, x_dim1 + 1});
     DenseTensor last_indices = Empty<int64_t, Context>(dev_ctx, {1});
     phi::funcs::SetConstant<Context, int64_t> set_constant;
-    set_constant(dev_ctx, &last_indices, x_dim1);
+    set_constant(dev_ctx, &last_indices, static_cast<int64_t>(x_dim1));
 
     DenseTensor x_crows_last = Empty<int64_t, Context>(dev_ctx, {x_dim0, 1});
     IndexSelectKernel<int64_t, Context>(
@@ -423,7 +430,7 @@ void SumCsrKernel(const Context& dev_ctx,
   } else {
     PADDLE_ENFORCE_EQ(axis[0],
                       -1,
-                      phi::errors::Unimplemented(
+                      common::errors::Unimplemented(
                           "`axis` of SumCsrKernel only support None or -1 now."
                           "More number will be supported in the future."));
     SumCsr1Kernel<T, Context>(dev_ctx, x, axis, dtype, keep_dim, out);

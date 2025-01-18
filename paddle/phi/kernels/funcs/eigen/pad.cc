@@ -15,8 +15,7 @@ limitations under the License. */
 #include "paddle/phi/common/complex.h"
 #include "paddle/phi/kernels/funcs/eigen/eigen_function.h"
 
-namespace phi {
-namespace funcs {
+namespace phi::funcs {
 
 template <typename T, int Rank>
 struct EigenPad<Eigen::DefaultDevice, T, Rank> {
@@ -61,13 +60,15 @@ struct EigenPad<Eigen::DefaultDevice, T, Rank> {
 INSTANTIATION(EigenPad, bool);
 INSTANTIATION(EigenPad, uint8_t);
 INSTANTIATION(EigenPad, int);
+INSTANTIATION(EigenPad, int8_t);
+INSTANTIATION(EigenPad, int16_t);
 INSTANTIATION(EigenPad, int64_t);
 INSTANTIATION(EigenPad, float);
 INSTANTIATION(EigenPad, double);
+INSTANTIATION(EigenPad, dtype::float16);
 INSTANTIATION(EigenPad, dtype::bfloat16);
 INSTANTIATION(EigenPad, dtype::complex<float>);
 INSTANTIATION(EigenPad, dtype::complex<double>);
 #undef INSTANTIATION
 
-}  // namespace funcs
-}  // namespace phi
+}  // namespace phi::funcs

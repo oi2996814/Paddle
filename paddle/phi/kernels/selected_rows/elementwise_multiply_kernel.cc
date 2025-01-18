@@ -22,8 +22,7 @@ limitations under the License. */
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/elementwise_multiply_kernel.h"
 
-namespace phi {
-namespace sr {
+namespace phi::sr {
 
 template <typename T, typename Context>
 void MultiplyRawKernel(const Context& dev_ctx,
@@ -31,11 +30,11 @@ void MultiplyRawKernel(const Context& dev_ctx,
                        const DenseTensor& y,
                        int axis,
                        SelectedRows* out) {
-  PADDLE_ENFORCE_EQ(
-      phi::product(y.dims()),
-      1,
-      phi::errors::InvalidArgument("For MultiplyKernel, if X is Sparse, Y must "
-                                   "contain only one element."));
+  PADDLE_ENFORCE_EQ(common::product(y.dims()),
+                    1,
+                    common::errors::InvalidArgument(
+                        "For MultiplyKernel, if X is Sparse, Y must "
+                        "contain only one element."));
   out->set_rows(x.rows());
   out->set_height(x.height());
   auto z = out->mutable_value();
@@ -53,8 +52,7 @@ void MultiplyKernel(const Context& dev_ctx,
   MultiplyRawKernel<T, Context>(dev_ctx, x, y, axis, out);
 }
 
-}  // namespace sr
-}  // namespace phi
+}  // namespace phi::sr
 
 using complex64 = ::phi::dtype::complex<float>;
 using complex128 = ::phi::dtype::complex<double>;

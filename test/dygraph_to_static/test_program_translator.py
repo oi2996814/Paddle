@@ -18,7 +18,11 @@ import unittest
 
 import astor
 import numpy as np
-from dygraph_to_static_util import ast_only_test
+from dygraph_to_static_utils import (
+    Dy2StTestBase,
+    enable_to_static_guard,
+    test_ast_only,
+)
 from ifelse_simple_func import (
     dyfunc_with_if_else_early_return1,
     dyfunc_with_if_else_early_return2,
@@ -26,30 +30,27 @@ from ifelse_simple_func import (
 
 import paddle
 import paddle.jit.dy2static as _jst
-from paddle import fluid
-from paddle.jit.api import to_static
 from paddle.jit.dy2static.utils import func_to_source_code
 from paddle.utils import gast
 
 np.random.seed(0)
 
 
-# TODO(Aurelius): Currently, `declarative` don't support decorate the function
+# TODO(Aurelius): Currently, `to_static` don't support decorate the function
 # that contains layers with initialized operation, like `fc = linear(10, 3)`.
 # Because initialized ops will be added into program and be executed many times.
 # The parameters are assumed to initialized outside of the function.
 def simple_func(x, weight_numpy):
-    x = fluid.dygraph.to_variable(x)
-    w = fluid.dygraph.to_variable(weight_numpy)
+    x = paddle.to_tensor(x)
+    w = paddle.to_tensor(weight_numpy)
     y = paddle.matmul(x, w)
     z = paddle.mean(y)
     return z
 
 
-@to_static
 def decorated_simple_func(x, weight_numpy):
-    x = fluid.dygraph.to_variable(x)
-    w = fluid.dygraph.to_variable(weight_numpy)
+    x = paddle.to_tensor(x)
+    w = paddle.to_tensor(weight_numpy)
     y = paddle.matmul(x, w)
     z = paddle.mean(y)
     return z
@@ -74,19 +75,19 @@ class StaticCode1:
             nonlocal x_v
             return (x_v,)
 
-        def set_args_0(__args):
+        def set_args_0(__args):  # noqa: PYI063
             nonlocal x_v
             (x_v,) = __args
 
         def true_fn_0():
             nonlocal x_v
             x_v = x_v - 1
-            return
+            return  # noqa: PLR1711
 
         def false_fn_0():
             nonlocal x_v
             x_v = x_v + 1
-            return
+            return  # noqa: PLR1711
 
         _jst.IfElse(
             paddle.mean(x_v)[0] > 5,
@@ -102,7 +103,7 @@ class StaticCode1:
             nonlocal __return_0, __return_1, __return_value_0, loss
             return __return_0, __return_1, __return_value_0, loss
 
-        def set_args_1(__args):
+        def set_args_1(__args):  # noqa: PYI063
             nonlocal __return_0, __return_1, __return_value_0, loss
             __return_0, __return_1, __return_value_0, loss = __args
 
@@ -113,13 +114,13 @@ class StaticCode1:
             )
             __return_0 = _jst.create_bool_as_type(label is not None, True)
             __return_value_0 = loss
-            return
+            return  # noqa: PLR1711
 
         def false_fn_1():
             nonlocal __return_0, __return_1, __return_value_0, loss
             __return_1 = _jst.create_bool_as_type(label is not None, True)
             __return_value_0 = x_v
-            return
+            return  # noqa: PLR1711
 
         _jst.IfElse(
             label is not None,
@@ -145,19 +146,19 @@ class StaticCode2:
             nonlocal x_v
             return (x_v,)
 
-        def set_args_2(__args):
+        def set_args_2(__args):  # noqa: PYI063
             nonlocal x_v
             (x_v,) = __args
 
         def true_fn_2():
             nonlocal x_v
             x_v = x_v - 1
-            return
+            return  # noqa: PLR1711
 
         def false_fn_2():
             nonlocal x_v
             x_v = x_v + 1
-            return
+            return  # noqa: PLR1711
 
         _jst.IfElse(
             paddle.mean(x_v)[0] > 5,
@@ -173,7 +174,7 @@ class StaticCode2:
             nonlocal __return_2, __return_3, __return_value_1, loss
             return __return_2, __return_3, __return_value_1, loss
 
-        def set_args_3(__args):
+        def set_args_3(__args):  # noqa: PYI063
             nonlocal __return_2, __return_3, __return_value_1, loss
             __return_2, __return_3, __return_value_1, loss = __args
 
@@ -184,13 +185,13 @@ class StaticCode2:
             )
             __return_2 = _jst.create_bool_as_type(label is not None, True)
             __return_value_1 = loss
-            return
+            return  # noqa: PLR1711
 
         def false_fn_3():
             nonlocal __return_2, __return_3, __return_value_1, loss
             __return_3 = _jst.create_bool_as_type(label is not None, True)
             __return_value_1 = x_v
-            return
+            return  # noqa: PLR1711
 
         _jst.IfElse(
             label is not None,
@@ -205,34 +206,34 @@ class StaticCode2:
 
 
 class NetWithError(paddle.nn.Layer):
-    @to_static
+    __name__ = 'NetWithError'
+
     def forward(self, x):
         linear = paddle.nn.Linear(32, 64)
         y = linear(x)
         return y
 
 
-class TestEnableDeclarative(unittest.TestCase):
+class TestEnableDeclarative(Dy2StTestBase):
     def setUp(self):
         self.x = np.random.randn(30, 10, 32).astype('float32')
         self.weight = np.random.randn(32, 64).astype('float32')
 
-    @ast_only_test
+    @test_ast_only
     def test_raise_error(self):
-        with fluid.dygraph.guard():
-            paddle.jit.enable_to_static(True)
-            net = NetWithError()
-            with self.assertRaises(ValueError):
-                net(fluid.dygraph.to_variable(self.x))
+        net = paddle.jit.to_static(full_graph=True)(NetWithError())
+        with self.assertRaises(ValueError):
+            net(paddle.to_tensor(self.x))
 
-    def test_enable_disable_declarative(self):
-        paddle.jit.enable_to_static(True)
-        with fluid.dygraph.guard():
-            static_output = decorated_simple_func(self.x, self.weight)
+    def test_enable_disable_to_static(self):
+        static_output = paddle.jit.to_static(decorated_simple_func)(
+            self.x, self.weight
+        )
 
-        paddle.jit.enable_to_static(False)
-        with fluid.dygraph.guard():
-            dygraph_output = decorated_simple_func(self.x, self.weight)
+        with enable_to_static_guard(False):
+            dygraph_output = paddle.jit.to_static(decorated_simple_func)(
+                self.x, self.weight
+            )
             np.testing.assert_allclose(
                 static_output.numpy(),
                 dygraph_output.numpy(),
@@ -253,24 +254,25 @@ class SwitchModeNet(paddle.nn.Layer):
     def __init__(self):
         super().__init__()
 
-    @paddle.jit.to_static
     def forward(self, x):
         return x + 1
 
-    @paddle.jit.to_static
     def foo(self):
         return True
 
 
-@paddle.jit.to_static
 def switch_mode_function():
     return True
 
 
-class TestFunctionTrainEvalMode(unittest.TestCase):
-    @ast_only_test
+switch_mode_function = paddle.jit.to_static(full_graph=True)(
+    switch_mode_function
+)
+
+
+class TestFunctionTrainEvalMode(Dy2StTestBase):
+    @test_ast_only
     def test_switch_mode(self):
-        paddle.disable_static()
         switch_mode_function.eval()
         switch_mode_function()
         self.assertEqual(switch_mode_function._training, False)
@@ -284,8 +286,7 @@ class TestFunctionTrainEvalMode(unittest.TestCase):
         self.assertEqual(partial_layer.training, True)
 
     def test_raise_error(self):
-        paddle.disable_static()
-        net = SwitchModeNet()
+        net = paddle.jit.to_static(SwitchModeNet())
 
         self.assertEqual(net.training, True)
         with self.assertRaises(RuntimeError):
@@ -294,24 +295,34 @@ class TestFunctionTrainEvalMode(unittest.TestCase):
         net.eval()
         self.assertEqual(net.training, False)
         with self.assertRaises(RuntimeError):
-            net.foo.train()
+            paddle.jit.to_static(net.foo).train()
 
 
-class TestIfElseEarlyReturn(unittest.TestCase):
+class TestIfElseEarlyReturn(Dy2StTestBase):
     def test_ifelse_early_return1(self):
         answer = np.zeros([2, 2]) + 1
         static_func = paddle.jit.to_static(dyfunc_with_if_else_early_return1)
         out = static_func()
-        np.testing.assert_allclose(answer, out[0].numpy(), rtol=1e-05)
+        if isinstance(out, paddle.Tensor):
+            np.testing.assert_allclose(
+                paddle.to_tensor(answer), out, rtol=1e-05
+            )
+        elif isinstance(out, tuple):
+            np.testing.assert_allclose(answer, out[0].numpy(), rtol=1e-05)
 
     def test_ifelse_early_return2(self):
         answer = np.zeros([2, 2]) + 3
         static_func = paddle.jit.to_static(dyfunc_with_if_else_early_return2)
         out = static_func()
-        np.testing.assert_allclose(answer, out[0].numpy(), rtol=1e-05)
+        if isinstance(out, paddle.Tensor):
+            np.testing.assert_allclose(
+                paddle.to_tensor(answer), out, rtol=1e-05
+            )
+        elif isinstance(out, tuple):
+            np.testing.assert_allclose(answer, out[0].numpy(), rtol=1e-05)
 
 
-class TestRemoveCommentInDy2St(unittest.TestCase):
+class TestRemoveCommentInDy2St(Dy2StTestBase):
     def func_with_comment(self):
         # Comment1
         x = paddle.to_tensor([1, 2, 3])
@@ -341,18 +352,17 @@ class Net2:
         self.layer1 = paddle.nn.Linear(10, 10)
 
     def forward(self, data):
-        @paddle.jit.to_static
         def func(ins, x, loss_fn):
             x = ins.layer1(x)
             return loss_fn(x)
 
         def func1(x):
-            return func(self, x, obj.func)
+            return paddle.jit.to_static(func)(self, x, obj.func)
 
         return func1(data)
 
 
-class TestParameterRecorder(unittest.TestCase):
+class TestParameterRecorder(Dy2StTestBase):
     def test_recorder(self):
         """function calls nn.Layer case."""
         net = Net()

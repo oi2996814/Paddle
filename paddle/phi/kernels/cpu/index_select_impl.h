@@ -85,20 +85,22 @@ void IndexSelectInner(const Context& ctx,
   for (int i = 0; i < index_size; i++) {
     PADDLE_ENFORCE_GE(
         index_data[i],
-        0,
-        phi::errors::InvalidArgument(
+        -input_dim[dim],
+        common::errors::InvalidArgument(
             "Variable value (index) of OP(index_select) "
-            "expected >= 0 and < %ld, but got %ld. Please check input "
+            "expected >= %ld and < %ld, but got %ld. Please check input "
             "value.",
+            -input_dim[dim],
             input_dim[dim],
             index_data[i]));
     PADDLE_ENFORCE_LT(
         index_data[i],
         input_dim[dim],
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Variable value (index) of OP(index_select) "
-            "expected >= 0 and < %ld, but got %ld. Please check input "
+            "expected >= %ld and < %ld, but got %ld. Please check input "
             "value.",
+            -input_dim[dim],
             input_dim[dim],
             index_data[i]));
   }
@@ -106,8 +108,8 @@ void IndexSelectInner(const Context& ctx,
   VLOG(3) << "Index_Select_Debug; outer_nums: " << outer_nums
           << "; slice_size: " << slice_size << "; index_size: " << index_size;
 
-  input->Resize(phi::make_ddim({outer_nums, input_dim[dim], slice_size}));
-  output->Resize(phi::make_ddim({outer_nums, index_size, slice_size}));
+  input->Resize(common::make_ddim({outer_nums, input_dim[dim], slice_size}));
+  output->Resize(common::make_ddim({outer_nums, index_size, slice_size}));
 
   auto input_tensor = EigenTensor<T, 3>::From(*input);
   auto output_tensor = EigenTensor<T, 3>::From(*output);
@@ -116,6 +118,9 @@ void IndexSelectInner(const Context& ctx,
 
   for (auto j = 0; j < index_size; j++) {
     IndexT index_value = index_data[j];
+    if (index_value < 0) {
+      index_value += input_dim[dim];
+    }
     auto output_t = output_tensor.chip(j, 1);
     output_t.device(place) = input_tensor.chip(index_value, 1);
   }
@@ -167,6 +172,9 @@ void IndexSelectGradInner(const Context& ctx,
 
     for (auto j = 0; j < index_size; j++) {
       IndexT index_value = index_data[j];
+      if (index_value < 0) {
+        index_value += input_dim[dim];
+      }
       auto src = input_data + input_start_offset + j * slice_size;
       auto p_out = p_output + output_start_offset + index_value * slice_size;
       auto dst = out_data + output_start_offset + index_value * slice_size;

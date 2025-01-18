@@ -14,18 +14,26 @@
 
 import os
 import sys
-from .optimizer_factory import FLEET_GLOBAL_DICT  # noqa: F403
-from .optimizer_factory import DistributedAdam  # noqa: F403
+
 from google.protobuf import text_format
-from paddle.framework import core
-from paddle.incubate.distributed.fleet.base import Fleet
-from paddle.incubate.distributed.fleet.base import Mode
-from paddle.incubate.distributed.fleet.base import DistributedOptimizer
-from paddle.incubate.distributed.fleet.role_maker import MPISymetricRoleMaker
-from paddle.incubate.distributed.fleet.role_maker import HeterRoleMaker
-from paddle.common_ops_import import LayerHelper
 
 import paddle
+from paddle.common_ops_import import LayerHelper
+from paddle.framework import core
+from paddle.incubate.distributed.fleet.base import (
+    DistributedOptimizer,
+    Fleet,
+    Mode,
+)
+from paddle.incubate.distributed.fleet.role_maker import (
+    HeterRoleMaker,
+    MPISymmetricRoleMaker,
+)
+
+from .optimizer_factory import (
+    FLEET_GLOBAL_DICT,
+    DistributedAdam,  # noqa: F401
+)
 
 
 class PSLib(Fleet):
@@ -44,7 +52,7 @@ class PSLib(Fleet):
 
     def init(self, role_maker=None):
         if role_maker is None:
-            role_maker = MPISymetricRoleMaker()
+            role_maker = MPISymmetricRoleMaker()
         super().init(role_maker)
         self._fleet_ptr = core.Fleet()
         self._heter_ptr = None
@@ -67,8 +75,8 @@ class PSLib(Fleet):
                     should call init_worker() to initialize global information about worker and connect
                     worker with pserver. You should run startup program before init_worker.
         Args:
-            executor(Executor): The executor to run for init server.
-            programs(Program|None): The program that need to run.
+            executor (Executor): The executor to run for init server.
+            programs (Program|None): The program that need to run.
         """
 
         if len(self._main_programs) == 0:
@@ -167,16 +175,24 @@ class PSLib(Fleet):
 
     def init_server(self, model_dir=None, **kwargs):
         """
-        init_server() will be called by user. It will load model from model_dir.
+        Called by user. It will load model from model_dir.
+
         Args:
-            model_dir(str): load model path, can be local or hdfs/afs path.
-            kwargs: user-defined attributes, currently support following:
-                model(int): load model mode.
-                            0 is for load whole model,
-                            1 is for load delta model (load diff),
-                            default is 0.
-        Example:
-            >>> fleet.init_server("/you/path/to/model", mode = 0)
+            model_dir(str, optional): Load model path, can be local or hdfs/afs path. Default is None.
+            kwargs: User-defined attributes, currently support following:
+
+                - model(int): Load model mode.
+
+                  0 is for load whole model,
+                  1 is for load delta model (load diff).
+                  Default is 0.
+
+        Examples:
+
+            .. code-block:: text
+
+                fleet.init_server("/you/path/to/model", mode = 0)
+
         """
         mode = kwargs.get("mode", 0)
         if isinstance(self._role_maker, HeterRoleMaker):
@@ -192,8 +208,7 @@ class PSLib(Fleet):
 
     def run_server(self):
         """
-        init_pserver(): will be called by user. When a user knows current process is_worker(), he/she
-            should call init_pserver() to initialize global information about parameter server
+        Called by user. When a user init server, after that he/she should run run_server() to start.
         """
         if self._opt_info:
             if "fleet_desc" in self._opt_info:
@@ -209,7 +224,7 @@ class PSLib(Fleet):
             self._fleet_ptr.init_server(
                 self._dist_desc_str, self._role_maker.server_index() * 2
             )
-            if isinstance(self._role_maker, MPISymetricRoleMaker):
+            if isinstance(self._role_maker, MPISymmetricRoleMaker):
                 self._local_ip = self._fleet_ptr.run_server()
             else:
                 local_endpoint = self._role_maker.get_local_endpoint()
@@ -296,8 +311,8 @@ class PSLib(Fleet):
 
     def stop_worker(self):
         """
-        stop(): will be called after a user finishes his/her training task. Fleet instance will be
-            destroyed when stop() is called.
+        Will be called after a user finishes his/her training task. Fleet instance will be
+            destroyed when stop_worker() is called.
         """
         self._role_maker._barrier_worker()
         # all worker should be finalize first
@@ -315,14 +330,20 @@ class PSLib(Fleet):
     def distributed_optimizer(self, optimizer, strategy={}):
         """
         distributed_optimizer
+
         Args:
-            optimizer(Optimizer): optimizer
-            strategy(dict): strategy
-        Examples:
-            .. code-block:: python
-              fleet.distributed_optimizer(optimizer)
+            optimizer (Optimizer): Optimizer.
+            strategy (dict): Strategy.
+
         Returns:
-            optimizer(DownpourOptimizer): downpour optimizer
+            optimizer(DownpourOptimizer): Downpour optimizer.
+
+        Examples:
+
+            .. code-block:: text
+
+                fleet.distributed_optimizer(optimizer)
+
         """
         self._optimizer = DownpourOptimizer(optimizer, strategy)
         return self._optimizer
@@ -337,29 +358,42 @@ class PSLib(Fleet):
         export_for_deployment=True,
     ):
         """
-        save pserver model called from a worker
+        Save pserver model called from a worker.
+
         Args:
-            executor(Executor): fluid executor
-            dirname(str): save model path
-            feeded_var_names(list): default None
-            target_vars(list): default None
-            main_program(Program): default None
-            export_for_deployment(bool): default None
+
+            executor (Executor): Fluid executor.
+            dirname (str): Save model path.
+            feeded_var_names (list, optional): Default None.
+            target_vars (list, optional): Default None.
+            main_program (Program, optional): Default None.
+            export_for_deployment (bool, optional): Default None.
+
         Examples:
-            .. code-block:: python
-              fleet.save_inference_model(dirname="hdfs:/my/path")
+
+            .. code-block:: text
+
+                fleet.save_inference_model(dirname="hdfs:/my/path")
+
         """
         self._fleet_ptr.save_model(dirname, 0)
 
     def print_table_stat(self, table_id, pass_id, threshold):
         """
-        print stat info of table_id,
-        format: tableid, feasign size, mf size
+        Print stat info of table_id, format: tableid, feasign size, mf size.
+
         Args:
-            table_id(int): the id of table
-        Example:
-            .. code-block:: python
-              fleet.print_table_stat(0)
+
+            table_id (int): The id of table.
+            pass_id (int): The id of pass.
+            threshold (float): The threshold of print.
+
+        Examples:
+
+            .. code-block:: text
+
+                fleet.print_table_stat(0)
+
         """
         self._role_maker._barrier_worker()
         if self._role_maker.is_first_worker():
@@ -368,13 +402,19 @@ class PSLib(Fleet):
 
     def set_file_num_one_shard(self, table_id, file_num):
         """
-        set file_num in one shard
+        Set file_num in one shard.
+
         Args:
-            table_id(int): the id of table
-            file_num(int): file num in one shard
-        Example:
-            .. code-block:: python
-              fleet.set_file_num_one_shard(0, 5)
+
+            table_id (int): The id of table.
+            file_num (int): File num in one shard.
+
+        Examples:
+
+            .. code-block:: text
+
+                fleet.set_file_num_one_shard(0, 5)
+
         """
         self._role_maker._barrier_worker()
         if self._role_maker.is_first_worker():
@@ -383,20 +423,28 @@ class PSLib(Fleet):
 
     def save_persistables(self, executor, dirname, main_program=None, **kwargs):
         """
-        save presistable parameters,
-        when using fleet, it will save sparse and dense feature
+        Save presistable parameters,
+        when using fleet, it will save sparse and dense feature.
+
         Args:
-            executor(Executor): fluid executor
-            dirname(str): save path. It can be hdfs/afs path or local path
-            main_program(Program): fluid program, default None
-            kwargs: use define property, current support following
-                mode(int): 0 means save all pserver model,
-                           1 means save delta pserver model (save diff),
-                           2 means save xbox base,
-                           3 means save batch model.
-        Example:
-            .. code-block:: python
-              fleet.save_persistables(dirname="/you/path/to/model", mode = 0)
+
+            executor (Executor): Fluid executor.
+            dirname (str): Save path. It can be hdfs/afs path or local path.
+            main_program (Program, optional): Fluid program, default None.
+            kwargs: Use define property, current support following
+
+                - mode (int):
+                  0 means save all pserver model,
+                  1 means save delta pserver model (save diff),
+                  2 means save xbox base,
+                  3 means save batch model.
+
+        Examples:
+
+            .. code-block:: test
+
+                fleet.save_persistables(dirname="/you/path/to/model", mode = 0)
+
         """
         mode = kwargs.get("mode", 0)
         self._fleet_ptr.client_flush()
@@ -409,23 +457,28 @@ class PSLib(Fleet):
         self, executor, dirname, whitelist_path, main_program=None, **kwargs
     ):
         """
-        save whitelist, mode is consistent with fleet.save_persistables,
-        when using fleet, it will save sparse and dense feature
+        Save whitelist, mode is consistent with fleet.save_persistables,
+        when using fleet, it will save sparse and dense feature.
 
         Args:
-            executor(Executor): fluid executor
-            dirname(str): save path. It can be hdfs/afs path or local path
-            main_program(Program): fluid program, default None
-            kwargs: use define property, current support following
-                mode(int): 0 means save all pserver model,
-                           1 means save delta pserver model (save diff),
-                           2 means save xbox base,
-                           3 means save batch model.
 
-        Example:
-            .. code-block:: python
+            executor (Executor): Fluid executor.
+            dirname (str): save path. It can be hdfs/afs path or local path.
+            whitelist_path (str): whitelist path. It can be hdfs/afs path or local path.
+            main_program (Program, optional): fluid program, default None.
+            kwargs: Use define property, current support following
 
-              fleet.save_persistables(dirname="/you/path/to/model", mode = 0)
+                - mode (int):
+                  0 means save all pserver model,
+                  1 means save delta pserver model (save diff),
+                  2 means save xbox base,
+                  3 means save batch model.
+
+        Examples:
+
+            .. code-block:: text
+
+                fleet.save_persistables(dirname="/you/path/to/model", mode = 0)
 
         """
         mode = kwargs.get("mode", 0)
@@ -440,18 +493,23 @@ class PSLib(Fleet):
 
     def save_multi_table_one_path(self, table_ids, model_dir, **kwargs):
         """
-        save pslib multi sparse table in one path.
+        Save pslib multi sparse table in one path.
+
         Args:
-            table_ids(list): table ids
-            model_dir(str): if you use hdfs, model_dir should starts with
-                            'hdfs:', otherwise means local dir
-            kwargs(dict): user-defined properties.
-                          mode(int): the modes illustrated above, default 0
-                          prefix(str): the parts to save can have prefix,
-                                       for example, part-prefix-000-00000
+
+            table_ids (list): Table ids.
+            model_dir (str): If you use hdfs, model_dir should starts with 'hdfs:', otherwise means local dir.
+            kwargs (dict): User-defined properties.
+
+                - mode (int): The modes illustrated above, default 0.
+                - prefix (str): the parts to save can have prefix, for example, part-prefix-000-00000.
+
         Examples:
-            .. code-block:: python
-              fleet.save_multi_table_one_path("[0, 1]", "afs:/user/path/")
+
+            .. code-block:: text
+
+                fleet.save_multi_table_one_path("[0, 1]", "afs:/user/path/")
+
         """
         mode = kwargs.get("mode", 0)
         self._role_maker._barrier_worker()
@@ -463,21 +521,30 @@ class PSLib(Fleet):
 
     def save_cache_model(self, executor, dirname, main_program=None, **kwargs):
         """
-        save sparse cache table,
-        when using fleet, it will save sparse cache table
+        Save sparse cache table,
+        when using fleet, it will save sparse cache table.
+
         Args:
-            executor(Executor): fluid executor
-            dirname(str): save path. It can be hdfs/afs path or local path
-            main_program(Program): fluid program, default None
-            kwargs: use define property, current support following
-                mode(int): define for feature extension in the future,
-                           currently no use, will pass a default value 0
-                table_id(int): which table to save cache, default is 0
+
+            executor (Executor): Fluid executor.
+            dirname (str): Save path. It can be hdfs/afs path or local path.
+            main_program (Program, optional): Fluid program, default None.
+            kwargs: Use define property, current support following
+
+                - mode (int): Define for feature extension in the future,
+                  currently no use, will pass a default value 0.
+                - table_id (int): Which table to save cache, default is 0.
+
         Returns:
-            feasign_num(int): cache feasign num
-        Example:
-            .. code-block:: python
-              fleet.save_cache_model(None, dirname="/you/path/to/model", mode = 0)
+
+            feasign_num (int): cache feasign num.
+
+        Examples:
+
+            .. code-block:: text
+
+                fleet.save_cache_model(None, dirname="/you/path/to/model", mode = 0)
+
         """
         mode = kwargs.get("mode", 0)
         table_id = kwargs.get("table_id", 0)
@@ -506,10 +573,15 @@ class PSLib(Fleet):
 
     def shrink_sparse_table(self):
         """
-        shrink cvm of all sparse embedding in pserver, the decay rate
-        is defined as "show_click_decay_rate" in fleet_desc.prototxt
-        Example:
-            >>> fleet.shrink_sparse_table()
+        Shrink cvm of all sparse embedding in pserver, the decay rate
+        is defined as "show_click_decay_rate" in fleet_desc.prototxt.
+
+        Examples:
+
+            .. code-block:: text
+
+                fleet.shrink_sparse_table()
+
         """
         self._role_maker._barrier_worker()
         if self._role_maker.is_first_worker():
@@ -523,18 +595,22 @@ class PSLib(Fleet):
 
     def shrink_dense_table(self, decay, emb_dim=11, scope=None, table_id=None):
         """
-        shrink batch_sum in pserver by multiplying by decay
+        Shrink batch_sum in pserver by multiplying by decay.
+
         Args:
-            decay(float): the decay rate, usually range in (0, 1)
-            emb_dim(int): one element's length in datanorm layer
-            scope(Scope): Scope object, default is fluid.global_scope()
-            table_id(int): table id of shrinking dense table. None means shrink all,
-                           you should specify it when using multiple scopes,
-                           default is None.
-        Example:
-            >>> fleet.shrink_dense_table(0.98, 11, myscope1, 1)
-            >>> fleet.shrink_dense_table(0.98, 11, myscope1, 2)
-            >>> fleet.shrink_dense_table(0.98, 11, myscope2, 3)
+            decay (float): The decay rate, usually range in (0, 1).
+            emb_dim (int, optional): One element's length in datanorm layer. Default is 11.
+            scope (Scope, optional): Scope object, default is base.global_scope(). Default is None.
+            table_id (int, optional): Table id of shrinking dense table. None means shrink all,
+                you should specify it when using multiple scopes, default is None.
+
+        Examples:
+
+            .. code-block:: text
+
+                fleet.shrink_dense_table(0.98, 11, myscope1, 1)
+                fleet.shrink_dense_table(0.98, 11, myscope1, 2)
+                fleet.shrink_dense_table(0.98, 11, myscope2, 3)
         """
         if scope is None:
             scope = paddle.static.global_scope()
@@ -559,12 +635,17 @@ class PSLib(Fleet):
 
     def clear_one_table(self, table_id):
         """
-        clear_one_table() will be called by user. It will clear one table.
+        This function will be called by user. It will clear one table.
+
         Args:
-            table_id(int): table id
+
+            table_id (int): Table id.
+
         Examples:
-            .. code-block:: python
-              fleet.clear_one_table(0)
+
+            .. code-block:: text
+
+                fleet.clear_one_table(0)
         """
         self._role_maker._barrier_worker()
         if self._role_maker.is_first_worker():
@@ -573,10 +654,13 @@ class PSLib(Fleet):
 
     def clear_model(self):
         """
-        clear_model() will be called by user. It will clear sparse model.
+        This function will be called by user. It will clear sparse model.
+
         Examples:
-            .. code-block:: python
-              fleet.clear_model()
+
+            .. code-block:: text
+
+                fleet.clear_model()
         """
         self._role_maker._barrier_worker()
         if self._role_maker.is_first_worker():
@@ -585,40 +669,39 @@ class PSLib(Fleet):
 
     def load_pslib_whitelist(self, table_id, model_path, **kwargs):
         """
-        load pslib model for one table with whitelist
+        Load pslib model for one table with whitelist.
 
         Args:
-            table_id(int): load table id
-            model_path(str): load model path, can be local or hdfs/afs path
-            kwargs(dict): user defined params, currently support following:
-                only for load pslib model for one table:
-                    mode(int): load model mode. 0 is for load whole model, 1 is
-                               for load delta model (load diff), default is 0.
-                only for load params from paddle model:
-                    scope(Scope): Scope object
-                    model_proto_file(str): path of program desc proto binary
-                                           file, can be local or hdfs/afs file
-                    var_names(list): var name list
-                    load_combine(bool): load from a file or split param files
-                                        default False.
+            table_id (int): Load table id.
+            model_path (str): Load model path, can be local or hdfs/afs path.
+            kwargs (dict): User defined params, currently support following:
+
+                - only for load pslib model for one table:
+                  mode (int): load model mode. 0 is for load whole model, 1 is for load delta model (load diff), default is 0.
+                - only for load params from paddle model:
+                  scope (Scope): Scope object.
+                  model_proto_file (str): Path of program desc proto binary file, can be local or hdfs/afs file.
+                  var_names (list): Var name list.
+                  load_combine (bool): Load from a file or split param files, default False.
 
         Examples:
-            .. code-block:: python
 
-              # load pslib model for one table
-              fleet.load_one_table(0, "hdfs:/my_fleet_model/20190714/0/")
-              fleet.load_one_table(1, "hdfs:/xx/xxx", mode = 0)
+            .. code-block:: text
 
-              # load params from paddle model
-              fleet.load_one_table(2, "hdfs:/my_paddle_model/",
-                                   scope = my_scope,
-                                   model_proto_file = "./my_program.bin",
-                                   load_combine = False)
+                # load pslib model for one table
+                fleet.load_one_table(0, "hdfs:/my_fleet_model/20190714/0/")
+                fleet.load_one_table(1, "hdfs:/xx/xxx", mode = 0)
 
-              # below is how to save proto binary file
-              with open("my_program.bin", "wb") as fout:
-                  my_program = fluid.default_main_program()
-                  fout.write(my_program.desc.serialize_to_string())
+                # load params from paddle model
+                fleet.load_one_table(2, "hdfs:/my_paddle_model/",
+                                    scope = my_scope,
+                                    model_proto_file = "./my_program.bin",
+                                    load_combine = False)
+
+                # below is how to save proto binary file
+                with open("my_program.bin", "wb") as fout:
+                    my_program = base.default_main_program()
+                    fout.write(my_program.desc.serialize_to_string())
 
         """
         self._role_maker._barrier_worker()
@@ -631,35 +714,39 @@ class PSLib(Fleet):
 
     def load_one_table(self, table_id, model_path, **kwargs):
         """
-        load pslib model for one table or load params from paddle model
+        Load pslib model for one table or load params from paddle model.
+
         Args:
-            table_id(int): load table id
-            model_path(str): load model path, can be local or hdfs/afs path
-            kwargs(dict): user defined params, currently support following:
-                only for load pslib model for one table:
-                    mode(int): load model mode. 0 is for load whole model, 1 is
-                               for load delta model (load diff), default is 0.
-                only for load params from paddle model:
-                    scope(Scope): Scope object
-                    model_proto_file(str): path of program desc proto binary
-                                           file, can be local or hdfs/afs file
-                    var_names(list): var name list
-                    load_combine(bool): load from a file or split param files
-                                        default False.
+
+            table_id (int): Load table id.
+            model_path (str): Load model path, can be local or hdfs/afs path.
+            kwargs (dict): user defined params, currently support following:
+
+                - only for load pslib model for one table:
+                  mode(int): load model mode. 0 is for load whole model, 1 is for load delta model (load diff), default is 0.
+                - only for load params from paddle model:
+                  scope(Scope): Scope object.
+                  model_proto_file(str): Path of program desc proto binary file, can be local or hdfs/afs file.
+                  var_names(list): var name list.
+                  load_combine(bool): load from a file or split param files, default False.
+
         Examples:
-            .. code-block:: python
-              # load pslib model for one table
-              fleet.load_one_table(0, "hdfs:/my_fleet_model/20190714/0/")
-              fleet.load_one_table(1, "hdfs:/xx/xxx", mode = 0)
-              # load params from paddle model
-              fleet.load_one_table(2, "hdfs:/my_paddle_model/",
-                                   scope = my_scope,
-                                   model_proto_file = "./my_program.bin",
-                                   load_combine = False)
-              # below is how to save proto binary file
-              with open("my_program.bin", "wb") as fout:
-                  my_program = fluid.default_main_program()
-                  fout.write(my_program.desc.serialize_to_string())
+
+            .. code-block:: text
+
+                # load pslib model for one table
+                fleet.load_one_table(0, "hdfs:/my_fleet_model/20190714/0/")
+                fleet.load_one_table(1, "hdfs:/xx/xxx", mode = 0)
+                # load params from paddle model
+                fleet.load_one_table(2, "hdfs:/my_paddle_model/",
+                                    scope = my_scope,
+                                    model_proto_file = "./my_program.bin",
+                                    load_combine = False)
+                # below is how to save proto binary file
+                with open("my_program.bin", "wb") as fout:
+                    my_program = base.default_main_program()
+                    fout.write(my_program.desc.serialize_to_string())
+
         """
         self._role_maker._barrier_worker()
         mode = kwargs.get("mode", 0)
@@ -691,15 +778,16 @@ class PSLib(Fleet):
         load_combine=False,
     ):
         """
-        load params from paddle model, and push params to pserver
+        Load params from paddle model, and push params to pserver.
+
         Args:
-            scope(Scope): Scope object
-            table_id(int): the id of table to load
-            model_path(str): path of paddle model, can be local or hdfs/afs file
-            model_proto_file(str): path of program desc proto binary file,
-                                   can be local or hdfs/afs file
-            var_names(list): load var names
-            load_combine(bool): load from a file or split param files
+            scope (Scope): Scope object.
+            table_id (int): The id of table to load.
+            model_path (str): Path of paddle model, can be local or hdfs/afs file.
+            model_proto_file (str): Path of program desc proto binary file, can be local or hdfs/afs file.
+            var_names (list, optional): Load var names. Default is None.
+            load_combine (bool, optional): Load from a file or split param files. Default is False.
+
         """
         self._role_maker._barrier_worker()
         if self._role_maker.is_first_worker():
@@ -713,7 +801,7 @@ class PSLib(Fleet):
             hadoop_bin = self._opt_info["fleet_desc"].fs_client_param.hadoop_bin
             # download model_path if it's hdfs/afs
             if model_path.startswith("hdfs:") or model_path.startswith("afs:"):
-                dest = "./model_for_load_table_%s" % table_id
+                dest = f"./model_for_load_table_{table_id}"
                 cmd = (
                     hadoop_bin
                     + " fs -D fs.default.name="
@@ -733,7 +821,7 @@ class PSLib(Fleet):
             if model_proto_file.startswith(
                 "hdfs:"
             ) or model_proto_file.startswith("afs:"):
-                dest = "./model_proto_file_for_load_table_%s" % table_id
+                dest = f"./model_proto_file_for_load_table_{table_id}"
                 cmd = (
                     hadoop_bin
                     + " fs -D fs.default.name="
@@ -800,14 +888,18 @@ class PSLib(Fleet):
            usually for online predict)
         3: load batch model (do some statistic works in checkpoint, such as
            calculate unseen days of each feasign)
+
         Args:
-            model_dir(str): if you use hdfs, model_dir should starts with
-                            'hdfs:', otherwise means local dir
-            kwargs(dict): user-defined properties.
-                          mode(int): the modes illustrated above, default 0
+            model_dir (str, optional): If you use hdfs, model_dir should starts with
+                'hdfs:', otherwise means local dir. Default is None.
+            kwargs (dict): user-defined properties.
+
+                - mode (int): The modes illustrated above, default 0.
+
         Examples:
-            .. code-block:: python
-              fleet.load_model("afs:/user/path/")
+            .. code-block:: text
+
+                fleet.load_model("afs:/user/path/")
         """
         mode = kwargs.get("mode", 0)
         self._role_maker._barrier_worker()
@@ -818,14 +910,19 @@ class PSLib(Fleet):
     def save_model(self, model_dir=None, **kwargs):
         """
         save pslib model, the modes are same with load model.
+
         Args:
-            model_dir(str): if you use hdfs, model_dir should starts with
-                            'hdfs:', otherwise means local dir
-            kwargs(dict): user-defined properties.
-                          mode(int): the modes illustrated above, default 0
+            model_dir (str, optional): If you use hdfs, model_dir should starts with
+                'hdfs:', otherwise means local dir. Default is None.
+            kwargs (dict): user-defined properties.
+
+                - mode (int): The modes illustrated above, default 0.
+
         Examples:
-            .. code-block:: python
-              fleet.save_model("afs:/user/path/")
+            .. code-block:: text
+
+                fleet.save_model("afs:/user/path/")
+
         """
         mode = kwargs.get("mode", 0)
         prefix = kwargs.get("prefix", None)
@@ -836,18 +933,21 @@ class PSLib(Fleet):
 
     def save_one_table(self, table_id, model_dir, **kwargs):
         """
-        save pslib model's one table, the modes are same with load model.
+        Save pslib model's one table, the modes are same with load model.
+
         Args:
-            table_id(int): table id
-            model_dir(str): if you use hdfs, model_dir should starts with
-                            'hdfs:', otherwise means local dir
-            kwargs(dict): user-defined properties.
-                          mode(int): the modes illustrated above, default 0
-                          prefix(str): the parts to save can have prefix,
-                                       for example, part-prefix-000-00000
+            table_id (int): Table id.
+            model_dir (str): if you use hdfs, model_dir should starts with
+                'hdfs:', otherwise means local dir.
+            kwargs (dict): user-defined properties.
+
+                - mode (int): the modes illustrated above, default 0.
+                - prefix (str): the parts to save can have prefix, for example, part-prefix-000-00000.
+
         Examples:
-            .. code-block:: python
-              fleet.save_one_table("afs:/user/path/")
+            .. code-block:: text
+
+                fleet.save_one_table("afs:/user/path/")
         """
         mode = kwargs.get("mode", 0)
         prefix = kwargs.get("prefix", None)
@@ -890,15 +990,17 @@ def _prepare_params(
     dtype='float32',
 ):
     """
-    preprocess params, this interface is not for users.
+    Preprocess params, this interface is not for users.
+
     Args:
-        input(Variable|list of Variable): Input is a Tensor<int64> Variable
-        size(list of int): the embedding dim
-        is_sparse(bool): whether input is sparse ids
-        is_distributed(bool): whether in distributed mode
-        padding_idx(int): padding idx of input
-        param_attr(ParamAttr): To specify the weight parameter property
-        dtype(str): data type of output
+        input (Variable|list of Variable): Input is a Tensor<int64> Variable.
+        size (list of int): The embedding dim.
+        is_sparse (bool, optional): Whether input is sparse ids. Default is False.
+        is_distributed (bool, optional): Whether in distributed mode. Default is False.
+        padding_idx (int, optional): Padding idx of input. Default is None.
+        param_attr (ParamAttr, optional): To specify the weight parameter property. Default is None.
+        dtype (str, optional): Data type of output. Default is 'float32'.
+
     """
     if param_attr is None:
         raise ValueError("param_attr must be set")
@@ -943,94 +1045,6 @@ def _prepare_params(
         raise ValueError("dtype must be float32")
 
 
-def _fleet_embedding(
-    input,
-    size,
-    is_sparse=False,
-    is_distributed=False,
-    padding_idx=None,
-    param_attr=None,
-    dtype='float32',
-):
-    """
-    add fleet embedding, this interface is not for users.
-    Args:
-        input(Variable|list of Variable): Input is a Tensor<int64> Variable
-        size(list of int): the embedding dim
-        is_sparse(bool): whether input is sparse ids
-        is_distributed(bool): whether in distributed mode
-        padding_idx(int): padding idx of input
-        param_attr(ParamAttr): To specify the weight parameter property
-        dtype(str): data type of output
-    """
-
-    def _pull_sparse(
-        input,
-        size,
-        table_id,
-        accessor_class,
-        name="embedding",
-        ctr_label_name="",
-        padding_id=0,
-        dtype='float32',
-        scale_sparse_grad=True,
-    ):
-        helper = LayerHelper(name, **locals())
-        inputs = helper.multiple_input()
-        outs = [helper.create_variable_for_type_inference(dtype)]
-        input_names = [i.name for i in inputs]
-        attrs = {
-            'EmbeddingDim': size,
-            'TableId': table_id,
-            'AccessorClass': accessor_class,
-            'CtrLabelName': ctr_label_name,
-            'PaddingId': padding_id,
-            'ScaleSparseGrad': scale_sparse_grad,
-            'InputNames': input_names,
-            # this is only for compatible with embedding op
-            'is_distributed': True,
-        }
-        # this is only for compatible with embedding op
-        w, _ = helper.create_or_get_global_variable(
-            name=name,
-            shape=[size],
-            dtype=dtype,
-            is_bias=False,
-            persistable=True,
-        )
-        helper.append_op(
-            type='pull_sparse',
-            inputs={'Ids': inputs, 'W': w},
-            outputs={'Out': outs},
-            attrs=attrs,
-        )
-        if len(outs) == 1:
-            return outs[0]
-        return outs
-
-    # check and set params
-    _prepare_params(
-        input, size, is_sparse, is_distributed, padding_idx, param_attr, dtype
-    )
-    name = param_attr.name
-    size = size[-1]
-    if padding_idx is None:
-        padding_idx = 0
-    global FLEET_GLOBAL_DICT
-
-    return _pull_sparse(
-        input=input,
-        size=size,
-        table_id=FLEET_GLOBAL_DICT["emb_to_table"][name],
-        accessor_class=FLEET_GLOBAL_DICT["emb_to_accessor"][name],
-        name=name,
-        ctr_label_name=FLEET_GLOBAL_DICT["click_name"],
-        padding_id=padding_idx,
-        dtype=dtype,
-        scale_sparse_grad=FLEET_GLOBAL_DICT["scale_sparse_grad"],
-    )
-
-
 def _fleet_embedding_v2(
     input,
     size,
@@ -1041,15 +1055,16 @@ def _fleet_embedding_v2(
     dtype='float32',
 ):
     """
-    add fleet embedding v2, this interface is not for users.
+    Add fleet embedding v2, this interface is not for users.
+
     Args:
-        input(Variable|list of Variable): Input is a Tensor<int64> Variable
-        size(list of int): the embedding dim
-        is_sparse(bool): whether input is sparse ids
-        is_distributed(bool): whether in distributed mode
-        padding_idx(int): padding idx of input
-        param_attr(ParamAttr): To specify the weight parameter property
-        dtype(str): data type of output
+        input (Variable|list of Variable): Input is a Tensor<int64> Variable.
+        size (list[int]): The embedding dim.
+        is_sparse (bool, optional): Whether input is sparse ids. Default is False.
+        is_distributed (bool, optional): Whether in distributed mode. Default is False.
+        padding_idx (int, optional): Padding idx of input. Default is None.
+        param_attr (ParamAttr, optional): To specify the weight parameter property. Default is None.
+        dtype (str, optional): Data type of output. Default is 'float32'.
     """
 
     def _pull_sparse_v2(
@@ -1120,16 +1135,19 @@ def _fleet_embedding_v2(
 
 class fleet_embedding:
     """
-    fleet embedding class, it is used as a wrapper
-    Example:
-        .. code-block:: python
-          with fleet_embedding(click_name=label.name):
-              emb = paddle.static.nn.embedding(
-                  input=var,
-                  size=[-1, 11],
-                  is_sparse=True,
-                  is_distributed=True,
-                  param_attr=fluid.ParamAttr(name="embedding"))
+    Fleet embedding class, it is used as a wrapper.
+
+    Examples:
+
+        .. code-block:: text
+
+            with fleet_embedding(click_name=label.name):
+                emb = paddle.static.nn.embedding(
+                    input=var,
+                    size=[-1, 11],
+                    is_sparse=True,
+                    is_distributed=True,
+                    param_attr=base.ParamAttr(name="embedding"))
     """
 
     def __init__(self, click_name, scale_sparse_grad=True):
@@ -1158,16 +1176,18 @@ class fleet_embedding:
 
 class DownpourOptimizer(DistributedOptimizer):
     """
-    DistributedOptimizer is a wrapper for paddle.fluid.optimizer
-    A user should pass a paddle.fluid.optimizer to DistributedOptimizer
+    DistributedOptimizer is a wrapper for paddle.base.optimizer
+    A user should pass a paddle.base.optimizer to DistributedOptimizer
     minimize() function is implemented.
     DistributedOptimizer is the starting point for a user who wants to
     run distributed training. The optimized information will be stored in
     Fleet() instance who holds the global information about current distributed
     training.
+
     Args:
         optimizer(Optimizer): subclass of Optimizer.
         strategy(any): config for DownpourOptimizer.
+
     Returns:
         None
     """
@@ -1176,7 +1196,7 @@ class DownpourOptimizer(DistributedOptimizer):
         super().__init__(optimizer, strategy)
 
         self._optimizer = optimizer
-        self._optimizer_name = "Distributed%s" % optimizer.type.capitalize()
+        self._optimizer_name = f"Distributed{optimizer.type.capitalize()}"
         if optimizer.type != "adam":
             print(
                 "Currently, distributed optimizer only support Adam"
@@ -1199,11 +1219,11 @@ class DownpourOptimizer(DistributedOptimizer):
         """
         Currently, backward function can not be called through DistributedOptimizer
         """
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def _remove_collective_ops(self, program, name):
         """
-        colective init op should call once, so remove other call.
+        collective init op should call once, so remove other call.
         """
         block = program.global_block()
         for ids, op in list(enumerate(block.ops)):
@@ -1215,7 +1235,7 @@ class DownpourOptimizer(DistributedOptimizer):
         """
         Currently, apply_gradients function can not be called through DistributedOptimizer
         """
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def get_dist_env(self):
         trainer_id = int(os.getenv('PADDLE_TRAINER_ID', '0'))
@@ -1270,22 +1290,24 @@ class DownpourOptimizer(DistributedOptimizer):
         program_mode="all_reduce",
     ):
         """
-        minimize a program through loss, loss can be a list in DistributedOptimizer.
+        Minimize a program through loss, loss can be a list in DistributedOptimizer.
         Note that in parameter server mode, a worker will not get anything about optimize_os
         Because optimizer algorithms run on pserver side. We will make this usable in pserver
         process, but currently the optimization part is written into Fleet(). A user does not
         need to care about how to startup a pserver node.
+
         Args:
-            losses (Variable|Variable List): loss variable or loss variable list to run optimization.
-            scopes (Scope| Scope List): scope instance.
-            startup_programs (Program|Program List): startup_program for initializing parameters
-                in `parameter_list`.
-            parameter_list (list): list of Variables to update.
-            no_grad_set (set|None): set of Variables should be ignored.
-            program_mode (str|"all_reduce"): grad action for grogram when use_ps_gpu.
+            losses (Variable|Variable List): Loss variable or loss variable list to run optimization.
+            scopes (Scope|Scope List, Optional): Scope instance. Default is None.
+            startup_programs (Program|Program List, Optional): Startup_program for initializing parameters
+                in `parameter_list`. Default is None.
+            parameter_list (list, Optional): List of Variables to update. Default is None.
+            no_grad_set (set, Optional): Set of Variables should be ignored. Default is None.
+            program_mode (str, Optional): Grad action for grogram when use_ps_gpu. Default is "all_reduce".
+
         Returns:
             tuple: (optimize_ops, params_grads) which are, list of operators appended;
-            and list of (param, grad) Variables pair for optimization.
+                and list of (param, grad) Variables pair for optimization.
         """
 
         if not isinstance(losses, list):
@@ -1348,9 +1370,7 @@ class DownpourOptimizer(DistributedOptimizer):
                     wait_port=False,
                 )
                 if i > 0:
-                    self._remove_collective_ops(
-                        start_program, "c_comm_init_all"
-                    )
+                    self._remove_collective_ops(start_program, "comm_init_all")
             for i in range(0, len(losses)):
                 loss = losses[i]
                 embedding_table = self._distributed_optimizer._find_multi_distributed_lookup_table(

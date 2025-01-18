@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import wave
-from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import TYPE_CHECKING, BinaryIO
 
 import numpy as np
 
@@ -22,23 +23,28 @@ import paddle
 
 from .backend import AudioInfo
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from paddle import Tensor
+
 
 def _error_message():
     package = "paddleaudio"
     warn_msg = (
-        "only PCM16 WAV supportted. \n"
+        "only PCM16 WAV supported. \n"
         "if want support more other audio types, please "
-        "manually installed (usually with `pip install {}`). \n "
+        f"manually installed (usually with `pip install {package}`). \n "
         "and use paddle.audio.backends.set_backend('soundfile') to set audio backend"
-    ).format(package)
+    )
     return warn_msg
 
 
-def info(filepath: str) -> AudioInfo:
+def info(filepath: str | BinaryIO) -> AudioInfo:
     """Get signal information of input audio file.
 
     Args:
-       filepath: audio path or file object.
+        filepath: audio path or file object.
 
     Returns:
         AudioInfo: info of the given audio.
@@ -53,7 +59,7 @@ def info(filepath: str) -> AudioInfo:
             >>> wav_duration = 0.5
             >>> num_channels = 1
             >>> num_frames = sample_rate * wav_duration
-            >>> wav_data = paddle.linspace(-1.0, 1.0, num_frames) * 0.1
+            >>> wav_data = paddle.linspace(-1.0, 1.0, int(num_frames)) * 0.1
             >>> waveform = wav_data.tile([num_channels, 1])
             >>> base_dir = os.getcwd()
             >>> filepath = os.path.join(base_dir, "test.wav")
@@ -87,12 +93,12 @@ def info(filepath: str) -> AudioInfo:
 
 
 def load(
-    filepath: Union[str, Path],
+    filepath: str | Path,
     frame_offset: int = 0,
     num_frames: int = -1,
     normalize: bool = True,
     channels_first: bool = True,
-) -> Tuple[paddle.Tensor, int]:
+) -> tuple[Tensor, int]:
     """Load audio data from file. load the audio content start form frame_offset, and get num_frames.
 
     Args:
@@ -118,7 +124,7 @@ def load(
             >>> wav_duration = 0.5
             >>> num_channels = 1
             >>> num_frames = sample_rate * wav_duration
-            >>> wav_data = paddle.linspace(-1.0, 1.0, num_frames) * 0.1
+            >>> wav_data = paddle.linspace(-1.0, 1.0, int(num_frames)) * 0.1
             >>> waveform = wav_data.tile([num_channels, 1])
             >>> base_dir = os.getcwd()
             >>> filepath = os.path.join(base_dir, "test.wav")
@@ -167,12 +173,12 @@ def load(
 
 def save(
     filepath: str,
-    src: paddle.Tensor,
+    src: Tensor,
     sample_rate: int,
     channels_first: bool = True,
-    encoding: Optional[str] = None,
-    bits_per_sample: Optional[int] = 16,
-):
+    encoding: str | None = None,
+    bits_per_sample: int | None = 16,
+) -> None:
     """
     Save audio tensor to file.
 
@@ -198,7 +204,7 @@ def save(
             >>> wav_duration = 0.5
             >>> num_channels = 1
             >>> num_frames = sample_rate * wav_duration
-            >>> wav_data = paddle.linspace(-1.0, 1.0, num_frames) * 0.1
+            >>> wav_data = paddle.linspace(-1.0, 1.0, int(num_frames)) * 0.1
             >>> waveform = wav_data.tile([num_channels, 1])
             >>> filepath = "./test.wav"
 

@@ -17,11 +17,11 @@
 
 #include "paddle/phi/kernels/sparse/unary_kernel.h"
 
+#include "paddle/common/ddim.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
 #include "paddle/phi/backends/gpu/gpu_launch_config.h"
 #include "paddle/phi/backends/gpu/gpu_primitives.h"
 #include "paddle/phi/common/memory_utils.h"
-#include "paddle/phi/core/ddim.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/core/visit_type.h"
 #include "paddle/phi/kernels/empty_kernel.h"
@@ -613,7 +613,7 @@ void SliceCsrCompute(const Context& dev_ctx,
         dev_ctx, x, new_axes, new_starts, new_ends, out_dims, out);
   } else {
     // throw exception
-    phi::errors::InvalidArgument(
+    common::errors::InvalidArgument(
         "Slice for Sparse CSR Tensor only support 2-D or 3-D, but got %d-D.",
         x_dims.size());
   }

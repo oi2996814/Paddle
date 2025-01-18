@@ -16,7 +16,7 @@ limitations under the License. */
 
 #include <thrust/random.h>
 
-#include "gflags/gflags.h"
+#include "paddle/common/flags.h"
 #include "paddle/phi/common/amp_type_traits.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/funcs/distribution_helper.h"

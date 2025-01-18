@@ -34,13 +34,12 @@ __global__ void KernelBincount(const InputT* input,
                                const bool has_weights,
                                const T* weights,
                                OutT* output) {
-  if (!has_weights) {
-    for (int i = threadIdx.x; i < total_elements; i += blockDim.x) {
-      phi::CudaAtomicAdd(&output[input[i]], 1L);
-    }
-  } else {
-    for (int i = threadIdx.x; i < total_elements; i += blockDim.x) {
-      phi::CudaAtomicAdd(&output[input[i]], static_cast<OutT>(weights[i]));
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid < total_elements) {
+    if (!has_weights) {
+      phi::CudaAtomicAdd(&output[input[tid]], 1L);
+    } else {
+      phi::CudaAtomicAdd(&output[input[tid]], static_cast<OutT>(weights[tid]));
     }
   }
 }
@@ -86,7 +85,7 @@ void BincountCUDAInner(const Context& dev_ctx,
   PADDLE_ENFORCE_GE(
       input_min,
       static_cast<InputT>(0),
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The elements in input tensor must be non-negative ints"));
 
   int64_t output_size =
@@ -103,7 +102,8 @@ void BincountCUDAInner(const Context& dev_ctx,
 
   if (!has_weights) {
     int64_t* output_data = dev_ctx.template Alloc<int64_t>(output);
-    phi::funcs::SetConstant<Context, int64_t>()(dev_ctx, output, 0L);
+    phi::funcs::SetConstant<Context, int64_t>()(
+        dev_ctx, output, static_cast<int64_t>(0));
 
     KernelBincount<T, InputT, int64_t>
         <<<GET_BLOCKS(input_numel), PADDLE_CUDA_NUM_THREADS, 0, stream>>>(
@@ -137,7 +137,7 @@ void BincountKernel(const Context& dev_ctx,
   int int_minlength = minlength.to<int>();
   PADDLE_ENFORCE_GE(int_minlength,
                     0,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The minlength should be greater than or equal to 0."
                         "But received minlength is %d",
                         int_minlength));

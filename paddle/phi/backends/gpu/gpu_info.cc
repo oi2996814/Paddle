@@ -17,16 +17,14 @@ limitations under the License. */
 #include <sstream>
 #include <vector>
 
-#include "gflags/gflags.h"
 #include "glog/logging.h"
+#include "paddle/common/flags.h"
 
 #include "paddle/phi/common/memory_utils.h"
 
-DECLARE_string(selected_gpus);
+COMMON_DECLARE_string(selected_gpus);
 
-namespace phi {
-namespace backends {
-namespace gpu {
+namespace phi::backends::gpu {
 
 static inline std::vector<std::string> Split(std::string const& original,
                                              char separator) {
@@ -47,7 +45,7 @@ std::vector<int> GetSelectedDevices() {
   std::vector<int> devices;
   if (!FLAGS_selected_gpus.empty()) {
     auto devices_str = Split(FLAGS_selected_gpus, ',');
-    for (auto id : devices_str) {
+    for (auto const& id : devices_str) {
       devices.push_back(atoi(id.c_str()));
     }
   } else {
@@ -66,7 +64,7 @@ size_t GpuAvailableMemToAlloc() {
   size_t available = 0;
   memory_utils::GpuMemoryUsage(&available, &total);
   size_t reserving =
-      static_cast<size_t>(fraction_reserve_gpu_memory * available);
+      static_cast<size_t>(fraction_reserve_gpu_memory * available);  // NOLINT
   // If available size is less than minimum chunk size, no usable memory exists
   size_t available_to_alloc = available - reserving;
   size_t min_chunk_size = GpuMinChunkSize();
@@ -83,6 +81,4 @@ size_t GpuMinChunkSize() {
   return 1 << 8;
 }
 
-}  // namespace gpu
-}  // namespace backends
-}  // namespace phi
+}  // namespace phi::backends::gpu

@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 from paddle import enable_static
-from paddle.fluid import core
+from paddle.base import core
 
 
 @unittest.skipIf(
@@ -47,7 +47,9 @@ class TestTransposeOp(OpTest):
         }
 
     def test_check_output(self):
-        self.check_output_with_place(core.CPUPlace(), no_check_set=['XShape'])
+        self.check_output_with_place(
+            core.CPUPlace(), no_check_set=['XShape'], check_pir_onednn=True
+        )
 
     def init_test_case(self):
         self.shape = (2, 3, 4, 5)

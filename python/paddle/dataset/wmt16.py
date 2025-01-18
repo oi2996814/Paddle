@@ -73,7 +73,7 @@ def __build_dict(tar_file, dict_size, save_path, lang):
 
 def __load_dict(tar_file, dict_size, lang, reverse=False):
     dict_path = os.path.join(
-        paddle.dataset.common.DATA_HOME, "wmt16/%s_%d.dict" % (lang, dict_size)
+        paddle.dataset.common.DATA_HOME, f"wmt16/{lang}_{dict_size}.dict"
     )
     if not os.path.exists(dict_path) or (
         len(open(dict_path, "rb").readlines()) != dict_size
@@ -133,8 +133,8 @@ def reader_creator(tar_file, file_name, src_dict_size, trg_dict_size, src_lang):
                 trg_words = line_split[trg_col].split()
                 trg_ids = [trg_dict.get(w, unk_id) for w in trg_words]
 
-                trg_ids_next = trg_ids + [end_id]
-                trg_ids = [start_id] + trg_ids
+                trg_ids_next = [*trg_ids, end_id]
+                trg_ids = [start_id, *trg_ids]
 
                 yield src_ids, trg_ids, trg_ids_next
 
@@ -349,7 +349,7 @@ def get_dict(lang, dict_size, reverse=False):
         dict_size = min(dict_size, TOTAL_DE_WORDS)
 
     dict_path = os.path.join(
-        paddle.dataset.common.DATA_HOME, "wmt16/%s_%d.dict" % (lang, dict_size)
+        paddle.dataset.common.DATA_HOME, f"wmt16/{lang}_{dict_size}.dict"
     )
     assert os.path.exists(dict_path), "Word dictionary does not exist. "
     "Please invoke paddle.dataset.wmt16.train/test/validation first "

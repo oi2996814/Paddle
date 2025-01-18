@@ -27,8 +27,7 @@
 
 PHI_DEFINE_bool(dump_jitcode, false, "Whether to dump the jitcode to file");
 
-namespace phi {
-namespace jit {
+namespace phi::jit {
 
 // refer do not need CanBeUsed, it would be the last one.
 void GenBase::dumpCode(const unsigned char* code) const {
@@ -39,14 +38,15 @@ void GenBase::dumpCode(const unsigned char* code) const {
     counter++;
     std::ofstream fout(filename.str(), std::ios::out);
     if (fout.is_open()) {
-      fout.write(reinterpret_cast<const char*>(code), this->getSize());
+      fout.write(reinterpret_cast<const char*>(code),
+                 static_cast<int>(this->getSize()));
       fout.close();
     }
   }
 }
 
 void* GenBase::operator new(size_t size) {
-  void* ptr;
+  void* ptr = nullptr;
   constexpr size_t alignment = 32ul;
 #ifdef _WIN32
   ptr = _aligned_malloc(size, alignment);
@@ -54,22 +54,24 @@ void* GenBase::operator new(size_t size) {
   PADDLE_ENFORCE_EQ(
       posix_memalign(&ptr, alignment, size),
       0,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Jitcode generator (GenBase) allocate %ld memory error!", size));
 #endif
   PADDLE_ENFORCE_NOT_NULL(
       ptr,
-      phi::errors::InvalidArgument("Fail to allocate jitcode generator "
-                                   "(GenBase) CPU memory: size = %d .",
-                                   size));
+      common::errors::InvalidArgument("Fail to allocate jitcode generator "
+                                      "(GenBase) CPU memory: size = %d .",
+                                      size));
   return ptr;
 }
 
-void GenBase::operator delete(void* ptr) { posix_memalign_free(ptr); }
+void GenBase::operator delete(void* ptr) {
+  posix_memalign_free(ptr);  // NOLINT
+}
 
 std::vector<int> packed_groups(int n, int k, int* block_out, int* rest_out) {
-  int block;
-  int max_num_regs;
+  int block = 0;
+  int max_num_regs = 0;
   if (phi::backends::cpu::MayIUse(phi::backends::cpu::avx512f)) {
     block = ZMM_FLOAT_BLOCK;
     max_num_regs = 32;
@@ -96,5 +98,4 @@ std::vector<int> packed_groups(int n, int k, int* block_out, int* rest_out) {
   return groups;
 }
 
-}  // namespace jit
-}  // namespace phi
+}  // namespace phi::jit

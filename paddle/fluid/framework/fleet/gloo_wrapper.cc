@@ -12,26 +12,23 @@ limitations under the License. */
 #include "paddle/fluid/framework/fleet/gloo_wrapper.h"
 
 #include "paddle/fluid/framework/io/fs.h"
-#include "paddle/fluid/string/string_helper.h"
+#include "paddle/utils/string/string_helper.h"
 
-namespace gloo {
-namespace transport {
+namespace gloo::transport {
 class Device;
-}  // namespace transport
-}  // namespace gloo
+}  // namespace gloo::transport
 
-namespace gloo {
-namespace rendezvous {
+namespace gloo::rendezvous {
 
 class HTTPStore;
 class Store;
 
 constexpr int kNodeSize = 136;
 
-HdfsStore::HdfsStore(const std::string& path) {
+HdfsStore::HdfsStore(const std::string& path)
+    : wait_timeout_(std::chrono::seconds(999999999)), self_rank_(0) {
   path_ = path;
   wait_sleep_ms_ = 10000;
-  wait_timeout_ = std::chrono::seconds(999999999);
   retry_times_ = 100;
 }
 
@@ -63,7 +60,7 @@ void HdfsStore::set(const std::string& key, const std::vector<char>& data) {
       paddle::framework::fs_remove(tmp);
       if (i == retry_times_) {
         VLOG(0) << "fs_open_write failed, retry times reaches limit";
-        PADDLE_THROW(paddle::platform::errors::PreconditionNotMet(
+        PADDLE_THROW(common::errors::PreconditionNotMet(
             "fs_open_write failed, retry times reaches %d limit.",
             retry_times_));
       }
@@ -79,7 +76,7 @@ void HdfsStore::set(const std::string& key, const std::vector<char>& data) {
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::steady_clock::now() - start);
     if (wait_timeout_ != gloo::kNoTimeout && elapsed > wait_timeout_) {
-      PADDLE_THROW(paddle::platform::errors::ExecutionTimeout(
+      PADDLE_THROW(common::errors::ExecutionTimeout(
           "fs_mv failed, tmp: %s, path: %s", tmp, path));
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(wait_sleep_ms_));
@@ -114,10 +111,10 @@ std::vector<char> HdfsStore::get(const std::string& key) {
       5,
       wait_sleep_ms_);
   bool is_exists = (ret == 0);
-  PADDLE_ENFORCE_EQ(is_exists,
-                    true,
-                    paddle::platform::errors::NotFound(
-                        "HdfsStore::get, path not exists: " + path));
+  PADDLE_ENFORCE_EQ(
+      is_exists,
+      true,
+      common::errors::NotFound("HdfsStore::get, path not exists: " + path));
 
   int read_status = retry_do_func(
       [&path, &result]() {
@@ -138,10 +135,10 @@ std::vector<char> HdfsStore::get(const std::string& key) {
       },
       5,
       wait_sleep_ms_);
-  PADDLE_ENFORCE_EQ(read_status,
-                    0,
-                    paddle::platform::errors::Fatal(
-                        "HdfsStore::get, path read faied: " + path));
+  PADDLE_ENFORCE_EQ(
+      read_status,
+      0,
+      common::errors::Fatal("HdfsStore::get, path read failed: " + path));
 #endif
   return result;
 }
@@ -165,11 +162,11 @@ void HdfsStore::wait(const std::vector<std::string>& keys,
       int32_t last_check_rank = -1;
       for (size_t i = 0; i < check_key_status.size(); ++i) {
         if (!check_key_status[i]) {
-          last_check_rank = i;
+          last_check_rank = static_cast<int32_t>(i);
           break;
         }
       }
-      PADDLE_THROW(paddle::platform::errors::ExecutionTimeout(
+      PADDLE_THROW(common::errors::ExecutionTimeout(
           "TIMEOUT self_rank = %d pair_rank = %d",
           self_rank_,
           last_check_rank));
@@ -252,7 +249,7 @@ void ParallelConnectContext::connectFullMesh(
     connect_threads[i].reset(new std::thread(
         [&store, &transportContext, total_add_size, this](
             size_t thread_idx, size_t thread_num) -> void {
-          for (int i = thread_idx; i < size; i += thread_num) {
+          for (int i = thread_idx; i < size; i += thread_num) {  // NOLINT
             if (i == rank) {
               continue;
             }
@@ -300,11 +297,9 @@ void ParallelConnectContext::connectFullMesh(
   VLOG(0) << "ParallelConnectContext::connectFullMesh() is over";
 }
 #endif
-}  // namespace rendezvous
-}  // namespace gloo
+}  // namespace gloo::rendezvous
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 void GlooWrapper::Init() {
   if (is_initialized_) {
@@ -377,5 +372,4 @@ template std::vector<float> GlooWrapper::AllGather<float>(
 template std::vector<double> GlooWrapper::AllGather<double>(
     double& input);  // NOLINT
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

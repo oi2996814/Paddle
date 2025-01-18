@@ -12,14 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from paddle import framework
+from paddle.base import data_feeder
 from paddle.distributed.communication.group import (
     _get_global_group,
     _get_or_throw_group_rank,
     _warn_cur_rank_not_in_group,
 )
 from paddle.distributed.communication.reduce import ReduceOp, _get_reduce_op
-from paddle.fluid import data_feeder
+
+if TYPE_CHECKING:
+    from paddle import Tensor
+    from paddle.base.core import task
+    from paddle.distributed.communication.group import Group
+    from paddle.distributed.communication.reduce import _ReduceOp
 
 
 def _reduce_in_dygraph(
@@ -41,7 +51,7 @@ def _reduce_in_dygraph(
 
 
 def _reduce_in_static_mode(
-    tensor, dst_rank_in_group, op, group, sync_op, use_calc_stream
+    tensor, dst_rank_in_group, reduce_type, group, sync_op, use_calc_stream
 ):
     data_feeder.check_variable_and_dtype(
         tensor,
@@ -59,41 +69,40 @@ def _reduce_in_static_mode(
         'reduce',
     )
 
-    op_type = _get_reduce_op(op, "reduce")
+    op_type = "reduce"
     ring_id = 0 if group is None else group.id
 
     helper = framework.LayerHelper(op_type, **locals())
     helper.append_op(
         type=op_type,
-        inputs={'X': [tensor]},
-        outputs={'Out': [tensor]},
+        inputs={'x': [tensor]},
+        outputs={'out': [tensor]},
         attrs={
             'ring_id': ring_id,
-            'use_calc_stream': sync_op,
             'root_id': dst_rank_in_group,
+            'reduce_type': int(reduce_type),
         },
     )
-    return None
 
 
 def reduce(
-    tensor,
-    dst=0,
-    op=ReduceOp.SUM,
-    group=None,
-    sync_op=True,
-    use_calc_stream=False,
-):
+    tensor: Tensor,
+    dst: int = 0,
+    op: _ReduceOp = ReduceOp.SUM,
+    group: Group | None = None,
+    sync_op: bool = True,
+    use_calc_stream: bool = False,
+) -> task | None:
     """
 
-    Perform specific reduction (for example, sum, max) on a tensor across devices and send to the destintion device.
+    Perform specific reduction (for example, sum, max) on a tensor across devices and send to the destination device.
 
     Args:
         tensor (Tensor): The input tensor on each rank. The result will overwrite this tenor after communication. Support
             float16, float32, float64, int32, int64, int8, uint8 or bool as the input data type.
         dst (int, optional): Rank of the destination device. If none is given, use `0` as default.
         op (ReduceOp.SUM|ReduceOp.MAX|ReduceOp.MIN|ReduceOp.PROD, optional): The reduction used. If none is given, use ReduceOp.SUM as default.
-        group (Group, optional): Communicate in which group. If none is given, use the global group as default.
+        group (Group|None, optional): Communicate in which group. If none is given, use the global group as default.
         sync_op (bool, optional): Indicate whether the communication is sync or not. If none is given, use true as default.
         use_calc_stream (bool, optional): Indicate whether the communication is done on calculation stream. If none is given, use false as default. This
             option is designed for high performance demand, be careful to turn it on except you are clearly know its meaning.
@@ -107,21 +116,22 @@ def reduce(
     Examples:
         .. code-block:: python
 
-            # required: distributed
-            import paddle
-            import paddle.distributed as dist
+            >>> # doctest: +REQUIRES(env: DISTRIBUTED)
+            >>> import paddle
+            >>> import paddle.distributed as dist
 
-            dist.init_parallel_env()
-            local_rank = dist.get_rank()
-            if local_rank == 0:
-                data = paddle.to_tensor([[4, 5, 6], [4, 5, 6]])
-            else:
-                data = paddle.to_tensor([[1, 2, 3], [1, 2, 3]])
-            task = dist.stream.reduce(data, dst=0, sync_op=False)
-            task.wait()
-            out = data.numpy()
-            # [[5, 7, 9], [5, 7, 9]] (2 GPUs, out for rank 0)
-            # [[1, 2, 3], [1, 2, 3]] (2 GPUs, out for rank 1)
+            >>> dist.init_parallel_env()
+            >>> local_rank = dist.get_rank()
+            >>> if local_rank == 0:
+            ...     data = paddle.to_tensor([[4, 5, 6], [4, 5, 6]])
+            >>> else:
+            ...     data = paddle.to_tensor([[1, 2, 3], [1, 2, 3]])
+            >>> task = dist.stream.reduce(data, dst=0, sync_op=False)
+            >>> task.wait()  # type: ignore[union-attr]
+            >>> out = data.numpy()
+            >>> print(out)
+            >>> # [[5, 7, 9], [5, 7, 9]] (2 GPUs, out for rank 0)
+            >>> # [[1, 2, 3], [1, 2, 3]] (2 GPUs, out for rank 1)
     """
     if _warn_cur_rank_not_in_group(group):
         return

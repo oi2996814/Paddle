@@ -98,7 +98,7 @@ void SoftmaxCsrKernel(const Context& dev_ctx,
                       SparseCsrTensor* out) {
   PADDLE_ENFORCE_EQ(axis,
                     -1,
-                    phi::errors::Unimplemented(
+                    common::errors::Unimplemented(
                         "SparseCsrTensor only support axis=-1 for softmax, "
                         "which is faster when reading data by row (axis=-1)"));
   EmptyLikeCsrKernel<T, Context>(dev_ctx, x, out);
@@ -194,7 +194,7 @@ void SoftmaxCooGPUKernel(const Context& dev_ctx,
   auto indices = x.indices();
   auto values = x.values();
   const auto x_dims = x.dims();
-  const std::vector<IntT> sizes = phi::vectorize<IntT>(x_dims);
+  const std::vector<IntT> sizes = common::vectorize<IntT>(x_dims);
   const auto sparse_dim = x.sparse_dim();
   const IntT x_nnz = x.nnz();
   DenseTensor out_indices(indices);

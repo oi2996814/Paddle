@@ -15,11 +15,11 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
 import paddle.nn.functional as F
-from paddle.fluid import core
+from paddle.base import core
 
 np.random.seed(10)
 
@@ -45,7 +45,9 @@ def ref_log_softmax_grad(x, axis):
 class TestLogSoftmaxOp(OpTest):
     def setUp(self):
         self.op_type = 'log_softmax'
+        self.prim_op_type = "comp"
         self.python_api = F.log_softmax
+        self.public_python_api = F.log_softmax
         self.dtype = 'float64'
         self.shape = [2, 3, 4, 5]
         self.axis = -1
@@ -63,16 +65,20 @@ class TestLogSoftmaxOp(OpTest):
         pass
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_prim_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X'], ['Out'], user_defined_grads=[self.x_grad])
+        self.check_grad(
+            ['X'], ['Out'], user_defined_grads=[self.x_grad], check_pir=True
+        )
 
 
 class TestLogSoftmaxOp_ZeroDim(TestLogSoftmaxOp):
     def setUp(self):
         self.op_type = 'log_softmax'
+        self.prim_op_type = "comp"
         self.python_api = F.log_softmax
+        self.public_python_api = F.log_softmax
         self.dtype = 'float64'
 
         x = np.random.uniform(0.1, 1.0, []).astype(self.dtype)
@@ -83,10 +89,10 @@ class TestLogSoftmaxOp_ZeroDim(TestLogSoftmaxOp):
         self.attrs = {'axis': -1}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_prim_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X'], ['Out'])
+        self.check_grad(['X'], ['Out'], check_pir=True)
 
 
 class TestLogSoftmaxShape(TestLogSoftmaxOp):
@@ -104,10 +110,10 @@ class TestLogSoftmaxFP16OP(TestLogSoftmaxOp):
         self.dtype = np.float16
 
     def test_check_output(self):
-        self.check_output(atol=1e-3)
+        self.check_output(atol=1e-3, check_pir=True, check_prim_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X'], ['Out'], max_relative_error=1e-2)
+        self.check_grad(['X'], ['Out'], max_relative_error=1e-2, check_pir=True)
 
 
 class TestLogSoftmaxShapeFP16OP(TestLogSoftmaxFP16OP):
@@ -128,7 +134,9 @@ class TestLogSoftmaxAxisFP16OP(TestLogSoftmaxFP16OP):
 class TestLogSoftmaxBF16Op(OpTest):
     def setUp(self):
         self.op_type = 'log_softmax'
+        self.prim_op_type = "comp"
         self.python_api = F.log_softmax
+        self.public_python_api = F.log_softmax
         self.dtype = np.uint16
         self.shape = [2, 3, 4, 5]
         self.axis = -1
@@ -143,7 +151,7 @@ class TestLogSoftmaxBF16Op(OpTest):
 
     def test_check_output(self):
         place = core.CUDAPlace(0)
-        self.check_output_with_place(place)
+        self.check_output_with_place(place, check_pir=True, check_prim_pir=True)
 
     def test_check_grad(self):
         place = core.CUDAPlace(0)
@@ -152,6 +160,7 @@ class TestLogSoftmaxBF16Op(OpTest):
             ['X'],
             ['Out'],
             user_defined_grads=[self.x_grad],
+            check_pir=True,
         )
 
 
@@ -167,7 +176,7 @@ class TestNNLogSoftmaxAPI(unittest.TestCase):
         self.x = np.random.uniform(-1.0, 1.0, self.x_shape).astype(np.float32)
         self.place = (
             paddle.CUDAPlace(0)
-            if paddle.fluid.core.is_compiled_with_cuda()
+            if paddle.base.core.is_compiled_with_cuda()
             else paddle.CPUPlace()
         )
 
@@ -183,7 +192,7 @@ class TestNNLogSoftmaxAPI(unittest.TestCase):
             out = exe.run(feed={'x': self.x}, fetch_list=[y])
         np.testing.assert_allclose(out[0], ref_out, rtol=1e-05)
 
-        # test dygrapg api
+        # test dygraph api
         paddle.disable_static()
         x = paddle.to_tensor(self.x)
         y = logsoftmax(x)
@@ -201,7 +210,7 @@ class TestNNFunctionalLogSoftmaxAPI(unittest.TestCase):
         self.x = np.random.uniform(-1, 1, self.x_shape).astype(np.float32)
         self.place = (
             paddle.CUDAPlace(0)
-            if paddle.fluid.core.is_compiled_with_cuda()
+            if paddle.base.core.is_compiled_with_cuda()
             else paddle.CPUPlace()
         )
 

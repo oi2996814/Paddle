@@ -12,29 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "paddle/fluid/operators/set_value_op.h"
-
 #include <string>
 
+#include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/fluid/framework/infershape_utils.h"
+#include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/op_version_registry.h"
+#include "paddle/fluid/framework/tensor_util.h"
 #include "paddle/phi/core/infermeta_utils.h"
 #include "paddle/phi/infermeta/unary.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class InferShapeContext;
 class OpDesc;
 template <typename T>
 class EmptyGradOpMaker;
-}  // namespace framework
-namespace imperative {
+}  // namespace paddle::framework
+namespace paddle::imperative {
 class OpBase;
-}  // namespace imperative
-}  // namespace paddle
+}  // namespace paddle::imperative
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class SetValue : public framework::OperatorWithKernel {
  public:
@@ -111,6 +109,7 @@ class SetValueMaker : public framework::OpProtoAndCheckerMaker {
                  framework::proto::VarType::FP32,
                  framework::proto::VarType::FP64,
                  framework::proto::VarType::FP16,
+                 framework::proto::VarType::BF16,
                  framework::proto::VarType::COMPLEX64,
                  framework::proto::VarType::COMPLEX128})
         .SetDefault(framework::proto::VarType::FP32);
@@ -151,32 +150,26 @@ class SetValueGradMaker : public framework::SingleGradOpMaker<T> {
 
  protected:
   void Apply(GradOpPtr<T> op) const override {
-    if (this->HasInput("ValueTensor")) {
-      op->SetType("set_value_grad");
+    op->SetType("set_value_grad");
+    op->SetInput("ValueTensor", this->Input("ValueTensor"));
+    op->SetOutput(framework::GradVarName("ValueTensor"),
+                  this->InputGrad("ValueTensor"));
 
-      op->SetInput(framework::GradVarName("Out"), this->OutputGrad("Out"));
-      op->SetInput("ValueTensor", this->Input("ValueTensor"));
-      if (this->HasInput("StartsTensorList")) {
-        op->SetInput("StartsTensorList", this->Input("StartsTensorList"));
-      }
-      if (this->HasInput("EndsTensorList")) {
-        op->SetInput("EndsTensorList", this->Input("EndsTensorList"));
-      }
-      if (this->HasInput("StepsTensorList")) {
-        op->SetInput("StepsTensorList", this->Input("StepsTensorList"));
-      }
+    op->SetInput(framework::GradVarName("Out"), this->OutputGrad("Out"));
 
-      op->SetAttrMap(this->Attrs());
-
-      op->SetOutput(framework::GradVarName("ValueTensor"),
-                    this->InputGrad("ValueTensor"));
-      op->SetOutput(framework::GradVarName("Input"), this->InputGrad("Input"));
-
-    } else {
-      op->SetType("assign");
-      op->SetInput("X", this->OutputGrad("Out"));
-      op->SetOutput("Out", this->InputGrad("Input"));
+    if (this->HasInput("StartsTensorList")) {
+      op->SetInput("StartsTensorList", this->Input("StartsTensorList"));
     }
+    if (this->HasInput("EndsTensorList")) {
+      op->SetInput("EndsTensorList", this->Input("EndsTensorList"));
+    }
+    if (this->HasInput("StepsTensorList")) {
+      op->SetInput("StepsTensorList", this->Input("StepsTensorList"));
+    }
+
+    op->SetAttrMap(this->Attrs());
+
+    op->SetOutput(framework::GradVarName("Input"), this->InputGrad("Input"));
   }
 };
 
@@ -194,7 +187,7 @@ class SetValueGrad : public framework::OperatorWithKernel {
     PADDLE_ENFORCE_LT(
         in_dims.size(),
         7,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The dimension of set_value_grad operator's input should be less "
             "than 7, but received dimension is %d.",
             in_dims.size()));
@@ -232,11 +225,9 @@ class SetValueGrad : public framework::OperatorWithKernel {
 
 DECLARE_INPLACE_OP_INFERER(SetValueOpInplaceInferer, {"Input", "Out"});
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
-namespace plat = paddle::platform;
 
 DECLARE_INFER_SHAPE_FUNCTOR(set_value,
                             SetValueInferShapeFunctor,

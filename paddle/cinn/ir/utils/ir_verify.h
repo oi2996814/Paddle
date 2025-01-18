@@ -15,8 +15,14 @@
 #pragma once
 #include "paddle/cinn/ir/ir.h"
 
-namespace cinn::ir {
+namespace cinn {
+namespace ir {
+namespace ir_utils {
 
 void IrVerify(Expr e);
 
-}  // namespace cinn::ir
+void IrVerify(const ir::_Module_* module);
+
+}  // namespace ir_utils
+}  // namespace ir
+}  // namespace cinn

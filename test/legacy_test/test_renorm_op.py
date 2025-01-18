@@ -17,8 +17,7 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle import fluid
-from paddle.fluid import Program, program_guard
+from paddle import base
 
 paddle.set_device('cpu')
 
@@ -37,10 +36,12 @@ class TestRenormAPI(unittest.TestCase):
         self.input_data()
 
         # case 1:
-        with program_guard(Program(), Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             x = paddle.static.data(name="x", shape=[-1, 2, 3], dtype='float64')
             z = paddle.renorm(x, self.p, self.dim, self.max_norm)
-            exe = fluid.Executor(fluid.CPUPlace())
+            exe = base.Executor(base.CPUPlace())
             (res,) = exe.run(
                 feed={"x": self.data_x}, fetch_list=[z], return_numpy=False
             )
@@ -61,7 +62,7 @@ class TestRenormAPI(unittest.TestCase):
     def test_dygraph_api(self):
         self.input_data()
         # case axis none
-        with fluid.dygraph.guard(fluid.CPUPlace()):
+        with base.dygraph.guard(base.CPUPlace()):
             input = [[[2.0, 2, -2], [3, 0.3, 3]], [[2, -8, 2], [3.1, 3.7, 3]]]
             x = paddle.to_tensor(input, stop_gradient=False)
             y = paddle.renorm(x, 1.0, 2, 2.05)
@@ -90,7 +91,7 @@ class TestRenormAPI(unittest.TestCase):
                 expected_grad, np.array(x.grad), rtol=1e-05
             )
         # #test exception:
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             input = [[[2.0, 2, -2], [3, 0.3, 3]], [[2, -8, 2], [3.1, 3.7, 3]]]
             x = paddle.to_tensor(input, stop_gradient=False)
             exp = False

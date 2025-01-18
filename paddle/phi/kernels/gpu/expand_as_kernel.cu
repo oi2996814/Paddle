@@ -18,6 +18,7 @@
 #include "paddle/phi/common/scalar.h"
 #include "paddle/phi/core/dense_tensor.h"
 #include "paddle/phi/core/kernel_registry.h"
+#include "paddle/phi/kernels/expand_kernel.h"
 #include "paddle/phi/kernels/funcs/broadcast_function.h"
 
 namespace phi {
@@ -26,11 +27,17 @@ template <typename T, typename Context>
 void ExpandAsKernel(const Context& ctx,
                     const DenseTensor& x,
                     const paddle::optional<DenseTensor>& y,
-                    const std::vector<int>& target_shape,
+                    const std::vector<int>& target_shape_t,
                     DenseTensor* out) {
+  std::vector<int> target_shape = target_shape_t;
+
+  if (y.get_ptr()) {
+    target_shape = phi::vectorize<int>(y.get_ptr()->dims());
+  }
+
   int rank = x.dims().size();
   int target_rank = static_cast<int>(target_shape.size());
-  auto vec_in_dims = phi::vectorize<int>(x.dims());
+  auto vec_in_dims = common::vectorize<int>(x.dims());
 
   unsigned int diff = target_rank - rank;
   vec_in_dims.insert(vec_in_dims.begin(), diff, 1);
@@ -70,11 +77,7 @@ void ExpandAsKernel(const Context& ctx,
     }
   }
 
-  out->Resize(phi::make_ddim(target_shape));
-  ctx.template Alloc<T>(out);
-  std::vector<const DenseTensor*> ins = {&x};
-  std::vector<DenseTensor*> outs = {out};
-  phi::funcs::BroadcastKernel<T>(ctx, ins, &outs, kps::IdentityFunctor<T>());
+  ExpandKernel<T, Context>(ctx, x, target_shape, out);
 }
 
 }  // namespace phi

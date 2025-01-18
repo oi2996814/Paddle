@@ -16,21 +16,22 @@ import unittest
 import warnings
 
 import paddle
-from paddle import fluid
+from paddle import base
 
 
 class TestSaveModelWithoutVar(unittest.TestCase):
+
     def test_no_var_save(self):
         data = paddle.static.data(name='data', shape=[-1, 1], dtype='float32')
         data_plus = data + 1
 
-        if fluid.core.is_compiled_with_cuda():
-            place = fluid.core.CUDAPlace(0)
+        if base.core.is_compiled_with_cuda():
+            place = base.core.CUDAPlace(0)
         else:
-            place = fluid.core.CPUPlace()
+            place = base.core.CPUPlace()
 
-        exe = fluid.Executor(place)
-        exe.run(fluid.default_startup_program())
+        exe = base.Executor(place)
+        exe.run(base.default_startup_program())
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")

@@ -29,21 +29,21 @@ void StridedCopyKernel(const Context& dev_ctx,
                        int64_t offset,
                        DenseTensor* out) {
   phi::DenseTensorMeta meta = input.meta();
-  meta.strides = phi::make_ddim(out_stride);
-  meta.dims = phi::make_ddim(dims);
+  meta.strides = common::make_ddim(out_stride);
+  meta.dims = common::make_ddim(dims);
   meta.offset = offset;
   out->set_meta(meta);
 
   PADDLE_ENFORCE_EQ(input.dims(),
                     out->dims(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Input shape(%s) must be equal with out shape(%s).",
                         input.dims(),
                         out->dims()));
 
   PADDLE_ENFORCE_EQ(input.numel(),
                     out->numel(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Input numel(%d) must be equal with out numel(%d).",
                         input.numel(),
                         out->numel()));
@@ -59,7 +59,7 @@ void StridedCopyKernel(const Context& dev_ctx,
 
   T* output_data = out->data<T>();
   PADDLE_ENFORCE_NOT_NULL(output_data,
-                          phi::errors::InvalidArgument(
+                          common::errors::InvalidArgument(
                               "StridedCopyKernel's out tensor must complete "
                               "mutable data before call kernel."));
   int output_rank = meta.dims.size();
@@ -101,4 +101,6 @@ PD_REGISTER_KERNEL(strided_copy,
                    ::phi::dtype::float16,
                    ::phi::dtype::bfloat16,
                    ::phi::dtype::complex<float>,
-                   ::phi::dtype::complex<double>) {}
+                   ::phi::dtype::complex<double>,
+                   ::phi::dtype::float8_e4m3fn,
+                   ::phi::dtype::float8_e5m2) {}

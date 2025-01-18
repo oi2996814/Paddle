@@ -15,41 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, paddle_static_guard
+from op_test import OpTest
 
 import paddle
-from paddle import fluid
-
-
-class TestDygraphBilinearTensorProductAPIError(unittest.TestCase):
-    def test_errors(self):
-        with paddle_static_guard():
-            with fluid.program_guard(fluid.Program(), fluid.Program()):
-                layer = paddle.nn.Bilinear(5, 4, 1000)
-                # the input must be Variable.
-                x0 = fluid.create_lod_tensor(
-                    np.array([-1, 3, 5, 5]), [[1, 1, 1, 1]], fluid.CPUPlace()
-                )
-                self.assertRaises(TypeError, layer, x0)
-                # the input dtype must be float32 or float64
-                x1 = paddle.static.data(
-                    name='x1', shape=[-1, 5], dtype="float16"
-                )
-                x2 = paddle.static.data(
-                    name='x2', shape=[-1, 4], dtype="float32"
-                )
-                self.assertRaises(TypeError, layer, x1, x2)
-                # the dimensions of x and y must be 2
-                paddle.enable_static()
-                x3 = paddle.static.data("", shape=[0], dtype="float32")
-                x4 = paddle.static.data("", shape=[0], dtype="float32")
-                self.assertRaises(
-                    ValueError,
-                    paddle.static.nn.bilinear_tensor_product,
-                    x3,
-                    x4,
-                    1000,
-                )
+from paddle import base
 
 
 class TestBilinearTensorProductOp(OpTest):
@@ -60,7 +29,7 @@ class TestBilinearTensorProductOp(OpTest):
         size0 = 5
         size1 = 4
         size2 = 5
-        dtype = "float32" if fluid.core.is_compiled_with_rocm() else "float64"
+        dtype = "float32" if base.core.is_compiled_with_rocm() else "float64"
         a = np.random.random((batch_size, size0)).astype(dtype)
         b = np.random.random((batch_size, size1)).astype(dtype)
         w = np.random.random((size2, size0, size1)).astype(dtype)

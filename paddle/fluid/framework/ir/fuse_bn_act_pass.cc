@@ -19,19 +19,13 @@
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 class Node;
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
-#include "paddle/fluid/platform/device/gpu/gpu_dnn.h"
+#include "paddle/phi/core/platform/device/gpu/gpu_dnn.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 void FuseBatchNormActPass::ApplyImpl(ir::Graph *graph) const {
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
@@ -41,7 +35,7 @@ void FuseBatchNormActPass::ApplyImpl(ir::Graph *graph) const {
   graph = FuseBatchNormAct(graph, act_types);
   // backward
   std::unordered_set<std::string> act_grad_types = {"relu_grad"};
-  graph = FuseBatchNormActGrad(graph, act_grad_types);
+  graph = FuseBatchNormActGrad(graph, act_grad_types);  // NOLINT
 #endif
 #endif
 }
@@ -51,7 +45,7 @@ ir::Graph *FuseBatchNormActPass::FuseBatchNormAct(
     ir::Graph *graph, const std::unordered_set<std::string> &act_types) const {
   PADDLE_ENFORCE_NOT_NULL(
       graph,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The input graph of FuseBatchNormAct should not be nullptr."));
   FusePassBase::Init("bn_act", graph);
 
@@ -191,7 +185,7 @@ ir::Graph *FuseBatchNormActPass::FuseBatchNormActGrad(
     const std::unordered_set<std::string> &act_grad_types) const {
   PADDLE_ENFORCE_NOT_NULL(
       graph,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The input graph of FuseBatchNormActGrad should not be nullptr."));
   FusePassBase::Init("bn_act_grad", graph);
 
@@ -215,7 +209,7 @@ ir::Graph *FuseBatchNormActPass::FuseBatchNormActGrad(
         batch_norm_grad, batch_norm_grad, bn_act_grad_pattern);
     GET_IR_NODE_FROM_SUBGRAPH(act_out, act_out, bn_act_grad_pattern);
     GET_IR_NODE_FROM_SUBGRAPH(
-        d_itermediate_out, d_itermediate_out, bn_act_grad_pattern);
+        d_intermediate_out, d_intermediate_out, bn_act_grad_pattern);
     GET_IR_NODE_FROM_SUBGRAPH(bn_x, bn_x, bn_act_grad_pattern);
     GET_IR_NODE_FROM_SUBGRAPH(bn_scale, bn_scale, bn_act_grad_pattern);
     GET_IR_NODE_FROM_SUBGRAPH(bn_bias, bn_bias, bn_act_grad_pattern);
@@ -231,7 +225,7 @@ ir::Graph *FuseBatchNormActPass::FuseBatchNormActGrad(
 
     std::string d_act_out_n = subgraph.at(d_act_out)->Name();  // Y@GRAD
     std::string act_out_n = act_out->Name();                   // Y
-    std::string d_itermediate_out_n = d_itermediate_out->Name();
+    std::string d_intermediate_out_n = d_intermediate_out->Name();
     std::string bn_x_n = bn_x->Name();
     std::string bn_scale_n = bn_scale->Name();
     std::string bn_bias_n = bn_bias->Name();
@@ -272,14 +266,14 @@ ir::Graph *FuseBatchNormActPass::FuseBatchNormActGrad(
     auto fused_node = g->CreateOpNode(&desc);
 
     VLOG(4) << "\n\t " << d_act_out_n << " and " << act_out_n << " -> "
-            << act_grad->Name() << " -> " << d_itermediate_out_n << "\n\t "
-            << bn_x_n << ", " << d_itermediate_out_n << ", " << bn_scale_n
+            << act_grad->Name() << " -> " << d_intermediate_out_n << "\n\t "
+            << bn_x_n << ", " << d_intermediate_out_n << ", " << bn_scale_n
             << ", " << bn_bias_n << ", " << bn_saved_mean_n << ", "
             << bn_saved_variance_n << " and " << bn_reserve_space_n << " -> "
             << batch_norm_grad->Name() << " -> " << d_bn_x_n << ", "
             << d_bn_scale_n << " and " << d_bn_bias_n;
 
-    ReLinkNodes(g, d_itermediate_out, act_grad, batch_norm_grad, fused_node);
+    ReLinkNodes(g, d_intermediate_out, act_grad, batch_norm_grad, fused_node);
     found_bn_act_count++;
   };
 
@@ -326,8 +320,8 @@ void FuseBatchNormActPass::ReLinkNodes(Graph *graph,
     IR_OP_VAR_LINK(fused_op, out);
   }
 
-  nodes2delete.insert(std::move(op_1));
-  nodes2delete.insert(std::move(op_2));
+  nodes2delete.insert(op_1);
+  nodes2delete.insert(op_2);
 
   GraphSafeRemoveNodes(graph, nodes2delete);
 }
@@ -346,13 +340,11 @@ std::vector<Node *> FuseBatchNormActPass::ReplaceNode(
       });
   PADDLE_ENFORCE_EQ(has_replaced,
                     true,
-                    platform::errors::NotFound("Not found %s in the node list.",
-                                               cur_node->Name()));
+                    common::errors::NotFound("Not found %s in the node list.",
+                                             cur_node->Name()));
   return new_list;
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(fuse_bn_act_pass, paddle::framework::ir::FuseBatchNormActPass);

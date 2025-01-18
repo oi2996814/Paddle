@@ -15,7 +15,8 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
+from utils import dygraph_guard, static_guard
 
 import paddle
 
@@ -67,6 +68,30 @@ def valid_single_eigh_result(A, eigh_value, eigh_vector, uplo):
     np.testing.assert_array_less(np.linalg.norm(residual, np.inf) / M, rtol)
 
 
+def valid_eigh_shape_result(A, eigh_value, eigh_vector):
+    assert A.ndim == 2 or A.ndim == 3
+
+    if A.ndim == 2:
+        valid_single_eigh_shape_result(A, eigh_value, eigh_vector)
+        return
+
+    for batch_A, batch_w, batch_v in zip(A, eigh_value, eigh_vector):
+        valid_single_eigh_shape_result(batch_A, batch_w, batch_v)
+
+
+def valid_single_eigh_shape_result(A, eigh_value, eigh_vector):
+    N = A.shape[0]
+    if eigh_value.shape != (N,):
+        raise ValueError(
+            f"Eigenvalues array must have shape ({N},), but got {eigh_value.shape}."
+        )
+
+    if eigh_vector.shape != (N, N):
+        raise ValueError(
+            f"Eigenvectors matrix must have shape ({N}, {N}), but got {eigh_vector.shape}."
+        )
+
+
 class TestEighOp(OpTest):
     def setUp(self):
         paddle.enable_static()
@@ -88,16 +113,25 @@ class TestEighOp(OpTest):
         self.x_type = np.float64
         self.x_np = np.random.random(self.x_shape).astype(self.x_type)
 
-    # def test_check_output(self):
-    #     self.check_output(no_check_set=['Eigenvectors'])
+    def test_check_output(self):
+        self.check_output(
+            no_check_set=['Eigenvectors'],
+            check_symbol_infer=True,
+            check_pir=True,
+        )
 
     def test_grad(self):
-        self.check_grad(["X"], ["Eigenvalues"])
+        self.check_grad(["X"], ["Eigenvalues"], check_pir=True)
 
 
 class TestEighUPLOCase(TestEighOp):
     def init_config(self):
         self.UPLO = 'U'
+
+    def init_input(self):
+        self.x_shape = (20, 10, 10)
+        self.x_type = np.float64
+        self.x_np = np.random.random(self.x_shape).astype(self.x_type)
 
 
 class TestEighGPUCase(unittest.TestCase):
@@ -141,7 +175,8 @@ class TestEighAPI(unittest.TestCase):
         complex_data = np.random.random(self.x_shape).astype(
             self.dtype
         ) + 1j * np.random.random(self.x_shape).astype(self.dtype)
-        self.trans_dims = list(range(len(self.x_shape) - 2)) + [
+        self.trans_dims = [
+            *range(len(self.x_shape) - 2),
             len(self.x_shape) - 1,
             len(self.x_shape) - 2,
         ]
@@ -221,6 +256,7 @@ class TestEighBatchAPI(TestEighAPI):
 
 
 class TestEighAPIError(unittest.TestCase):
+
     def test_error(self):
         main_prog = paddle.static.Program()
         startup_prog = paddle.static.Program()
@@ -249,6 +285,70 @@ class TestEighAPIError(unittest.TestCase):
                 name='x_4', shape=[4, 4], dtype="int32"
             )
             self.assertRaises(TypeError, paddle.linalg.eigh, input_x)
+
+
+class TestEighAPIZeroSize(unittest.TestCase):
+    def setUp(self):
+        self.init_input_data()
+        self.place = (
+            paddle.CUDAPlace(0)
+            if paddle.is_compiled_with_cuda()
+            else paddle.CPUPlace()
+        )
+        np.random.seed(123)
+
+    def init_input_shape(self):
+        self.x_shape = [0, 0]
+
+    def init_input_data(self):
+        self.init_input_shape()
+        self.dtype = "float32"
+        self.real_data = np.random.random(self.x_shape).astype(self.dtype)
+
+    def test_in_static_mode(self):
+        with static_guard():
+            main_prog = paddle.static.Program()
+            startup_prog = paddle.static.Program()
+            with paddle.static.program_guard(main_prog, startup_prog):
+                input_x = paddle.static.data(
+                    'input_x', shape=self.x_shape, dtype=self.dtype
+                )
+                output_w, output_v = paddle.linalg.eigh(input_x)
+                exe = paddle.static.Executor(self.place)
+                actual_w, actual_v = exe.run(
+                    main_prog,
+                    feed={"input_x": self.real_data},
+                    fetch_list=[output_w, output_v],
+                )
+                valid_eigh_shape_result(self.real_data, actual_w, actual_v)
+
+            main_prog = paddle.static.Program()
+            startup_prog = paddle.static.Program()
+            with paddle.static.program_guard(main_prog, startup_prog):
+                input_x = paddle.static.data(
+                    'input_x', shape=self.x_shape, dtype=self.dtype
+                )
+                output_w, output_v = paddle.linalg.eigh(input_x)
+                exe = paddle.static.Executor(paddle.CPUPlace())
+                actual_w, actual_v = exe.run(
+                    main_prog,
+                    feed={"input_x": self.real_data},
+                    fetch_list=[output_w, output_v],
+                )
+                valid_eigh_shape_result(self.real_data, actual_w, actual_v)
+
+    def test_in_dynamic_mode(self):
+        with dygraph_guard():
+            input_real_data = paddle.to_tensor(self.real_data)
+            actual_w, actual_v = paddle.linalg.eigh(input_real_data)
+            valid_eigh_shape_result(
+                self.real_data, actual_w.numpy(), actual_v.numpy()
+            )
+
+
+class TestEighBatchAPIZeroSize(TestEighAPIZeroSize):
+    def init_input_shape(self):
+        self.x_shape = [0, 5, 5]
 
 
 if __name__ == "__main__":

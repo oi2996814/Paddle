@@ -31,7 +31,7 @@ static inline void TransCompute2DTo5D(const Context& dev_ctx,
                                       const std::vector<int>& perm,
                                       DenseTensor* out) {
   if (rank <= 1 || rank > 5) {
-    PADDLE_THROW(phi::errors::Fatal(
+    PADDLE_THROW(common::errors::Fatal(
         "Weight rank of SpectralNorm should be in range [2, 5], but got %d.",
         rank));
   }
@@ -129,7 +129,7 @@ void SpectralNormKernel(const Context& dev_ctx,
         real_dims.push_back(dims[i]);
       }
     }
-    weight_mat.Resize(phi::make_ddim(real_dims));
+    weight_mat.Resize(common::make_ddim(real_dims));
     dev_ctx.template Alloc<T>(&weight_mat);
     TransCompute2DTo5D<Context, T>(dev_ctx, weight, rank, perm, &weight_mat);
   } else {
@@ -168,7 +168,11 @@ void SpectralNormKernel(const Context& dev_ctx,
     out->Resize(dims);
     dev_ctx.template Alloc<T>(out);
     TransCompute2DTo5D<Context, T>(
-        dev_ctx, weight_mat.Resize(phi::make_ddim(real_dims)), rank, perm, out);
+        dev_ctx,
+        weight_mat.Resize(common::make_ddim(real_dims)),
+        rank,
+        perm,
+        out);
   } else {
     phi::Copy(dev_ctx, weight_mat.Resize(dims), dev_ctx.GetPlace(), true, out);
   }

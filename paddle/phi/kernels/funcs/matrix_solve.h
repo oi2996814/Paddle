@@ -68,7 +68,7 @@ static std::vector<int> getNewAxis(const int b_rank) {
 
 // for Resize
 static std::vector<int64_t> getNewDimsVec(const DDim& b_dims) {
-  std::vector<int64_t> b_dims_vec = phi::vectorize(b_dims);
+  std::vector<int64_t> b_dims_vec = common::vectorize(b_dims);
   int size = b_dims_vec.size();
   if (size >= 2) {
     // swap the last 2 elements in b_dims_vec
@@ -80,9 +80,9 @@ static std::vector<int64_t> getNewDimsVec(const DDim& b_dims) {
   PADDLE_ENFORCE_NE(
       b_dims_vec.empty(),
       true,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "The size of tensor b must not be %d after getting new dims", 0));
-  // if b_dims_vec.size() == 1, just retun original vec
+  // if b_dims_vec.size() == 1, just return original vec
   return b_dims_vec;
 }
 
@@ -124,13 +124,13 @@ void compute_solve_eigen(const Context& context,
       PADDLE_ENFORCE_GT(
           min_abs_pivot,
           static_cast<T>(0),
-          phi::errors::InvalidArgument("Input is not invertible."));
+          common::errors::InvalidArgument("Input is not invertible."));
       out_mat.noalias() = lu.solve(b_mat);
     }
   } else {
     PADDLE_ENFORCE_EQ(a_batch_size,
                       b_batch_size,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "All input tensors must have the same rank."));
   }
 }
@@ -175,7 +175,7 @@ void SolveLinearSystem(T* matrix_data,
         lu_decomposition.matrixLU().diagonal().cwiseAbs().minCoeff();
     PADDLE_ENFORCE_GT(min_abs_piv,
                       Treal(0),
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Something's wrong with SolveLinearSystem. "));
 
     output = lu_decomposition.solve(input_rhs);

@@ -12,11 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import warnings
+from typing import TYPE_CHECKING, Literal
 
 import paddle
 import paddle.distributed as dist
 from paddle import framework
+
+if TYPE_CHECKING:
+    from paddle import Tensor
+    from paddle.base.core import ProcessGroup
 
 
 class Group:
@@ -24,7 +31,14 @@ class Group:
     The abstract representation of group.
     """
 
-    def __init__(self, rank_in_group, id, ranks, pg=None, name=None):
+    def __init__(
+        self,
+        rank_in_group: int,
+        id: int,
+        ranks: list[int],
+        pg: ProcessGroup | None = None,
+        name: str | None = None,
+    ) -> None:
         self._rank_in_group = rank_in_group
         self._world_size = len(ranks) if rank_in_group >= 0 else -1
         self._id = id
@@ -33,53 +47,53 @@ class Group:
         self._name = name
 
     @property
-    def rank(self):
+    def rank(self) -> int:
         return self._rank_in_group
 
     @property
-    def ranks(self):
+    def ranks(self) -> list[int]:
         return self._ranks
 
     @property
-    def nranks(self):
+    def nranks(self) -> int:
         return len(self._ranks)
 
     @property
-    def name(self):
+    def name(self) -> str | None:
         return self._name
 
     @property
-    def process_group(self):
+    def process_group(self) -> ProcessGroup:
         return self._pg
 
     @property
-    def world_size(self):
+    def world_size(self) -> int:
         return self._world_size
 
     @property
-    def backend(self):
+    def backend(self) -> str:
         return self._pg.name()
 
     @property
-    def id(self):
+    def id(self) -> int:
         return self._id
 
-    def is_member(self):
+    def is_member(self) -> bool:
         if self.rank < 0:
             return False
         if self.nranks < 2:
             return False
         return True
 
-    def get_group_rank(self, rank):
+    def get_group_rank(self, rank: int) -> int | Literal[-1]:
         if self.is_member():
             return self.ranks.index(rank)
         else:
             return -1
 
-    def __repr__(self):
-        debug_str = "rank: {}, nranks: {}, id: {}, ranks: ".format(
-            self.rank, self.nranks, self.id
+    def __repr__(self) -> str:
+        debug_str = (
+            f"rank: {self.rank}, nranks: {self.nranks}, id: {self.id}, ranks: "
         )
         debug_str += ", ".join(map(str, self.ranks))
         debug_str += "; name: "
@@ -112,9 +126,7 @@ def _warn_cur_rank_not_in_group(group):
     global_rank = dist.get_rank()
     if group and not group.is_member():
         warnings.warn(
-            "Current global rank {} is not in group {}".format(
-                global_rank, group.name
-            )
+            f"Current global rank {global_rank} is not in group {group.name}"
         )
         return True
     return False
@@ -124,13 +136,11 @@ def _get_or_throw_group_rank(global_rank, group):
     group_rank = group.get_group_rank(global_rank)
     assert (
         group_rank >= 0
-    ), "The input rank {} can not be found inside the group {}".format(
-        global_rank, group.name
-    )
+    ), f"The input rank {global_rank} can not be found inside the group {group.name}"
     return group_rank
 
 
-def is_initialized():
+def is_initialized() -> bool:
     """
 
     Check whether the distributed environment has been initialized
@@ -144,21 +154,21 @@ def is_initialized():
     Examples:
         .. code-block:: python
 
-            # required: distributed
-            import paddle
+            >>> # doctest: +REQUIRES(env: DISTRIBUTED)
+            >>> import paddle
 
-            print(paddle.distributed.is_initialized())
-            # False
+            >>> print(paddle.distributed.is_initialized())
+            False
 
-            paddle.distributed.init_parallel_env()
-            print(paddle.distributed.is_initialized())
-            # True
+            >>> paddle.distributed.init_parallel_env()
+            >>> print(paddle.distributed.is_initialized())
+            True
 
     """
     return _GroupManager.global_group_id in _GroupManager.group_map_by_id
 
 
-def destroy_process_group(group=None):
+def destroy_process_group(group: Group | None = None) -> None:
     """
     Destroy a given group for communication
 
@@ -175,19 +185,19 @@ def destroy_process_group(group=None):
     Examples:
         .. code-block:: python
 
-            # required: distributed
-            import paddle
-            import paddle.distributed as dist
+            >>> # doctest: +REQUIRES(env: DISTRIBUTED)
+            >>> import paddle
+            >>> import paddle.distributed as dist
 
-            dist.init_parallel_env()
-            group = dist.new_group([0, 1])
+            >>> dist.init_parallel_env()
+            >>> group = dist.new_group([0, 1])
 
-            dist.destroy_process_group(group)
-            print(dist.is_initialized())
-            # True
-            dist.destroy_process_group()
-            print(dist.is_initialized())
-            # False
+            >>> dist.destroy_process_group(group)
+            >>> print(dist.is_initialized())
+            True
+            >>> dist.destroy_process_group()
+            >>> print(dist.is_initialized())
+            False
 
     """
     group = _get_global_group() if group is None else group
@@ -200,7 +210,7 @@ def destroy_process_group(group=None):
         del _GroupManager.group_map_by_id[group.id]
 
 
-def get_group(id=0):
+def get_group(id: int = 0) -> Group:
     """
 
     Get group instance by group id.
@@ -214,13 +224,13 @@ def get_group(id=0):
     Examples:
         .. code-block:: python
 
-            # required: distributed
-            import paddle
-            import paddle.distributed as dist
+            >>> # doctest: +REQUIRES(env: DISTRIBUTED)
+            >>> import paddle
+            >>> import paddle.distributed as dist
 
-            dist.init_parallel_env()
-            gid = paddle.distributed.new_group([2,4,6])
-            paddle.distributed.get_group(gid.id)
+            >>> dist.init_parallel_env()
+            >>> gid = paddle.distributed.new_group([2,4,6])
+            >>> paddle.distributed.get_group(gid.id)
 
     """
 
@@ -245,9 +255,7 @@ def _sync_calc_stream(tensor):
 
 def _sync_comm_stream(tensor, ring_id=0):
     if framework.in_dynamic_mode():
-        return paddle._legacy_C_ops.c_sync_comm_stream(
-            [tensor], [tensor], 'ring_id', ring_id
-        )
+        return paddle._C_ops.sync_comm_stream([tensor], ring_id)
     else:
         op_type = 'c_sync_comm_stream'
         helper = framework.LayerHelper(op_type, **locals())
@@ -259,7 +267,9 @@ def _sync_comm_stream(tensor, ring_id=0):
         )
 
 
-def wait(tensor, group=None, use_calc_stream=True):
+def wait(
+    tensor: Tensor, group: Group | None = None, use_calc_stream: bool = True
+) -> None:
     """
 
     wait to sync stream for group.
@@ -267,7 +277,7 @@ def wait(tensor, group=None, use_calc_stream=True):
     Args:
         tensor (Tensor): The Tensor used before sync.
         group (Group): The Group instance to perform sync.
-        use_calc_stream (bool): Wether to use calculation stream (True) or communication stream (False).
+        use_calc_stream (bool): Whether to use calculation stream (True) or communication stream (False).
             Default to True.
 
     Returns:
@@ -276,12 +286,13 @@ def wait(tensor, group=None, use_calc_stream=True):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> # doctest: +REQUIRES(env: DISTRIBUTED)
+            >>> import paddle
 
-            paddle.distributed.init_parallel_env()
-            tindata = paddle.randn(shape=[2, 3])
-            paddle.distributed.all_reduce(tindata, sync_op=True)
-            paddle.distributed.wait(tindata)
+            >>> paddle.distributed.init_parallel_env()
+            >>> tindata = paddle.randn(shape=[2, 3])
+            >>> paddle.distributed.all_reduce(tindata, sync_op=True)
+            >>> paddle.distributed.wait(tindata)
 
     """
     if group is not None and not group.is_member():
@@ -294,7 +305,7 @@ def wait(tensor, group=None, use_calc_stream=True):
         _sync_comm_stream(tensor, ring_id)
 
 
-def barrier(group=None):
+def barrier(group: Group | None = None) -> None:
     """
 
     Barrier among all participators in the group.
@@ -308,12 +319,13 @@ def barrier(group=None):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.distributed import init_parallel_env
+            >>> # doctest: +REQUIRES(env: DISTRIBUTED)
+            >>> import paddle
+            >>> from paddle.distributed import init_parallel_env
 
-            paddle.set_device('gpu:%d'%paddle.distributed.ParallelEnv().dev_id)
-            init_parallel_env()
-            paddle.distributed.barrier()
+            >>> paddle.set_device(f'gpu:{paddle.distributed.ParallelEnv().dev_id}')
+            >>> init_parallel_env()
+            >>> paddle.distributed.barrier()
     """
     if group is not None and not group.is_member():
         return
@@ -349,7 +361,7 @@ def barrier(group=None):
         )
 
 
-def get_backend(group=None):
+def get_backend(group: Group | None = None) -> str:
     """
     Get the backend of given group.
 
@@ -362,11 +374,12 @@ def get_backend(group=None):
     Examples:
         .. code-block:: python
 
-            # required: distributed
-            import paddle
+            >>> # doctest: +REQUIRES(env: DISTRIBUTED)
+            >>> import paddle
 
-            paddle.distributed.init_parallel_env()
-            paddle.distributed.get_backend() # NCCL
+            >>> paddle.distributed.init_parallel_env()
+            >>> paddle.distributed.get_backend()
+            NCCL
     """
     if _warn_cur_rank_not_in_group(group):
         raise RuntimeError("Invalid group specified")

@@ -25,15 +25,15 @@ sys.path.append("../legacy_test")
 import nets
 
 import paddle
-from paddle import fluid
+from paddle import base
 
 
 def convolution_net(
     data, label, input_dim, class_dim=2, emb_dim=32, hid_dim=32
 ):
-    emb = paddle.static.nn.embedding(
-        input=data, size=[input_dim, emb_dim], is_sparse=True
-    )
+    emb = paddle.nn.Embedding(
+        num_embeddings=input_dim, embedding_dim=emb_dim, sparse=True
+    )(data)
     conv_3 = nets.sequence_conv_pool(
         input=emb,
         num_filters=hid_dim,
@@ -72,9 +72,7 @@ def train(
     dict_dim = len(word_dict)
     class_dim = 2
 
-    data = paddle.static.data(
-        name="words", shape=[-1, 1], dtype="int64", lod_level=1
-    )
+    data = paddle.static.data(name="words", shape=[-1, 1], dtype="int64")
     label = paddle.static.data(name="label", shape=[-1, 1], dtype="int64")
 
     if not parallel:
@@ -82,7 +80,7 @@ def train(
             data, label, input_dim=dict_dim, class_dim=class_dim
         )
     else:
-        raise NotImplementedError()
+        raise NotImplementedError
 
     adagrad = paddle.optimizer.Adagrad(learning_rate=0.002)
     adagrad.minimize(cost)
@@ -93,12 +91,12 @@ def train(
         ),
         batch_size=BATCH_SIZE,
     )
-    place = fluid.CUDAPlace(0) if use_cuda else fluid.CPUPlace()
-    exe = fluid.Executor(place)
-    feeder = fluid.DataFeeder(feed_list=[data, label], place=place)
+    place = base.CUDAPlace(0) if use_cuda else base.CPUPlace()
+    exe = base.Executor(place)
+    feeder = base.DataFeeder(feed_list=[data, label], place=place)
 
     def train_loop(main_program):
-        exe.run(fluid.default_startup_program())
+        exe.run(base.default_startup_program())
 
         for pass_id in range(PASS_NUM):
             for data in train_data():
@@ -119,7 +117,7 @@ def train(
         raise AssertionError(f"Cost is too large for {net_method.__name__}")
 
     if is_local:
-        train_loop(fluid.default_main_program())
+        train_loop(base.default_main_program())
     else:
         port = os.getenv("PADDLE_PSERVER_PORT", "6174")
         pserver_ips = os.getenv("PADDLE_PSERVER_IPS")  # ip,ip...
@@ -148,11 +146,11 @@ def infer(word_dict, use_cuda, save_dirname=None):
     if save_dirname is None:
         return
 
-    place = fluid.CUDAPlace(0) if use_cuda else fluid.CPUPlace()
-    exe = fluid.Executor(place)
+    place = base.CUDAPlace(0) if use_cuda else base.CPUPlace()
+    exe = base.Executor(place)
 
-    inference_scope = fluid.core.Scope()
-    with fluid.scope_guard(inference_scope):
+    inference_scope = base.core.Scope()
+    with base.scope_guard(inference_scope):
         # Use paddle.static.io.load_inference_model to obtain the inference program desc,
         # the feed_target_names (the names of variables that will be fed
         # data using feed operators), and the fetch_targets (variables that
@@ -165,20 +163,20 @@ def infer(word_dict, use_cuda, save_dirname=None):
 
         word_dict_len = len(word_dict)
 
-        # Setup input by creating LoDTensor to represent sequence of words.
-        # Here each word is the basic element of the LoDTensor and the shape of
+        # Setup input by creating DenseTensor to represent sequence of words.
+        # Here each word is the basic element of the DenseTensor and the shape of
         # each word (base_shape) should be [1] since it is simply an index to
         # look up for the corresponding word vector.
         # Suppose the recursive_sequence_lengths info is set to [[3, 4, 2]],
-        # which has only one level of detail. Then the created LoDTensor will have only
+        # which has only one level of detail. Then the created DenseTensor will have only
         # one higher level structure (sequence of words, or sentence) than the basic
-        # element (word). Hence the LoDTensor will hold data for three sentences of
+        # element (word). Hence the DenseTensor will hold data for three sentences of
         # length 3, 4 and 2, respectively.
         # Note that recursive_sequence_lengths should be a list of lists.
         recursive_seq_lens = [[3, 4, 2]]
         base_shape = [1]
         # The range of random integers is [low, high]
-        tensor_words = fluid.create_random_int_lodtensor(
+        tensor_words = base.create_random_int_lodtensor(
             recursive_seq_lens, base_shape, place, low=0, high=word_dict_len - 1
         )
 
@@ -191,14 +189,13 @@ def infer(word_dict, use_cuda, save_dirname=None):
             fetch_list=fetch_targets,
             return_numpy=False,
         )
-        print(results[0].recursive_sequence_lengths())
         np_data = np.array(results[0])
         print("Inference Shape: ", np_data.shape)
         print("Inference results: ", np_data)
 
 
 def main(word_dict, net_method, use_cuda, parallel=False, save_dirname=None):
-    if use_cuda and not fluid.core.is_compiled_with_cuda():
+    if use_cuda and not base.core.is_compiled_with_cuda():
         return
 
     train(
@@ -218,11 +215,11 @@ class TestUnderstandSentiment(unittest.TestCase):
 
     @contextlib.contextmanager
     def new_program_scope(self):
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
-        scope = fluid.core.Scope()
-        with fluid.scope_guard(scope):
-            with fluid.program_guard(prog, startup_prog):
+        prog = base.Program()
+        startup_prog = base.Program()
+        scope = base.core.Scope()
+        with base.scope_guard(scope):
+            with base.program_guard(prog, startup_prog):
                 yield
 
     def test_conv_cpu(self):

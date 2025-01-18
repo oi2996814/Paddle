@@ -15,19 +15,26 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 
 class TestIndexSampleOp(OpTest):
     def setUp(self):
         self.op_type = "index_sample"
+        self.prim_op_type = "comp"
         self.python_api = paddle.index_sample
+        self.public_python_api = paddle.index_sample
         self.config()
         xnp = np.random.random(self.x_shape).astype(self.x_type)
+        if self.x_type == np.complex64 or self.x_type == np.complex128:
+            xnp = (
+                np.random.random(self.x_shape)
+                + 1j * np.random.random(self.x_shape)
+            ).astype(self.x_type)
         indexnp = np.random.randint(
             low=0, high=self.x_shape[1], size=self.index_shape
         ).astype(self.index_type)
@@ -41,10 +48,10 @@ class TestIndexSampleOp(OpTest):
         self.outputs = {'Out': out}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_prim_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Out')
+        self.check_grad(['X'], 'Out', check_pir=True)
 
     def config(self):
         """
@@ -122,6 +129,28 @@ class TestCase6(TestIndexSampleOp):
         self.index_type = "int64"
 
 
+class TestIndexSampleComplex64(TestIndexSampleOp):
+    def config(self):
+        """
+        For complex64 x type
+        """
+        self.x_shape = (10, 128)
+        self.x_type = np.complex64
+        self.index_shape = (10, 64)
+        self.index_type = "int64"
+
+
+class TestIndexSampleComplex128(TestIndexSampleOp):
+    def config(self):
+        """
+        For complex64 x type
+        """
+        self.x_shape = (10, 128)
+        self.x_type = np.complex128
+        self.index_shape = (10, 64)
+        self.index_type = "int64"
+
+
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
@@ -130,7 +159,9 @@ class TestCase6(TestIndexSampleOp):
 class TestIndexSampleBF16Op(OpTest):
     def setUp(self):
         self.op_type = "index_sample"
+        self.prim_op_type = "comp"
         self.python_api = paddle.index_sample
+        self.public_python_api = paddle.index_sample
         self.config()
         xnp = np.random.random(self.x_shape).astype(self.x_type)
         indexnp = np.random.randint(
@@ -149,10 +180,12 @@ class TestIndexSampleBF16Op(OpTest):
         self.place = core.CUDAPlace(0)
 
     def test_check_output(self):
-        self.check_output_with_place(self.place)
+        self.check_output_with_place(
+            self.place, check_pir=True, check_prim_pir=True
+        )
 
     def test_check_grad(self):
-        self.check_grad_with_place(self.place, ['X'], 'Out')
+        self.check_grad_with_place(self.place, ['X'], 'Out', check_pir=True)
 
     def config(self):
         """
@@ -166,35 +199,38 @@ class TestIndexSampleBF16Op(OpTest):
 
 
 class TestIndexSampleShape(unittest.TestCase):
+
     def test_shape(self):
         paddle.enable_static()
-        # create x value
-        x_shape = (2, 5)
-        x_type = "float64"
-        x_np = np.random.random(x_shape).astype(x_type)
+        with paddle.static.program_guard(paddle.static.Program()):
+            # create x value
+            x_shape = (2, 5)
+            x_type = "float64"
+            x_np = np.random.random(x_shape).astype(x_type)
 
-        # create index value
-        index_shape = (2, 3)
-        index_type = "int32"
-        index_np = np.random.randint(
-            low=0, high=x_shape[1], size=index_shape
-        ).astype(index_type)
+            # create index value
+            index_shape = (2, 3)
+            index_type = "int32"
+            index_np = np.random.randint(
+                low=0, high=x_shape[1], size=index_shape
+            ).astype(index_type)
 
-        x = paddle.static.data(name='x', shape=[-1, 5], dtype='float64')
-        index = paddle.static.data(name='index', shape=[-1, 3], dtype='int32')
-        output = paddle.index_sample(x=x, index=index)
+            x = paddle.static.data(name='x', shape=[-1, 5], dtype='float64')
+            index = paddle.static.data(
+                name='index', shape=[-1, 3], dtype='int32'
+            )
+            output = paddle.index_sample(x=x, index=index)
 
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place=place)
-        exe.run(fluid.default_startup_program())
+            place = base.CPUPlace()
+            exe = base.Executor(place=place)
 
-        feed = {'x': x_np, 'index': index_np}
-        res = exe.run(feed=feed, fetch_list=[output])
+            feed = {'x': x_np, 'index': index_np}
+            res = exe.run(feed=feed, fetch_list=[output])
 
 
 class TestIndexSampleDynamic(unittest.TestCase):
     def test_result(self):
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             x = paddle.to_tensor(
                 [
                     [1.0, 2.0, 3.0, 4.0],

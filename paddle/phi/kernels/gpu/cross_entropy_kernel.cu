@@ -73,7 +73,7 @@ struct ExpAddFunctor {
 
 /*
   Cross entropy soft label with dynamic size on axis (log2_elements is
-  varibale).
+  variable).
   - if the input is softmax, compute loss with softmax
   - if the input is log_softmax, compute loss with log_softmax and update
   softmax
@@ -90,11 +90,7 @@ __global__ void CrossEntropySoftLabel(T* loss,
   const int kDimCeil = 1 << log2_elements;
   const int kVSize = sizeof(VecT) / sizeof(T);
 
-#ifdef __HIPCC__
-  const int kThreadPerBlock = 256;
-#else
   const int kThreadPerBlock = 512;
-#endif
   const int kBatchPerBlock = 1;
   const int kWarpSize = 32;  // (dim < 32) ? dim : 32;
   const int kBatchSize = 1;
@@ -718,11 +714,7 @@ static void SoftmaxWithCrossEntropySoftLabel(const GPUContext& dev_ctx,
                                              int N,
                                              int dim,
                                              int D) {
-#ifdef __HIPCC__
-  constexpr int kMaxBlockDim = 256;
-#else
   constexpr int kMaxBlockDim = 512;
-#endif
   int64_t block_dim = dim >= kMaxBlockDim
                           ? kMaxBlockDim
                           : (1 << static_cast<int>(std::log2(dim)));
@@ -799,11 +791,7 @@ static void SoftmaxWithCrossEntropySoftLabel(const GPUContext& dev_ctx,
 
     const int kDimLog2 = static_cast<int>(Log2Ceil(dim));
     const int kDimCeil = 1 << kDimLog2;
-#ifdef __HIPCC__
-    int kThreadPerBlock = 256;
-#else
     int kThreadPerBlock = 512;
-#endif
 
     int kBatchPerBlock = 1;
     int blocks = (N * D + kBatchPerBlock - 1) / kBatchPerBlock;
@@ -1301,18 +1289,14 @@ void CrossEntropyWithSoftmaxCUDAKernel(const GPUContext& dev_ctx,
       return;
     }
 
-    // if axis is not the last, we need a new impliment
+    // if axis is not the last, we need a new implement
     if (soft_label) {
       auto* logits_data = softmax->data<T>();
       auto* labels_data = labels.data<T>();
 
       const int kDimLog2 = static_cast<int>(Log2Ceil(axis_dim));
       const int kDimCeil = 1 << kDimLog2;
-#ifdef __HIPCC__
-      int kThreadPerBlock = 256;
-#else
       int kThreadPerBlock = 512;
-#endif
       int kBatchPerBlock = 1;
       int blocks = (n * d + kBatchPerBlock - 1) / kBatchPerBlock;
       dim3 threads(kThreadPerBlock / kBatchPerBlock, kBatchPerBlock, 1);
@@ -1433,8 +1417,8 @@ void CrossEntropyWithSoftmaxKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         dtype,
         phi::CppTypeToDataType<T>::Type(),
-        phi::errors::InvalidArgument("The Input(Label) should be with the "
-                                     "same data type as Input(Logits)."));
+        common::errors::InvalidArgument("The Input(Label) should be with the "
+                                        "same data type as Input(Logits)."));
     CrossEntropyWithSoftmaxCUDAKernel<T, T>(dev_ctx,
                                             logits,
                                             label,

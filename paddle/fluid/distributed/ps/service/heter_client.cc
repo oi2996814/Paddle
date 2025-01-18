@@ -15,27 +15,25 @@
 #include "paddle/fluid/distributed/ps/service/heter_client.h"
 
 #include "paddle/fluid/framework/convert_utils.h"
-#include "paddle/fluid/platform/profiler.h"
+#include "paddle/phi/core/platform/profiler.h"
 
-namespace paddle {
-namespace distributed {
-DEFINE_int32(heter_world_size, 100, "group size");  // group max size
-DEFINE_int32(switch_send_recv_timeout_s, 600, "switch_send_recv_timeout_s");
+namespace paddle::distributed {
+PD_DEFINE_int32(heter_world_size, 100, "group size");  // group max size
+PD_DEFINE_int32(switch_send_recv_timeout_s, 600, "switch_send_recv_timeout_s");
 
 std::shared_ptr<HeterClient> HeterClient::s_instance_ = nullptr;
 std::mutex HeterClient::mtx_;
 std::shared_ptr<HeterClient> HeterClient::switch_s_instance_ = nullptr;
 
-int GetMicroId(const platform::DeviceContext& ctx,
-               const framework::Scope* scope) {
+int GetMicroId(const phi::DeviceContext& ctx, const framework::Scope* scope) {
   framework::Variable* var = scope->FindVar("microbatch_id");
   PADDLE_ENFORCE_EQ(var->IsType<phi::DenseTensor>(),
                     true,
-                    platform::errors::InvalidArgument(
-                        "the type of micro id shoulde be LoDTensor."));
+                    common::errors::InvalidArgument(
+                        "the type of micro id should be DenseTensor."));
   auto micro_id = -1;
   auto* tensor = var->GetMutable<phi::DenseTensor>();
-  if (platform::is_cpu_place(tensor->place())) {
+  if (phi::is_cpu_place(tensor->place())) {
     auto data = reinterpret_cast<const float*>(tensor->data());
     micro_id = static_cast<int>(data[0]);
   } else {
@@ -44,7 +42,7 @@ int GetMicroId(const platform::DeviceContext& ctx,
     temp.resize(tensor->numel() * phi::SizeOf(tensor->dtype()));
     char* temp_ptr = temp.data();
     auto stream = reinterpret_cast<const phi::GPUContext&>(ctx).stream();
-    memory::Copy(platform::CPUPlace(),
+    memory::Copy(phi::CPUPlace(),
                  temp_ptr,
                  tensor->place(),
                  tensor->data(),
@@ -113,16 +111,15 @@ void HeterClient::CreateClient2XpuConnection() {
 }
 
 void HeterClient::SendAndRecvAsync(
-    const platform::DeviceContext& ctx,
+    const phi::DeviceContext& ctx,
     const framework::Scope& scope,
     const std::string& message_name,
     const std::vector<std::string>& send_var_name,
     const std::vector<std::string>& recv_var_name,
     const std::string& mode) {
-  platform::RecordEvent record_event("HeterClient->SendAndRecvAsync",
-                                     platform::TracerEventType::Communication,
-                                     1);
-  const platform::DeviceContext* p_ctx = &ctx;
+  phi::RecordEvent record_event(
+      "HeterClient->SendAndRecvAsync", phi::TracerEventType::Communication, 1);
+  const phi::DeviceContext* p_ctx = &ctx;
   const framework::Scope* p_scope = &scope;
   const std::vector<std::string> send_var_name_val = send_var_name;
   const std::vector<std::string> recv_var_name_val = recv_var_name;
@@ -134,7 +131,7 @@ void HeterClient::SendAndRecvAsync(
     PADDLE_ENFORCE_NE(
         closure->cntl.Failed(),
         true,
-        platform::errors::Unimplemented(
+        common::errors::Unimplemented(
             "HeterClient::SendAndRecv meets brpc error, error message is %s",
             closure->cntl.ErrorText()));
     VLOG(4) << "call heter_worker success";
@@ -167,13 +164,13 @@ void HeterClient::SendAndRecvAsync(
     // int idx = 1;  // for test
     // LOG(INFO) << "xpu_channels_ size: " << xpu_channels_.size();
     // channel = xpu_channels_[idx].get();  // 为了适配 send_and_recv op
-    // ::paddle::distributed::PsService_Stub stub(channel);
+    // paddle::distributed::PsService_Stub stub(channel);
     // stub.SendToSwitch(&closure->cntl, &request, &closure->response,
     // closure); fut.wait();
     VLOG(4) << "calling switch service done";
     return;
   }
-  ::paddle::distributed::PsService_Stub stub(channel);
+  paddle::distributed::PsService_Stub stub(channel);
   stub.SendAndRecvVariable(
       &closure->cntl, &request, &closure->response, closure);
 }
@@ -204,7 +201,7 @@ std::future<int32_t> HeterClient::SendCmd(
     for (const auto& param : params) {
       closure->request(i)->add_params(param);
     }
-    ::paddle::distributed::PsService_Stub rpc_stub(xpu_channels_[i].get());
+    paddle::distributed::PsService_Stub rpc_stub(xpu_channels_[i].get());
     closure->cntl(i)->set_timeout_ms(
         FLAGS_pserver_timeout_ms);  // cmd msg don't limit timeout for save/load
     rpc_stub.service(
@@ -213,7 +210,7 @@ std::future<int32_t> HeterClient::SendCmd(
   return fut;
 }
 
-int HeterClient::Send(const platform::DeviceContext& ctx,
+int HeterClient::Send(const phi::DeviceContext& ctx,
                       const framework::Scope& scope,
                       const std::string& message_name,
                       const std::vector<std::string>& send_var_names) {
@@ -226,7 +223,7 @@ int HeterClient::Send(const platform::DeviceContext& ctx,
       PADDLE_ENFORCE_NE(
           closure->cntl.Failed(),
           true,
-          platform::errors::Unimplemented(
+          common::errors::Unimplemented(
               "HeterClient::SendToSwitch meets brpc error, error message is %s",
               closure->cntl.ErrorText()));
     }
@@ -252,7 +249,7 @@ int HeterClient::Send(const platform::DeviceContext& ctx,
     framework::Variable* var = p_scope->FindVar(send_var_name);
     butil::IOBuf temp_iobuf;
     if (var->IsType<phi::DenseTensor>()) {
-      SerializeLodTensor(var, ctx, send_var_msg, &temp_iobuf);
+      SerializeDenseTensor(var, ctx, send_var_msg, &temp_iobuf);
     } else if (var->IsType<phi::SelectedRows>()) {
       SerializeSelectedRows(var, ctx, send_var_msg, &temp_iobuf);
     }
@@ -270,7 +267,7 @@ int HeterClient::Send(const platform::DeviceContext& ctx,
   }
   brpc::Channel* channel = send_switch_channels_[0].get();
   // brpc::Channel* channel = xpu_channels_[0].get();
-  ::paddle::distributed::PsService_Stub stub(channel);
+  paddle::distributed::PsService_Stub stub(channel);
   stub.SendToSwitch(&closure->cntl, &request, &closure->ps_response, closure);
 
   VLOG(4) << "waiting SendToSwitch response result......";
@@ -317,14 +314,14 @@ int HeterClient::Send(int group_id,
     send_switch_channels_.push_back(xpu_channels_[0]);
   }
   brpc::Channel* channel = send_switch_channels_[0].get();
-  ::paddle::distributed::PsService_Stub stub(channel);
+  paddle::distributed::PsService_Stub stub(channel);
   stub.SendToSwitch(&closure->cntl, &request, &closure->ps_response, closure);
   fut.wait();
   delete closure;
   return 0;
 }
 
-int HeterClient::Recv(const platform::DeviceContext& ctx,
+int HeterClient::Recv(const phi::DeviceContext& ctx,
                       framework::Scope& recv_scope,  // NOLINT
                       const std::string& message_name,
                       const std::vector<std::string>& recv_var_names) {
@@ -362,13 +359,13 @@ int HeterClient::Recv(const platform::DeviceContext& ctx,
     recv_switch_channels_.push_back(xpu_channels_[1]);
   }
   brpc::Channel* channel = recv_switch_channels_[0].get();
-  ::paddle::distributed::PsService_Stub stub(channel);
+  paddle::distributed::PsService_Stub stub(channel);
   stub.RecvFromSwitch(&closure->cntl, &request, &closure->response, closure);
   fut.wait();
   VLOG(4) << "RecvFromSwitch done";
   // save in worker
-  platform::DeviceContextPool& pool = platform::DeviceContextPool::Instance();
-  platform::CPUPlace cpu_place;
+  phi::DeviceContextPool& pool = phi::DeviceContextPool::Instance();
+  phi::CPUPlace cpu_place;
   auto& cpu_dev_ctx = *pool.Get(cpu_place);
   auto& res_io_buffer = closure->cntl.response_attachment();
   VLOG(4) << "entering DeserializeFromMultiVarMsgAndIOBuf";
@@ -412,7 +409,7 @@ int HeterClient::Recv(int group_id,
     recv_switch_channels_.push_back(xpu_channels_[0]);
   }
   brpc::Channel* channel = recv_switch_channels_[0].get();
-  ::paddle::distributed::PsService_Stub stub(channel);
+  paddle::distributed::PsService_Stub stub(channel);
   stub.RecvFromSwitch(&closure->cntl, &request, &closure->response, closure);
   fut.wait();
   VLOG(4) << "RecvFromSwitch done";
@@ -424,5 +421,4 @@ int HeterClient::Recv(int group_id,
   VLOG(4) << "Recv done";
   return 0;
 }
-}  // namespace distributed
-}  // end namespace paddle
+}  // namespace paddle::distributed

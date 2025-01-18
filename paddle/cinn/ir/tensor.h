@@ -20,41 +20,29 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "paddle/cinn/ast_gen_ius/tensor_group.h"
 #include "paddle/cinn/common/graph_utils.h"
 #include "paddle/cinn/ir/buffer.h"
+#include "paddle/cinn/ir/dim.h"
 #include "paddle/cinn/ir/function_base.h"
 #include "paddle/cinn/lang/buffer.h"
 #include "paddle/cinn/poly/stage.h"
 
 namespace cinn {
 
-namespace ir {
-class Tensor;
-}  // namespace ir
-
-namespace lang {
-template <typename T>
-struct Placeholder;
-
-void InitReduceTensor(poly::StageMap stages,
-                      const ir::Tensor& tensor,
-                      const Target& target = common::DefaultHostTarget());
-}  // namespace lang
+namespace ast_gen_ius {
+class TensorGroup;
+}  // namespace ast_gen_ius
 
 namespace ir {
-namespace detail {
-constexpr bool LE(int a, int b) { return a <= b; }
-constexpr bool GE(int a, int b) { return a >= b; }
-
-}  // namespace detail
 
 class _Tensor_;
-class Tensor;
 
 class Tensor : public ir::IrNodeRef {
  public:
@@ -64,6 +52,13 @@ class Tensor : public ir::IrNodeRef {
          Type dtype,
          const std::vector<Expr>& shape,
          const std::vector<Expr>& domain,
+         FunctionRef fn,
+         const std::vector<Var>& reduce_axis = {});
+
+  Tensor(const std::string& name,
+         Type dtype,
+         const std::vector<Dim>& sym_shape,
+         const std::vector<Dim>& sym_domain,
          FunctionRef fn,
          const std::vector<Var>& reduce_axis = {});
 
@@ -84,8 +79,8 @@ class Tensor : public ir::IrNodeRef {
     return operator()(std::vector<Expr>({a}));
   }
   template <typename... Args>
-  inline typename std::enable_if<detail::GE(sizeof...(Args), 2), Expr>::type
-  operator()(Args&&... args) const {
+  inline typename std::enable_if<sizeof...(Args) >= 2, Expr>::type operator()(
+      Args&&... args) const {
     return operator()({std::forward<Args>(args)...});
   }
   // @}
@@ -116,6 +111,10 @@ class Tensor : public ir::IrNodeRef {
  */
 std::string GenReduceInitTensorNameOf(const std::string& tensor_name);
 
+bool IsReduceInitTensorName(const std::string& tensor_name);
+
+std::string GetOriginalReduceTensorName(const std::string& tensor_name);
+
 class ComputeOp;
 class PlaceholderOp;
 struct ReadCacheRelation;
@@ -131,8 +130,12 @@ struct WriteCacheRelation;
  */
 class _Tensor_ : public ExprNode<_Tensor_> {
  public:
+  //! Symbolic Shape of this tensor(buffer).
+  std::vector<Dim> sym_shape;
   //! Shape of this tensor(buffer).
   std::vector<Expr> shape;
+  //! The symbolic domain of each axis(without reduce_axis)
+  std::vector<Dim> sym_domain;
   //! The domain of each axis(without reduce_axis)
   // TODO(Superjomn) support ISL domain.
   std::vector<Expr> domain;
@@ -159,9 +162,29 @@ class _Tensor_ : public ExprNode<_Tensor_> {
                      FunctionRef fn,
                      const std::vector<Var>& reduce_axis = {});
 
-  void Verify() const override;
+  // Manual tensor construction, no FunctionRef information
+  static Tensor Make(const std::string& name,
+                     Type dtype,
+                     const std::vector<Expr>& shape,
+                     const std::vector<Expr>& domain,
+                     const std::vector<Var>& reduce_axis = {});
 
-  bool IsReduceInited(poly::StageMap stages) const;
+  //! (Symbolic Shape) Generate a tensor from a function.
+  static Tensor Make(const std::string& name,
+                     Type dtype,
+                     const std::vector<Dim>& sym_shape,
+                     const std::vector<Dim>& sym_domain,
+                     FunctionRef fn,
+                     const std::vector<Var>& reduce_axis = {});
+
+  // (Symbolic Shape) Manual tensor construction, no FunctionRef information
+  static Tensor Make(const std::string& name,
+                     Type dtype,
+                     const std::vector<Dim>& sym_shape,
+                     const std::vector<Dim>& sym_domain,
+                     const std::vector<Var>& reduce_axis = {});
+
+  void Verify() const override;
 
   //! Tell whether this tensor represents a tuple (consists of one or multiple
   //! tensors as output of a extern Call).
@@ -185,7 +208,7 @@ class _Tensor_ : public ExprNode<_Tensor_> {
   bool IsDependOnStatement(absl::string_view statement);
 
   /**
-   * Get the names of the tensors thouse this tensor depends on.
+   * Get the names of the tensors those this tensor depends on.
    */
   std::set<std::string> DependingTensorNames();
 
@@ -193,15 +216,13 @@ class _Tensor_ : public ExprNode<_Tensor_> {
    * Get a new tensor with the \p shape, but the underlying buffer shared.
    * NOTE the tensor to Reshape should not be an inlined computation.
    */
-  ir::Tensor Reshape(const std::vector<Expr>& shape,
-                     poly::StageMap stages) const;
+  ir::Tensor Reshape(const std::vector<Expr>& shape) const;
 
   /**
    * Get a new tensor with the \p shape with a newly allocated buffer.
    * NOTE the tensor to Reshape should not be an inlined computation.
    */
-  ir::Tensor ReshapeCopied(const std::vector<Expr>& shape,
-                           poly::StageMap stages) const;
+  ir::Tensor ReshapeCopied(const std::vector<Expr>& shape) const;
 
   /**
    * Tell whether this tensor has same shape with \p other.
@@ -251,7 +272,7 @@ class _Tensor_ : public ExprNode<_Tensor_> {
   std::vector<Var> axis_with_reduce() const;
 
   /**
-   * Get the tensors thouse depend on the same buffer belong to this tensor.
+   * Get the tensors those depend on the same buffer belong to this tensor.
    */
   const std::set<std::string>& buffer_depended_tensor_names() const {
     return buffer_depended_tensor_names_;
@@ -280,9 +301,10 @@ class _Tensor_ : public ExprNode<_Tensor_> {
   void WithBuffer(const std::string& memory_type,
                   const std::string& buffer_name = "",
                   const Type& type = Void());
-  Tensor GetInitTensor(
-      poly::StageMap stages,
-      const Target& target = common::DefaultHostTarget()) const;
+
+  const std::optional<std::vector<Expr>>& value() const { return value_; }
+
+  void set_value(const std::vector<Expr>& value) { value_ = value; }
 
  private:
   //! Initialize the axis field after the shape field is assigned.
@@ -290,25 +312,15 @@ class _Tensor_ : public ExprNode<_Tensor_> {
 
   isl::set GenerateIslDomain() const;
 
-  /**
-   * Create the initialization tensor.
-   * @param stages The stages.
-   * @param init_val The initial value.
-   * @return The initializing tensor.
-   */
-  ir::Tensor InitReduction(
-      poly::StageMap stages,
-      const Target& target = common::DefaultHostTarget()) const;
-
   //! The names of the tensors depend the same buffer and should schedule before
   //! this.
   std::set<std::string> buffer_depended_tensor_names_;
 
-  friend Shared<poly::Stage> CreateStage(Tensor tensor);
+  // The flatten compute value of tensor, such as Tensor[[1, 2], [3, 4]] ->
+  // Tensor[1, 2, 3, 4]
+  std::optional<std::vector<Expr>> value_;
 
-  friend void lang::InitReduceTensor(poly::StageMap stages,
-                                     const ir::Tensor& tensor,
-                                     const Target& target);
+  friend Shared<poly::Stage> CreateStage(Tensor tensor);
 };
 
 Shared<poly::Stage> CreateStage(Tensor tensor);

@@ -23,11 +23,11 @@
 namespace phi {
 
 static constexpr int kNumCUDAThreads = 512;
-static constexpr int kNumMaxinumNumBlocks = 4096;
+static constexpr int kNumMaximumNumBlocks = 4096;
 
 static inline int NumBlocks(const int N) {
   return std::min((N + kNumCUDAThreads - 1) / kNumCUDAThreads,
-                  kNumMaxinumNumBlocks);
+                  kNumMaximumNumBlocks);
 }
 
 template <typename T>
@@ -111,7 +111,7 @@ void RoiPoolKernel(const Context& dev_ctx,
                    DenseTensor* arg_max) {
   auto x_dims = x.dims();
   int batch_size = x_dims[0];
-  auto in_stride = phi::stride(x_dims);
+  auto in_stride = common::stride(x_dims);
   int channels = x_dims[1];
   int height = x_dims[2];
   int width = x_dims[3];
@@ -137,7 +137,7 @@ void RoiPoolKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         boxes_batch_size,
         batch_size,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The batch size of input(ROIs) and input(X) must be the same but "
             "received batch size of input(ROIs) and input(X) is %d and %d "
             "respectively.",
@@ -163,7 +163,7 @@ void RoiPoolKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         boxes_batch_size,
         batch_size,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The batch size of input(ROIs) and input(X) must be the same but "
             "received batch size of input(ROIs) and input(X) is %d and %d "
             "respectively.",
@@ -173,7 +173,7 @@ void RoiPoolKernel(const Context& dev_ctx,
     int boxes_num_with_lod = boxes_lod[boxes_batch_size];
     PADDLE_ENFORCE_EQ(rois_num,
                       boxes_num_with_lod,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The number of rois from input(ROIs) and its LOD "
                           "must be the same. Received rois %d of input(ROIs) "
                           "but the number of rois %d from its LOD is %d",

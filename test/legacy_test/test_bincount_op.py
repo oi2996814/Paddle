@@ -13,16 +13,18 @@
 # limitations under the License.
 
 import os
+import sys
 import tempfile
 import unittest
 
+sys.path.append("../../legacy_test")
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 import paddle
 import paddle.inference as paddle_infer
-from paddle import fluid
-from paddle.fluid.framework import in_dygraph_mode
+from paddle import base
+from paddle.base.framework import in_dygraph_mode, in_pir_mode
 
 paddle.enable_static()
 
@@ -31,18 +33,18 @@ class TestBincountOpAPI(unittest.TestCase):
     """Test bincount api."""
 
     def test_static_graph(self):
-        startup_program = fluid.Program()
-        train_program = fluid.Program()
-        with fluid.program_guard(train_program, startup_program):
+        startup_program = paddle.static.Program()
+        train_program = paddle.static.Program()
+        with paddle.static.program_guard(train_program, startup_program):
             inputs = paddle.static.data(name='input', dtype='int64', shape=[7])
             weights = paddle.static.data(
                 name='weights', dtype='int64', shape=[7]
             )
             output = paddle.bincount(inputs, weights=weights)
-            place = fluid.CPUPlace()
-            if fluid.core.is_compiled_with_cuda():
-                place = fluid.CUDAPlace(0)
-            exe = fluid.Executor(place)
+            place = base.CPUPlace()
+            if base.core.is_compiled_with_cuda():
+                place = base.CUDAPlace(0)
+            exe = base.Executor(place)
             exe.run(startup_program)
             img = np.array([0, 1, 1, 3, 2, 1, 7]).astype(np.int64)
             w = np.array([0, 1, 1, 2, 2, 1, 0]).astype(np.int64)
@@ -59,9 +61,9 @@ class TestBincountOpAPI(unittest.TestCase):
             )
 
     def test_dygraph(self):
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             inputs_np = np.array([0, 1, 1, 3, 2, 1, 7]).astype(np.int64)
-            inputs = fluid.dygraph.to_variable(inputs_np)
+            inputs = paddle.to_tensor(inputs_np)
             actual = paddle.bincount(inputs)
             expected = np.bincount(inputs)
             self.assertTrue(
@@ -74,7 +76,7 @@ class TestBincountOpError(unittest.TestCase):
     """Test bincount op error."""
 
     def run_network(self, net_func):
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             net_func()
 
     def test_input_value_error(self):
@@ -104,7 +106,7 @@ class TestBincountOpError(unittest.TestCase):
             input_value = paddle.to_tensor([1, 2, 3, 4, 5])
             paddle.bincount(input_value, minlength=-1)
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             if in_dygraph_mode():
                 # InvalidArgument for phi BincountKernel
                 with self.assertRaises(ValueError):
@@ -152,7 +154,7 @@ class TestBincountOp(OpTest):
         self.Out = np.bincount(self.np_input, minlength=self.minlength)
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
 
 class TestCase1(TestBincountOp):
@@ -221,6 +223,14 @@ class TestCase5(TestBincountOp):
         self.Out = np.bincount(self.np_input, minlength=self.minlength)
 
 
+class TestCase6(TestBincountOp):
+    # with bigger input size
+    def init_test_case(self):
+        self.minlength = 0
+        self.np_input = np.random.randint(low=0, high=10, size=1024)
+        self.Out = np.bincount(self.np_input, minlength=self.minlength)
+
+
 class TestTensorMinlength(unittest.TestCase):
     def setUp(self):
         paddle.disable_static()
@@ -249,8 +259,8 @@ class TestTensorMinlength(unittest.TestCase):
         paddle.enable_static()
         np_x = np.random.randn(100).astype('float32')
         main_prog = paddle.static.Program()
-        starup_prog = paddle.static.Program()
-        with paddle.static.program_guard(main_prog, starup_prog):
+        startup_prog = paddle.static.Program()
+        with paddle.static.program_guard(main_prog, startup_prog):
             # run static
             x = paddle.static.data(shape=np_x.shape, name='x', dtype=np_x.dtype)
             linear = paddle.nn.Linear(np_x.shape[0], np_x.shape[0])
@@ -262,14 +272,22 @@ class TestTensorMinlength(unittest.TestCase):
             )
 
             exe = paddle.static.Executor(self.place)
-            exe.run(starup_prog)
+            exe.run(startup_prog)
             static_out = exe.run(feed={'x': np_x}, fetch_list=[out])
 
             # run infer
             paddle.static.save_inference_model(self.save_path, [x], [out], exe)
-            config = paddle_infer.Config(
-                self.save_path + '.pdmodel', self.save_path + '.pdiparams'
-            )
+            if in_pir_mode():
+                config = paddle_infer.Config(
+                    self.save_path + '.json', self.save_path + '.pdiparams'
+                )
+                config.enable_new_executor()
+                config.enable_new_ir()
+            else:
+                config = paddle_infer.Config(
+                    self.save_path + '.pdmodel', self.save_path + '.pdiparams'
+                )
+
             if paddle.is_compiled_with_cuda():
                 config.enable_use_gpu(100, 0)
             else:

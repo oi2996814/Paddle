@@ -11,9 +11,7 @@ limitations under the License. */
 
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 /*
  * Unbind Op
@@ -74,13 +72,11 @@ class UnbindOpConverter : public OpConverter {
       auto inputReshaped =
           TRT_ENGINE_ADD_LAYER(engine_, Shuffle, *inputSliced_out);
       inputReshaped->setInput(1, *newDims_tensor);
-      RreplenishLayerAndOutput(
+      ReplenishLayerAndOutput(
           inputReshaped, "unbind", {output_name}, test_mode);
     }
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 REGISTER_TRT_OP_CONVERTER(unbind, UnbindOpConverter);

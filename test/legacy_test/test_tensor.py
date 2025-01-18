@@ -17,13 +17,14 @@ import unittest
 
 import numpy as np
 
-from paddle import fluid
-from paddle.fluid import core
+import paddle
+from paddle import base
+from paddle.base import core
 
 
 class TestTensorPtr(unittest.TestCase):
     def test_tensor_ptr(self):
-        t = core.Tensor()
+        t = core.DenseTensor()
         np_arr = np.zeros([2, 3])
         t.set(np_arr, core.CPUPlace())
         self.assertGreater(t._ptr(), 0)
@@ -172,14 +173,9 @@ class TestTensor(unittest.TestCase):
         array[0, 0, 0] = 3
         array[3, 3, 5] = 10
         lod_tensor.set(array, place)
-        lod_tensor.set_recursive_sequence_lengths([[2, 2]])
 
         lod_v = np.array(lod_tensor)
-        self.assertTrue(np.alltrue(array == lod_v))
-
-        lod = lod_tensor.recursive_sequence_lengths()
-        self.assertEqual(2, lod[0][0])
-        self.assertEqual(2, lod[0][1])
+        self.assertTrue(np.all(array == lod_v))
 
     def test_float_lod_tensor(self):
         place = core.CPUPlace()
@@ -199,50 +195,6 @@ class TestTensor(unittest.TestCase):
         lod_v = np.array(lod_tensor)
         self.assertAlmostEqual(1.0, lod_v[0, 0, 0, 0])
         self.assertAlmostEqual(2.0, lod_v[0, 0, 0, 1])
-        self.assertEqual(len(lod_tensor.recursive_sequence_lengths()), 0)
-
-        lod_py = [[2, 1], [1, 2, 2]]
-        lod_tensor.set_recursive_sequence_lengths(lod_py)
-        lod = lod_tensor.recursive_sequence_lengths()
-        self.assertListEqual(lod_py, lod)
-
-    def test_lod_tensor_init(self):
-        place = core.CPUPlace()
-        lod_py = [[2, 1], [1, 2, 2]]
-        lod_tensor = core.LoDTensor()
-
-        lod_tensor._set_dims([5, 2, 3, 4])
-        lod_tensor.set_recursive_sequence_lengths(lod_py)
-        lod_tensor._alloc_float(place)
-        tensor_array = np.array(lod_tensor)
-        tensor_array[0, 0, 0, 0] = 1.0
-        tensor_array[0, 0, 0, 1] = 2.0
-        lod_tensor.set(tensor_array, place)
-
-        lod_v = np.array(lod_tensor)
-        self.assertAlmostEqual(1.0, lod_v[0, 0, 0, 0])
-        self.assertAlmostEqual(2.0, lod_v[0, 0, 0, 1])
-        self.assertListEqual(lod_py, lod_tensor.recursive_sequence_lengths())
-
-    def test_lod_tensor_gpu_init(self):
-        if not core.is_compiled_with_cuda():
-            return
-        place = core.CUDAPlace(0)
-        lod_py = [[2, 1], [1, 2, 2]]
-        lod_tensor = core.LoDTensor()
-
-        lod_tensor._set_dims([5, 2, 3, 4])
-        lod_tensor.set_recursive_sequence_lengths(lod_py)
-        lod_tensor._alloc_float(place)
-        tensor_array = np.array(lod_tensor)
-        tensor_array[0, 0, 0, 0] = 1.0
-        tensor_array[0, 0, 0, 1] = 2.0
-        lod_tensor.set(tensor_array, place)
-
-        lod_v = np.array(lod_tensor)
-        self.assertAlmostEqual(1.0, lod_v[0, 0, 0, 0])
-        self.assertAlmostEqual(2.0, lod_v[0, 0, 0, 1])
-        self.assertListEqual(lod_py, lod_tensor.recursive_sequence_lengths())
 
     def test_empty_tensor(self):
         place = core.CPUPlace()
@@ -263,7 +215,7 @@ class TestTensor(unittest.TestCase):
             self.assertEqual((0, 1), tensor_array.shape)
 
     def run_slice_tensor(self, place, dtype):
-        tensor = fluid.Tensor()
+        tensor = base.Tensor()
         shape = [3, 3, 3]
         tensor._set_dims(shape)
 
@@ -338,13 +290,17 @@ class TestTensor(unittest.TestCase):
             print(tensor)
             self.assertTrue(isinstance(str(tensor), str))
 
-    def test_tensor_poiter(self):
+    def test_tensor_pointer(self):
         place = core.CPUPlace()
         scope = core.Scope()
         var = scope.var("test_tensor")
         place = core.CPUPlace()
         tensor = var.get_tensor()
-        dtype = core.VarDesc.VarType.FP32
+        dtype = paddle.float32
+        if paddle.framework.use_pir_api() and isinstance(
+            dtype, paddle.base.core.DataType
+        ):
+            dtype = paddle.pir.core.datatype_to_vartype[dtype]
         self.assertTrue(
             isinstance(tensor._mutable_data(place, dtype), numbers.Integral)
         )
@@ -358,7 +314,7 @@ class TestTensor(unittest.TestCase):
             self.assertTrue(
                 isinstance(tensor._mutable_data(place, dtype), numbers.Integral)
             )
-            places = fluid.cuda_pinned_places()
+            places = base.cuda_pinned_places()
             self.assertTrue(
                 isinstance(
                     tensor._mutable_data(places[0], dtype), numbers.Integral
@@ -367,46 +323,56 @@ class TestTensor(unittest.TestCase):
 
     def test_tensor_set_fp16(self):
         array = np.random.random((300, 500)).astype("float16")
-        tensor = fluid.Tensor()
+        tensor = base.Tensor()
         place = core.CPUPlace()
         tensor.set(array, place)
-        self.assertEqual(tensor._dtype(), core.VarDesc.VarType.FP16)
+        tensor_dtype = tensor._dtype()
+        if paddle.framework.use_pir_api() and isinstance(
+            tensor_dtype, paddle.base.libpaddle.VarDesc.VarType
+        ):
+            tensor_dtype = paddle.pir.core.vartype_to_datatype[tensor_dtype]
+        self.assertEqual(tensor_dtype, paddle.float16)
         np.testing.assert_array_equal(np.array(tensor), array)
 
         if core.is_compiled_with_cuda():
             place = core.CUDAPlace(0)
             tensor.set(array, place)
-            self.assertEqual(tensor._dtype(), core.VarDesc.VarType.FP16)
+            self.assertEqual(tensor_dtype, paddle.float16)
             np.testing.assert_array_equal(np.array(tensor), array)
 
             place = core.CUDAPinnedPlace()
             tensor.set(array, place)
-            self.assertEqual(tensor._dtype(), core.VarDesc.VarType.FP16)
+            self.assertEqual(tensor_dtype, paddle.float16)
             np.testing.assert_array_equal(np.array(tensor), array)
 
     def test_tensor_set_int16(self):
         array = np.random.randint(100, size=(300, 500)).astype("int16")
-        tensor = fluid.Tensor()
+        tensor = base.Tensor()
         place = core.CPUPlace()
         tensor.set(array, place)
-        self.assertEqual(tensor._dtype(), core.VarDesc.VarType.INT16)
+        tensor_dtype = tensor._dtype()
+        if paddle.framework.use_pir_api() and isinstance(
+            tensor_dtype, paddle.base.libpaddle.VarDesc.VarType
+        ):
+            tensor_dtype = paddle.pir.core.vartype_to_datatype[tensor_dtype]
+        self.assertEqual(tensor_dtype, paddle.int16)
         np.testing.assert_array_equal(np.array(tensor), array)
 
         if core.is_compiled_with_cuda():
             place = core.CUDAPlace(0)
             tensor.set(array, place)
-            self.assertEqual(tensor._dtype(), core.VarDesc.VarType.INT16)
+            self.assertEqual(tensor_dtype, paddle.int16)
             np.testing.assert_array_equal(np.array(tensor), array)
 
             place = core.CUDAPinnedPlace()
             tensor.set(array, place)
-            self.assertEqual(tensor._dtype(), core.VarDesc.VarType.INT16)
+            self.assertEqual(tensor_dtype, paddle.int16)
             np.testing.assert_array_equal(np.array(tensor), array)
 
     def test_tensor_set_from_array_list(self):
         array = np.random.randint(1000, size=(200, 300))
         list_array = [array, array]
-        tensor = fluid.Tensor()
+        tensor = base.Tensor()
         place = core.CPUPlace()
         tensor.set(list_array, place)
         self.assertEqual([2, 200, 300], tensor.shape())
@@ -443,11 +409,15 @@ class TestTensor(unittest.TestCase):
         array = (
             np.random.random((100, 100)) + 1j * np.random.random((100, 100))
         ).astype(np.complex128)
-        tensor = fluid.Tensor()
+        tensor = base.Tensor()
         place = core.CPUPlace()
         tensor.set(array, place)
-
-        self.assertEqual(tensor._dtype(), core.VarDesc.VarType.COMPLEX128)
+        tensor_dtype = tensor._dtype()
+        if paddle.framework.use_pir_api() and isinstance(
+            tensor_dtype, paddle.base.libpaddle.VarDesc.VarType
+        ):
+            tensor_dtype = paddle.pir.core.vartype_to_datatype[tensor_dtype]
+        self.assertEqual(tensor_dtype, paddle.complex128)
         tensor._set_complex128_element(0, 42.1 + 42.1j)
         np.testing.assert_allclose(
             tensor._get_complex128_element(0), 42.1 + 42.1j
@@ -456,7 +426,7 @@ class TestTensor(unittest.TestCase):
         if core.is_compiled_with_cuda():
             place = core.CUDAPlace(0)
             tensor.set(array, place)
-            self.assertEqual(tensor._dtype(), core.VarDesc.VarType.COMPLEX128)
+            self.assertEqual(tensor_dtype, paddle.complex128)
             tensor._set_complex128_element(0, 42.1 + 42.1j)
             np.testing.assert_allclose(
                 tensor._get_complex128_element(0), 42.1 + 42.1j
@@ -464,7 +434,7 @@ class TestTensor(unittest.TestCase):
 
             place = core.CUDAPinnedPlace()
             tensor.set(array, place)
-            self.assertEqual(tensor._dtype(), core.VarDesc.VarType.COMPLEX128)
+            self.assertEqual(tensor_dtype, paddle.complex128)
             tensor._set_complex128_element(0, 42.1 + 42.1j)
             np.testing.assert_allclose(
                 tensor._get_complex128_element(0), 42.1 + 42.1j
@@ -474,11 +444,15 @@ class TestTensor(unittest.TestCase):
         array = (
             np.random.random((100, 100)) + 1j * np.random.random((100, 100))
         ).astype(np.complex64)
-        tensor = fluid.Tensor()
+        tensor = base.Tensor()
         place = core.CPUPlace()
         tensor.set(array, place)
-
-        self.assertEqual(tensor._dtype(), core.VarDesc.VarType.COMPLEX64)
+        tensor_dtype = tensor._dtype()
+        if paddle.framework.use_pir_api() and isinstance(
+            tensor_dtype, paddle.base.libpaddle.VarDesc.VarType
+        ):
+            tensor_dtype = paddle.pir.core.vartype_to_datatype[tensor_dtype]
+        self.assertEqual(tensor_dtype, paddle.complex64)
         tensor._set_complex64_element(0, 42.1 + 42.1j)
         np.testing.assert_allclose(
             np.complex64(tensor._get_complex64_element(0)),
@@ -488,7 +462,7 @@ class TestTensor(unittest.TestCase):
         if core.is_compiled_with_cuda():
             place = core.CUDAPlace(0)
             tensor.set(array, place)
-            self.assertEqual(tensor._dtype(), core.VarDesc.VarType.COMPLEX64)
+            self.assertEqual(tensor_dtype, paddle.complex64)
             tensor._set_complex64_element(0, 42.1 + 42.1j)
             np.testing.assert_allclose(
                 np.complex64(tensor._get_complex64_element(0)),
@@ -497,7 +471,7 @@ class TestTensor(unittest.TestCase):
 
             place = core.CUDAPinnedPlace()
             tensor.set(array, place)
-            self.assertEqual(tensor._dtype(), core.VarDesc.VarType.COMPLEX64)
+            self.assertEqual(tensor_dtype, paddle.complex64)
             tensor._set_complex64_element(0, 42.1 + 42.1j)
             np.testing.assert_allclose(
                 np.complex64(tensor._get_complex64_element(0)),

@@ -26,7 +26,7 @@ void TileGradKernel(const Context& dev_ctx,
                     const IntArray& repeat_times,
                     DenseTensor* x_grad) {
   auto x_dims = x.dims();
-  auto vec_x_dims = phi::vectorize<int>(x_dims);
+  auto vec_x_dims = common::vectorize<int>(x_dims);
   auto repeat_times_data = repeat_times.GetData();
   if (repeat_times_data.size() < vec_x_dims.size()) {
     int diff = vec_x_dims.size() - repeat_times_data.size();
@@ -83,8 +83,8 @@ void TileGradKernel(const Context& dev_ctx,
     using XPUType = typename XPUTypeTrait<T>::Type;
     // int reduce_sum(Context* ctx, const T* x, T* y, const std::vector<int>&
     // xshape, const std::vector<int>& rdims)
-    const auto* out_data = out_grad.data<XPUType>();
-    auto* x_grad_data = x_grad->data<XPUType>();
+    const auto* out_data = reinterpret_cast<const XPUType*>(out_grad.data<T>());
+    auto* x_grad_data = reinterpret_cast<XPUType*>(x_grad->data<T>());
     int r = xpu::reduce_sum<XPUType>(dev_ctx.x_context(),
                                      out_data,
                                      x_grad_data,
@@ -96,4 +96,9 @@ void TileGradKernel(const Context& dev_ctx,
 
 }  // namespace phi
 
-PD_REGISTER_KERNEL(tile_grad, XPU, ALL_LAYOUT, phi::TileGradKernel, float) {}
+PD_REGISTER_KERNEL(tile_grad,
+                   XPU,
+                   ALL_LAYOUT,
+                   phi::TileGradKernel,
+                   float,
+                   phi::dtype::bfloat16) {}

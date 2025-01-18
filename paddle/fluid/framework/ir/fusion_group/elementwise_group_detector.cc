@@ -19,10 +19,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/ir/fusion_group/operation.h"
 #include "paddle/fluid/framework/ir/subgraph_detector.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
-namespace fusion_group {
+namespace paddle::framework::ir::fusion_group {
 
 static std::unordered_set<std::string> elementwise_op_types;
 
@@ -47,7 +44,7 @@ static bool IsSpecifiedOp(const std::unordered_set<std::string>& op_types,
 static bool IsGradOp(const Node* n) {
   PADDLE_ENFORCE_EQ(n && n->IsOp() && n->Op(),
                     true,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Expected node %p to be an operator node.", n));
   std::string suffix = "_grad";
   std::string op_type = n->Op()->Type();
@@ -67,7 +64,7 @@ bool GroupDetector::CheckPrecondition(const Node* n) {
     proto::VarType::Type data_type_0 = proto::VarType::BOOL;
     for (auto* n : nodes) {
       if (n && n->IsVar() && n->Var()) {
-        if (n->Var()->GetType() != proto::VarType::LOD_TENSOR) {
+        if (n->Var()->GetType() != proto::VarType::DENSE_TENSOR) {
           return false;
         }
 
@@ -149,7 +146,4 @@ std::vector<std::vector<Node*>> ElementwiseGroupDetector::operator()(
   return SubgraphDetector(graph, teller)();
 }
 
-}  // namespace fusion_group
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir::fusion_group

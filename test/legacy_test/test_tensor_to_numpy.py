@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
 
-from paddle import fluid
+from paddle import base
 
 
 class TensorToNumpyTest(unittest.TestCase):
@@ -34,10 +35,16 @@ class TensorToNumpyTest(unittest.TestCase):
             'bool',
         ]
 
-        places = [fluid.CPUPlace()]
-        if fluid.core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
-            places.append(fluid.CUDAPinnedPlace())
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
+        if base.core.is_compiled_with_cuda():
+            places.append(base.CUDAPlace(0))
+            places.append(base.CUDAPinnedPlace())
 
         for p in places:
             for dtype in dtypes:
@@ -46,7 +53,7 @@ class TensorToNumpyTest(unittest.TestCase):
                     self.shape,
                 )
 
-                t = fluid.LoDTensor()
+                t = base.DenseTensor()
                 t.set(np_arr, p)
 
                 ret_np_arr = np.array(t)

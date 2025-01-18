@@ -27,14 +27,13 @@
 
 #include "paddle/cinn/common/graph_utils.h"
 #include "paddle/cinn/ir/buffer.h"
-#include "paddle/cinn/ir/utils/ir_printer.h"
+#include "paddle/cinn/ir/ir_mutator.h"
+#include "paddle/cinn/ir/ir_printer.h"
 #include "paddle/cinn/optim/buffer_assign.h"
 #include "paddle/cinn/optim/compute_inline_expand.h"
 #include "paddle/cinn/optim/fold_cinn_call_arguments.h"
 #include "paddle/cinn/optim/optimize.h"
-#include "paddle/cinn/optim/remove_nested_block.h"
 #include "paddle/cinn/optim/replace_call_with_expr.h"
-#include "paddle/cinn/optim/tensor_write_tell.h"
 #include "paddle/cinn/optim/transform_gpu_forloop.h"
 #include "paddle/cinn/optim/transform_polyfor_to_for.h"
 #include "paddle/cinn/poly/ast_gen.h"
@@ -56,27 +55,9 @@ namespace detail {
 void CheckNoIslCallRemains(const Expr* expr);
 
 /**
- * \brief Lower a single group of nodes.
- *
- * We partition the whole computation of a function into several groups, each
- * group is a basic element for ISL polyhedral computation, that is, we
- * transform a group into a isl domain and schedule, and generate ast latter.
- *
- * @param group A single schedule group containing several Stages and the
- * scheduling order.
- * @param tuple_to_expr A map from isl set tuple name to CINN expressions.
- */
-Expr LowerGroup(const poly::ScheduleGroup& group,
-                const std::map<std::string, Expr>& tuple_to_expr,
-                std::map<std::string, Tensor>* global_tensor_map,
-                std::unordered_set<std::string>& resized_buffer,  // NOLINT
-                StageMap stage_map,
-                ir::CudaAxisInfo* cuda_axis_info = nullptr);
-
-/**
  * A Computation graph node.
  */
-struct CompuGraphNode : public common::GraphNode {
+struct CompuGraphNode : public cinn::common::GraphNode {
   explicit CompuGraphNode(ir::Tensor tensor) : tensor(tensor) {}
 
   ir::Tensor tensor;
@@ -86,44 +67,14 @@ struct CompuGraphNode : public common::GraphNode {
   static const char* __type_info__;
 };
 
-/**
- * \brief Create a computation graph using a tensor set.
- * It will deduce the temporary tensors not in the \p tensors.
- * It consider the `extra_depend_stages` stored in tensor.stage.
- *
- * @param tensors the input/output tensors of a computation.
- * @param hide_inline hide inline tensor nodes.
- * @return a graph.
- */
-std::unique_ptr<common::Graph> CreateCompGraph(
-    const std::vector<ir::Tensor>& tensors,
-    StageMap stages,
-    bool hide_inline = false);
-
 class LowerImpl {
  public:
-  /**
-   * @param fn_name the name of the final output function.
-   * @param tensor_args the tensor arguments for the function
-   * @param scalar_args the scalar arguments for the function
-   * @param temp_tensor_args the extra temporary tensor arguments
-   *
-   * The \p tensor_args contains both input and output tensors.
-   */
-  LowerImpl(const std::string& fn_name,
-            StageMap stages,
-            const std::vector<Tensor>& tensor_args,
-            const std::vector<Var>& scalar_args,
-            const std::vector<Tensor>& temp_tensor_args = {},
-            const Target& target = common::DefaultHostTarget(),
-            bool support_ir_schedule = false);
-
   std::vector<ir::LoweredFunc> operator()();
 
   /**
    * Get the computational graph.
    */
-  const common::Graph* comp_graph() const { return compu_graph_.get(); }
+  const cinn::common::Graph* comp_graph() const { return compu_graph_.get(); }
 
   /**
    * \brief generate the argument list of the final output function.
@@ -151,8 +102,8 @@ class LowerImpl {
   std::vector<Tensor> CollectTemporaryTensors();
 
   /**
-   * \brief Check both the tensor_args and sclar_args not contain duplication
-   * (different arguemnt with the same name).
+   * \brief Check both the tensor_args and scalar_args not contain duplication
+   * (different argument with the same name).
    */
   void CheckArgsUnique();
 
@@ -191,10 +142,8 @@ class LowerImpl {
   std::vector<Tensor> temp_tensor_args_;
   Target target_;
 
-  StageMap stages_;
-
   //! A computation graph generated from the tensor_args and scalar_args.
-  std::unique_ptr<common::Graph> compu_graph_;
+  std::unique_ptr<cinn::common::Graph> compu_graph_;
 
   //! CUDA axis info for this function.
   std::vector<ir::CudaAxisInfo> cuda_axis_info_;
@@ -231,12 +180,25 @@ struct MarkVectorizeMutator : public ir::IRMutator<Expr*> {
   // each statement in ISL is bound to a Store node.
   void Visit(const ir::Store* op, Expr* expr) override {
     auto* tensor_n = op->tensor.As<ir::_Tensor_>();
-    CHECK(tensor_n);
+    PADDLE_ENFORCE_NOT_NULL(
+        tensor_n,
+        ::common::errors::InvalidArgument("Sorry, but op->tensor is null"));
     auto it = vectorizes.find(tensor_n->name);
     if (it != vectorizes.end()) {
-      CHECK_LT(it->second.level, forloop_stack.size());
+      PADDLE_ENFORCE_LT(
+          it->second.level,
+          forloop_stack.size(),
+          ::common::errors::InvalidArgument(
+              "Required it->second.level shall be less than "
+              "forloop_stack.size()."
+              "But receive it->second.level = %d, forloop_stack.size() = %d ",
+              it->second.level,
+              forloop_stack.size()));
       forloop_stack[it->second.level]->set_vectorize_info(it->second);
-      CHECK(it->second.valid());
+      PADDLE_ENFORCE_EQ(
+          it->second.valid(),
+          true,
+          ::common::errors::InvalidArgument("it->second.valid() is false"));
     }
   }
 
@@ -265,12 +227,20 @@ struct MarkUnrollMutator : public ir::IRMutator<Expr*> {
   // each statement in ISL is bound to a Store node.
   void Visit(const ir::Store* op, Expr* expr) override {
     auto* tensor_n = op->tensor.As<ir::_Tensor_>();
-    CHECK(tensor_n);
+    PADDLE_ENFORCE_NOT_NULL(
+        tensor_n,
+        ::common::errors::InvalidArgument("Sorry, but op->tensor is null"));
     auto it = unrolls.find(tensor_n->name);
     if (it != unrolls.end()) {
       for (int level : it->second) {
         VLOG(1) << "Mark " << level << " Unrolled";
-        CHECK_LT(level, stack.size());
+        PADDLE_ENFORCE_LT(level,
+                          stack.size(),
+                          ::common::errors::InvalidArgument(
+                              "Required level shall be less than stack.size()."
+                              "But receive level = %d, stack.size() = %d ",
+                              level,
+                              stack.size()));
         stack[level]->set_unrolled();
       }
     }
@@ -301,12 +271,20 @@ struct MarkParallelMutator : public ir::IRMutator<Expr*> {
   // each statement in ISL is bound to a Store node.
   void Visit(const ir::Store* op, Expr* expr) override {
     auto* tensor_n = op->tensor.As<ir::_Tensor_>();
-    CHECK(tensor_n);
+    PADDLE_ENFORCE_NOT_NULL(
+        tensor_n,
+        ::common::errors::InvalidArgument("Sorry, but op->tensor is null"));
     auto it = parallels.find(tensor_n->name);
     if (it != parallels.end()) {
       for (int level : it->second) {
-        VLOG(1) << "Mark " << level << " Paralled";
-        CHECK_LT(level, stack.size());
+        VLOG(1) << "Mark " << level << " Parallelled";
+        PADDLE_ENFORCE_LT(level,
+                          stack.size(),
+                          ::common::errors::InvalidArgument(
+                              "Required level shall be less than stack.size()."
+                              "But receive level = %d, stack.size() = %d ",
+                              level,
+                              stack.size()));
         stack[level]->set_parallel();
       }
     }

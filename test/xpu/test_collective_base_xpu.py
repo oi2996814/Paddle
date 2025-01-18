@@ -24,36 +24,43 @@ from contextlib import closing
 
 import numpy as np
 
-import paddle.fluid.unique_name as nameGen
-from paddle import fluid
-from paddle.fluid import core
+import paddle.base.unique_name as nameGen
+from paddle import base
+from paddle.base import core
+from paddle.distributed.collective import _init_parallel_env
 
 
 def DataTypeCast(date_type):
-    np_data_type = None
+    np_dtype = None
 
     if date_type == "float16":
-        np_data_type = np.float16
+        np_dtype = np.float16
     elif date_type == "float32":
-        np_data_type = np.float32
+        np_dtype = np.float32
     elif date_type == "float64":
-        np_data_type = np.float64
-    elif date_type == "int8":
-        np_data_type = np.int8
-    elif date_type == "int16":
-        np_data_type = np.int16
+        np_dtype = np.float64
+    elif date_type == "uint8":
+        np_dtype = np.uint8
     elif date_type == "int32":
-        np_data_type = np.int32
+        np_dtype = np.int32
     elif date_type == "int64":
-        np_data_type = np.int64
+        np_dtype = np.int64
+    elif date_type == "bfloat16":
+        np_dtype = np.uint16
     else:
         raise ValueError("This data type is not support!")
 
-    return np_data_type
+    return np_dtype
+
+
+def dump_output(x):
+    dump_file = os.environ['DUMP_FILE']
+    with open(dump_file, 'wb') as f:
+        pickle.dump(x, f)
 
 
 class TestCollectiveRunnerBase:
-    def get_model(self, train_prog, startup_prog):
+    def get_model(self, train_prog, startup_prog, dtype=None):
         raise NotImplementedError(
             "get model should be implemented by child class."
         )
@@ -127,30 +134,30 @@ class TestCollectiveRunnerBase:
         )
 
     def run_trainer(self, args):
-        train_prog = fluid.Program()
-        startup_prog = fluid.Program()
+        train_prog = base.Program()
+        startup_prog = base.Program()
         endpoints = args["endpoints"].split(",")
         rank = args["trainerid"]
         current_endpoint = args["currentendpoint"]
         nranks = 2
-        self.initCommunicator(
-            startup_prog, rank, nranks, True, current_endpoint, endpoints
-        )
+
+        _init_parallel_env("bkcl")
+
         self.rank = rank
-        result = self.get_model(train_prog, startup_prog)
+        np_dtype = DataTypeCast(args["dtype"])
+        result = self.get_model(train_prog, startup_prog, np_dtype)
         device_id = int(os.getenv("FLAGS_selected_xpus", "0"))
-        place = fluid.XPUPlace(device_id)
-        exe = fluid.Executor(place)
+        place = base.XPUPlace(device_id)
+        exe = base.Executor(place)
         exe.run(startup_prog)
         np.random.seed(os.getpid())
-        np_data_type = DataTypeCast(args["data_type"])
         indata = np.random.uniform(
             low=-10.0, high=10.0, size=(10, 1000)
-        ).astype(np_data_type)
+        ).astype(np_dtype)
         out = exe.run(
             train_prog, feed={'tindata': indata}, fetch_list=[result.name]
         )
-        sys.stdout.buffer.write(pickle.dumps(out[0]))
+        dump_output(out[0])
 
 
 def runtime_main(test_class, col_type, sub_type):
@@ -162,7 +169,8 @@ def runtime_main(test_class, col_type, sub_type):
     args["endpoints"] = os.getenv('PADDLE_TRAINER_ENDPOINTS')
     args["currentendpoint"] = os.getenv("PADDLE_CURRENT_ENDPOINT")
     args["col_type"] = col_type
-    args["data_type"] = os.getenv("DATA_TYPE")
+    args["dtype"] = os.getenv("DTYPE")
+    args["batch_size"] = os.getenv("BATCH_SIZE")
     model.run_trainer(args)
 
 
@@ -170,10 +178,7 @@ class TestDistBase(unittest.TestCase):
     def setUp(self):
         self._port_set = set()
         self._trainers = 2
-        self._ps_endpoints = "127.0.0.1:{},127.0.0.1:{}".format(
-            self._find_free_port(),
-            self._find_free_port(),
-        )
+        self._ps_endpoints = f"127.0.0.1:{self._find_free_port()},127.0.0.1:{self._find_free_port()}"
         self._python_interp = sys.executable
 
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -216,6 +221,14 @@ class TestDistBase(unittest.TestCase):
         # update environment
         env0.update(envs)
         env1.update(envs)
+
+        # setup out dump path
+        cur_pid = os.getpid()
+        dump_file_0 = f'./out_data_0_{cur_pid}.pickled'
+        dump_file_1 = f'./out_data_1_{cur_pid}.pickled'
+        env0['DUMP_FILE'] = dump_file_0
+        env1['DUMP_FILE'] = dump_file_1
+
         tr_cmd = "%s %s"
         tr0_cmd = tr_cmd % (self._python_interp, model_file)
         tr1_cmd = tr_cmd % (self._python_interp, model_file)
@@ -239,14 +252,21 @@ class TestDistBase(unittest.TestCase):
 
         tr0_out, tr0_err = tr0_proc.communicate()
         tr1_out, tr1_err = tr1_proc.communicate()
-        sys.stderr.write('trainer 0 stderr: %s\n' % tr0_err)
-        sys.stderr.write('trainer 1 stderr: %s\n' % tr1_err)
+        sys.stderr.write(f'trainer 0 stderr: {tr0_err}\n')
+        sys.stderr.write(f'trainer 1 stderr: {tr1_err}\n')
         # close trainer file
         tr0_pipe.close()
         tr1_pipe.close()
+
+        def load_and_remove(path):
+            with open(path, 'rb') as f:
+                out = pickle.load(f)
+            os.remove(path)
+            return out
+
         return (
-            pickle.loads(tr0_out),
-            pickle.loads(tr1_out),
+            load_and_remove(dump_file_0),
+            load_and_remove(dump_file_1),
             tr0_proc.pid,
             tr1_proc.pid,
         )
@@ -255,7 +275,7 @@ class TestDistBase(unittest.TestCase):
         self,
         model_file,
         col_type,
-        data_type,
+        dtype=None,
         check_error_log=False,
         need_envs={},
     ):
@@ -266,7 +286,7 @@ class TestDistBase(unittest.TestCase):
             "LD_LIBRARY_PATH": os.getenv("LD_LIBRARY_PATH", ""),
             "LD_PRELOAD": os.getenv("LD_PRELOAD", ""),
             "GLOG_v": "3",
-            "DATA_TYPE": data_type,
+            "DTYPE": dtype,
         }
         required_envs.update(need_envs)
         if check_error_log:
@@ -275,15 +295,16 @@ class TestDistBase(unittest.TestCase):
         tr0_out, tr1_out, pid0, pid1 = self._run_cluster(
             model_file, required_envs
         )
-        np_data_type = DataTypeCast(data_type)
+        dtype = "float32" if dtype is None else dtype
+        np_dtype = DataTypeCast(dtype)
         np.random.seed(pid0)
         input1 = np.random.uniform(
             low=-10.0, high=10.0, size=(10, 1000)
-        ).astype(np_data_type)
+        ).astype(np_dtype)
         np.random.seed(pid1)
         input2 = np.random.uniform(
             low=-10.0, high=10.0, size=(10, 1000)
-        ).astype(np_data_type)
+        ).astype(np_dtype)
         if col_type == "allgather":
             need_result = np.vstack((input1, input2))
             np.testing.assert_allclose(tr0_out, need_result)
@@ -330,12 +351,12 @@ class TestDistBase(unittest.TestCase):
             np.testing.assert_allclose(tr0_out, need_result1, rtol=0, atol=0)
             np.testing.assert_allclose(tr1_out, need_result2, rtol=0, atol=0)
         elif col_type == "reduce_slicegather":
-            slicesize = input1.shape[0] // 2
-            tmp10 = input1[0:slicesize]
-            tmp11 = input2[0:slicesize]
+            slice_size = input1.shape[0] // 2
+            tmp10 = input1[0:slice_size]
+            tmp11 = input2[0:slice_size]
             need_result1 = np.concatenate((tmp10, tmp11), axis=1)
-            tmp20 = input1[slicesize:]
-            tmp21 = input2[slicesize:]
+            tmp20 = input1[slice_size:]
+            tmp21 = input2[slice_size:]
             need_result2 = np.concatenate((tmp20, tmp21), axis=1)
             np.testing.assert_allclose(tr0_out, need_result1)
             np.testing.assert_allclose(tr1_out, need_result2)

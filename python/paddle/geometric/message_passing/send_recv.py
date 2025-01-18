@@ -11,18 +11,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
+from typing_extensions import TypeAlias
 
 from paddle import _C_ops
-from paddle.fluid.data_feeder import (
+from paddle.base.data_feeder import (
     check_dtype,
     check_type,
     check_variable_and_dtype,
 )
-from paddle.fluid.framework import Variable
-from paddle.fluid.layer_helper import LayerHelper
-from paddle.framework import in_dynamic_mode
+from paddle.base.framework import Variable
+from paddle.base.layer_helper import LayerHelper
+from paddle.framework import in_dynamic_or_pir_mode
 
 from .utils import (
     convert_out_size_to_list,
@@ -30,12 +34,32 @@ from .utils import (
     reshape_lhs_rhs,
 )
 
+if TYPE_CHECKING:
+    from paddle import Tensor
+
+    _ReduceOp: TypeAlias = Literal[
+        "sum",
+        "mean",
+        "max",
+        "min",
+    ]
+    _MessageOp: TypeAlias = Literal[
+        "add",
+        "sub",
+        "mul",
+        "div",
+    ]
 __all__ = []
 
 
 def send_u_recv(
-    x, src_index, dst_index, reduce_op="sum", out_size=None, name=None
-):
+    x: Tensor,
+    src_index: Tensor,
+    dst_index: Tensor,
+    reduce_op: _ReduceOp = "sum",
+    out_size: int | Tensor | None = None,
+    name: str | None = None,
+) -> Tensor:
     """
     Graph Learning message passing api.
 
@@ -121,14 +145,13 @@ def send_u_recv(
 
     if reduce_op not in ["sum", "mean", "max", "min"]:
         raise ValueError(
-            "reduce_op should be `sum`, `mean`, `max` or `min`, but received %s"
-            % reduce_op
+            f"reduce_op should be `sum`, `mean`, `max` or `min`, but received {reduce_op}"
         )
 
     # TODO(daisiming): Should we add judgement for out_size: max(dst_index) + 1.
 
-    if in_dynamic_mode():
-        out_size = convert_out_size_to_list(out_size)
+    if in_dynamic_or_pir_mode():
+        out_size = convert_out_size_to_list(out_size, 'graph_send_recv')
         return _C_ops.send_u_recv(
             x, src_index, dst_index, reduce_op.upper(), out_size
         )
@@ -185,15 +208,15 @@ def send_u_recv(
 
 
 def send_ue_recv(
-    x,
-    y,
-    src_index,
-    dst_index,
-    message_op="add",
-    reduce_op="sum",
-    out_size=None,
-    name=None,
-):
+    x: Tensor,
+    y: Tensor,
+    src_index: Tensor,
+    dst_index: Tensor,
+    message_op: _MessageOp = "add",
+    reduce_op: _ReduceOp = "sum",
+    out_size: int | Tensor | None = None,
+    name: str | None = None,
+) -> Tensor:
     """
 
     Graph Learning message passing api.
@@ -291,14 +314,12 @@ def send_ue_recv(
 
     if message_op not in ["add", "sub", "mul", "div"]:
         raise ValueError(
-            "message_op should be `add`, `sub`, `mul`, `div`, but received %s"
-            % message_op
+            f"message_op should be `add`, `sub`, `mul`, `div`, but received {message_op}"
         )
 
     if reduce_op not in ["sum", "mean", "max", "min"]:
         raise ValueError(
-            "reduce_op should be `sum`, `mean`, `max` or `min`, but received %s"
-            % reduce_op
+            f"reduce_op should be `sum`, `mean`, `max` or `min`, but received {reduce_op}"
         )
 
     x, y = reshape_lhs_rhs(x, y)
@@ -312,8 +333,8 @@ def send_ue_recv(
 
     # TODO(daisiming): Should we add judgement for out_size: max(dst_index) + 1.
 
-    if in_dynamic_mode():
-        out_size = convert_out_size_to_list(out_size)
+    if in_dynamic_or_pir_mode():
+        out_size = convert_out_size_to_list(out_size, 'graph_send_ue_recv')
         return _C_ops.send_ue_recv(
             x,
             y,
@@ -389,7 +410,14 @@ def send_ue_recv(
         return out
 
 
-def send_uv(x, y, src_index, dst_index, message_op="add", name=None):
+def send_uv(
+    x: Tensor,
+    y: Tensor,
+    src_index: Tensor,
+    dst_index: Tensor,
+    message_op: _MessageOp = "add",
+    name: str | None = None,
+) -> Tensor:
     """
 
     Graph Learning message passing api.
@@ -459,8 +487,7 @@ def send_uv(x, y, src_index, dst_index, message_op="add", name=None):
 
     if message_op not in ['add', 'sub', 'mul', 'div']:
         raise ValueError(
-            "message_op should be `add`, `sub`, `mul`, `div`, but received %s"
-            % message_op
+            f"message_op should be `add`, `sub`, `mul`, `div`, but received {message_op}"
         )
 
     x, y = reshape_lhs_rhs(x, y)
@@ -472,7 +499,7 @@ def send_uv(x, y, src_index, dst_index, message_op="add", name=None):
         message_op = 'mul'
         y = 1.0 / (y + 1e-12)
 
-    if in_dynamic_mode():
+    if in_dynamic_or_pir_mode():
         return _C_ops.send_uv(x, y, src_index, dst_index, message_op.upper())
     else:
         helper = LayerHelper("graph_send_uv", **locals())

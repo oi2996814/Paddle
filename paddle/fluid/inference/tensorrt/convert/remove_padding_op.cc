@@ -15,9 +15,7 @@ limitations under the License. */
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 #include "paddle/fluid/inference/tensorrt/plugin/remove_padding_plugin.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 /*
  * Remove padding of transformer'input.
@@ -28,7 +26,7 @@ class RemovePadding : public OpConverter {
                   const framework::Scope& scope,
                   bool test_mode) override {
     if (!engine_->with_dynamic_shape()) {
-      PADDLE_THROW(platform::errors::Fatal(
+      PADDLE_THROW(common::errors::Fatal(
           "remove_padding_op: If you want to use transformer, must "
           "be with dynamic shape"));
     }
@@ -50,7 +48,7 @@ class RemovePadding : public OpConverter {
                  "transformer'input: Padding -> VarSeqlen.";
       if (!op_desc.HasAttr("out_threshold")) {
         PADDLE_THROW(
-            platform::errors::Fatal("use with_interleaved must be int8."));
+            common::errors::Fatal("use with_interleaved must be int8."));
       }
       float out_scale =
           PADDLE_GET_CONST(float, op_desc.GetAttr("out_threshold"));
@@ -71,8 +69,6 @@ class RemovePadding : public OpConverter {
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(remove_padding, RemovePadding);

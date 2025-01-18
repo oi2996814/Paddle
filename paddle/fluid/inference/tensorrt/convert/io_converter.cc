@@ -22,21 +22,21 @@ namespace paddle {
 namespace inference {
 namespace tensorrt {
 
-using platform::is_cpu_place;
-using platform::is_gpu_place;
+using phi::is_cpu_place;
+using phi::is_gpu_place;
 
 class DefaultIOConverter : public EngineIOConverter {
  public:
   DefaultIOConverter() {}
   // NOTE out is GPU memory.
-  virtual void operator()(const LoDTensor& in,
+  virtual void operator()(const DenseTensor& in,
                           void* out,
                           size_t max_size) override {
     PADDLE_ENFORCE_NOT_NULL(out,
-                            platform::errors::InvalidArgument(
+                            common::errors::InvalidArgument(
                                 "The input param 'out' must not be nullptr."));
     PADDLE_ENFORCE_NOT_NULL(stream_,
-                            platform::errors::PreconditionNotMet(
+                            common::errors::PreconditionNotMet(
                                 "You should set up stream_ by SetStream() "
                                 "before you call the operator()."));
     const auto& place = in.place();
@@ -44,8 +44,8 @@ class DefaultIOConverter : public EngineIOConverter {
     PADDLE_ENFORCE_LE(
         size,
         max_size,
-        platform::errors::InvalidArgument(
-            "The input Tensor in's memory_size shoule be less than or equal to "
+        common::errors::InvalidArgument(
+            "The input Tensor in's memory_size should be less than or equal to "
             "the input max_size. But in's memory_size = %u, max_size = %u.",
             size,
             max_size));
@@ -57,22 +57,22 @@ class DefaultIOConverter : public EngineIOConverter {
           0,
           cudaMemcpyAsync(
               out, in.data<float>(), size, cudaMemcpyDeviceToDevice, *stream_),
-          platform::errors::External(
+          common::errors::External(
               "cudaMemcpyAsync(cudaMemcpyDeviceToDevice) error."));
     } else {
-      PADDLE_THROW(platform::errors::NotFound("Unknown device for converter"));
+      PADDLE_THROW(common::errors::NotFound("Unknown device for converter"));
     }
     cudaStreamSynchronize(*stream_);
   }
   // NOTE in is GPU memory.
   virtual void operator()(const void* in,
-                          LoDTensor* out,
+                          DenseTensor* out,
                           size_t max_size) override {
     PADDLE_ENFORCE_NOT_NULL(in,
-                            platform::errors::InvalidArgument(
+                            common::errors::InvalidArgument(
                                 "The input param 'in' must not be nullptr."));
     PADDLE_ENFORCE_NOT_NULL(stream_,
-                            platform::errors::PreconditionNotMet(
+                            common::errors::PreconditionNotMet(
                                 "You should set up stream_ by SetStream() "
                                 "before you call the operator()."));
     const auto& place = out->place();
@@ -80,8 +80,8 @@ class DefaultIOConverter : public EngineIOConverter {
     PADDLE_ENFORCE_LE(
         size,
         max_size,
-        platform::errors::InvalidArgument(
-            "The input Tensor out's memory_size shoule be less than or equal "
+        common::errors::InvalidArgument(
+            "The input Tensor out's memory_size should be less than or equal "
             "to the input max_size. "
             "But out's memory_size = %u, max_size = %u.",
             size,
@@ -91,23 +91,23 @@ class DefaultIOConverter : public EngineIOConverter {
           0,
           cudaMemcpyAsync(
               out->data<float>(), in, size, cudaMemcpyDeviceToHost, *stream_),
-          platform::errors::External(
+          common::errors::External(
               "cudaMemcpyAsync(cudaMemcpyDeviceToHost) error."));
     } else if (is_gpu_place(place)) {
       PADDLE_ENFORCE_EQ(
           0,
           cudaMemcpyAsync(
               out->data<float>(), in, size, cudaMemcpyDeviceToDevice, *stream_),
-          platform::errors::External(
+          common::errors::External(
               "cudaMemcpyAsync(cudaMemcpyDeviceToDevice) error."));
     } else {
-      PADDLE_THROW(platform::errors::NotFound("Unknown device for converter"));
+      PADDLE_THROW(common::errors::NotFound("Unknown device for converter"));
     }
     cudaStreamSynchronize(*stream_);
   }
 };
 
-// fluid LodTensor <-> tensorrt ITensor
+// fluid DenseTensor <-> tensorrt ITensor
 REGISTER_TENSORRT_IO_CONVERTER(default, DefaultIOConverter);
 
 }  // namespace tensorrt

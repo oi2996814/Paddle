@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import gradient_checker
@@ -19,13 +20,14 @@ import numpy as np
 from decorator_helper import prog_scope
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 paddle.enable_static()
 
 
 class TestSliceOpDoubleGradCheck(unittest.TestCase):
+
     @prog_scope()
     def func(self, place):
         self.config()
@@ -42,14 +44,20 @@ class TestSliceOpDoubleGradCheck(unittest.TestCase):
         self.ends = [3, 3, 6]
         self.axes = [0, 1, 2]
         self.x_arr = np.random.random([3, 4, 5, 2]).astype("float64")
-        self.inputs = paddle.create_parameter(
+        self.inputs = paddle.static.data(
             dtype="float64", shape=[3, 4, 5, 2], name='x'
         )
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for place in places:
             self.func(place)
 
@@ -60,12 +68,13 @@ class TestSliceOpDoubleGradCheckCase3(TestSliceOpDoubleGradCheck):
         self.ends = [3, 3, 3]
         self.axes = [0, 1, 2]
         self.x_arr = np.random.random([3, 3, 3]).astype("float64")
-        self.inputs = paddle.create_parameter(
+        self.inputs = paddle.static.data(
             dtype="float64", shape=[3, 3, 3], name='x3'
         )
 
 
 class TestReduceMeanWithDimDoubleGradCheck(unittest.TestCase):
+
     @prog_scope()
     def func(self, place):
         shape = [7, 11]
@@ -82,14 +91,21 @@ class TestReduceMeanWithDimDoubleGradCheck(unittest.TestCase):
         )
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
 
 class TestReduceSumWithDimDoubleGradCheck(unittest.TestCase):
+
     @prog_scope()
     def func(self, place):
         shape = [7, 11]
@@ -106,14 +122,21 @@ class TestReduceSumWithDimDoubleGradCheck(unittest.TestCase):
         )
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
 
 class TestReshapeDoubleGradCheck(unittest.TestCase):
+
     @prog_scope()
     def func(self, place):
         x_shape = [3, 12]
@@ -131,9 +154,15 @@ class TestReshapeDoubleGradCheck(unittest.TestCase):
         )
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
@@ -162,9 +191,15 @@ class TestTileDoubleGradCheck(unittest.TestCase):
         )
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
@@ -193,9 +228,15 @@ class TestExpandV2DoubleGradCheck(unittest.TestCase):
         )
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
@@ -225,9 +266,15 @@ class TestSqueezeDoubleGradCheck(unittest.TestCase):
         )
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
@@ -257,9 +304,15 @@ class TestUnsqueezeDoubleGradCheck(unittest.TestCase):
         )
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
@@ -284,14 +337,21 @@ class TestClipDoubleGradCheck(unittest.TestCase):
         )
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
 
 class TestTransposeDoubleGradCheck(unittest.TestCase):
+
     @prog_scope()
     def func(self, place):
         x_shape = [3, 40]
@@ -306,14 +366,21 @@ class TestTransposeDoubleGradCheck(unittest.TestCase):
         gradient_checker.double_grad_check([x], out, x_init=x_arr, place=place)
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
 
 class TestTransposeDoubleGradCheckCase1(unittest.TestCase):
+
     @prog_scope()
     def func(self, place):
         x_shape = [2, 3, 4, 5]
@@ -328,9 +395,15 @@ class TestTransposeDoubleGradCheckCase1(unittest.TestCase):
         gradient_checker.double_grad_check([x], out, x_init=x_arr, place=place)
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
@@ -361,14 +434,21 @@ class TestConstantPadDoubleGradCheck(unittest.TestCase):
         )
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
 
 class TestConstantPadDoubleGradCheckCase1(TestConstantPadDoubleGradCheck):
+
     @prog_scope()
     def func(self, place):
         x_shape = [2, 3, 4, 5]
@@ -390,13 +470,14 @@ class TestConcatDoubleGradCheck(unittest.TestCase):
     @prog_scope()
     def func(self, place):
         x_shape = [2, 3, 4, 5]
-        pad = [1, 1, 1, 1]
         dtype = np.float64
 
         x1 = paddle.static.data('x', x_shape, dtype)
         x2 = paddle.static.data('x', x_shape, dtype)
         x1.persistable = True
+        x1.stop_gradient = False
         x2.persistable = True
+        x2.stop_gradient = False
         out = paddle.concat([x1, x2], axis=0)
         x2_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
         x1_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
@@ -413,14 +494,65 @@ class TestConcatDoubleGradCheck(unittest.TestCase):
         )
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
+        for p in places:
+            self.func(p)
+
+
+class TestStackDoubleGradCheck(unittest.TestCase):
+    def stack_wrapper(self, x):
+        return paddle.stack(x, axis=1)
+
+    @prog_scope()
+    def func(self, place):
+        x_shape = [2, 3, 4, 5]
+        dtype = np.float64
+
+        x1 = paddle.static.data('x', x_shape, dtype)
+        x2 = paddle.static.data('x', x_shape, dtype)
+        x1.persistable = True
+        x1.stop_gradient = False
+        x2.persistable = True
+        x2.stop_gradient = False
+        out = paddle.stack([x1, x2], axis=0)
+        x2_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
+        x1_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
+
+        gradient_checker.double_grad_check(
+            [x1, x2], out, x_init=[x1_arr, x2_arr], place=place
+        )
+        gradient_checker.double_grad_check_for_dygraph(
+            self.stack_wrapper,
+            [x1, x2],
+            out,
+            x_init=[x1_arr, x2_arr],
+            place=place,
+        )
+
+    def test_grad(self):
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
+        if core.is_compiled_with_cuda():
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
 
 class TestAvgPool2DDoubleGradCheckCase1(unittest.TestCase):
+
     @prog_scope()
     def func(self, place):
         input_NCHW = paddle.static.data(
@@ -438,9 +570,15 @@ class TestAvgPool2DDoubleGradCheckCase1(unittest.TestCase):
         )
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
@@ -474,9 +612,15 @@ class TestAvgPool2DDoubleGradCheckCase2(unittest.TestCase):
         )
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
@@ -509,9 +653,15 @@ class TestAvgPool2DDoubleGradCheckCase3(unittest.TestCase):
         )
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
@@ -540,9 +690,15 @@ class TestAvgPool2DDoubleGradCheckCase4(unittest.TestCase):
         )
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 

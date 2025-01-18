@@ -13,11 +13,26 @@
 # limitations under the License.
 
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from paddle import framework
 from paddle.distributed.communication import stream
 
+if TYPE_CHECKING:
+    from paddle import Tensor
+    from paddle.base.core import task
+    from paddle.distributed.communication.group import Group
 
-def gather(tensor, gather_list=None, dst=0, group=None, sync_op=True):
+
+def gather(
+    tensor: Tensor,
+    gather_list: list[Tensor] | None = None,
+    dst: int = 0,
+    group: Group | None = None,
+    sync_op: bool = True,
+) -> task | None:
     """
 
     Gather tensors from all participators.
@@ -38,21 +53,21 @@ def gather(tensor, gather_list=None, dst=0, group=None, sync_op=True):
     Examples:
         .. code-block:: python
 
-            # required: distributed
-            import paddle
-            import paddle.distributed as dist
+            >>> # doctest: +REQUIRES(env: DISTRIBUTED)
+            >>> import paddle
+            >>> import paddle.distributed as dist
 
-            dist.init_parallel_env()
-            gather_list = []
-            if dist.get_rank() == 0:
-                data = paddle.to_tensor([1, 2, 3])
-                dist.gather(data, gather_list, dst=0)
-            else:
-                data = paddle.to_tensor([4, 5, 6])
-                dist.gather(data1, gather_list, dst=0)
-            print(gather_list)
-            # [[1, 2, 3], [4, 5, 6]] (2 GPUs, out for rank 0)
-            # [] (2 GPUs, out for rank 1)
+            >>> dist.init_parallel_env()
+            >>> gather_list = [] # type: ignore
+            >>> if dist.get_rank() == 0:
+            ...     data = paddle.to_tensor([1, 2, 3])
+            ...     dist.gather(data, gather_list, dst=0)
+            >>> else:
+            ...     data = paddle.to_tensor([4, 5, 6])
+            ...     dist.gather(data, gather_list, dst=0)
+            >>> print(gather_list)
+            >>> # [[1, 2, 3], [4, 5, 6]] (2 GPUs, out for rank 0)
+            >>> # [] (2 GPUs, out for rank 1)
     """
     assert (
         framework.in_dynamic_mode()

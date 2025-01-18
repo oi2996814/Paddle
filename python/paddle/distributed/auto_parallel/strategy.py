@@ -11,10 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License
+from __future__ import annotations
 
 import copy
+from typing import TYPE_CHECKING
 
 from . import constants
+
+if TYPE_CHECKING:
+    from paddle._typing.dtype_like import _DTypeLiteral
 
 
 class BaseConfig:
@@ -26,9 +31,7 @@ class BaseConfig:
                 self._config_dict = config_dict
             else:
                 raise ValueError(
-                    "Expected a dictionary. But received: {}".format(
-                        config_dict
-                    )
+                    f"Expected a dictionary. But received: {config_dict}"
                 )
         # Initialize attributes by the default config
         config = constants.get_category_default_config(self._category)
@@ -62,7 +65,7 @@ class BaseConfig:
         result_dict = self.to_dict()
         string = "{"
         for k, v in result_dict.items():
-            string += f"\"{k}\":\"{v}\","
+            string += f'"{k}":"{v}",'
         return string + "}"
 
     def __deepcopy__(self, memo):
@@ -84,25 +87,60 @@ class RecomputeConfig(BaseConfig):
         super().__init__(category, config_dict)
 
 
+class FusedLinearPromotionConfig(BaseConfig):
+    def __init__(self, config_dict=None):
+        category = constants.FUSEDLINEARPROMOTION
+        super().__init__(category, config_dict)
+
+
 class AMPConfig(BaseConfig):
+    enable: bool
+    dtype: _DTypeLiteral
+    level: str
+    init_loss_scaling: float
+    incr_every_n_steps: int
+    decr_every_n_nan_or_inf: int
+    incr_ratio: float
+    decr_ratio: float
+    use_dynamic_loss_scaling: bool
+    custom_white_list: list[str]
+    custom_black_list: list[str]
+    custom_black_varnames: list[str]
+    use_fp16_guard: bool
+    use_bf16_guard: bool
+    use_master_grad: bool
+
     def __init__(self, config_dict=None):
         category = constants.AMP
         super().__init__(category, config_dict)
 
 
 class ShardingConfig(BaseConfig):
+    enable: bool
+    stage: int
+    degree: int
+
     def __init__(self, config_dict=None):
         category = constants.SHARDING
         super().__init__(category, config_dict)
 
 
 class GradientMergeConfig(BaseConfig):
+    enable: bool
+    k_steps: int
+    avg: bool
+
     def __init__(self, config_dict=None):
         category = constants.GRADIENT_MERGE
         super().__init__(category, config_dict)
 
 
 class PipelineConfig(BaseConfig):
+    enable: bool
+    schedule_mode: str
+    micro_batch_size: int
+    accumulate_steps: int
+
     def __init__(self, config_dict=None):
         category = constants.PIPELINE
         super().__init__(category, config_dict)
@@ -138,9 +176,21 @@ class DPOptimizationConfig(BaseConfig):
         super().__init__(category, config_dict)
 
 
+class MPOptimizationConfig(BaseConfig):
+    def __init__(self, config_dict=None):
+        category = constants.MP_OPTIMIZATION
+        super().__init__(category, config_dict)
+
+
+class SPOptimizationConfig(BaseConfig):
+    def __init__(self, config_dict=None):
+        category = constants.SP_OPTIMIZATION
+        super().__init__(category, config_dict)
+
+
 class Strategy(BaseConfig):
     """
-    The `Strategy` object is used to configure the parallelization and optimization behaviors.
+    The `Strategy` object is used to configure the parallelization and optimization for static graph.
 
     Args:
         config (dict|string, optional): If this is None, the default configurations will used.
@@ -152,20 +202,21 @@ class Strategy(BaseConfig):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.distributed.fleet import auto
+            >>> import paddle
+            >>> from paddle.distributed.fleet import auto
 
-            strategy = auto.Strategy()
-            sharding = strategy.sharding
-            self.assertEqual(sharding.enabled, False)
-            self.assertEqual(sharding.stage, 1)
-            self.assertEqual(sharding.degree, 8)
-            sharding.enabled = True
-            sharding.stage = 2
-            sharding.degree = 2
-            self.assertEqual(sharding.enabled, True)
-            self.assertEqual(sharding.stage, 2)
-            self.assertEqual(sharding.degree, 2)
+            >>> strategy = auto.Strategy()
+            >>> sharding = strategy.sharding
+            >>> assert sharding.enable == False
+            >>> assert sharding.stage == 1
+            >>> assert sharding.degree == 8
+
+            >>> sharding.enable = True
+            >>> sharding.stage = 2
+            >>> sharding.degree = 2
+            >>> assert sharding.enable == True
+            >>> assert sharding.stage == 2
+            >>> assert sharding.degree == 2
 
     """
 
@@ -213,5 +264,16 @@ class Strategy(BaseConfig):
         config_dict = self._config_dict.get(constants.FUSED_PASSES, None)
         self.fused_passes = FusedPassesConfig(config_dict)
 
+        config_dict = self._config_dict.get(
+            constants.FUSEDLINEARPROMOTION, None
+        )
+        self.fused_linear_promotion = FusedLinearPromotionConfig(config_dict)
+
         config_dict = self._config_dict.get(constants.DP_OPTIMIZATION, None)
         self.dp_optimization = DPOptimizationConfig(config_dict)
+
+        config_dict = self._config_dict.get(constants.MP_OPTIMIZATION, None)
+        self.mp_optimization = MPOptimizationConfig(config_dict)
+
+        config_dict = self._config_dict.get(constants.SP_OPTIMIZATION, None)
+        self.sp_optimization = SPOptimizationConfig(config_dict)

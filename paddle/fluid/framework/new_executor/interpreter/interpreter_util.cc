@@ -16,45 +16,48 @@
 
 #include <algorithm>
 
+#include "paddle/common/flags.h"
 #include "paddle/fluid/distributed/auto_parallel/dist_attr.h"
 #include "paddle/fluid/framework/details/nan_inf_utils.h"
 #include "paddle/fluid/framework/executor_gc_helper.h"
+#include "paddle/fluid/framework/io/save_load_tensor.h"
 #include "paddle/fluid/framework/new_executor/instruction/instruction_base.h"
 #include "paddle/fluid/framework/new_executor/interpreter/data_transfer.h"
 #include "paddle/fluid/framework/new_executor/interpreter/execution_config.h"
 #include "paddle/fluid/framework/new_executor/interpreter/static_build.h"
-#include "paddle/fluid/ir/dialect/pd_dialect.h"
-#include "paddle/fluid/ir/interface/op_yaml_info.h"
-#include "paddle/fluid/ir/interface/op_yaml_info_parser.h"
-#include "paddle/fluid/ir/phi_kernel_adaptor/phi_kernel_util.h"
-#include "paddle/fluid/memory/stats.h"
+#include "paddle/fluid/framework/new_executor/pir_adaptor/pir_adaptor_util.h"
 #include "paddle/fluid/operators/controlflow/conditional_block_op_helper.h"
-#include "paddle/fluid/operators/controlflow/recurrent_op_helper.h"
+#include "paddle/fluid/operators/controlflow/pylayer_op_helper.h"
 #include "paddle/fluid/operators/controlflow/while_op_helper.h"
 #include "paddle/fluid/operators/ops_extra_info.h"
-#include "paddle/fluid/platform/flags.h"
+#include "paddle/fluid/pir/dialect/operator/interface/op_yaml_info.h"
+#include "paddle/fluid/pir/dialect/operator/ir/op_dialect.h"
+#include "paddle/fluid/pir/dialect/operator/ir/pd_op.h"
+#include "paddle/fluid/pir/dialect/operator/utils/op_yaml_info_parser.h"
 #include "paddle/phi/core/distributed/comm_context_manager.h"
+#include "paddle/phi/core/framework/framework.pb.h"
 #include "paddle/phi/core/kernel_context.h"
 #include "paddle/phi/core/kernel_factory.h"
+#include "paddle/phi/core/memory/stats.h"
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
+#include "paddle/fluid/distributed/collective/process_group.h"
+#include "paddle/fluid/distributed/collective/process_group_nccl.h"
+#endif
 
 #ifdef PADDLE_WITH_DNNL
-#include "paddle/fluid/platform/mkldnn_helper.h"
+#include "paddle/fluid/platform/onednn_helper.h"
 #endif
 
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
 #include "paddle/phi/backends/device_manager.h"
 #endif
-PADDLE_DEFINE_EXPORTED_bool(
-    new_executor_log_memory_stats,
-    false,
-    "Log memory stats after each op runs, just used for debug.");
 
-PHI_DECLARE_bool(use_mkldnn);
-PHI_DECLARE_bool(check_nan_inf);
+COMMON_DECLARE_bool(use_mkldnn);
+COMMON_DECLARE_bool(check_nan_inf);
+COMMON_DECLARE_string(static_runtime_data_save_path);
+COMMON_DECLARE_bool(save_static_runtime_data);
 
-namespace paddle {
-namespace framework {
-namespace interpreter {
+namespace paddle::framework::interpreter {
 
 using VariableIdMap = std::map<std::string, std::vector<int>>;
 
@@ -72,7 +75,7 @@ class SingleStreamGuard {
     }
   }
 
-  ~SingleStreamGuard() {
+  ~SingleStreamGuard() {  // NOLINT
     if (!is_changed) {
       return;
     }
@@ -115,10 +118,9 @@ const std::vector<WorkQueueOptions> ConstructWorkQueueOptions(
 AsyncWorkQueue::AsyncWorkQueue(size_t host_num_threads,
                                size_t device_num_threads,
                                EventsWaiter* waiter)
-    : host_num_thread_(host_num_threads) {
-  queue_group_ = CreateWorkQueueGroup(
-      ConstructWorkQueueOptions(host_num_threads, device_num_threads, waiter));
-}
+    : host_num_thread_(host_num_threads),
+      queue_group_(CreateWorkQueueGroup(ConstructWorkQueueOptions(
+          host_num_threads, device_num_threads, waiter))) {}
 
 void AsyncWorkQueue::AddTask(const OpFuncType& op_func_type,
                              std::function<void()> fn) {
@@ -153,20 +155,41 @@ bool IsCommunicationOp(const Instruction& instr) {
   return IsCommunicationOp(instr.OpBase());
 }
 
+bool IsCommunicationOp(const ::pir::Operation* op) {
+  std::string op_name = op->name();
+  if (op->attributes().count("op_name")) {
+    op_name =
+        op->attributes().at("op_name").dyn_cast<pir::StrAttribute>().AsString();
+  }
+  const std::set<std::string> special_comm_op_set = {
+      paddle::dialect::SendV2Op::name(),
+      paddle::dialect::RecvV2Op::name(),
+  };
+  const std::string communication_op_prefix = "c_";
+  if (op_name.find(communication_op_prefix) != std::string::npos ||
+      special_comm_op_set.count(op_name)) {
+    return true;
+  }
+  if (op->attributes().count("ring_id") != 0) {
+    return true;
+  }
+  return false;
+}
+
 bool IsCpuOp(const Instruction& instr) {
-  return platform::is_cpu_place(instr.DeviceContext().GetPlace());
+  return phi::is_cpu_place(instr.DeviceContext().GetPlace());
 }
 
 bool IsCpuOp(Instruction* instr) {
-  return platform::is_cpu_place(instr->DeviceContext().GetPlace());
+  return phi::is_cpu_place(instr->DeviceContext().GetPlace());
 }
 
 bool IsCpuOp(const paddle::framework::InstructionBase& instr) {
-  return platform::is_cpu_place(instr.DeviceContext().GetPlace());
+  return phi::is_cpu_place(instr.DeviceContext().GetPlace());
 }
 
 bool IsCpuOp(paddle::framework::InstructionBase* instr) {
-  return platform::is_cpu_place(instr->DeviceContext().GetPlace());
+  return phi::is_cpu_place(instr->DeviceContext().GetPlace());
 }
 
 bool IsGradOp(const std::string& op_name) {
@@ -174,8 +197,8 @@ bool IsGradOp(const std::string& op_name) {
 }
 
 bool IsSupportedHeterPlace(const phi::Place& place) {
-  return platform::is_gpu_place(place) || platform::is_xpu_place(place) ||
-         platform::is_ipu_place(place) || platform::is_custom_place(place);
+  return phi::is_gpu_place(place) || phi::is_xpu_place(place) ||
+         phi::is_ipu_place(place) || phi::is_custom_place(place);
 }
 
 bool IsMemcpyD2H(const Instruction& instr) {
@@ -191,7 +214,7 @@ bool IsMemcpyH2D(Instruction* instr) {
 }
 
 bool IsMemcpyH2D(paddle::framework::InstructionBase* instr) {
-  return instr->Name() == "pd.memcpy_h2d";
+  return instr->Name() == "pd_op.memcpy_h2d";
 }
 
 bool IsMemcpyOp(const Instruction& instr) {
@@ -225,9 +248,11 @@ bool var_can_be_deleted(const std::string& name, const BlockDesc& block) {
 
   auto type = var_desc->Proto()->type().type();
 
-  return type == proto::VarType::LOD_TENSOR ||
+  return type == proto::VarType::DENSE_TENSOR ||
          type == proto::VarType::SELECTED_ROWS ||
-         type == proto::VarType::LOD_TENSOR_ARRAY;
+         type == proto::VarType::DENSE_TENSOR_ARRAY ||
+         type == proto::VarType::SPARSE_COO ||
+         type == proto::VarType::SPARSE_CSR;
 }
 
 std::unordered_map<const paddle::framework::OperatorBase*,
@@ -285,14 +310,15 @@ GetUnusedVars(const BlockDesc& block,
 }
 
 OpFuncType AnalyseOpFuncType(const OpFuncNode& op_func_node,
-                             const platform::Place& place) {
-  if (platform::is_cpu_place(place)) {
+                             const phi::Place& place) {
+  if (phi::is_cpu_place(place)) {
     return OpFuncType::kCpuSync;
   }
 
-  PADDLE_ENFORCE_EQ(IsSupportedHeterPlace(place),
-                    true,
-                    phi::errors::Fatal("Unsupported current place %s", place));
+  PADDLE_ENFORCE_EQ(
+      IsSupportedHeterPlace(place),
+      true,
+      common::errors::Fatal("Unsupported current place %s", place));
 
   // Some GPU OPs do not launch CUDA Kernel, but spend a lot of time on CPU
   // computing. They execute serially in device thread and block CUDA kernel
@@ -300,7 +326,7 @@ OpFuncType AnalyseOpFuncType(const OpFuncNode& op_func_node,
   // and so that they would be dispatched to host thread.
   std::shared_ptr<OperatorBase> op = op_func_node.operator_base_;
   if (op->Type() == kCoalesceTensor &&
-      (!platform::is_xpu_place(place) ||
+      (!phi::is_xpu_place(place) ||
        op->Attr<bool>("persist_output") == false) &&
       op->Attr<bool>("set_constant") == false &&
       op->Attr<bool>("copy_data") == false) {
@@ -308,7 +334,7 @@ OpFuncType AnalyseOpFuncType(const OpFuncNode& op_func_node,
   }
 
   // for memcpy explicitly called by user
-  if (platform::is_gpu_place(place) && op->Type() == interpreter::kMemcpyD2H) {
+  if (phi::is_gpu_place(place) && op->Type() == interpreter::kMemcpyD2H) {
     return OpFuncType::kGpuSync;
   }
 
@@ -395,25 +421,25 @@ std::tuple<VariableValueMap, VariableIdMap> BuildVariableMap(
 }
 
 void ApplyDeviceGuard(const OperatorBase* op_base,
-                      const platform::Place& place,
+                      const phi::Place& place,
                       OpKernelType* expected_kernel_key) {
   bool need_change_place =
       (op_base->HasAttr("op_device") &&
        (op_base->Attr<std::string>("op_device").length() > 0));
   if (need_change_place) {
     auto& op_device = op_base->Attr<std::string>("op_device");
-    if (op_device == "cpu" || platform::is_cpu_place(place)) {
+    if (op_device == "cpu" || phi::is_cpu_place(place)) {
       VLOG(3) << "Switch into CPUPlace by device_guard.";
-      expected_kernel_key->place_ = platform::CPUPlace();
+      expected_kernel_key->place_ = phi::CPUPlace();
     } else if (op_device.find("gpu") != std::string::npos &&
-               platform::is_gpu_place(place)) {
+               phi::is_gpu_place(place)) {
       // when the Op that does not have GPUKernel is assigned to GPU, the
       // CPUKernel will be executed and a warning will be given at the same
       // time.
       if (op_base->SupportGPU()) {
         expected_kernel_key->place_ = place;
       } else {
-        expected_kernel_key->place_ = platform::CPUPlace();
+        expected_kernel_key->place_ = phi::CPUPlace();
         LOG_FIRST_N(WARNING, 1)
             << "Op(" << op_base->Type()
             << ") has no CUDA implementation. It will be assigned to CPUPlace.";
@@ -421,21 +447,21 @@ void ApplyDeviceGuard(const OperatorBase* op_base,
       VLOG(3) << "Switch into " << expected_kernel_key->place_
               << " by device_guard.";
     } else if (op_device.find("xpu") != std::string::npos &&
-               platform::is_xpu_place(place)) {
+               phi::is_xpu_place(place)) {
       // when the Op that does not have XPUKernel is assigned to XPU, the
       // CPUKernel will be executed and a warning will be given at the same
       // time.
       if (op_base->SupportXPU()) {
         expected_kernel_key->place_ = place;
       } else {
-        expected_kernel_key->place_ = platform::CPUPlace();
+        expected_kernel_key->place_ = phi::CPUPlace();
         LOG_FIRST_N(WARNING, 1)
             << "Op(" << op_base->Type()
             << ") has no XPU implementation. It will be assigned to CPUPlace.";
       }
       VLOG(3) << "Switch into " << expected_kernel_key->place_
               << " by device_guard.";
-    } else if (platform::is_custom_place(place)) {
+    } else if (phi::is_custom_place(place)) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
       auto device_types = phi::DeviceManager::GetAllCustomDeviceTypes();
       bool is_custom_device_op = false;
@@ -448,12 +474,12 @@ void ApplyDeviceGuard(const OperatorBase* op_base,
       PADDLE_ENFORCE_EQ(
           is_custom_device_op,
           true,
-          phi::errors::Unimplemented(
+          common::errors::Unimplemented(
               "Unsupported current device %s with Paddle CustomDevice ",
               op_device));
 #else
       VLOG(1) << string::Sprintf(
-          "Cannot use get_all_custom_device_type because you have installed"
+          "Cannot use get_all_custom_device_type because you have installed "
           "CPU/GPU version PaddlePaddle.\n"
           "If you want to use get_all_custom_device_type, please try to "
           "install CustomDevice version "
@@ -462,7 +488,7 @@ void ApplyDeviceGuard(const OperatorBase* op_base,
       if (op_base->SupportCustomDevice()) {
         expected_kernel_key->place_ = place;
       } else {
-        expected_kernel_key->place_ = platform::CPUPlace();
+        expected_kernel_key->place_ = phi::CPUPlace();
         LOG_FIRST_N(WARNING, 1) << "Op(" << op_base->Type()
                                 << ") has no Custom Place implementation. It "
                                    "will be assigned to CPUPlace.";
@@ -471,14 +497,14 @@ void ApplyDeviceGuard(const OperatorBase* op_base,
               << " by device_guard.";
     } else {
       PADDLE_THROW(
-          platform::errors::Fatal("Unsupported current place %s", op_device));
+          common::errors::Fatal("Unsupported current place %s", op_device));
     }
   }
 }
 
-platform::DeviceContext* ConstructDeviceContext(const OperatorBase* op,
-                                                const platform::Place& place) {
-  auto& pool = platform::DeviceContextPool::Instance();
+phi::DeviceContext* ConstructDeviceContext(const OperatorBase* op,
+                                           const phi::Place& place) {
+  auto& pool = phi::DeviceContextPool::Instance();
   auto* default_dev_ctx = pool.Get(place);
 
   // Replace the default_dev_ctx according to dst_place_type for memcpy op if
@@ -509,7 +535,7 @@ platform::DeviceContext* ConstructDeviceContext(const OperatorBase* op,
   //    into the kernel API through arguments. (3) So we have no way to
   //    construct a CUDAPlace() in the memcpy kernel and then pass it
   //     to the phi::Copy(...) api.
-  if (!platform::is_gpu_place(place)) {
+  if (!phi::is_gpu_place(place)) {
     const auto& op_type = op->Type();
     if (op_type == "memcpy") {
       int dst_place_type = op->Attr<int>("dst_place_type");
@@ -526,12 +552,14 @@ platform::DeviceContext* ConstructDeviceContext(const OperatorBase* op,
   return default_dev_ctx;
 }
 
-void HandleOperatorBase(const platform::Place& place,
-                        std::shared_ptr<OperatorBase> op,
-                        OpFuncNode* op_func_node,
-                        Scope* scope,
-                        bool static_build) {
-  platform::DeviceContextPool& pool = platform::DeviceContextPool::Instance();
+void HandleOperatorBase(
+    const phi::Place& place,
+    std::shared_ptr<OperatorBase> op,
+    OpFuncNode* op_func_node,
+    Scope* scope,
+    bool static_build,
+    std::vector<std::shared_ptr<OperatorBase>> following_ops) {
+  phi::DeviceContextPool& pool = phi::DeviceContextPool::Instance();
   auto* dev_ctx = pool.Get(place);
   // input, output is prepared. set the other attributes.
   op_func_node->operator_base_ = op;
@@ -541,7 +569,8 @@ void HandleOperatorBase(const platform::Place& place,
     if (OperatorBasesMustRunInStaticBuild.count(op->Type())) {
       op->Run(*scope, place);
     }
-    FakeInitializeOutputsForOperatorBase(*op, place, scope);
+
+    FakeInitializeOutputsForOperatorBase(*op, place, scope, following_ops);
   } else {
     op->Run(*scope, place);  // Run without data transformer.
   }
@@ -549,12 +578,14 @@ void HandleOperatorBase(const platform::Place& place,
   op_func_node->dev_ctx_ = dev_ctx;
 }
 
-void BuildOpFuncList(const platform::Place& place,
+void BuildOpFuncList(const phi::Place& place,
                      const framework::BlockDesc& block,
                      const std::set<std::string>& skip_gc_vars,
                      std::vector<OpFuncNode>* vec_func_list,
                      VariableScope* var_scope,
                      const ExecutionConfig& execution_config,
+                     const std::vector<HookFunc>& input_hookfuncs,
+                     const std::vector<HookFunc>& output_hookfuncs,
                      bool use_local_scope,
                      bool static_build) {
   Scope* local_scope = use_local_scope ? var_scope->GetMutableLocalScope()
@@ -571,9 +602,9 @@ void BuildOpFuncList(const platform::Place& place,
     const ProgramDesc& main_program = *block.Program();
     operators::PrepareSafeEagerDeletionOnConditionalOpAndConditionalGradOp(
         main_program, block.ID(), ops_unique);
-    operators::PrepareSafeEagerDeletionOnWhileOpAndWhileGradOp(
+    operators::PrepareSafeEagerDeletionOnPyLayerOpAndPyLayerGradOp(
         main_program, block.ID(), ops_unique);
-    operators::PrepareSafeEagerDeletionOnRecurrentOpAndRecurrentGradOp(
+    operators::PrepareSafeEagerDeletionOnWhileOpAndWhileGradOp(
         main_program, block.ID(), ops_unique);
   }
 
@@ -587,12 +618,30 @@ void BuildOpFuncList(const platform::Place& place,
   }
   auto unused_var_map = GetUnusedVars(block, ops);
 
-  platform::DeviceContextPool& pool = platform::DeviceContextPool::Instance();
+  phi::DeviceContextPool& pool = phi::DeviceContextPool::Instance();
 
   bool flag_log_is_printed = false;
   for (size_t i = 0; i < ops.size(); ++i) {
     auto op = ops[i].get();
+    op->SetId(i);
+
     const std::string& op_type = op->Type();
+    if (execution_config.used_for_inference) {
+      if (op_type == "feed" || op_type == "fetch") {
+        continue;
+      }
+      for (auto& hook : input_hookfuncs) {
+        hook(op, local_scope);
+      }
+
+      if (op->Type() == "while" || op->Type() == "conditional_block") {
+        op->SetInputHooks(input_hookfuncs);
+        op->SetOutputHooks(output_hookfuncs);
+        auto runtime_attrs = op->RuntimeAttrs();
+        runtime_attrs.insert(std::make_pair("used_for_inference", true));
+        op->SetRuntimeAttributeMap(runtime_attrs);
+      }
+    }
 
     VLOG(6) << "Build OpFuncNode from : " << op_type;
 
@@ -611,9 +660,9 @@ void BuildOpFuncList(const platform::Place& place,
     const std::set<std::string> ops_with_var_not_in_scope = {
         "conditional_block",
         "conditional_block_grad",
+        "pylayer",
+        "pylayer_grad"
         "recurrent_grad",
-        "rnn_memory_helper",
-        "rnn_memory_helper_grad",
         "while",
         "while_grad"};
     bool allow_var_not_in_program = ops_with_var_not_in_program.count(op_type);
@@ -648,7 +697,8 @@ void BuildOpFuncList(const platform::Place& place,
     op_func_node.input_index = ins_name2id;
     op_func_node.output_index = outs_name2id;
 
-    const OperatorDistAttr* dist_attr = block.Op(i)->DistAttr();
+    const OperatorDistAttr* dist_attr =
+        block.Op(static_cast<int>(i))->DistAttr();
     if (dist_attr) {
       if (dist_attr->execution_stream() !=
           distributed::auto_parallel::kDefault) {
@@ -656,6 +706,10 @@ void BuildOpFuncList(const platform::Place& place,
       }
       op_func_node.stream_priority_ = dist_attr->stream_priority();
       op_func_node.scheduling_priority_ = dist_attr->scheduling_priority();
+      // set manual event information
+      op_func_node.force_record_event_ = dist_attr->force_record_event();
+      op_func_node.events_to_wait_ = dist_attr->events_to_wait();
+      op_func_node.event_to_record_ = dist_attr->event_to_record();
     } else {
       if (interpreter::IsCommunicationOp(op)) {
         // NOTE(Ruibiao): Dispatching computation before communication improves
@@ -679,9 +733,16 @@ void BuildOpFuncList(const platform::Place& place,
     try {
       if (dynamic_cast<framework::OperatorWithKernel*>(op) == nullptr) {
         VLOG(4) << "HandleOperatorBase";
-        // op is not a operatorwithkernel, so direcly run OperatorBase::Run()
-        HandleOperatorBase(
-            place, ops[i], &op_func_node, local_scope, static_build);
+        // op is not a operatorwithkernel, so directly run OperatorBase::Run()
+
+        std::vector<std::shared_ptr<OperatorBase>> following_ops(
+            ops.begin() + static_cast<int>(i) + 1, ops.end());
+        HandleOperatorBase(place,
+                           ops[i],
+                           &op_func_node,
+                           local_scope,
+                           static_build,
+                           following_ops);
         vec_func_list->emplace_back(op_func_node);
       } else {
         VLOG(4) << "OP is not null";
@@ -695,17 +756,6 @@ void BuildOpFuncList(const platform::Place& place,
         VLOG(4) << "get RuntimeContext";
 
         Scope scope, *runtime_scope = &scope;
-        // NOTE(Ruibiao): We do not encourage directly using scope in OP kernel.
-        // But some OPs do have such behavior (e.g., cinn_launch OP). Here
-        // special treatment for them.
-        if (op_with_kernel->Type() == "cinn_launch" ||
-            op_with_kernel->Type() == "cinn_instruction_run") {
-          VLOG(6) << "OP(" << op_with_kernel->Type()
-                  << ") use scope in kernel, "
-                     "so pass a real scope to "
-                     "ExecutionContext";
-          runtime_scope = local_scope;
-        }
 
         // construct the device context
         auto* dev_ctx = ConstructDeviceContext(op, place);
@@ -724,8 +774,8 @@ void BuildOpFuncList(const platform::Place& place,
         VLOG(4) << "expected_kernel_key : " << expected_kernel_key;
         // change device by the device_guard()
         ApplyDeviceGuard(op, place, &expected_kernel_key);
-        if (platform::places_are_same_class(exec_ctx.GetPlace(),
-                                            expected_kernel_key.place_)) {
+        if (phi::places_are_same_class(exec_ctx.GetPlace(),
+                                       expected_kernel_key.place_)) {
           expected_kernel_key.place_ = exec_ctx.GetPlace();
         }
 
@@ -809,7 +859,7 @@ void BuildOpFuncList(const platform::Place& place,
                 op->Attr<bool>(kAllKernelsMustComputeRuntimeShape))) {
             RuntimeInferShapeContext infer_shape_ctx(*op, runtime_context);
             // TODO(Aurelius84): In case of control flow ops, they are NOT
-            // inheritted from OperatorWithKernel.
+            // inherited from OperatorWithKernel.
             op_with_kernel->Info().infer_shape_(&infer_shape_ctx);
           }
         }
@@ -819,6 +869,40 @@ void BuildOpFuncList(const platform::Place& place,
             op_func_node.phi_kernel_->GetKernelRegisteredType() ==
                 phi::KernelRegisteredType::FUNCTION) {
           VLOG(6) << op_type << " run function kernel";
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
+          auto attrs = op->Attrs();
+          if (attrs.find("ring_id") != attrs.end()) {
+            auto ring_id_attr = attrs.at("ring_id");
+            int ring_id = PADDLE_GET(int, ring_id_attr);
+            auto map = distributed::ProcessGroupMapFromGid::getInstance();
+            if (map->has(ring_id)) {
+              auto original_stream =
+                  static_cast<phi::GPUContext*>(dev_ctx)->cuda_stream();
+              distributed::ProcessGroup* pg = map->get(ring_id);
+              auto comm_context =
+                  static_cast<paddle::distributed::ProcessGroupNCCL*>(pg)
+                      ->GetOrCreateCommContext(place);
+              dev_ctx =
+                  static_cast<phi::distributed::NCCLCommContext*>(comm_context)
+                      ->GetDevContext();
+              dev_ctx->SetCommContext(comm_context);
+
+              static_cast<phi::GPUContext*>(dev_ctx)->SetCUDAStream(
+                  original_stream, false);
+              auto& instance =
+                  paddle::memory::allocation::AllocatorFacade::Instance();
+              dev_ctx->SetAllocator(
+                  instance
+                      .GetAllocator(
+                          place,
+                          static_cast<phi::GPUContext*>(dev_ctx)->stream())
+                      .get());
+            } else {
+              VLOG(3) << "ring_id " << ring_id
+                      << " not found in ProcessGroupMapFromGid ";
+            }
+          }
+#endif
           if (static_build) {
             FakeInitializeOutputsForFunctionKernel(
                 *op,
@@ -867,16 +951,16 @@ void BuildOpFuncList(const platform::Place& place,
           // operator.cc
           for (auto& p : m) {
             auto* transformed_tensor =
-                GetMutableLoDTensorOrSelectedRowsValueFromVar(
+                GetMutableDenseTensorOrSelectedRowsValueFromVar(
                     local_scope->FindVar(var_scope->GetNameById(p.first)));
             auto* original_tensor =
-                GetMutableLoDTensorOrSelectedRowsValueFromVar(
+                GetMutableDenseTensorOrSelectedRowsValueFromVar(
                     local_scope->FindVar(var_scope->GetNameById(p.second)));
 
             // avoid overwriting valid data
             if (static_build && original_tensor->initialized()) {
               const phi::Place& target_place = transformed_tensor->place();
-              platform::DeviceContext* dev_ctx_for_copy;
+              phi::DeviceContext* dev_ctx_for_copy = nullptr;
               if (target_place.GetType() != AllocationType::CPU) {
                 dev_ctx_for_copy = pool.Get(target_place);
               } else {
@@ -916,17 +1000,54 @@ void BuildOpFuncList(const platform::Place& place,
       }
     } catch (platform::EnforceNotMet& ex) {
       framework::InsertCallStackInfo(op_type, op->Attrs(), &ex);
-      throw std::move(ex);
+      throw ex;
     } catch (platform::EOFException&) {
       std::rethrow_exception(std::current_exception());
     } catch (std::exception& ex) {
       LOG(WARNING) << op_type << " raises an exception "
-                   << platform::demangle(typeid(ex).name()) << ", "
-                   << ex.what();
+                   << common::demangle(typeid(ex).name()) << ", " << ex.what();
       std::rethrow_exception(std::current_exception());
     } catch (...) {
       LOG(WARNING) << op_type << " raises an unknown exception";
       std::rethrow_exception(std::current_exception());
+    }
+
+    if (FLAGS_save_static_runtime_data) {
+      VLOG(6) << "start to save paddle variable";
+      auto root_path = FLAGS_static_runtime_data_save_path;
+      for (auto& vname : op->InputVars()) {
+        auto* var = local_scope->FindVar(vname);
+        if (var == nullptr) continue;
+        const phi::DenseTensor* tensor{nullptr};
+        if (var->IsType<phi::DenseTensor>()) {
+          tensor = &var->Get<phi::DenseTensor>();
+        } else {
+          VLOG(6) << vname << " is not DenseTensor";
+          continue;
+        }
+        if (!tensor->IsInitialized()) continue;
+        paddle::framework::SaveTensor(
+            *tensor,
+            root_path + "/saved_tensors/" + op_type + "-input-" + vname,
+            false);
+      }
+      for (auto& vname : op->OutputVars(true)) {
+        auto* var = local_scope->FindVar(vname);
+        if (var == nullptr) continue;
+        const phi::DenseTensor* tensor{nullptr};
+        if (var->IsType<phi::DenseTensor>()) {
+          tensor = &var->Get<phi::DenseTensor>();
+        } else {
+          VLOG(6) << vname << "  is not DenseTensor";
+          continue;
+        }
+        if (!tensor->IsInitialized()) continue;
+        paddle::framework::SaveTensor(
+            *tensor,
+            root_path + "/saved_tensors/" + op_type + "-output-" + vname,
+            false);
+      }
+      VLOG(6) << "end save paddle variable";
     }
 
     if (FLAGS_check_nan_inf) {
@@ -958,6 +1079,12 @@ void BuildOpFuncList(const platform::Place& place,
       }
     }
 
+    if (execution_config.used_for_inference) {
+      for (auto& hook : output_hookfuncs) {
+        hook(op, local_scope);
+      }
+    }
+
     VLOG(4) << "End run " << place << " "
             << op_func_node.operator_base_->DebugStringEx(local_scope);
 
@@ -965,7 +1092,7 @@ void BuildOpFuncList(const platform::Place& place,
       // gc---------------------------------------------
       auto iter = unused_var_map.find(op);
       if (iter == unused_var_map.end()) {
-        interpreter::LogDeviceMemoryStats(place);
+        memory::LogDeviceMemoryStats(place, op_type);
         continue;
       }
 
@@ -984,11 +1111,38 @@ void BuildOpFuncList(const platform::Place& place,
         if (var->IsType<phi::DenseTensor>()) {
           garbages->emplace_back(
               var->GetMutable<phi::DenseTensor>()->MoveMemoryHolder());
+        } else if (var->IsType<phi::SelectedRows>()) {
+          garbages->emplace_back(var->GetMutable<phi::SelectedRows>()
+                                     ->mutable_value()
+                                     ->MoveMemoryHolder());
+          var->GetMutable<phi::SelectedRows>()->mutable_rows()->clear();
+        } else if (var->IsType<phi::TensorArray>()) {
+          auto* tensor_arr = var->GetMutable<phi::TensorArray>();
+          for (auto& t : *tensor_arr) {
+            garbages->emplace_back(t.MoveMemoryHolder());
+          }
+        } else if (var->IsType<phi::SparseCooTensor>()) {
+          garbages->emplace_back(var->GetMutable<phi::SparseCooTensor>()
+                                     ->mutable_indices()
+                                     ->MoveMemoryHolder());
+          garbages->emplace_back(var->GetMutable<phi::SparseCooTensor>()
+                                     ->mutable_values()
+                                     ->MoveMemoryHolder());
+        } else if (var->IsType<phi::SparseCsrTensor>()) {
+          garbages->emplace_back(var->GetMutable<phi::SparseCsrTensor>()
+                                     ->mutable_cols()
+                                     ->MoveMemoryHolder());
+          garbages->emplace_back(var->GetMutable<phi::SparseCsrTensor>()
+                                     ->mutable_crows()
+                                     ->MoveMemoryHolder());
+          garbages->emplace_back(var->GetMutable<phi::SparseCsrTensor>()
+                                     ->mutable_values()
+                                     ->MoveMemoryHolder());
         }
       }
       delete garbages;  // free mem
 
-      interpreter::LogDeviceMemoryStats(place);
+      memory::LogDeviceMemoryStats(place, op_type);
     }
   }
 
@@ -1004,99 +1158,36 @@ void BuildOpFuncList(const platform::Place& place,
     if (var->IsType<phi::DenseTensor>()) {
       garbages->emplace_back(
           var->GetMutable<phi::DenseTensor>()->MoveMemoryHolder());
+    } else if (var->IsType<phi::SelectedRows>()) {
+      garbages->emplace_back(var->GetMutable<phi::SelectedRows>()
+                                 ->mutable_value()
+                                 ->MoveMemoryHolder());
+      var->GetMutable<phi::SelectedRows>()->mutable_rows()->clear();
+    } else if (var->IsType<phi::TensorArray>()) {
+      auto* tensor_arr = var->GetMutable<phi::TensorArray>();
+      for (auto& t : *tensor_arr) {
+        garbages->emplace_back(t.MoveMemoryHolder());
+      }
+    } else if (var->IsType<phi::SparseCooTensor>()) {
+      garbages->emplace_back(var->GetMutable<phi::SparseCooTensor>()
+                                 ->mutable_indices()
+                                 ->MoveMemoryHolder());
+      garbages->emplace_back(var->GetMutable<phi::SparseCooTensor>()
+                                 ->mutable_values()
+                                 ->MoveMemoryHolder());
+    } else if (var->IsType<phi::SparseCsrTensor>()) {
+      garbages->emplace_back(var->GetMutable<phi::SparseCsrTensor>()
+                                 ->mutable_cols()
+                                 ->MoveMemoryHolder());
+      garbages->emplace_back(var->GetMutable<phi::SparseCsrTensor>()
+                                 ->mutable_crows()
+                                 ->MoveMemoryHolder());
+      garbages->emplace_back(var->GetMutable<phi::SparseCsrTensor>()
+                                 ->mutable_values()
+                                 ->MoveMemoryHolder());
     }
   }
   delete garbages;
-}
-
-void BuildOpFuncList(
-    const platform::Place& place,
-    ::ir::Block* block,
-    std::vector<OpFuncNode>* vec_func_list,
-    framework::Scope* scope,
-    framework::Scope* local_scope,
-    const std::unordered_map<::ir::Value, std::string>& value_2_name_map,
-    const ExecutionConfig& execution_config) {
-  vec_func_list->reserve(block->size());
-  ::ir::IrContext* ctx = ir::IrContext::Instance();
-
-  ctx->GetOrRegisterDialect<paddle::dialect::PaddleDialect>();
-
-  for (auto op : *block) {
-    OpFuncNode op_func_node;
-    auto attr_map = op->attributes();
-
-    auto op_name =
-        attr_map.at("op_name").dyn_cast<::ir::StrAttribute>().AsString();
-    op_func_node.phi_op_name_ = op_name;
-
-    if (GetSpecialOpNames().count(op_name)) {
-      VLOG(6) << "skip process " << op_name;
-      continue;
-    }
-
-    ::ir::OpInfo op_info = ctx->GetRegisteredOpInfo(op_name);
-
-    auto impl =
-        op_info.GetInterfaceImpl<paddle::dialect::OpYamlInfoInterface>();
-
-    op_func_node.infer_meta_interface_ =
-        op_info.GetInterfaceImpl<paddle::dialect::InferMetaInterface>();
-
-    VLOG(6) << "op name" << op_func_node.phi_op_name_;
-    dialect::OpYamlInfoParser op_yaml_info_parser(impl->get_op_info_());
-    if (op_func_node.infer_meta_interface_) {
-      ::ir::BuildPhiContext<
-          phi::InferMetaContext,
-          phi::MetaTensor,
-          phi::MetaTensor,
-          paddle::small_vector<phi::MetaTensor, phi::kInputSmallVectorSize>,
-          paddle::small_vector<phi::MetaTensor, phi::kInputSmallVectorSize>,
-          false>(op,
-                 value_2_name_map,
-                 scope,
-                 local_scope,
-                 op_yaml_info_parser,
-                 &(op_func_node.infer_meta_context_));
-    }
-
-    auto kernel_name =
-        attr_map.at("kernel_name").dyn_cast<ir::StrAttribute>().AsString();
-    auto kernel_key = attr_map.at("kernel_key")
-                          .dyn_cast<paddle::dialect::KernelAttribute>()
-                          .data();
-
-    VLOG(6) << "finish process infer meta context";
-    auto t1 = phi::KernelFactory::Instance().SelectKernelOrThrowError(
-        kernel_name, kernel_key);
-    op_func_node.phi_kernel_ = new phi::Kernel(t1.kernel);
-
-    PADDLE_ENFORCE_EQ(op_func_node.phi_kernel_->IsValid(),
-                      true,
-                      "not found kernel for [%s]",
-                      kernel_name);
-
-    ::ir::BuildPhiContext<phi::KernelContext,
-                          const phi::TensorBase*,
-                          phi::TensorBase*,
-                          paddle::small_vector<const phi::TensorBase*>,
-                          paddle::small_vector<phi::TensorBase*>,
-                          true>(op,
-                                value_2_name_map,
-                                scope,
-                                local_scope,
-                                op_yaml_info_parser,
-                                &(op_func_node.kernel_context_));
-
-    VLOG(6) << "finish process kernel context";
-    op_func_node.kernel_context_.SetDeviceContext(
-        phi::DeviceContextPool::Instance().Get(
-            phi::TransToPhiPlace(kernel_key.backend())));
-    op_func_node.dev_ctx_ = phi::DeviceContextPool::Instance().Get(
-        phi::TransToPhiPlace(kernel_key.backend()));
-
-    vec_func_list->emplace_back(op_func_node);
-  }
 }
 
 void BuildVariableScope(const framework::BlockDesc& block,
@@ -1146,23 +1237,8 @@ void BuildVariableScope(const framework::BlockDesc& block,
   }
 }
 
-void LogDeviceMemoryStats(const platform::Place& place) {
-  if (FLAGS_new_executor_log_memory_stats && platform::is_gpu_place(place)) {
-    VLOG(0) << "memory_allocated: "
-            << static_cast<double>(memory::DeviceMemoryStatCurrentValue(
-                   "Allocated", place.device)) /
-                   1024 / 1024
-            << " MB";
-    VLOG(0) << "max_memory_allocated: "
-            << static_cast<double>(memory::DeviceMemoryStatPeakValue(
-                   "Allocated", place.device)) /
-                   1024 / 1024
-            << " MB";
-  }
-}
-
 void SetDeviceCommContext(framework::OperatorBase* operator_base,
-                          platform::DeviceContext* dev_ctx) {
+                          phi::DeviceContext* dev_ctx) {
   if (operator_base->HasAttr("ring_id")) {
     int ring_id = operator_base->Attr<int>("ring_id");
     const auto& comm_context_manager =
@@ -1179,12 +1255,11 @@ void SetDeviceCommContext(framework::OperatorBase* operator_base,
   }
 }
 
-void SetDeviceCommContext(::ir::Operation* op,
-                          platform::DeviceContext* dev_ctx) {
+void SetDeviceCommContext(pir::Operation* op, phi::DeviceContext* dev_ctx) {
   auto op_attributes = op->attributes();
   if (op_attributes.count("ring_id") != 0) {
     int ring_id =
-        op_attributes.at("ring_id").dyn_cast<::ir::Int32Attribute>().data();
+        op_attributes.at("ring_id").dyn_cast<pir::Int32Attribute>().data();
     const auto& comm_context_manager =
         phi::distributed::CommContextManager::GetInstance();
     if (comm_context_manager.Has(std::to_string(ring_id))) {
@@ -1195,7 +1270,7 @@ void SetDeviceCommContext(::ir::Operation* op,
     } else {
       VLOG(3) << "op: "
               << op_attributes.at("op_name")
-                     .dyn_cast<::ir::StrAttribute>()
+                     .dyn_cast<pir::StrAttribute>()
                      .AsString()
               << ", ring_id: " << ring_id << ", get comm_context failed!";
     }
@@ -1206,14 +1281,283 @@ std::unordered_set<std::string> GetSpecialOpNames() {
   return {
       "builtin.combine",
       "builtin.slice",
-      "pd.feed",
+      "pd_op.feed",
       "builtin.set_parameter",
-      "builtin.get_parameter",
-      "pd.data",
-      "pd.shadow_output",
+      "builtin.parameter",
+      "builtin.constant",
+      "pd_op.data",
+      "builtin.shadow_output",
   };
 }
 
-}  // namespace interpreter
-}  // namespace framework
-}  // namespace paddle
+void BuildId2VarName(const std::map<std::string, int>& var_name_2_id,
+                     std::unordered_map<int, std::string>* id_2_var_name) {
+  PADDLE_ENFORCE_NOT_NULL(
+      id_2_var_name,
+      common::errors::InvalidArgument("id2_var_name can not be null"));
+  for (auto [var_name, id] : var_name_2_id) {
+    id_2_var_name->insert({id, var_name});
+  }
+}
+
+const paddle::framework::Variable* GetVariableByName(
+    const std::string& var_name,
+    const std::unordered_map<const paddle::framework::Variable*, std::string>&
+        variable_2_var_name) {
+  for (auto kv : variable_2_var_name) {
+    if (kv.second == var_name) {
+      return kv.first;
+    }
+  }
+  VLOG(8) << "cannot find var: " << var_name;
+  return nullptr;
+}
+
+std::vector<std::string> GetOriginInputNames(const std::string& op_name) {
+  std::vector<std::string> ret;
+  pir::IrContext* ctx = pir::IrContext::Instance();
+  pir::OpInfo op_info = ctx->GetRegisteredOpInfo(op_name);
+  if (op_info.GetInterfaceImpl<paddle::dialect::OpYamlInfoInterface>()) {
+    paddle::dialect::OpYamlInfoParser yaml_parser(
+        op_info.GetInterfaceImpl<paddle::dialect::OpYamlInfoInterface>()
+            ->get_op_info_(op_name));
+    ret = yaml_parser.InputNames();
+  }
+  return ret;
+}
+
+std::vector<std::string> GetOriginOutputNames(const std::string& op_name) {
+  std::vector<std::string> ret;
+  pir::IrContext* ctx = pir::IrContext::Instance();
+  pir::OpInfo op_info = ctx->GetRegisteredOpInfo(op_name);
+  if (op_info.GetInterfaceImpl<paddle::dialect::OpYamlInfoInterface>()) {
+    paddle::dialect::OpYamlInfoParser yaml_parser(
+        op_info.GetInterfaceImpl<paddle::dialect::OpYamlInfoInterface>()
+            ->get_op_info_(op_name));
+    ret = yaml_parser.OutputNames();
+  }
+  return ret;
+}
+
+void PrintValuesAndVariables(
+    const pir::Block& block,
+    const std::unordered_map<pir::Value, std::string>& value_2_var_name,
+    const std::unordered_map<const paddle::framework::Variable*, std::string>&
+        variable_2_var_name) {
+  for (auto& op : block) {
+    std::stringstream ss;
+    VLOG(6) << "-----------------------------";
+    op.Print(ss);
+    VLOG(6) << ss.str();
+
+    std::string op_name = op.name();
+    if (op.attributes().count("op_name")) {
+      op_name = op.attributes()
+                    .at("op_name")
+                    .dyn_cast<pir::StrAttribute>()
+                    .AsString();
+    }
+    std::vector<std::string> origin_input_names = GetOriginInputNames(op_name);
+    std::vector<std::string> origin_output_names =
+        GetOriginOutputNames(op_name);
+
+    // 1. output string
+    VLOG(10) << "Generate output string ...";
+    std::string ret_value_str = "Value   : (";
+    std::string ret_variable_str = "Variable: (";
+    if (!op.results().empty()) {
+      for (size_t i = 0; i < op.num_results(); ++i) {
+        pir::Value out_value = op.result(i);
+        if (value_2_var_name.count(out_value)) {
+          // get Variable by Value
+          auto& var_name = value_2_var_name.at(out_value);
+          const paddle::framework::Variable* out_variable =
+              GetVariableByName(var_name, variable_2_var_name);
+
+          // get origin name
+          std::string origin_name;
+          if (!origin_output_names.empty())
+            origin_name = origin_output_names[i];
+          else
+            origin_name = var_name;
+
+          // process info
+          ss.str("");
+          ss << out_value.impl();
+          ret_value_str +=
+              (std::string(origin_name.length(), ' ') + "[" + ss.str() + "]");
+          ss.str("");
+          if (out_variable) {
+            ss << out_variable;
+            ret_variable_str += (origin_name + "[" + ss.str() + "]");
+          } else {
+            ret_variable_str += (origin_name + "[NULL]");
+          }
+        } else {
+          ret_value_str += "NULL";
+          ret_variable_str += "NULL";
+        }
+        ret_value_str += ", ";
+        ret_variable_str += ", ";
+      }
+      ret_value_str = ret_value_str.substr(0, ret_value_str.length() - 2);
+      ret_variable_str =
+          ret_variable_str.substr(0, ret_variable_str.length() - 2);
+    }
+    ret_value_str += ") = ";
+    ret_variable_str += ") = ";
+
+    // 2. op name
+    VLOG(10) << "Generate op name ...";
+    ret_value_str += op_name;
+    ret_variable_str += op_name;
+
+    // 3. input string
+    VLOG(10) << "Generate input string ...";
+    ret_value_str += "(";
+    ret_variable_str += "(";
+    if (!op.operands().empty()) {
+      for (size_t i = 0; i < op.num_operands(); ++i) {
+        ::pir::Value in_value = op.operand(i).source();
+        if (value_2_var_name.count(in_value)) {
+          // get Variable by Value
+          auto& var_name = value_2_var_name.at(in_value);
+          const paddle::framework::Variable* in_variable =
+              GetVariableByName(var_name, variable_2_var_name);
+
+          // get origin name
+          std::string origin_name;
+          if (!origin_input_names.empty())
+            origin_name = origin_input_names[i];
+          else
+            origin_name = var_name;
+
+          // process info
+          ss.str("");
+          ss << in_value.impl();
+          ret_value_str +=
+              (std::string(origin_name.length(), ' ') + "[" + ss.str() + "]");
+          ss.str("");
+          if (in_variable) {
+            ss << in_variable;
+            ret_variable_str += (origin_name + "[" + ss.str() + "]");
+          } else {
+            ret_variable_str += (origin_name + "[NULL]");
+          }
+        } else {
+          ret_value_str += "NULL";
+          ret_variable_str += "NULL";
+        }
+        ret_value_str += ", ";
+        ret_variable_str += ", ";
+      }
+      ret_value_str = ret_value_str.substr(0, ret_value_str.length() - 2);
+      ret_variable_str =
+          ret_variable_str.substr(0, ret_variable_str.length() - 2);
+    }
+    ret_value_str += ")";
+    ret_variable_str += ")";
+    VLOG(6) << ret_value_str;
+    VLOG(6) << ret_variable_str;
+  }
+  return;
+}
+
+const std::vector<std::string> GetInstructionCallStack(
+    const std::string& type, const pir::AttributeMap& attrs) {
+  std::vector<std::string> vec_str;
+  if (attrs.count("sub_block") != 0) {
+    return vec_str;
+  }
+  auto iter = attrs.find(OpProtoAndCheckerMaker::OpCreationCallstackAttrName());
+  if (iter != attrs.end()) {
+    auto attr = iter->second;
+    PADDLE_ENFORCE(
+        attr.isa<pir::ArrayAttribute>(),
+        common::errors::InvalidArgument(
+            "%s: Callstack attributes of %s is not ArrayAttribute type", type));
+    pir::ArrayAttribute array_attribute = attr.dyn_cast<pir::ArrayAttribute>();
+    std::vector<pir::Attribute> vec_attr = array_attribute.AsVector();
+    for (auto value : vec_attr) {
+      PADDLE_ENFORCE(
+          value.isa<pir::StrAttribute>(),
+          common::errors::InvalidArgument(
+              "%s: Callstack attributes of %s is not StrAttribute type", type));
+      vec_str.emplace_back(value.dyn_cast<pir::StrAttribute>().AsString());
+    }
+  }
+  return vec_str;
+}
+
+bool IsNoNeedBuffer(pir::Operation* op, pir::Value value) {
+  paddle::dialect::OpYamlInfoInterface op_info_interface =
+      op->dyn_cast<paddle::dialect::OpYamlInfoInterface>();
+  std::unique_ptr<paddle::dialect::OpYamlInfoParser> info_parser(nullptr);
+  if (op_info_interface) {
+    info_parser = std::make_unique<paddle::dialect::OpYamlInfoParser>(
+        op_info_interface.GetOpInfo(), paddle::dialect::IsLegacyOp(op->name()));
+    auto& no_need_buffer_ids = info_parser->NoNeedBufferIds();
+    for (auto no_need_buffer_id : no_need_buffer_ids) {
+      if (value == op->operand_source(no_need_buffer_id)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+std::unordered_map<std::string, std::set<std::string>> GetNoNeedBufferValues(
+    const std::unordered_map<std::string, std::shared_ptr<::pir::Program>>&
+        type_to_ir_program) {
+  std::unordered_map<std::string, std::set<std::string>> shadow_output_values;
+  std::set<std::string> no_need_buffer_vars;
+
+  for (auto& pair : type_to_ir_program) {
+    std::shared_ptr<::pir::Program> program = pair.second;
+    // Iterate over the block_args and data_op output, and if all ops in all
+    // programs using this value are of the no_need_buffer type, then insert
+    // this value into the no_need_buffer set.
+    for (const auto& [name, value] : program->block()->kwargs()) {
+      for (auto it = value.use_begin(); it != value.use_end(); ++it) {
+        if (IsNoNeedBuffer(it->owner(), value)) {
+          no_need_buffer_vars.insert(name);
+        } else {
+          no_need_buffer_vars.erase(name);
+        }
+      }
+    }
+    for (auto& op : *program->block()) {
+      if (op.isa<paddle::dialect::DataOp>()) {
+        pir::Value value = op.result(0);
+        std::string name = op.attribute<pir::StrAttribute>("name").AsString();
+        for (auto it = value.use_begin(); it != value.use_end(); ++it) {
+          if (IsNoNeedBuffer(it->owner(), value)) {
+            no_need_buffer_vars.insert(name);
+          } else {
+            no_need_buffer_vars.erase(name);
+          }
+        }
+      }
+      // Retrieve the value names of all shadow_output_op for each program.
+      if (op.isa<pir::ShadowOutputOp>()) {
+        shadow_output_values[pair.first].insert(
+            op.attribute<pir::StrAttribute>("output_name").AsString());
+      }
+    }
+  }
+
+  for (auto& pair : shadow_output_values) {
+    std::set<std::string>& value_set = pair.second;
+    std::set<std::string> intersection;
+    std::set_intersection(value_set.begin(),
+                          value_set.end(),
+                          no_need_buffer_vars.begin(),
+                          no_need_buffer_vars.end(),
+                          std::inserter(intersection, intersection.begin()));
+    value_set = std::move(intersection);
+  }
+
+  return shadow_output_values;
+}
+
+}  // namespace paddle::framework::interpreter

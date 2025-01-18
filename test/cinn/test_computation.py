@@ -18,11 +18,11 @@ import sys
 import unittest
 
 import numpy as np
-from cinn.common import DefaultHostTarget, DefaultNVGPUTarget, Float
-from cinn.frontend import Computation, NetBuilder
 
 import paddle
-from paddle import fluid, static
+from paddle import base, static
+from paddle.cinn.common import DefaultHostTarget, DefaultNVGPUTarget, Float
+from paddle.cinn.frontend import Computation, NetBuilder
 
 assert len(sys.argv) == 3
 enable_gpu = sys.argv.pop()
@@ -45,15 +45,15 @@ class TestNetBuilder(unittest.TestCase):
         d = paddle.nn.initializer.NumpyArrayInitializer(
             np.array(inputdata[2]).reshape((144, 24, 1, 1)).astype('float32')
         )
-        res = static.nn.conv2d(
-            input=c,
-            num_filters=144,
-            filter_size=1,
+        res = paddle.nn.Conv2D(
+            in_channels=24,
+            out_channels=144,
+            kernel_size=1,
             stride=1,
-            padding=0,
             dilation=1,
-            param_attr=d,
-        )
+            padding=0,
+            weight_attr=d,
+        )(c)
 
         exe = static.Executor(paddle.CPUPlace())
         exe.run(static.default_startup_program())
@@ -113,11 +113,11 @@ class TestCompilePaddleModel(unittest.TestCase):
         out = computation.get_tensor("fc_0.tmp_2")
         res_cinn = out.numpy(self.target)
 
-        config = fluid.core.AnalysisConfig(naive_model_dir)
+        config = base.core.AnalysisConfig(naive_model_dir)
         config.disable_gpu()
         config.switch_ir_optim(False)
-        paddle_predictor = fluid.core.create_paddle_predictor(config)
-        data = fluid.core.PaddleTensor(A_data)
+        paddle_predictor = base.core.create_paddle_predictor(config)
+        data = base.core.PaddleTensor(A_data)
         paddle_out = paddle_predictor.run([data])
         res_paddle = paddle_out[0].as_ndarray()
 

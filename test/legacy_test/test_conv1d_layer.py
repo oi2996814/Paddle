@@ -17,9 +17,9 @@ import unittest
 import numpy as np
 
 import paddle
-import paddle.fluid.dygraph as dg
+import paddle.base.dygraph as dg
 import paddle.nn.functional as F
-from paddle import fluid, nn
+from paddle import base, nn
 
 
 class Conv1DTestCase(unittest.TestCase):
@@ -59,9 +59,9 @@ class Conv1DTestCase(unittest.TestCase):
 
     def setUp(self):
         input_shape = (
-            (self.batch_size, self.num_channels) + self.spartial_shape
+            (self.batch_size, self.num_channels, *self.spartial_shape)
             if not self.channel_last
-            else (self.batch_size,) + self.spartial_shape + (self.num_channels,)
+            else (self.batch_size, *self.spartial_shape, self.num_channels)
         )
         self.input = np.random.randn(*input_shape).astype(self.dtype)
 
@@ -72,7 +72,8 @@ class Conv1DTestCase(unittest.TestCase):
         self.weight_shape = weight_shape = (
             self.num_filters,
             self.num_channels // self.groups,
-        ) + tuple(filter_size)
+            *filter_size,
+        )
         self.weight = np.random.uniform(-1, 1, size=weight_shape).astype(
             self.dtype
         )
@@ -84,10 +85,10 @@ class Conv1DTestCase(unittest.TestCase):
             self.bias = None
 
     def functional(self, place):
-        main = fluid.Program()
-        start = fluid.Program()
-        with fluid.unique_name.guard():
-            with fluid.program_guard(main, start):
+        main = base.Program()
+        start = base.Program()
+        with base.unique_name.guard():
+            with base.program_guard(main, start):
                 input_shape = (
                     (-1, self.num_channels, -1)
                     if not self.channel_last
@@ -99,13 +100,16 @@ class Conv1DTestCase(unittest.TestCase):
                 w_var = paddle.static.data(
                     "weight", self.weight_shape, dtype=self.dtype
                 )
-                b_var = paddle.static.data(
-                    "bias", (self.num_filters,), dtype=self.dtype
-                )
+                if not self.no_bias:
+                    b_var = paddle.static.data(
+                        "bias", (self.num_filters,), dtype=self.dtype
+                    )
+                else:
+                    b_var = None
                 y_var = F.conv1d(
                     x_var,
                     w_var,
-                    b_var if not self.no_bias else None,
+                    b_var,
                     padding=self.padding,
                     stride=self.stride,
                     dilation=self.dilation,
@@ -115,7 +119,7 @@ class Conv1DTestCase(unittest.TestCase):
         feed_dict = {"input": self.input, "weight": self.weight}
         if self.bias is not None:
             feed_dict["bias"] = self.bias
-        exe = fluid.Executor(place)
+        exe = base.Executor(place)
         exe.run(start)
         (y_np,) = exe.run(main, feed=feed_dict, fetch_list=[y_var])
         return y_np
@@ -147,17 +151,17 @@ class Conv1DTestCase(unittest.TestCase):
         np.testing.assert_array_almost_equal(result1, result2)
 
     def runTest(self):
-        place = fluid.CPUPlace()
+        place = base.CPUPlace()
         self._test_equivalence(place)
 
-        if fluid.core.is_compiled_with_cuda():
-            place = fluid.CUDAPlace(0)
+        if base.core.is_compiled_with_cuda():
+            place = base.CUDAPlace(0)
             self._test_equivalence(place)
 
 
 class Conv1DErrorTestCase(Conv1DTestCase):
     def runTest(self):
-        place = fluid.CPUPlace()
+        place = base.CPUPlace()
         with dg.guard(place):
             with self.assertRaises(ValueError):
                 self.paddle_nn_layer()
@@ -165,7 +169,7 @@ class Conv1DErrorTestCase(Conv1DTestCase):
 
 class Conv1DTypeErrorTestCase(Conv1DTestCase):
     def runTest(self):
-        place = fluid.CPUPlace()
+        place = base.CPUPlace()
         with dg.guard(place):
             with self.assertRaises(TypeError):
                 self.paddle_nn_layer()

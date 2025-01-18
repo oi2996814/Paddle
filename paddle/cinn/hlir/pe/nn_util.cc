@@ -16,7 +16,7 @@
 
 #include "paddle/cinn/common/ir_util.h"
 #include "paddle/cinn/common/target.h"
-
+#include "paddle/common/enforce.h"
 namespace cinn {
 namespace hlir {
 namespace pe {
@@ -387,13 +387,14 @@ ir::Tensor const_matrix(const std::vector<std::vector<float>>& input,
         auto now = cinn::common::make_const(1.0f);
         for (int ii = 0; ii < row; ii++) {
           for (int jj = 0; jj < col; jj++) {
-            // if (common::is_zero(Expr(ii)-yy) && common::is_zero(Expr(jj)-xx))
+            // if (cinn::common::is_zero(Expr(ii)-yy) &&
+            // cinn::common::is_zero(Expr(jj)-xx))
             // {
             //     now = cinn::common::make_const(input[ii][jj]);
             // }
             auto cond =
-                common::and_all({Expr(ii) - yy == 0, Expr(jj) - xx == 0});
-            now = common::select(
+                cinn::common::and_all({Expr(ii) - yy == 0, Expr(jj) - xx == 0});
+            now = cinn::common::select(
                 cond, cinn::common::make_const(input[ii][jj]), now);
           }
         }
@@ -407,7 +408,10 @@ std::vector<ir::Tensor> winograd_transform_matrices(const int& tile_size,
                                                     const int& kernel_size) {
   std::vector<std::vector<std::vector<float>>> vals =
       get_winograd_val(tile_size, kernel_size);
-  CHECK_EQ(vals.size(), 3U) << "vals_size of winograd is not 3! Please check.";
+  PADDLE_ENFORCE_EQ(vals.size(),
+                    3U,
+                    ::common::errors::InvalidArgument(
+                        "vals_size of winograd is not 3! Please check."));
 
   std::vector<std::vector<float>> A = vals[0];
   std::vector<std::vector<float>> B = vals[1];
@@ -461,8 +465,12 @@ std::vector<int> GetFirstStepReduceShape(const std::vector<int>& shape,
   // post parallel size
   int post_parallel_size = GetPostParallelSize(shape, axes);
   // the size to unfold las reduce axis
-  int unfold_size = common::GetMaxThreads() / GetParallelSize(shape, axes);
-  CHECK_GT(unfold_size, 1);
+  int unfold_size =
+      cinn::common::GetMaxThreads() / GetParallelSize(shape, axes);
+  PADDLE_ENFORCE_GT(unfold_size,
+                    1,
+                    ::common::errors::InvalidArgument(
+                        "unfold_size should be greater than 1!"));
 
   // fuse reduce axis.
   int insert_zero_num = 0;

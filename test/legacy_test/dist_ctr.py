@@ -18,14 +18,13 @@ import dist_ctr_reader
 from test_dist_base import TestDistRunnerBase, runtime_main
 
 import paddle
-from paddle import fluid
+from paddle import base
 
 IS_SPARSE = True
 os.environ['PADDLE_ENABLE_REMOTE_PREFETCH'] = "1"
 
 # Fix seed for test
-fluid.default_startup_program().random_seed = 1
-fluid.default_main_program().random_seed = 1
+paddle.seed(1)
 
 
 class TestDistCTR2x2(TestDistRunnerBase):
@@ -36,19 +35,16 @@ class TestDistCTR2x2(TestDistRunnerBase):
             name="dnn_data",
             shape=[-1, 1],
             dtype="int64",
-            lod_level=1,
         )
         lr_data = paddle.static.data(
             name="lr_data",
             shape=[-1, 1],
             dtype="int64",
-            lod_level=1,
         )
         label = paddle.static.data(
             name="click",
             shape=[-1, 1],
             dtype="int64",
-            lod_level=0,
         )
 
         # build dnn model
@@ -57,7 +53,7 @@ class TestDistCTR2x2(TestDistRunnerBase):
             is_distributed=False,
             input=dnn_data,
             size=[dnn_input_dim, dnn_layer_dims[0]],
-            param_attr=fluid.ParamAttr(
+            param_attr=base.ParamAttr(
                 name="deep_embedding",
                 initializer=paddle.nn.initializer.Constant(value=0.01),
             ),
@@ -72,10 +68,10 @@ class TestDistCTR2x2(TestDistRunnerBase):
                 x=dnn_out,
                 size=dim,
                 activation="relu",
-                weight_attr=fluid.ParamAttr(
+                weight_attr=base.ParamAttr(
                     initializer=paddle.nn.initializer.Constant(value=0.01)
                 ),
-                name='dnn-fc-%d' % i,
+                name=f'dnn-fc-{i}',
             )
             dnn_out = fc
 
@@ -84,7 +80,7 @@ class TestDistCTR2x2(TestDistRunnerBase):
             is_distributed=False,
             input=lr_data,
             size=[lr_input_dim, 1],
-            param_attr=fluid.ParamAttr(
+            param_attr=base.ParamAttr(
                 name="wide_embedding",
                 initializer=paddle.nn.initializer.Constant(value=0.01),
             ),
@@ -108,7 +104,7 @@ class TestDistCTR2x2(TestDistRunnerBase):
         )
         avg_cost = paddle.mean(x=cost)
 
-        inference_program = paddle.fluid.default_main_program().clone()
+        inference_program = paddle.base.default_main_program().clone()
 
         regularization = None
         use_l2_decay = bool(os.getenv('USE_L2_DECAY', 0))

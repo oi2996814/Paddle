@@ -12,10 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Callable, TypeVar
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
+
+_T = TypeVar('_T')
 __all__ = []
 
 
-def batch(reader, batch_size, drop_last=False):
+def batch(
+    reader: Callable[[], Generator[_T, None, None]],
+    batch_size: int,
+    drop_last: bool = False,
+) -> Callable[[], Generator[list[_T], None, None]]:
     """
     This operator creates a batched reader which combines the data from the
     input reader to batched data.
@@ -67,7 +79,7 @@ def batch(reader, batch_size, drop_last=False):
     if batch_size <= 0:
         raise ValueError(
             "batch_size should be a positive integer value, "
-            "but got batch_size={}".format(batch_size)
+            f"but got batch_size={batch_size}"
         )
 
     return batch_reader

@@ -14,7 +14,11 @@
 
 import unittest
 
-from dygraph_to_static_util import ast_only_test
+from dygraph_to_static_utils import (
+    Dy2StTestBase,
+    test_ast_only,
+    test_pt_only,
+)
 
 import paddle
 from paddle.static import InputSpec
@@ -42,7 +46,7 @@ class NetWithOpAttr(paddle.nn.Layer):
         out = self.bn(out)
         return out
 
-    @paddle.jit.to_static(input_spec=[InputSpec([10, 16])])
+    @paddle.jit.to_static(input_spec=[InputSpec([10, 16])], full_graph=True)
     def with_cond(self, x):
         if paddle.mean(x) > 0.0:
             out = self.linear(x)
@@ -52,7 +56,7 @@ class NetWithOpAttr(paddle.nn.Layer):
         return out
 
 
-class CheckOpAttr(unittest.TestCase):
+class CheckOpAttr(Dy2StTestBase):
     def setUp(self):
         self.in_num = 16
         self.out_num = 16
@@ -77,7 +81,8 @@ class CheckOpAttr(unittest.TestCase):
             'elementwise_sub': self.sub_attrs,
         }
 
-    @ast_only_test
+    @test_ast_only
+    @test_pt_only
     def test_set_op_attrs(self):
         net = NetWithOpAttr(self.in_num, self.out_num)
         # set attrs
@@ -119,7 +124,8 @@ class CheckOpAttr(unittest.TestCase):
                         else:
                             self.assertEqual(op_val, expect_val)
 
-    @ast_only_test
+    @test_ast_only
+    @test_pt_only
     def test_set_op_attrs_with_sub_block(self):
         net = NetWithOpAttr(self.in_num, self.out_num)
         # set attrs
@@ -140,6 +146,7 @@ class CheckOpAttr(unittest.TestCase):
         self.assertEqual(len(net.linear._forward_pre_hooks), 0)
         self.assertEqual(len(net.linear._forward_post_hooks), 0)
 
+    @test_pt_only
     def test_type_error(self):
         net = NetWithOpAttr(self.in_num, self.out_num)
         # attrs should be dict

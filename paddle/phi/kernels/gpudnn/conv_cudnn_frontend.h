@@ -87,7 +87,7 @@ class CudnnFrontendConvHelper {
       const phi::DenseTensor* tensor,
       int64_t id,
       cudnnTensorFormat_t layout_format) {
-    auto transformed_dims = phi::vectorize<int64_t>(tensor->dims());
+    auto transformed_dims = common::vectorize<int64_t>(tensor->dims());
     if (layout_format == CUDNN_TENSOR_NHWC) {
       transformed_dims =
           phi::backends::gpu::TransformDimOrder(transformed_dims);
@@ -334,12 +334,12 @@ class CudnnFrontendConvHelper {
       } catch (cudnn_frontend::cudnnException& e) {
         VLOG(4) << "Plan " << plan.describe()
                 << "failed to execute. Trying next plan.";
-      } catch (phi::enforce::EnforceNotMet& e) {
+      } catch (common::enforce::EnforceNotMet& e) {
         VLOG(4) << "Plan " << plan.describe()
                 << "failed to execute. Trying next plan.";
       }
     }
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "[CUDNN Frontend API] No valid plan could "
         "be found to execute. Try setting FLAGS_conv_workspace_size_limit "
         "higher."));
@@ -364,6 +364,48 @@ class CudnnFrontendConvHelper {
                          plans,
                          exhaustive_search,
                          op_graph.getFeatureVector(),
+                         plan_cache);
+  }
+
+  static void QueryCacheAndExecute(
+      cudnnHandle_t handle,
+      phi::DnnWorkspaceHandle* workspace_handle,
+      cudnn_frontend::OperationGraph* op_graph_pointer,
+      std::vector<void*>* data_ptrs,
+      std::vector<int64_t>* uids,
+      bool exhaustive_search,
+      bool deterministic,
+      const cudnn_frontend::feature_vector_t& feature_vector,
+      phi::autotune::CudnnFrontendPlanCache* plan_cache) {
+    if (plan_cache->FindPlan(feature_vector, handle)) {
+      const cudnn_frontend::ExecutionPlan* cached_plan = nullptr;
+      int64_t workspace_size = 0;
+      plan_cache->GetPlanAndWorkspaceSize(
+          feature_vector, &cached_plan, &workspace_size, handle);
+      ExecutePlan(handle,
+                  workspace_handle,
+                  data_ptrs,
+                  uids,
+                  cached_plan->get_raw_desc(),
+                  workspace_size);
+      return;
+    }
+
+    auto plans = FindExecutionPlans(op_graph_pointer,
+                                    exhaustive_search,
+                                    deterministic,
+                                    data_ptrs,
+                                    uids,
+                                    handle,
+                                    workspace_handle);
+
+    ExecutePlansAndCache(handle,
+                         workspace_handle,
+                         data_ptrs,
+                         uids,
+                         &plans,
+                         exhaustive_search,
+                         feature_vector,
                          plan_cache);
   }
 
@@ -435,7 +477,7 @@ void CudnnConvBwdDataV8(const DenseTensor* dy_tensor,
   if (plan_cache_bwd_data.FindPlan(op_graph, handle)) {
     const cudnn_frontend::ExecutionPlan* cached_plan = nullptr;
     int64_t workspace_size = 0;
-    plan_cache_bwd_data.GetPlan(
+    plan_cache_bwd_data.GetPlanAndWorkspaceSize(
         op_graph, &cached_plan, &workspace_size, handle);
     helper::ExecutePlan(handle,
                         workspace_handle,
@@ -509,7 +551,7 @@ void CudnnConvBwdFilterV8(const DenseTensor* x_tensor,
   if (plan_cache_bwd_filter.FindPlan(op_graph, handle)) {
     const cudnn_frontend::ExecutionPlan* cached_plan = nullptr;
     int64_t workspace_size = 0;
-    plan_cache_bwd_filter.GetPlan(
+    plan_cache_bwd_filter.GetPlanAndWorkspaceSize(
         op_graph, &cached_plan, &workspace_size, handle);
     helper::ExecutePlan(handle,
                         workspace_handle,

@@ -18,6 +18,8 @@
 #include "paddle/phi/kernels/impl/pool_kernel_impl.h"
 
 PD_REGISTER_KERNEL(pool2d, CPU, ALL_LAYOUT, phi::Pool2dKernel, float, double) {}
+PD_REGISTER_KERNEL(
+    lp_pool2d, CPU, ALL_LAYOUT, phi::LPPool2dKernel, float, double) {}
 PD_REGISTER_KERNEL(max_pool2d_with_index,
                    CPU,
                    ALL_LAYOUT,
@@ -34,5 +36,25 @@ PD_REGISTER_KERNEL(max_pool3d_with_index,
                    phi::MaxPool3dWithIndexKernel,
                    float,
                    double) {
+  kernel->OutputAt(1).SetDataType(phi::CppTypeToDataType<int>::Type());
+}
+
+PD_REGISTER_KERNEL(fractional_max_pool2d,
+                   CPU,
+                   ALL_LAYOUT,
+                   phi::FractionalMaxPool2dKernel,
+                   float,
+                   double,
+                   phi::dtype::float16) {
+  kernel->OutputAt(1).SetDataType(phi::CppTypeToDataType<int>::Type());
+}
+
+PD_REGISTER_KERNEL(fractional_max_pool3d,
+                   CPU,
+                   ALL_LAYOUT,
+                   phi::FractionalMaxPool3dKernel,
+                   float,
+                   double,
+                   phi::dtype::float16) {
   kernel->OutputAt(1).SetDataType(phi::CppTypeToDataType<int>::Type());
 }

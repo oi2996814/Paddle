@@ -14,16 +14,11 @@
 
 #include "paddle/fluid/framework/ir/fused_multi_transformer_encoder_pass.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Scope;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 
-namespace paddle {
-namespace framework {
-namespace ir {
-namespace patterns {
+namespace paddle::framework::ir::patterns {
 
 static const std::unordered_set<std::string> FFN_ACTS{"relu", "gelu"};
 
@@ -1459,7 +1454,8 @@ PDNode* MultiDevicesFusedMultiTransformerEncoderFuseQKVPattern::operator()() {
   return ffn_output;
 }
 
-}  // namespace patterns
+}  // namespace paddle::framework::ir::patterns
+namespace paddle::framework::ir {
 
 template <typename T>
 inline void QKVWeightsProcess(phi::DenseTensor* wq_tensor,
@@ -1469,12 +1465,12 @@ inline void QKVWeightsProcess(phi::DenseTensor* wq_tensor,
                               const int dim_head,
                               const int dim_embed) {
   auto* dev_ctx = static_cast<phi::CPUContext*>(
-      platform::DeviceContextPool::Instance().Get(platform::CPUPlace()));
+      phi::DeviceContextPool::Instance().Get(phi::CPUPlace()));
   auto* wq_data = wq_tensor->data<T>();
   auto* wk_data = wk_tensor->data<T>();
   auto* wv_data = wv_tensor->data<T>();
 
-  auto combined_w_dims = phi::make_ddim({3, num_head, dim_head, dim_embed});
+  auto combined_w_dims = common::make_ddim({3, num_head, dim_head, dim_embed});
 
   phi::DenseTensor tmp_combined_w_tensor;
   tmp_combined_w_tensor.Resize(combined_w_dims);
@@ -1511,12 +1507,12 @@ inline void QKVBiasProcess(phi::DenseTensor* bq_tensor,
                            const int dim_head,
                            const int dim_embed) {
   auto* dev_ctx = static_cast<phi::CPUContext*>(
-      platform::DeviceContextPool::Instance().Get(platform::CPUPlace()));
+      phi::DeviceContextPool::Instance().Get(phi::CPUPlace()));
   auto* bq_data = bq_tensor->data<T>();
   auto* bk_data = bk_tensor->data<T>();
   auto* bv_data = bv_tensor->data<T>();
 
-  auto combined_bias_dims = phi::make_ddim({3, num_head, dim_head});
+  auto combined_bias_dims = common::make_ddim({3, num_head, dim_head});
 
   phi::DenseTensor tmp_combined_bias_tensor;
   tmp_combined_bias_tensor.Resize(combined_bias_dims);
@@ -1548,7 +1544,7 @@ inline void QKVWeightsBiasProcess(phi::DenseTensor* wq_tensor,
                                   const int dim_embed) {
   switch (wq_tensor->dtype()) {
     case phi::DataType::FLOAT16:
-      QKVWeightsProcess<platform::float16>(
+      QKVWeightsProcess<phi::dtype::float16>(
           wq_tensor, wk_tensor, wv_tensor, num_head, dim_head, dim_embed);
       break;
     case phi::DataType::FLOAT32:
@@ -1560,14 +1556,14 @@ inline void QKVWeightsBiasProcess(phi::DenseTensor* wq_tensor,
           wq_tensor, wk_tensor, wv_tensor, num_head, dim_head, dim_embed);
       break;
     default:
-      PADDLE_THROW(platform::errors::Unavailable(
+      PADDLE_THROW(common::errors::Unavailable(
           "fused_multi_transformer not supported weight dtype. "
           "we now only support fp32/fp16/int8."));
       break;
   }
   switch (bq_tensor->dtype()) {
     case phi::DataType::FLOAT16:
-      QKVBiasProcess<platform::float16>(
+      QKVBiasProcess<phi::dtype::float16>(
           bq_tensor, bk_tensor, bv_tensor, num_head, dim_head, dim_embed);
       break;
     case phi::DataType::FLOAT32:
@@ -1575,7 +1571,7 @@ inline void QKVWeightsBiasProcess(phi::DenseTensor* wq_tensor,
           bq_tensor, bk_tensor, bv_tensor, num_head, dim_head, dim_embed);
       break;
     default:
-      PADDLE_THROW(platform::errors::Unavailable(
+      PADDLE_THROW(common::errors::Unavailable(
           "fused_multi_transformer not supported bias dtype. "
           "we now only support fp32/fp16."));
       break;
@@ -1588,9 +1584,9 @@ inline void QKVWeightsProcessFuseQKV(phi::DenseTensor* qkv_w_tensor,
                                      const int dim_head,
                                      const int dim_embed) {
   auto* dev_ctx = static_cast<phi::CPUContext*>(
-      platform::DeviceContextPool::Instance().Get(platform::CPUPlace()));
+      phi::DeviceContextPool::Instance().Get(phi::CPUPlace()));
   auto* qkv_w_data = qkv_w_tensor->data<T>();
-  auto transpose_w_dims = phi::make_ddim({3, num_head, dim_head, dim_embed});
+  auto transpose_w_dims = common::make_ddim({3, num_head, dim_head, dim_embed});
 
   phi::DenseTensor tmp_transpose_w_tensor;
   tmp_transpose_w_tensor.Resize(transpose_w_dims);
@@ -1626,9 +1622,9 @@ inline void QKVBiasProcessFuseQKV(phi::DenseTensor* qkv_b_tensor,
                                   const int dim_head,
                                   const int dim_embed) {
   auto* dev_ctx = static_cast<phi::CPUContext*>(
-      platform::DeviceContextPool::Instance().Get(platform::CPUPlace()));
+      phi::DeviceContextPool::Instance().Get(phi::CPUPlace()));
   auto* qkv_b_data = qkv_b_tensor->data<T>();
-  auto transpose_b_dims = phi::make_ddim({3, num_head, dim_head});
+  auto transpose_b_dims = common::make_ddim({3, num_head, dim_head});
 
   phi::DenseTensor tmp_transpose_b_tensor;
   tmp_transpose_b_tensor.Resize(transpose_b_dims);
@@ -1661,7 +1657,7 @@ inline void QKVWeightsBiasProcessFuseQKV(phi::DenseTensor* qkv_w_tensor,
                                          const int dim_embed) {
   switch (qkv_w_tensor->dtype()) {
     case phi::DataType::FLOAT16:
-      QKVWeightsProcessFuseQKV<platform::float16>(
+      QKVWeightsProcessFuseQKV<phi::dtype::float16>(
           qkv_w_tensor, num_head, dim_head, dim_embed);
       break;
     case phi::DataType::FLOAT32:
@@ -1673,21 +1669,21 @@ inline void QKVWeightsBiasProcessFuseQKV(phi::DenseTensor* qkv_w_tensor,
           qkv_w_tensor, num_head, dim_head, dim_embed);
       break;
     default:
-      PADDLE_THROW(platform::errors::Unavailable(
+      PADDLE_THROW(common::errors::Unavailable(
           "fused_multi_transformer not supported weight dtype. "
           "we now only support fp32/fp16/int8."));
       break;
   }
   switch (qkv_b_tensor->dtype()) {
     case phi::DataType::FLOAT16:
-      QKVBiasProcessFuseQKV<platform::float16>(
+      QKVBiasProcessFuseQKV<phi::dtype::float16>(
           qkv_b_tensor, num_head, dim_head, dim_embed);
       break;
     case phi::DataType::FLOAT32:
       QKVBiasProcessFuseQKV<float>(qkv_b_tensor, num_head, dim_head, dim_embed);
       break;
     default:
-      PADDLE_THROW(platform::errors::Unavailable(
+      PADDLE_THROW(common::errors::Unavailable(
           "fused_multi_transformer not supported bias dtype. "
           "we now only support fp32/fp16."));
       break;
@@ -1697,9 +1693,9 @@ inline void QKVWeightsBiasProcessFuseQKV(phi::DenseTensor* qkv_w_tensor,
 // Just use for fused_multi_transformer_int8
 inline void TransposeWeights(phi::DenseTensor* weight_tensor) {
   auto* dev_ctx = static_cast<phi::CPUContext*>(
-      platform::DeviceContextPool::Instance().Get(platform::CPUPlace()));
-  int m = weight_tensor->dims()[0];
-  int n = weight_tensor->dims()[1];
+      phi::DeviceContextPool::Instance().Get(phi::CPUPlace()));
+  int m = static_cast<int>(weight_tensor->dims()[0]);
+  int n = static_cast<int>(weight_tensor->dims()[1]);
   phi::DenseTensor tmp_weight_tensor;
   tmp_weight_tensor.Resize({n, m});
   dev_ctx->Alloc<int8_t>(&tmp_weight_tensor);
@@ -1744,7 +1740,7 @@ int FusedMultiTransformerEncoderPass::BuildFusion(Graph* graph,
   fused_multi_transformer_pattern();
 
   // Create New OpDesc
-  auto fuse_creater = [&](Node* input0,
+  auto fuse_creator = [&](Node* input0,
                           Node* layer_norm,
                           Node* layer_norm_scale,
                           Node* layer_norm_bias,
@@ -1805,7 +1801,7 @@ int FusedMultiTransformerEncoderPass::BuildFusion(Graph* graph,
     auto* bv_tensor =
         scope->FindVar(eltadd2_b->Name())->GetMutable<phi::DenseTensor>();
 
-    // NOTE(minghaoBD): to make it compatible with strucutured pruning on
+    // NOTE(minghaoBD): to make it compatible with structured pruning on
     // num_head dimension:
     // 1. get dim_head from reshape.shape[3], dim_embed from
     // layer_norm_bias.shape[0]
@@ -1816,8 +1812,8 @@ int FusedMultiTransformerEncoderPass::BuildFusion(Graph* graph,
             .at(3);
     auto* layer_norm_bias_tensor =
         scope->FindVar(layer_norm_bias->Name())->GetMutable<phi::DenseTensor>();
-    int dim_embed = layer_norm_bias_tensor->dims()[0];
-    int num_head = wq_tensor->dims()[1] / dim_head;
+    int dim_embed = static_cast<int>(layer_norm_bias_tensor->dims()[0]);
+    int num_head = static_cast<int>(wq_tensor->dims()[1] / dim_head);
 
     QKVWeightsBiasProcess(wq_tensor,
                           wk_tensor,
@@ -1936,7 +1932,7 @@ int FusedMultiTransformerEncoderPass::BuildFusion(Graph* graph,
     // Quantization attribute/Input
     if (enable_int8) {
       auto* dev_ctx = static_cast<phi::CPUContext*>(
-          platform::DeviceContextPool::Instance().Get(platform::CPUPlace()));
+          phi::DeviceContextPool::Instance().Get(phi::CPUPlace()));
       // Set input scale
       std::string qkv_input_name = matmul0_op->Input("X")[0];
       auto qkv_in_scale = PADDLE_GET_CONST(
@@ -1952,7 +1948,7 @@ int FusedMultiTransformerEncoderPass::BuildFusion(Graph* graph,
       auto ffn1_in_scale = PADDLE_GET_CONST(
           float, ffn_matmul_1_op->GetAttr("Input_scale_" + ffn1_input_name));
 
-      // Calc outscale and Set them
+      // Calc out scale and Set them
       auto qkv_weight_scale =
           PADDLE_GET_CONST(float, matmul0_op->GetAttr("weight_scale"));
       auto out_weight_scale =
@@ -2285,7 +2281,7 @@ int FusedMultiTransformerEncoderPass::BuildFusion(Graph* graph,
     GET_IR_NODE_FROM_SUBGRAPH(
         eltadd_out, eltadd_out, fused_multi_transformer_pattern)
 
-    fuse_creater(input0,
+    fuse_creator(input0,
                  layer_norm,
                  layer_norm_scale,
                  layer_norm_bias,
@@ -2397,8 +2393,18 @@ void FusedMultiTransformerEncoderPass::ApplyImpl(Graph* graph) const {
   auto* scope = param_scope();
   PADDLE_ENFORCE_NOT_NULL(
       scope,
-      platform::errors::Fatal(
+      common::errors::Fatal(
           "During the multi_transformer pass, The scope should not be null."));
+
+  VLOG(3) << "Running fused_multi_transformer_encoder_pass.";
+  if (graph->IsMainGraph()) {
+    VLOG(3) << "The ID of block running fused_multi_transformer_encoder_pass "
+               "is: 0(main_graph)";
+  } else {
+    VLOG(3)
+        << "The ID of block running fused_multi_transformer_encoder_pass is: "
+        << graph->GetBlockId();
+  }
 
   int fusion_count = BuildFusion(graph, name_scope_, scope);
   if (fusion_count > 0) {
@@ -2437,13 +2443,13 @@ FusedMultiTransformerEncoderPass::FusedMultiTransformerEncoderPass() {
       .End();
 
   AddOpCompat(OpCompat("matmul_v2"))
-      .AddInput("X")  // the shape shoule be (B, S, N*H)
+      .AddInput("X")  // the shape should be (B, S, N*H)
       .IsTensor()
       .End()
-      .AddInput("Y")  // the shape shoule be (N*H, N*H)
+      .AddInput("Y")  // the shape should be (N*H, N*H)
       .IsTensor()
       .End()
-      .AddOutput("Out")  // the shape shoule be (B, S, N*H)
+      .AddOutput("Out")  // the shape should be (B, S, N*H)
       .IsTensor()
       .End()
       .AddAttr("trans_x")
@@ -2570,7 +2576,7 @@ int FusedMultiTransformerEncoderFuseQKVPass::BuildFusion(
   fused_multi_transformer_fuse_qkv_pattern();
 
   // Create New OpDesc
-  auto fuse_creater = [&](Node* input0,
+  auto fuse_creator = [&](Node* input0,
                           Node* layer_norm,
                           Node* layer_norm_scale,
                           Node* layer_norm_bias,
@@ -2619,7 +2625,7 @@ int FusedMultiTransformerEncoderFuseQKVPass::BuildFusion(
     auto* qkv_b_tensor =
         scope->FindVar(eltadd0_b->Name())->GetMutable<phi::DenseTensor>();
 
-    // NOTE(minghaoBD): to make it compatible with strucutured pruning on
+    // NOTE(minghaoBD): to make it compatible with structured pruning on
     // num_head dimension:
     // 1. get dim_head from reshape.shape[3], dim_embed from
     // layer_norm_bias.shape[0]
@@ -2631,8 +2637,8 @@ int FusedMultiTransformerEncoderFuseQKVPass::BuildFusion(
         3;  // 3 for qkv
     auto* layer_norm_bias_tensor =
         scope->FindVar(layer_norm_bias->Name())->GetMutable<phi::DenseTensor>();
-    int dim_embed = layer_norm_bias_tensor->dims()[0];
-    int num_head = qkv_w_tensor->dims()[1] / 3 / dim_head;
+    int dim_embed = static_cast<int>(layer_norm_bias_tensor->dims()[0]);
+    int num_head = static_cast<int>(qkv_w_tensor->dims()[1] / 3 / dim_head);
 
     QKVWeightsBiasProcessFuseQKV(
         qkv_w_tensor, qkv_b_tensor, num_head, dim_head, dim_embed);
@@ -2732,7 +2738,7 @@ int FusedMultiTransformerEncoderFuseQKVPass::BuildFusion(
     // Quantization attribute/Input
     if (enable_int8) {
       auto* dev_ctx = static_cast<phi::CPUContext*>(
-          platform::DeviceContextPool::Instance().Get(platform::CPUPlace()));
+          phi::DeviceContextPool::Instance().Get(phi::CPUPlace()));
       // Set input scale
       std::string qkv_input_name = matmul0_op->Input("X")[0];
       auto qkv_in_scale = PADDLE_GET_CONST(
@@ -2748,9 +2754,9 @@ int FusedMultiTransformerEncoderFuseQKVPass::BuildFusion(
       auto ffn1_in_scale = PADDLE_GET_CONST(
           float, ffn_matmul_1_op->GetAttr("Input_scale_" + ffn1_input_name));
 
-      // Calc outscale and Set them
+      // Calc out scale and Set them
       // TODO(wufeisheng): Currently just match layer-wise weight scale, where
-      // channel-wise weight scale should also be surpported.
+      // channel-wise weight scale should also be supported.
       auto qkv_weight_scale =
           PADDLE_GET_CONST(float, matmul0_op->GetAttr("weight_scale"));
       auto out_weight_scale =
@@ -3110,7 +3116,7 @@ int FusedMultiTransformerEncoderFuseQKVPass::BuildFusion(
     GET_IR_NODE_FROM_SUBGRAPH(
         while0, while0, fused_multi_transformer_fuse_qkv_pattern)
 
-    fuse_creater(input0,
+    fuse_creator(input0,
                  layer_norm,
                  layer_norm_scale,
                  layer_norm_bias,
@@ -3207,9 +3213,19 @@ void FusedMultiTransformerEncoderFuseQKVPass::ApplyImpl(Graph* graph) const {
   auto* scope = param_scope();
   PADDLE_ENFORCE_NOT_NULL(
       scope,
-      platform::errors::Fatal(
-          "During the fused_multi_transformer_encoder pass, "
-          "The scope should not be null."));
+      common::errors::Fatal("During the fused_multi_transformer_encoder pass, "
+                            "The scope should not be null."));
+
+  VLOG(3) << "Running fused_multi_transformer_encoder_fuse_qkv_pass.";
+  if (graph->IsMainGraph()) {
+    VLOG(3)
+        << "The ID of block running "
+           "fused_multi_transformer_encoder_fuse_qkv_pass is: 0(main_graph)";
+  } else {
+    VLOG(3) << "The ID of block running "
+               "fused_multi_transformer_encoder_fuse_qkv_pass is: "
+            << graph->GetBlockId();
+  }
 
   int fusion_count = BuildFusion(graph, name_scope_, scope);
   if (fusion_count > 0) {
@@ -3266,13 +3282,13 @@ FusedMultiTransformerEncoderFuseQKVPass::
       .End();
 
   AddOpCompat(OpCompat("matmul_v2"))
-      .AddInput("X")  // the shape shoule be (B, S, N*H)
+      .AddInput("X")  // the shape should be (B, S, N*H)
       .IsTensor()
       .End()
-      .AddInput("Y")  // the shape shoule be (N*H, N*H)
+      .AddInput("Y")  // the shape should be (N*H, N*H)
       .IsTensor()
       .End()
-      .AddOutput("Out")  // the shape shoule be (B, S, N*H)
+      .AddOutput("Out")  // the shape should be (B, S, N*H)
       .IsTensor()
       .End()
       .AddAttr("trans_x")
@@ -3403,7 +3419,7 @@ int MultiDevicesFusedMultiTransformerEncoderPass::BuildFusion(
   multi_devices_fused_multi_transformer_pattern();
 
   // Create New OpDesc
-  auto fuse_creater = [&](Node* input0,
+  auto fuse_creator = [&](Node* input0,
                           Node* c_identity,
                           Node* layer_norm,
                           Node* layer_norm_scale,
@@ -3464,7 +3480,7 @@ int MultiDevicesFusedMultiTransformerEncoderPass::BuildFusion(
     auto* bv_tensor =
         scope->FindVar(eltadd2_b->Name())->GetMutable<phi::DenseTensor>();
 
-    int dim_embed = wq_tensor->dims()[0];
+    int dim_embed = static_cast<int>(wq_tensor->dims()[0]);
 
     QKVWeightsBiasProcess(wq_tensor,
                           wk_tensor,
@@ -3888,7 +3904,7 @@ int MultiDevicesFusedMultiTransformerEncoderPass::BuildFusion(
     GET_IR_NODE_FROM_SUBGRAPH(
         eltadd_out, eltadd_out, multi_devices_fused_multi_transformer_pattern)
 
-    fuse_creater(input0,
+    fuse_creator(input0,
                  c_identity0,
                  layer_norm,
                  layer_norm_scale,
@@ -4010,8 +4026,19 @@ void MultiDevicesFusedMultiTransformerEncoderPass::ApplyImpl(
   auto* scope = param_scope();
   PADDLE_ENFORCE_NOT_NULL(
       scope,
-      platform::errors::Fatal(
+      common::errors::Fatal(
           "During the multi_transformer pass, The scope should not be null."));
+
+  VLOG(3) << "Running multi_devices_fused_multi_transformer_encoder_pass.";
+  if (graph->IsMainGraph()) {
+    VLOG(3) << "The ID of block running "
+               "multi_devices_fused_multi_transformer_encoder_pass is: "
+               "0(main_graph)";
+  } else {
+    VLOG(3) << "The ID of block running "
+               "multi_devices_fused_multi_transformer_encoder_pass is: "
+            << graph->GetBlockId();
+  }
 
   int fusion_count = BuildFusion(graph, name_scope_, scope);
   if (fusion_count > 0) {
@@ -4051,13 +4078,13 @@ MultiDevicesFusedMultiTransformerEncoderPass::
       .End();
 
   AddOpCompat(OpCompat("matmul_v2"))
-      .AddInput("X")  // the shape shoule be (B, S, N*H)
+      .AddInput("X")  // the shape should be (B, S, N*H)
       .IsTensor()
       .End()
-      .AddInput("Y")  // the shape shoule be (N*H, N*H)
+      .AddInput("Y")  // the shape should be (N*H, N*H)
       .IsTensor()
       .End()
-      .AddOutput("Out")  // the shape shoule be (B, S, N*H)
+      .AddOutput("Out")  // the shape should be (B, S, N*H)
       .IsTensor()
       .End()
       .AddAttr("trans_x")
@@ -4184,7 +4211,7 @@ int MultiDevicesFusedMultiTransformerEncoderFuseQKVPass::BuildFusion(
   fused_multi_transformer_fuse_qkv_pattern();
 
   // Create New OpDesc
-  auto fuse_creater = [&](Node* input0,
+  auto fuse_creator = [&](Node* input0,
                           Node* layer_norm,
                           Node* layer_norm_scale,
                           Node* layer_norm_bias,
@@ -4235,20 +4262,20 @@ int MultiDevicesFusedMultiTransformerEncoderFuseQKVPass::BuildFusion(
     auto* qkv_b_tensor =
         scope->FindVar(eltadd0_b->Name())->GetMutable<phi::DenseTensor>();
 
-    // NOTE(minghaoBD): to make it compatible with strucutured pruning on
+    // NOTE(minghaoBD): to make it compatible with structured pruning on
     // num_head dimension:
     // 1. get dim_head from reshape.shape[3], dim_embed from
     // layer_norm_bias.shape[0]
     // 2. calculate num_head according to wqkv_tensor.shape[1]/3 and dim_head
     auto* layer_norm_bias_tensor =
         scope->FindVar(layer_norm_bias->Name())->GetMutable<phi::DenseTensor>();
-    int dim_embed = layer_norm_bias_tensor->dims()[0];
+    int dim_embed = static_cast<int>(layer_norm_bias_tensor->dims()[0]);
     auto reshape_desc = reshape2_0->Op();
     int dim_head =
         PADDLE_GET_CONST(std::vector<int>, reshape_desc->GetAttr("shape"))
             .at(3) /
         3;  // 3 for qkv
-    int num_head = qkv_w_tensor->dims()[1] / 3 / dim_head;
+    int num_head = static_cast<int>(qkv_w_tensor->dims()[1] / 3 / dim_head);
 
     QKVWeightsBiasProcessFuseQKV(
         qkv_w_tensor, qkv_b_tensor, num_head, dim_head, dim_embed);
@@ -4353,7 +4380,7 @@ int MultiDevicesFusedMultiTransformerEncoderFuseQKVPass::BuildFusion(
     // Quantization attribute/Input
     if (enable_int8) {
       auto* dev_ctx = static_cast<phi::CPUContext*>(
-          platform::DeviceContextPool::Instance().Get(platform::CPUPlace()));
+          phi::DeviceContextPool::Instance().Get(phi::CPUPlace()));
       // Set input scale
       std::string matmul_input_scale_suffix = c_identity_op->Input("X")[0];
       auto qkv_in_scale = PADDLE_GET_CONST(
@@ -4375,7 +4402,7 @@ int MultiDevicesFusedMultiTransformerEncoderFuseQKVPass::BuildFusion(
       auto ffn1_in_scale = PADDLE_GET_CONST(
           float, ffn_matmul_1_op->GetAttr("Input_scale_" + ffn1_input_name));
 
-      // Calc outscale and Set them
+      // Calc out scale and Set them
       auto qkv_weight_scale =
           PADDLE_GET_CONST(float, matmul0_op->GetAttr("weight_scale"));
       auto out_weight_scale =
@@ -4760,7 +4787,7 @@ int MultiDevicesFusedMultiTransformerEncoderFuseQKVPass::BuildFusion(
     GET_IR_NODE_FROM_SUBGRAPH(
         while0, while0, fused_multi_transformer_fuse_qkv_pattern);
 
-    fuse_creater(input0,
+    fuse_creator(input0,
                  layer_norm,
                  layer_norm_scale,
                  layer_norm_bias,
@@ -4868,9 +4895,21 @@ void MultiDevicesFusedMultiTransformerEncoderFuseQKVPass::ApplyImpl(
   auto* scope = param_scope();
   PADDLE_ENFORCE_NOT_NULL(
       scope,
-      platform::errors::Fatal(
-          "During the fused_multi_transformer_encoder pass, "
-          "The scope should not be null."));
+      common::errors::Fatal("During the fused_multi_transformer_encoder pass, "
+                            "The scope should not be null."));
+
+  VLOG(3)
+      << "Running multi_devices_fused_multi_transformer_encoder_fuse_qkv_pass.";
+  if (graph->IsMainGraph()) {
+    VLOG(3) << "The ID of block running "
+               "multi_devices_fused_multi_transformer_encoder_fuse_qkv_pass "
+               "is: 0(main_graph)";
+  } else {
+    VLOG(3)
+        << "The ID of block running "
+           "multi_devices_fused_multi_transformer_encoder_fuse_qkv_pass is: "
+        << graph->GetBlockId();
+  }
 
   int fusion_count = BuildFusion(graph, name_scope_, scope);
   if (fusion_count > 0) {
@@ -4928,13 +4967,13 @@ MultiDevicesFusedMultiTransformerEncoderFuseQKVPass::
       .End();
 
   AddOpCompat(OpCompat("matmul_v2"))
-      .AddInput("X")  // the shape shoule be (B, S, N*H)
+      .AddInput("X")  // the shape should be (B, S, N*H)
       .IsTensor()
       .End()
-      .AddInput("Y")  // the shape shoule be (N*H, N*H)
+      .AddInput("Y")  // the shape should be (N*H, N*H)
       .IsTensor()
       .End()
-      .AddOutput("Out")  // the shape shoule be (B, S, N*H)
+      .AddOutput("Out")  // the shape should be (B, S, N*H)
       .IsTensor()
       .End()
       .AddAttr("trans_x")
@@ -5054,9 +5093,7 @@ MultiDevicesFusedMultiTransformerEncoderFuseQKVPass::
       .End();
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(fused_multi_transformer_encoder_pass,
               paddle::framework::ir::FusedMultiTransformerEncoderPass);

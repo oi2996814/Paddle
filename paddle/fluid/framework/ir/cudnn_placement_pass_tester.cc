@@ -18,9 +18,7 @@
 #include "paddle/fluid/framework/ir/pass_tester_helper.h"
 #include "paddle/fluid/framework/operator.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 class PlacementPassTest {
  private:
@@ -29,7 +27,7 @@ class PlacementPassTest {
     if (!is_registered) {
       auto& all_kernels = OperatorWithKernel::AllOpKernels();
 
-      platform::CUDAPlace place = platform::CUDAPlace(0);
+      phi::GPUPlace place = phi::GPUPlace(0);
       OpKernelType plain_kernel_type = OpKernelType(proto::VarType::FP32,
                                                     place,
                                                     DataLayout::kAnyLayout,
@@ -120,7 +118,7 @@ TEST(CUDNNPlacementPass, enable_relu_pool) {
 
 TEST(CUDNNPlacementPass, enable_all) {
   // 1 conv2d + 1 pool2d
-  // depthwise_conv2d doesnot have CUDNN kernel.
+  // depthwise_conv2d does not have CUDNN kernel.
   PlacementPassTest().MainTest({}, 2);
 }
 
@@ -128,8 +126,6 @@ TEST(CUDNNPlacementPass, placement_name) {
   PlacementPassTest().PlacementNameTest();
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 USE_PASS(cudnn_placement_pass);

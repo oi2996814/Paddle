@@ -26,8 +26,7 @@ limitations under the License. */
 #include "paddle/phi/kernels/softmax_grad_kernel.h"
 #include "paddle/phi/kernels/sparse/empty_kernel.h"
 
-namespace phi {
-namespace sparse {
+namespace phi::sparse {
 
 template <typename T, typename Context>
 void SoftmaxCsrGradKernel(const Context& dev_ctx,
@@ -37,7 +36,7 @@ void SoftmaxCsrGradKernel(const Context& dev_ctx,
                           SparseCsrTensor* dx) {
   PADDLE_ENFORCE_EQ(axis,
                     -1,
-                    phi::errors::Unimplemented(
+                    common::errors::Unimplemented(
                         "SparseCsrTensor only support axis=-1 for softmax, "
                         "which is faster when reading data by row (axis=-1)"));
   EmptyLikeCsrKernel<T, Context>(dev_ctx, dout, dx);
@@ -48,9 +47,9 @@ void SoftmaxCsrGradKernel(const Context& dev_ctx,
   int row_number = 1;
   for (int i = 0; i < out_rank - 1; ++i) {
     if (i < out_rank - 2) {
-      batch_size *= out_dim[i];
+      batch_size *= static_cast<int>(out_dim[i]);
     } else if (i == out_rank - 2) {
-      row_number = out_dim[i];
+      row_number = static_cast<int>(out_dim[i]);
     }
   }
 
@@ -100,7 +99,7 @@ void SoftmaxCooGradCPUKernel(const Context& dev_ctx,
   auto out_values = out.values();
   const auto out_dims = out.dims();
   auto sparse_dim = out.sparse_dim();
-  auto sizes = phi::vectorize<IntT>(out_dims);
+  auto sizes = common::vectorize<IntT>(out_dims);
   auto grad_indices = dout.indices();
   auto grad_values = dout.values();
   auto grad_nnz = dout.nnz();
@@ -121,7 +120,7 @@ void SoftmaxCooGradCPUKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         is_same_offset,
         true,
-        phi::errors::Unimplemented(
+        common::errors::Unimplemented(
             "SparseCooTensor only support same offsets for softmax."));
 
     SoftmaxGradKernel<T, Context>(
@@ -136,13 +135,13 @@ void SoftmaxCooGradCPUKernel(const Context& dev_ctx,
                                  std::multiplies<>());
 
   DenseTensor values_2(*values);
-  values_2.Resize(phi::make_ddim({nnz, nvalues}));
+  values_2.Resize(common::make_ddim({nnz, nvalues}));
 
   DenseTensor out_values_2(out_values);
-  out_values_2.Resize(phi::make_ddim({nnz, nvalues}));
+  out_values_2.Resize(common::make_ddim({nnz, nvalues}));
 
   DenseTensor grad_values_2(grad_values);
-  grad_values_2.Resize(phi::make_ddim({nnz, nvalues}));
+  grad_values_2.Resize(common::make_ddim({nnz, nvalues}));
   std::map<IntT, std::vector<IntT>> pools;
   phi::funcs::sparse::GetPoolsSoftmax(out_indices, sizes, dim, &pools);
 
@@ -203,8 +202,7 @@ void SoftmaxCooGradKernel(const Context& dev_ctx,
       }));
 }
 
-}  // namespace sparse
-}  // namespace phi
+}  // namespace phi::sparse
 
 PD_REGISTER_KERNEL(softmax_csr_grad,
                    CPU,

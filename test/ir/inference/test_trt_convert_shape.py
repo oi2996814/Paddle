@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import unittest
 from functools import partial
-from typing import List
 
 import numpy as np
 from program_config import ProgramConfig, TensorConfig
@@ -63,28 +64,30 @@ class TrtConvertSumTest(TrtLayerAutoScanTest):
 
                 yield program_config
 
+    def generate_dynamic_shape(self):
+        if self.dims == 4:
+            self.dynamic_shape.min_input_shape = {"input1": [1, 3, 24, 24]}
+            self.dynamic_shape.max_input_shape = {"input1": [4, 3, 48, 48]}
+            self.dynamic_shape.opt_input_shape = {"input1": [1, 3, 24, 24]}
+        elif self.dims == 3:
+            self.dynamic_shape.min_input_shape = {"input1": [1, 3, 24]}
+            self.dynamic_shape.max_input_shape = {"input1": [4, 3, 48]}
+            self.dynamic_shape.opt_input_shape = {"input1": [1, 3, 24]}
+        elif self.dims == 2:
+            self.dynamic_shape.min_input_shape = {"input1": [1, 24]}
+            self.dynamic_shape.max_input_shape = {"input1": [4, 48]}
+            self.dynamic_shape.opt_input_shape = {"input1": [1, 24]}
+        elif self.dims == 1:
+            self.dynamic_shape.min_input_shape = {"input1": [24]}
+            self.dynamic_shape.max_input_shape = {"input1": [48]}
+            self.dynamic_shape.opt_input_shape = {
+                "input1": [24],
+            }
+        return self.dynamic_shape
+
     def sample_predictor_configs(
-        self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
-        def generate_dynamic_shape():
-            if self.dims == 4:
-                self.dynamic_shape.min_input_shape = {"input1": [1, 3, 24, 24]}
-                self.dynamic_shape.max_input_shape = {"input1": [4, 3, 48, 48]}
-                self.dynamic_shape.opt_input_shape = {"input1": [1, 3, 24, 24]}
-            elif self.dims == 3:
-                self.dynamic_shape.min_input_shape = {"input1": [1, 3, 24]}
-                self.dynamic_shape.max_input_shape = {"input1": [4, 3, 48]}
-                self.dynamic_shape.opt_input_shape = {"input1": [1, 3, 24]}
-            elif self.dims == 2:
-                self.dynamic_shape.min_input_shape = {"input1": [1, 24]}
-                self.dynamic_shape.max_input_shape = {"input1": [4, 48]}
-                self.dynamic_shape.opt_input_shape = {"input1": [1, 24]}
-            elif self.dims == 1:
-                self.dynamic_shape.min_input_shape = {"input1": [24]}
-                self.dynamic_shape.max_input_shape = {"input1": [48]}
-                self.dynamic_shape.opt_input_shape = {
-                    "input1": [24],
-                }
+        self, program_config, run_pir=False
+    ) -> tuple[paddle_infer.Config, list[int], float]:
 
         def generate_trt_nodes_num(dynamic_shape):
             if not dynamic_shape:
@@ -96,21 +99,22 @@ class TrtConvertSumTest(TrtLayerAutoScanTest):
             self.dynamic_shape.max_input_shape = {}
             self.dynamic_shape.opt_input_shape = {}
 
-        # for static_shape
-        clear_dynamic_shape()
-        self.trt_param.precision = paddle_infer.PrecisionType.Float32
-        program_config.set_input_type(np.float32)
-        yield self.create_inference_config(), generate_trt_nodes_num(
-            False
-        ), 1e-5
-        self.trt_param.precision = paddle_infer.PrecisionType.Half
-        program_config.set_input_type(np.float16)
-        yield self.create_inference_config(), generate_trt_nodes_num(
-            False
-        ), 1e-3
+        if not run_pir:
+            # for static_shape
+            clear_dynamic_shape()
+            self.trt_param.precision = paddle_infer.PrecisionType.Float32
+            program_config.set_input_type(np.float32)
+            yield self.create_inference_config(), generate_trt_nodes_num(
+                False
+            ), 1e-5
+            self.trt_param.precision = paddle_infer.PrecisionType.Half
+            program_config.set_input_type(np.float16)
+            yield self.create_inference_config(), generate_trt_nodes_num(
+                False
+            ), 1e-3
 
         # for dynamic_shape
-        generate_dynamic_shape()
+        self.generate_dynamic_shape()
         self.trt_param.precision = paddle_infer.PrecisionType.Float32
         program_config.set_input_type(np.float32)
         yield self.create_inference_config(), generate_trt_nodes_num(True), 1e-5
@@ -119,7 +123,10 @@ class TrtConvertSumTest(TrtLayerAutoScanTest):
         yield self.create_inference_config(), generate_trt_nodes_num(True), 1e-3
 
     def test(self):
+        # test for old ir
         self.run_test()
+        # test for pir
+        self.run_test(run_pir=True)
 
 
 if __name__ == "__main__":

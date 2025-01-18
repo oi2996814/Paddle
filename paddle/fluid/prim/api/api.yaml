@@ -26,9 +26,12 @@
 - gather_nd
 - log
 - max
+- min
 - maximum
 - minimum
+- pow
 - prod
+- cumprod
 - roll
 - scatter
 - scatter_nd_add
@@ -37,10 +40,8 @@
 - pad
 - sqrt
 - cumsum
+- cumprod
 - put_along_axis
-- equal
-- greater_than
-- less_equal
 - sin
 - cos
 - where
@@ -48,3 +49,10 @@
 - reshape
 - erf
 - tanh
+- sign
+- sigmoid
+- index_put
+- index_add
+- isnan
+- isfinite
+- take_along_axis

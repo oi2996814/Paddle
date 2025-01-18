@@ -14,9 +14,9 @@
 
 import unittest
 
+from paddle.base import core
+from paddle.base.framework import Program
 from paddle.distributed.fleet.base.util_factory import draw_block_graphviz
-from paddle.fluid import core
-from paddle.fluid.framework import Program
 
 
 class TestDrawBlockGraphviz(unittest.TestCase):
@@ -36,19 +36,13 @@ class TestDrawBlockGraphviz(unittest.TestCase):
         b.create_var(
             name='tensor_array',
             shape=[5, 10],
-            type=core.VarDesc.VarType.LOD_TENSOR_ARRAY,
+            type=core.VarDesc.VarType.DENSE_TENSOR_ARRAY,
         )
 
         # operator
-        mul_x = b.create_parameter(
-            dtype="float32", shape=[5, 10], lod_level=0, name="mul.x"
-        )
-        mul_y = b.create_var(
-            dtype="float32", shape=[10, 8], lod_level=0, name="mul.y"
-        )
-        mul_out = b.create_var(
-            dtype="float32", shape=[5, 8], lod_level=0, name="mul.out"
-        )
+        mul_x = b.create_parameter(dtype="float32", shape=[5, 10], name="mul.x")
+        mul_y = b.create_var(dtype="float32", shape=[10, 8], name="mul.y")
+        mul_out = b.create_var(dtype="float32", shape=[5, 8], name="mul.out")
         b.append_op(
             type="mul",
             inputs={"X": mul_x, "Y": mul_y},

@@ -60,6 +60,10 @@ static dnnl::memory::data_type GetDstType(
           NAME, ::paddle::DataType::FLOAT32, float, __VA_ARGS__)          \
       PD_PRIVATE_CASE_TYPE(                                               \
           NAME, ::paddle::DataType::INT8, int8_t, __VA_ARGS__)            \
+      PD_PRIVATE_CASE_TYPE(NAME,                                          \
+                           ::paddle::DataType::BFLOAT16,                  \
+                           ::phi::dtype::bfloat16,                        \
+                           __VA_ARGS__)                                   \
       default:                                                            \
         PD_THROW("function " #NAME " is not implemented for data type `", \
                  __dtype__,                                               \
@@ -168,12 +172,12 @@ void ComputeINT8(const OneDNNContext& dev_ctx,
   PADDLE_ENFORCE_NE(
       is_conv3d,
       true,
-      phi::errors::Unimplemented(
+      common::errors::Unimplemented(
           "OneDNN int8 convolution does not support 3D inputs currently"));
   PADDLE_ENFORCE_EQ(
       fuse_residual_conn && force_fp32_output,
       false,
-      phi::errors::Unimplemented(
+      common::errors::Unimplemented(
           "residual fusion does not support force output with fp32"));
   const std::string& unique_name =
       dev_ctx.GetInputsName("Input")[0] + dev_ctx.GetInputsName("Filter")[0];
@@ -218,7 +222,7 @@ void ComputeINT8(const OneDNNContext& dev_ctx,
           PADDLE_ENFORCE_EQ(
               output->dims(),
               residual_param->dims(),
-              phi::errors::InvalidArgument(
+              common::errors::InvalidArgument(
                   "Output and elementwise parameter need to have the "
                   "same dimension sizes, but got output's dimension = %d"
                   " and residual param's dimension =%d .",
@@ -288,10 +292,10 @@ void ConvOnednn(const Context& dev_ctx,
                 bool fuse_residual_connection,
                 bool force_fp32_output,
                 DenseTensor* out) {
-  PADDLE_ENFORCE_EQ(
-      dev_ctx.GetPlace().GetType(),
-      AllocationType::CPU,
-      phi::errors::PreconditionNotMet("Operator DNNL Conv must use CPUPlace"));
+  PADDLE_ENFORCE_EQ(dev_ctx.GetPlace().GetType(),
+                    AllocationType::CPU,
+                    common::errors::PreconditionNotMet(
+                        "Operator DNNL Conv must use CPUPlace"));
 
   bool is_INT8 = funcs::is_int8<T>();
 

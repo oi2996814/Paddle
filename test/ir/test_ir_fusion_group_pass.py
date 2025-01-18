@@ -18,13 +18,13 @@ import numpy as np
 from pass_test import PassTest
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 
 class FusionGroupPassTest(PassTest):
     def build_program(self, dtype):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             self.feed_vars = self._prepare_feed_vars([32, 128], dtype, 2)
             self.feed_vars.append(
                 paddle.static.data(name="data2", shape=[128, 128], dtype=dtype)
@@ -61,30 +61,32 @@ class FusionGroupPassTest(PassTest):
     def _feed_random_data(self, feed_vars):
         feeds = {}
         for var in feed_vars:
-            if var.type != fluid.core.VarDesc.VarType.LOD_TENSOR:
-                raise TypeError("Feed data of non LoDTensor is not supported.")
+            if var.type != base.core.VarDesc.VarType.DENSE_TENSOR:
+                raise TypeError(
+                    "Feed data of non DenseTensor is not supported."
+                )
 
             shape = var.shape
-            if var.dtype == fluid.core.VarDesc.VarType.FP32:
+            if var.dtype == paddle.float32:
                 dtype = "float32"
-            elif var.dtype == fluid.core.VarDesc.VarType.FP64:
+            elif var.dtype == paddle.float64:
                 dtype = "float64"
-            elif var.dtype == fluid.core.VarDesc.VarType.FP16:
+            elif var.dtype == paddle.float16:
                 dtype = "float16"
             else:
-                raise ValueError("Unsupported dtype %s" % var.dtype)
+                raise ValueError(f"Unsupported dtype {var.dtype}")
             feeds[var.name] = np.random.random(shape).astype(dtype)
         return feeds
 
     def test_check_output(self):
         if core.is_compiled_with_cuda():
             self.pass_attrs = {"fusion_group_pass": {"use_gpu": True}}
-            self.check_output_with_place(fluid.CUDAPlace(0))
+            self.check_output_with_place(base.CUDAPlace(0))
 
 
 class FusionGroupPassComplicatedTest(FusionGroupPassTest):
     def build_program(self, dtype):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             self.feed_vars = self._prepare_feed_vars([32, 64], dtype, 5, False)
 
             one = paddle.tensor.fill_constant(shape=[1], dtype=dtype, value=1.0)
@@ -107,7 +109,7 @@ class FusionGroupPassComplicatedTest(FusionGroupPassTest):
 
 class FusionGroupPassInplaceTest(FusionGroupPassTest):
     def build_program(self, dtype):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             self.feed_vars = self._prepare_feed_vars([32, 128], dtype, 3)
             self.feed_vars.append(
                 paddle.static.data(name="data3", shape=[128, 32], dtype=dtype)
@@ -133,7 +135,7 @@ class FusionGroupPassTestFP64(FusionGroupPassTest):
 
 class FusionGroupPassTestCastAndFP16(FusionGroupPassTest):
     def build_program(self, dtype):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             self.feed_vars = self._prepare_feed_vars([32, 128], dtype, 2)
             self.feed_vars.append(
                 paddle.static.data(name="data2", shape=[128, 128], dtype=dtype)
@@ -164,7 +166,7 @@ class FusionGroupPassTestCastAndFP16(FusionGroupPassTest):
 
 class FusionGroupPassSumTest(FusionGroupPassTest):
     def build_program(self, dtype):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             self.feed_vars = self._prepare_feed_vars([32, 128], dtype, 3)
             self.feed_vars.append(
                 paddle.static.data(name="data3", shape=[128, 128], dtype=dtype)
@@ -188,7 +190,7 @@ class FusionGroupPassSumTest(FusionGroupPassTest):
 
 class FusionGroupPassCastTest(FusionGroupPassTest):
     def build_program(self, dtype):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             self.feed_vars = self._prepare_feed_vars([2, 2], dtype, 2)
 
             tmp_0 = paddle.add(self.feed_vars[0], self.feed_vars[1])
@@ -210,7 +212,7 @@ class FusionGroupPassCastTest(FusionGroupPassTest):
 
 class FusionGroupPassFillConstantTest(FusionGroupPassTest):
     def build_program(self, dtype):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             self.feed_vars = self._prepare_feed_vars([2, 2], dtype, 2)
 
             tmp_0 = paddle.add(self.feed_vars[0], self.feed_vars[1])

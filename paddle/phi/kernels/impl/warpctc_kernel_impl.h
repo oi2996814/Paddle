@@ -246,7 +246,7 @@ void WarpctcKernel(const Context& dev_ctx,
 
     PADDLE_ENFORCE_GT(max_sequence_length,
                       0,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The first dimension of Input(Logits) should be "
                           "greater than zero "
                           "but received %d. ",
@@ -254,7 +254,7 @@ void WarpctcKernel(const Context& dev_ctx,
 
     PADDLE_ENFORCE_GT(num_sequences,
                       0,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The second dimension of Input(Logits) should be "
                           "greater than zero "
                           "but received %d. ",
@@ -262,7 +262,7 @@ void WarpctcKernel(const Context& dev_ctx,
 
     PADDLE_ENFORCE_GT(sequence_width,
                       0,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The third dimension of Input(Logits) should be "
                           "greater than zero "
                           "but received %d. ",
@@ -286,20 +286,20 @@ void WarpctcKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_GT(
         logits.NumLevels(),
         0UL,
-        phi::errors::InvalidArgument("Input(Logits) Tensor of WarpCTC "
-                                     "does not contain LoD information."));
+        common::errors::InvalidArgument("Input(Logits) Tensor of WarpCTC "
+                                        "does not contain LoD information."));
     PADDLE_ENFORCE_GT(
         label.NumLevels(),
         0UL,
-        phi::errors::InvalidArgument("Input(Label) Tensor of WarpCTC "
-                                     "does not contain LoD information."));
+        common::errors::InvalidArgument("Input(Label) Tensor of WarpCTC "
+                                        "does not contain LoD information."));
 
     logits_lod = phi::ToAbsOffset(logits.lod())[0];
     auto logits_dims = logits.dims();
 
     PADDLE_ENFORCE_GT(logits_dims[0],
                       0,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The first dimension of Input(Logits) should be "
                           "greater than zero "
                           "but received %d. ",
@@ -308,7 +308,7 @@ void WarpctcKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         logits_dims[0],
         static_cast<int64_t>(logits_lod.back()),
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The first dimension of Input(Logits) should be equal to "
             "the sum of all sequences' lengths = %d., but received %d. ",
             static_cast<int64_t>(logits_lod.back()),
@@ -318,7 +318,7 @@ void WarpctcKernel(const Context& dev_ctx,
     auto label_dims = label.dims();
     PADDLE_ENFORCE_EQ(label_dims[1],
                       1,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The last dimension of Input(Label) should be 1, "
                           "but received %d",
                           label_dims[1]));
@@ -326,7 +326,7 @@ void WarpctcKernel(const Context& dev_ctx,
     num_sequences = logits_lod.size() - 1;
     PADDLE_ENFORCE_EQ(num_sequences,
                       label_lod.size() - 1,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The number of sequences of Input(Logits) should be "
                           "equal to that of Input(Label) = %d, but received %d",
                           label_lod.size() - 1,
@@ -336,7 +336,7 @@ void WarpctcKernel(const Context& dev_ctx,
     max_sequence_length = phi::funcs::MaximumSequenceLength(logits_lod);
   }
 
-  auto loss_dims = phi::make_ddim({static_cast<int64_t>(num_sequences), 1});
+  auto loss_dims = common::make_ddim({static_cast<int64_t>(num_sequences), 1});
 
   // warpctc needs sequences data stored in transposed padding format
   DenseTensor warpctc_logits_tmp =
@@ -360,7 +360,7 @@ void WarpctcKernel(const Context& dev_ctx,
       phi::Copy(dev_ctx, cpu_pad_value, dev_ctx.GetPlace(), true, &pad_value);
     }
 
-    phi::funcs::PaddingLoDTensorFunctor<Context, T>()(
+    phi::funcs::PaddingDenseTensorFunctor<Context, T>()(
         dev_ctx,
         logits,
         &warpctc_logits,
@@ -400,7 +400,7 @@ void WarpctcKernel(const Context& dev_ctx,
     warpctc_label.set_lod(lod);
 
     if (dev_ctx.GetPlace() == phi::CPUPlace()) {
-      phi::funcs::UnpaddingLoDTensorFunctor<Context, int>()(
+      phi::funcs::UnpaddingDenseTensorFunctor<Context, int>()(
           dev_ctx,
           label,
           &warpctc_label,
@@ -415,7 +415,7 @@ void WarpctcKernel(const Context& dev_ctx,
            1});
       dev_ctx.template Alloc<int>(&gpu_label);
       gpu_label.set_lod(lod);
-      phi::funcs::UnpaddingLoDTensorFunctor<Context, int>()(
+      phi::funcs::UnpaddingDenseTensorFunctor<Context, int>()(
           dev_ctx,
           label,
           &gpu_label,

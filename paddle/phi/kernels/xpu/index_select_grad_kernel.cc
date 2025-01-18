@@ -35,7 +35,7 @@ void IndexSelectGradKernel(const Context& ctx,
       index_type == phi::DataType::INT32 || index_type == phi::DataType::INT64;
   PADDLE_ENFORCE_EQ(index_type_match,
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Input(Index) holds the wrong type, it holds %s, but "
                         "desires to be %s or %s",
                         index_type,
@@ -45,8 +45,8 @@ void IndexSelectGradKernel(const Context& ctx,
   T* x_grad_data = ctx.template Alloc<T>(x_grad);
   const T* out_grad_data = out_grad.data<T>();
 
-  auto out_grad_shape = phi::vectorize<int64_t>(out_grad.dims());
-  auto x_grad_shape = phi::vectorize<int64_t>(x_grad->dims());
+  auto out_grad_shape = common::vectorize<int64_t>(out_grad.dims());
+  auto x_grad_shape = common::vectorize<int64_t>(x_grad->dims());
 
   int r = xpu::Error_t::SUCCESS;
   if (index_type == phi::DataType::INT32) {

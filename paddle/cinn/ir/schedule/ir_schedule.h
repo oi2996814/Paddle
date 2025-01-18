@@ -21,9 +21,10 @@
 
 #include "paddle/cinn/ir/ir.h"
 #include "paddle/cinn/ir/ir_base.h"
+#include "paddle/cinn/ir/ir_mutator.h"
+#include "paddle/cinn/ir/schedule/schedule_base.h"
 #include "paddle/cinn/ir/schedule/schedule_desc.h"
 #include "paddle/cinn/ir/tensor.h"
-#include "paddle/cinn/ir/utils/ir_mutator.h"
 #include "paddle/cinn/utils/error.h"
 #include "paddle/cinn/utils/random_engine.h"
 
@@ -31,41 +32,12 @@ namespace cinn {
 namespace ir {
 
 /**
- * A struct representing a module that contains Expr. This struct is only used
- * in Schedule process.
- */
-class ModuleExpr {
- public:
-  ModuleExpr() = default;
-  ModuleExpr(const ModuleExpr& mod_expr) = default;
-  ModuleExpr(ModuleExpr&& mod_expr) = default;
-
-  ModuleExpr& operator=(const ModuleExpr& mod_expr) = default;
-
-  explicit ModuleExpr(const std::vector<Expr>& exprs) : exprs_(exprs) {}
-  explicit ModuleExpr(std::vector<Expr>&& exprs) : exprs_(std::move(exprs)) {}
-
-  //! Get all the Expr in this ModuleExpr.
-  std::vector<Expr> GetExprs() { return exprs_; }
-
-  std::vector<Expr> GetExprs() const { return exprs_; }
-
-  void SetExprs(const std::vector<Expr>& exprs) { exprs_ = exprs; }
-
- private:
-  //! Exprs stored in ModuleExpr. Each one is an AST, representing a computation
-  //! kernel.
-  std::vector<Expr> exprs_;
-};
-
-/**
- * A struct containing all the schedule primitives. Each shedule primitive is a
- * member function of IRSchedule. Schedule primitves are implmented by
- * ScheduleImpl manipulating the AST - IR(Expr). To support serializing and
+ * A struct containing all the schedule primitives. Each schedule primitive is a
+ * member function of IRSchedule. Schedule primitives are implemented by
+ * StScheduleImpl manipulating the AST - IR(Expr). To support serializing and
  * replaying, each schedule primitive should append a ScheduleDesc::Step to the
- * trace_ in its corresponding function implment.
+ * trace_ in its corresponding function implement.
  */
-class ScheduleImpl;
 class IRSchedule {
  public:
   IRSchedule();
@@ -73,10 +45,12 @@ class IRSchedule {
                       utils::LinearRandomEngine::StateType rand_seed = -1,
                       bool debug_flag = false,
                       utils::ErrorMessageLevel err_msg_level =
-                          utils::ErrorMessageLevel::kGeneral);
+                          utils::ErrorMessageLevel::kGeneral,
+                      bool is_dynamic_shape = false);
   IRSchedule(ir::ModuleExpr&& mod_expr,
              ScheduleDesc&& trace,
-             utils::LinearRandomEngine::StateType rand_seed = -1);
+             utils::LinearRandomEngine::StateType rand_seed = -1,
+             bool is_dynamic_shape = false);
   IRSchedule(const IRSchedule& other);
   IRSchedule& operator=(const IRSchedule& src);
   IRSchedule(IRSchedule&& other);
@@ -96,6 +70,8 @@ class IRSchedule {
 
   //! Get the ScheduleDesc that traces the scheduling process
   const ScheduleDesc& GetTraceDesc() const { return trace_; }
+
+  bool IsDynamicShape() const { return is_dynamic_shape_; }
 
   /**
    * \brief Get all the loops of specific Block stored in ModuleExpr.
@@ -219,6 +195,7 @@ class IRSchedule {
    * @param memory_type String that indicates the buffer's storage scope.
    * @return The buffer's cache.
    */
+
   Expr CacheRead(const Expr& block,
                  int read_buffer_index,
                  const std::string& memory_type);
@@ -244,7 +221,7 @@ class IRSchedule {
    */
   void SyncThreads(const Expr& ir_node, bool after_node = true);
 
-  /*!
+  /**
    * \brief Set a tensor's buffer type(memory_type)
    * \param block The ScheduleBlockRealize corresponding to an unique tensor.
    * \param memory_type The memory type we want to set. Should be "local",
@@ -253,6 +230,13 @@ class IRSchedule {
   void SetBuffer(Expr& block,  // NOLINT
                  const std::string& memory_type,
                  bool fixed = false);  // NOLINT
+
+  /**
+   * \brief Create a new unit loop on top of the block.
+   * @param block The block to be added the new loop.
+   * @return The new unit loop.
+   */
+  Expr AddUnitLoop(const Expr& block);
 
   /**
    * \brief Reorder the loops in the order of vector.
@@ -364,7 +348,7 @@ class IRSchedule {
    * If the rfactor loop is k and rf_axis is 0, the rfactor transformation is
    * divided into 2 steps:
    * 1. get the rfactor block where the reduce loop k is transformed to the
-   * serial loop with no accumalation and a new rfactor tensor is created. The
+   * serial loop with no accumulation and a new rfactor tensor is created. The
    * axis k will be placed in the rf_axis of the new rf_tensor. The rf_block is
    * as follows: \code for (rf_k, 0, 30)      // rfactor loop k is transformed
    * to the serial loop. for (i, 0, 10)       // serial loop for (j, 0, 20) //
@@ -380,6 +364,48 @@ class IRSchedule {
    * \endcode
    */
   Expr Rfactor(const Expr& rf_loop, int rf_axis);
+
+  /**
+   * \brief Factorize the reduction block by the given loop. The block will be
+   * split into two blocks: reduction-factorized block and write-back block.
+   * @param rf_loop the reduce loop to be factorized.
+   * @param rf_axis The position where the new dimension is placed in the new rf
+   * tensor.
+   * @return The new created rf tensor.
+   *
+   * For example, input the block:
+   * \code
+   * for (i, 0, 10)      // serial loop
+   *   B_init[i] = 0
+   *   for (j, 0, 20)    // reduce loop
+   *      for (k, 0, 30) // reduce loop
+   *         B[i] = B[i] + A[i, j, k]
+   * \endcode
+   *
+   * If the rf loop is j and rf_axis is 0, the transformation is
+   * divided into 2 steps:
+   * 1. get the rf block where the reduce loop j is transformed to the
+   * serial loop with no accumulation and a new rf tensor is created.
+   * The axis j will be placed in the rf_axis of the new rf_tensor.
+   * The rf_block is as follows:
+   * \code
+   * for (i, 0, 10)   // serial loop
+   *   for (j, 0, 20) //  rf loop j is transformed to the serial loop
+   *     rf_B_init[j, i] = 0
+   *     for (k, 0, 30)  // reduce loop.
+   *       rf_B[j, i] = rf_B[j, i] + A[i, j, k]
+   * \endcode
+   * 2. do reduction of the rf loop j to get the final result block:
+   * \code
+   *   for (i, 0, 10)     // serial loop
+   *      B_init[i] = 0
+   *      for (j, 0, 20)  // rf reduction loop
+   *        B[i] = B[i] + rf_B[j, i]
+   * \endcode
+   */
+  Expr FactorizeReduction(const Expr& rf_loop,
+                          int rf_axis,
+                          bool with_write_back_block_init = true);
 
   /*!
    * \brief Annotate a block with a key-value pair to set as its attribute
@@ -426,7 +452,7 @@ class IRSchedule {
 
   /*!
    * \brief Insert a tag in schedule_desc to mark the beginning of post
-   * processing, the schedue primitive itself does not make any changes to the
+   * processing, the schedule primitive itself does not make any changes to the
    * IR.
    */
   void TagPostSchedule();
@@ -451,15 +477,16 @@ class IRSchedule {
   utils::LinearRandomEngine::StateType ForkSeed() const;
 
  private:
-  std::unique_ptr<ScheduleImpl> impl_;
+  std::unique_ptr<ScheduleBase> impl_;
   mutable ScheduleDesc trace_;  // trace the scheduling process
   mutable utils::LinearRandomEngine::StateType rand_seed_;
+  bool is_dynamic_shape_;
 };
 
 /*!
  * \brief The base class of the inliner, which handles:
  * 1) Remove the block to be lined
- * 2) Maintain a list of index variables and their substition of the buffer
+ * 2) Maintain a list of index variables and their substitution of the buffer
  * being inlined
  */
 class BaseInliner : public ir::IRMutator<> {
@@ -474,9 +501,8 @@ class BaseInliner : public ir::IRMutator<> {
   void Visit(const ir::Block* expr, Expr* op) override;
 
  protected:
-  //! Check if indices are validate. If so, set idx_vars_ properly.
-  bool UpdateAndCheckIndexVars(const std::vector<Expr>& indices,
-                               int expected_ndim);
+  //! Check if indices are validate. If so, set idx_expr_ properly.
+  bool UpdateAndCheckIndexVars(const std::vector<Expr>& indices);
 
   void SetIndexSubstitution(const std::vector<Expr>& indices);
 
@@ -486,7 +512,7 @@ class BaseInliner : public ir::IRMutator<> {
   //! The body of the block to be inlined
   Expr inlined_store_{nullptr};
   //! The indices used for indexing the buffer to be inlined
-  std::vector<Var> idx_vars_;
+  std::vector<Expr> idx_expr_;
   //! Replacing vars(idx_sub_var_) in indices to corresponding
   //! expr(idx_sub_expr_)
   std::vector<Var> idx_sub_var_;

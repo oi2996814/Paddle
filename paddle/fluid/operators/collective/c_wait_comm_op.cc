@@ -14,17 +14,17 @@ limitations under the License. */
 #include <string>
 
 #include "paddle/fluid/framework/op_registry.h"
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Scope;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
-#include "paddle/fluid/platform/collective_helper.h"
+#include "paddle/common/flags.h"
+#include "paddle/phi/core/distributed/comm_context_manager.h"
+#include "paddle/phi/core/distributed/nccl_comm_context.h"
+#include "paddle/phi/core/platform/collective_helper.h"
 #endif
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class CWaitCommOp : public framework::OperatorBase {
  public:
@@ -35,26 +35,40 @@ class CWaitCommOp : public framework::OperatorBase {
       : OperatorBase(type, inputs, outputs, attrs) {}
 
   void RunImpl(const framework::Scope& scope,
-               const platform::Place& place) const override {
+               const phi::Place& place) const override {
     PADDLE_ENFORCE_EQ(
-        platform::is_gpu_place(place),
+        place.GetType() == phi::AllocationType::GPU,
         true,
-        platform::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "wait_comm op can run on gpu place only for now, but got %s",
             place.DebugString()));
 
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
     int ring_id = Attr<int>("ring_id");
 
-    auto compute_stream =
+    gpuStream_t compute_stream =
         static_cast<phi::GPUContext*>(
-            platform::DeviceContextPool::Instance().Get(place))
+            phi::DeviceContextPool::Instance().Get(place))
             ->stream();
-    auto comm_stream =
-        platform::NCCLCommContext::Instance().Get(ring_id, place)->stream();
+    gpuStream_t comm_stream = nullptr;
+    gpuEvent_t event = nullptr;
 
-    auto event =
-        platform::NCCLCommContext::Instance().Get(ring_id, place)->comm_event();
+    const auto& comm_context_manager =
+        phi::distributed::CommContextManager::GetInstance();
+
+    PADDLE_ENFORCE_EQ(comm_context_manager.Has(std::to_string(ring_id)),
+                      true,
+                      common::errors::InvalidArgument(
+                          "You choose to use new communication library. "
+                          "But ring_id(%d) is "
+                          "not found in comm_context_manager.",
+                          std::to_string(ring_id)));
+    phi::distributed::NCCLCommContext* comm_ctx =
+        static_cast<phi::distributed::NCCLCommContext*>(
+            comm_context_manager.Get(std::to_string(ring_id)));
+    comm_stream = comm_ctx->GetStream();
+    event = comm_ctx->GetComputeEvent();
+    VLOG(3) << "new comm_context_manager has rid " << ring_id;
 
 // comm_stream-->event-->compute_stream
 #ifdef PADDLE_WITH_HIP
@@ -65,7 +79,7 @@ class CWaitCommOp : public framework::OperatorBase {
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamWaitEvent(compute_stream, event, 0));
 #endif
 #else
-    PADDLE_THROW(platform::errors::PreconditionNotMet(
+    PADDLE_THROW(common::errors::PreconditionNotMet(
         "PaddlePaddle should compile with GPU."));
 #endif
   }
@@ -87,8 +101,7 @@ Compute stream wait Comm Stream with async event.
   }
 };
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
 

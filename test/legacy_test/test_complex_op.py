@@ -15,11 +15,11 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 import paddle
 from paddle import static
-from paddle.fluid import dygraph
+from paddle.base import dygraph
 
 paddle.enable_static()
 
@@ -45,12 +45,13 @@ class TestComplexOp(OpTest):
         self.outputs = {'Out': out_ref}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
         self.check_grad(
             ['X', 'Y'],
             'Out',
+            check_pir=True,
         )
 
     def test_check_grad_ignore_x(self):
@@ -58,6 +59,7 @@ class TestComplexOp(OpTest):
             ['Y'],
             'Out',
             no_grad_set=set('X'),
+            check_pir=True,
         )
 
     def test_check_grad_ignore_y(self):
@@ -65,6 +67,7 @@ class TestComplexOp(OpTest):
             ['X'],
             'Out',
             no_grad_set=set('Y'),
+            check_pir=True,
         )
 
 

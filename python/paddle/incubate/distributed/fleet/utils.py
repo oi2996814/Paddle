@@ -21,11 +21,11 @@ import numpy as np
 from google.protobuf import text_format
 
 import paddle
-from paddle import fluid
+from paddle import base
+from paddle.base import core
+from paddle.base.framework import Program
+from paddle.base.proto import framework_pb2
 from paddle.distributed.fleet.base.util_factory import draw_block_graphviz
-from paddle.fluid import core
-from paddle.fluid.framework import Program
-from paddle.fluid.proto import framework_pb2
 from paddle.framework import io_utils
 
 __all__ = [
@@ -109,8 +109,7 @@ def check_pruned_program_vars(train_prog, pruned_prog):
             train_prog_var = train_prog.global_block().var(var_name)
         except ValueError as e:
             logger.error(
-                "not find variable '%s' in train program. please check pruning."
-                % var_name
+                f"not find variable '{var_name}' in train program. please check pruning."
             )
             logger.error(e)
             continue
@@ -119,13 +118,7 @@ def check_pruned_program_vars(train_prog, pruned_prog):
             or var.dtype != train_prog_var.dtype
         ):
             logger.error(
-                "variable: {} not match. in pruned program shape: {} dtype:{}, in train program shape: {} dtype: {}".format(
-                    var_name,
-                    var.shape,
-                    var.dtype,
-                    train_prog_var.shape,
-                    train_prog_var.dtype,
-                )
+                f"variable: {var_name} not match. in pruned program shape: {var.shape} dtype:{var.dtype}, in train program shape: {train_prog_var.shape} dtype: {train_prog_var.dtype}"
             )
             is_match = False
     return is_match
@@ -168,21 +161,21 @@ def append_load_op(block, var, path):
 
 
 def save_var(np_array, var_name, shape_list, dtype, save_path):
-    program = fluid.Program()
-    place = fluid.CPUPlace()
-    exe = fluid.Executor(place)
+    program = base.Program()
+    place = base.CPUPlace()
+    exe = base.Executor(place)
     shape = list(shape_list)
-    with fluid.program_guard(program):
+    with base.program_guard(program):
         d0_data = paddle.static.data(var_name, shape=shape, dtype=dtype)
         append_save_op(program.global_block(), d0_data, save_path)
         exe.run(feed={var_name: np_array}, fetch_list=[])
 
 
 def load_var(var_name, shape_list, dtype, save_path):
-    program = fluid.Program()
-    place = fluid.CPUPlace()
-    exe = fluid.Executor(place)
-    with fluid.program_guard(program):
+    program = base.Program()
+    place = base.CPUPlace()
+    exe = base.Executor(place)
+    with base.program_guard(program):
         d0_data = paddle.static.data(var_name, shape=shape_list, dtype=dtype)
         append_load_op(program.global_block(), d0_data, save_path)
         outs = exe.run(feed={}, fetch_list=[d0_data])
@@ -200,7 +193,7 @@ def reader(batch_size, fn, dim):
     else:
         shape = [dim]
 
-    shape = [batch_size] + shape
+    shape = [batch_size, *shape]
     dim = dim * batch_size
 
     for line in open(fn, 'r'):
@@ -230,10 +223,10 @@ def try_load_model_vars(
     save_filename,
     saved_params,
 ):
-    place = fluid.CPUPlace()
-    exe = fluid.Executor(place)
-    scope = fluid.core.Scope()
-    with fluid.scope_guard(scope):
+    place = base.CPUPlace()
+    exe = base.Executor(place)
+    scope = base.core.Scope()
+    with base.scope_guard(scope):
         if is_text_dump_program:
             dump_prog_fn = program_type_trans(
                 dump_dir, dump_prog_fn, is_text_dump_program
@@ -256,7 +249,7 @@ def try_load_model_vars(
             for each_var in saved_params
         }
         for each_var in saved_params:
-            var_temp = fluid.global_scope().find_var(each_var.name)
+            var_temp = base.global_scope().find_var(each_var.name)
             assert var_temp is not None, "can't not find var: " + each_var.name
             new_shape = (np.array(var_temp.get_tensor())).shape
             assert each_var.name in orig_para_shape, (
@@ -265,10 +258,8 @@ def try_load_model_vars(
             orig_shape = orig_para_shape.get(each_var.name)
             if new_shape != orig_shape:
                 raise RuntimeError(
-                    "Shape not matching: the Program requires a parameter with a shape of ({}), "
-                    "while the loaded parameter (namely [ {} ]) has a shape of  ({}).".format(
-                        orig_shape, each_var.name, new_shape
-                    )
+                    f"Shape not matching: the Program requires a parameter with a shape of ({orig_shape}), "
+                    f"while the loaded parameter (namely [ {each_var.name} ]) has a shape of  ({new_shape})."
                 )
 
         # check feed/fetch vars in program and config
@@ -284,9 +275,7 @@ def try_load_model_vars(
             and feed_target_names != feed_config.feeded_vars_names
         ):
             logger.warning(
-                "feed vars in program and config are diff: feed in program: {}. feed in config {}.".format(
-                    feed_target_names, feed_config.feeded_vars_names
-                )
+                f"feed vars in program and config are diff: feed in program: {feed_target_names}. feed in config {feed_config.feeded_vars_names}."
             )
             feed_name_list = feed_config.feeded_vars_names
             # remove feed op in inference_program. new feed op will be added in exe.run
@@ -303,9 +292,7 @@ def try_load_model_vars(
             and fetch_targets_names != fetch_config.fetch_vars_names
         ):
             logger.warning(
-                "fetch vars in program and config are diff: fetch in program: {}. fetch in config {}.".format(
-                    fetch_targets_names, fetch_config.fetch_vars_names
-                )
+                f"fetch vars in program and config are diff: fetch in program: {fetch_targets_names}. fetch in config {fetch_config.fetch_vars_names}."
             )
             fetch_list = [
                 inference_program.global_block().var(i)
@@ -344,11 +331,7 @@ def try_load_model_vars(
             var_shape = var.shape[1:]
             if tensor_shape != var_shape:
                 raise RuntimeError(
-                    "feed variable '{}' shape not match. infer program  shape: {}. feed tensor shape: {}".format(
-                        feed_config.feeded_vars_names[i],
-                        var_shape,
-                        tensor_shape,
-                    )
+                    f"feed variable '{feed_config.feeded_vars_names[i]}' shape not match. infer program  shape: {var_shape}. feed tensor shape: {tensor_shape}"
                 )
 
         if not feed_config.feeded_vars_filelist:
@@ -362,9 +345,9 @@ def try_load_model_vars(
                     feed_tensors.append(
                         np.array(
                             np.random.random(
-                                tuple(
-                                    [batch_size]
-                                    + list(feed_config.feeded_vars_dims[i])
+                                (
+                                    batch_size,
+                                    *list(feed_config.feeded_vars_dims[i]),
                                 )
                             ),
                             dtype=feed_config.feeded_vars_types[i],
@@ -373,15 +356,15 @@ def try_load_model_vars(
                 elif var.lod_level == 1:
                     t = np.array(
                         np.random.random(
-                            tuple(
-                                [batch_size]
-                                + list(feed_config.feeded_vars_dims[i])
+                            (
+                                batch_size,
+                                *list(feed_config.feeded_vars_dims[i]),
                             )
                         ),
                         dtype=feed_config.feeded_vars_types[i],
                     )
                     feed_tensors.append(
-                        fluid.create_lod_tensor(t, [[1] * batch_size], place)
+                        base.create_lod_tensor(t, [[1] * batch_size], place)
                     )
                 else:
                     raise RuntimeError(
@@ -398,9 +381,7 @@ def try_load_model_vars(
             )
         else:
             logger.info(
-                "load feed vars from files: {}.".format(
-                    feed_config.feeded_vars_filelist
-                )
+                f"load feed vars from files: {feed_config.feeded_vars_filelist}."
             )
             feed_vars = [
                 inference_program.global_block().var(
@@ -408,7 +389,7 @@ def try_load_model_vars(
                 )
                 for i in range(len(feed_config.feeded_vars_names))
             ]
-            feeder = fluid.DataFeeder(feed_list=feed_vars, place=place)
+            feeder = base.DataFeeder(feed_list=feed_vars, place=place)
             batch_feed = feed_gen(
                 batch_size,
                 feed_config.feeded_vars_dims,
@@ -422,7 +403,7 @@ def try_load_model_vars(
                 return_numpy=return_numpy,
             )
         for i, v in enumerate(fetch_list):
-            logger.info("fetch_targets name: %s" % v.name)
+            logger.info(f"fetch_targets name: {v.name}")
             logger.info(f"fetch_targets: {results[i]}")
         return results
 
@@ -432,9 +413,7 @@ def check_not_expected_ops(prog):
     for op in prog.global_block().ops:
         if op.type in not_expected_op_types and op.type not in op_types_set:
             logger.warning(
-                "find op type '{}' in program, please check if your program is pruned correctly !".format(
-                    op.type
-                )
+                f"find op type '{op.type}' in program, please check if your program is pruned correctly !"
             )
             op_types_set.add(op.type)
 
@@ -455,9 +434,7 @@ def check_saved_vars_try_dump(
         v for v in dump_prog.list_vars() if io_utils.is_persistable(v)
     ]
     logger.info(
-        "persistable vars in dump program: {}".format(
-            [v.name for v in saved_params]
-        )
+        f"persistable vars in dump program: {[v.name for v in saved_params]}"
     )
 
     check_not_expected_ops(dump_prog)
@@ -499,14 +476,16 @@ def parse_program(program, output_dir):
     # all vars
     all_vars = list(program.list_vars())
     output["all_vars"] = [
-        {
-            'name': str(v.name),
-            'shape': str(v.shape),
-            'lod_level': int(v.lod_level),
-            'dtype': str(v.dtype),
-        }
-        if v.type not in feed_fetch_type_list
-        else {'name': str(v.name), 'type': str(v.type)}
+        (
+            {
+                'name': str(v.name),
+                'shape': str(v.shape),
+                'lod_level': int(v.lod_level),
+                'dtype': str(v.dtype),
+            }
+            if v.type not in feed_fetch_type_list
+            else {'name': str(v.name), 'type': str(v.type)}
+        )
         for v in all_vars
     ]
     with open(os.path.join(output_dir, all_vars_out_fn), 'w') as f:

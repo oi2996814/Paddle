@@ -21,6 +21,8 @@ import numpy as np
 
 import paddle
 import paddle.distributed as dist
+from paddle.base import core
+from paddle.base.framework import Program
 from paddle.distributed.auto_parallel.static.converter import Converter
 from paddle.distributed.auto_parallel.static.dist_context import (
     get_default_distributed_context,
@@ -30,14 +32,12 @@ from paddle.distributed.auto_parallel.static.utils import (
     is_forward_op,
     is_loss_op,
 )
-from paddle.fluid import core
-from paddle.fluid.framework import Program
 from paddle.static.io import deserialize_program
 
 _valid_types = [
-    core.VarDesc.VarType.LOD_TENSOR,
+    core.VarDesc.VarType.DENSE_TENSOR,
     core.VarDesc.VarType.SELECTED_ROWS,
-    core.VarDesc.VarType.LOD_TENSOR_ARRAY,
+    core.VarDesc.VarType.DENSE_TENSOR_ARRAY,
 ]
 
 paddle.enable_static()
@@ -100,7 +100,7 @@ class AutoAlignTool:
         elif level == 5:
             return self.get_backward_tmp_var()
         else:
-            raise ValueError()
+            raise ValueError
 
     def set_program(self, program: Program):
         assert isinstance(program, Program)
@@ -352,13 +352,13 @@ class AutoAlignTool:
         if src_attr_map is None or len(src_attr_map) == 0:
             return vars_list[0]
 
-        dst_strategys = {}
-        src_strategys = {}
+        dst_strategies = {}
+        src_strategies = {}
         tensors_dict = {}
 
         convert_tensor_dict = None
         for var_name in src_attr_map.keys():
-            assert var_name not in dst_strategys
+            assert var_name not in dst_strategies
             dist_vars = []
             for vars in vars_list:
                 if var_name in vars.keys():
@@ -367,13 +367,13 @@ class AutoAlignTool:
                 continue
 
             if var_name in dst_attr_map and var_name in src_attr_map:
-                dst_strategys[var_name] = copy.deepcopy(dst_attr_map[var_name])
-                src_strategys[var_name] = copy.deepcopy(src_attr_map[var_name])
+                dst_strategies[var_name] = copy.deepcopy(dst_attr_map[var_name])
+                src_strategies[var_name] = copy.deepcopy(src_attr_map[var_name])
                 tensors_dict[var_name] = dist_vars
 
         if src_attr_map == dst_attr_map:
             return tensors_dict
-        converter = Converter(tensors_dict, src_strategys, dst_strategys)
+        converter = Converter(tensors_dict, src_strategies, dst_strategies)
         convert_tensor_dict = converter.convert()
 
         return convert_tensor_dict
@@ -402,7 +402,7 @@ class AutoAlignTool:
         return diff_var_name_list
 
     @staticmethod
-    def diff_informations(right_dir, wrong_dir):
+    def diff_information(right_dir, wrong_dir):
         """
         Find the corresponding operator according to the variable name.
         """
@@ -448,7 +448,7 @@ class AutoAlignTool:
         return diff_ops_varname_dict
 
     @staticmethod
-    def diff_informations_from_dirs(right_dirs, wrong_dirs):
+    def diff_information_from_dirs(right_dirs, wrong_dirs):
         right_vars_list = []
         right_program_list = []
         right_dist_attr_map = {}

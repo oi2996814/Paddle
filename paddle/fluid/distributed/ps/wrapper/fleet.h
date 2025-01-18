@@ -23,6 +23,7 @@ limitations under the License. */
 #include <unordered_map>
 #include <vector>
 
+#include "paddle/common/macros.h"  // for DISABLE_COPY_AND_ASSIGN
 #include "paddle/fluid/distributed/ps/service/communicator/communicator_common.h"
 #include "paddle/fluid/distributed/ps/service/ps_service/service.h"
 #include "paddle/fluid/framework/archive.h"
@@ -32,7 +33,6 @@ limitations under the License. */
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/framework/tensor.h"
 #include "paddle/fluid/framework/variable_helper.h"
-#include "paddle/fluid/platform/macros.h"  // for DISABLE_COPY_AND_ASSIGN
 
 namespace paddle {
 namespace framework {
@@ -114,7 +114,7 @@ class FleetWrapper {
       const uint64_t table_id,
       int fea_dim,
       uint64_t padding_id,
-      platform::Place place,
+      phi::Place place,
       bool is_training,
       std::vector<const phi::DenseTensor*>* inputs,  // NOLINT
       std::vector<phi::DenseTensor*>* outputs);      // NOLINT
@@ -184,9 +184,9 @@ class FleetWrapper {
       int fea_dim,
       uint64_t padding_id,
       bool scale_sparse,
-      const std::string& accesor,
+      const std::string& accessor,
       const std::string& click_name,
-      platform::Place place,
+      phi::Place place,
       const std::vector<std::string>& input_names,
       std::vector<const phi::DenseTensor*>* inputs,    // NOLINT
       std::vector<const phi::DenseTensor*>* outputs);  // NOLINT
@@ -194,7 +194,7 @@ class FleetWrapper {
   void PushSparseFromTensorAsync(const uint64_t table_id,
                                  int fea_dim,
                                  uint64_t padding_id,
-                                 platform::Place place,
+                                 phi::Place place,
                                  std::vector<const phi::DenseTensor*>* inputs,
                                  std::vector<int>& slots,  // NOLINT
                                  const phi::DenseTensor* shows,
@@ -241,7 +241,9 @@ class FleetWrapper {
   // barrier with barrier table
   void BarrierWithTable(uint32_t barrier_type);
 
-  void PrintTableStat(const uint64_t table_id);
+  void PrintTableStat(const uint64_t table_id,
+                      uint32_t pass_id,
+                      size_t threshold);
   void SaveCacheTable(const uint64_t table_id,
                       uint16_t pass_id,
                       size_t threshold);
@@ -262,7 +264,7 @@ class FleetWrapper {
                          const std::string& path,
                          const int mode);
 
-  // recv table from server and save it in LodTensor
+  // recv table from server and save it in DenseTensor
   void RecvAndSaveTable(const uint64_t table_id, const std::string& path);
 
   // clear all models, release their memory
@@ -287,15 +289,17 @@ class FleetWrapper {
                                              const std::string& msg);
 
   std::string GetDistDesc() const {
-    CHECK(is_initialized_ == true)
-        << "fleetwrapper should be initialized first!!!";
+    PADDLE_ENFORCE_EQ(is_initialized_,
+                      true,
+                      common::errors::PermissionDenied(
+                          "FleetWrapper should be initialized first!!!"));
     return dist_desc_;
   }
 
   // FleetWrapper singleton
   static std::shared_ptr<FleetWrapper> GetInstance() {
     if (NULL == s_instance_) {
-      s_instance_.reset(new paddle::distributed::FleetWrapper());
+      s_instance_.reset(new ::paddle::distributed::FleetWrapper());
     }
     return s_instance_;
   }
@@ -313,6 +317,7 @@ class FleetWrapper {
   int32_t SaveCache(int table_id, const std::string& path, const int mode);
   void Revert();
   void CheckSavePrePatchDone();
+  void SetDate(const uint64_t table_id, const std::string& date);
 
   //********* for fl-coordinator
   void InitFlWorker(const std::vector<std::string>& host_list,
@@ -322,21 +327,21 @@ class FleetWrapper {
   std::string PullFlStrategy();
   //**********
 
-  static std::shared_ptr<paddle::distributed::PSCore> pserver_ptr_;
-  static std::shared_ptr<paddle::distributed::PSClient> worker_ptr_;
+  static std::shared_ptr<::paddle::distributed::PSCore> pserver_ptr_;
+  static std::shared_ptr<::paddle::distributed::PSClient> worker_ptr_;
 
  private:
   static std::shared_ptr<FleetWrapper> s_instance_;
   std::string dist_desc_;
-  paddle::distributed::PaddlePSEnvironment ps_env_;
+  ::paddle::distributed::PaddlePSEnvironment ps_env_;
   size_t GetAbsoluteSum(size_t start,
                         size_t end,
                         size_t level,
-                        const framework::LoD& lod);
+                        const phi::LegacyLoD& lod);
 
  protected:
   static bool is_initialized_;
-  std::map<uint64_t, std::vector<paddle::distributed::Region>> regions_;
+  std::map<uint64_t, std::vector<::paddle::distributed::Region>> regions_;
   bool scale_sparse_gradient_with_batch_size_;
   int32_t sleep_seconds_before_fail_exit_;
   int client2client_request_timeout_ms_;
@@ -345,5 +350,5 @@ class FleetWrapper {
   DISABLE_COPY_AND_ASSIGN(FleetWrapper);
 };
 
-}  // end namespace distributed
-}  // end namespace paddle
+}  // namespace distributed
+}  // namespace paddle

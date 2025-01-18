@@ -20,18 +20,17 @@ limitations under the License. */
 #include <regex>
 
 #include "glog/logging.h"
-#include "paddle/fluid/platform/device/gpu/gpu_info.h"
 #include "paddle/fluid/platform/enforce.h"
 #include "paddle/fluid/platform/profiler/event_node.h"
-#include "paddle/fluid/platform/profiler/utils.h"
+#include "paddle/phi/core/platform/device/gpu/gpu_info.h"
+#include "paddle/phi/core/platform/profiler/utils.h"
 
-namespace paddle {
-namespace platform {
+namespace paddle::platform {
 
 static const char* kDefaultFilename = "pid_%s_time_%s.paddle_trace.json";
 
 static std::string DefaultFileName() {
-  auto pid = GetProcessId();
+  auto pid = phi::GetProcessId();
   return string_format(
       std::string(kDefaultFilename), pid, GetStringFormatLocalTime().c_str());
 }
@@ -47,20 +46,22 @@ void ChromeTracingLogger::OpenFile() {
   }
 }
 
-ChromeTracingLogger::ChromeTracingLogger(const std::string& filename) {
+ChromeTracingLogger::ChromeTracingLogger(const std::string& filename)
+    : start_time_(0) {
   filename_ = filename.empty() ? DefaultFileName() : filename;
   OpenFile();
   StartLog();
 }
 
-ChromeTracingLogger::ChromeTracingLogger(const char* filename_cstr) {
+ChromeTracingLogger::ChromeTracingLogger(const char* filename_cstr)
+    : start_time_(0) {
   std::string filename(filename_cstr);
   filename_ = filename.empty() ? DefaultFileName() : filename;
   OpenFile();
   StartLog();
 }
 
-ChromeTracingLogger::~ChromeTracingLogger() {
+ChromeTracingLogger::~ChromeTracingLogger() {  // NOLINT
   EndLog();
   output_file_stream_.close();
 }
@@ -450,7 +451,8 @@ void ChromeTracingLogger::HandleTypeMemcpy(
   MemcpyEventInfo memcpy_info = device_node.MemcpyInfo();
   float memory_bandwidth = 0;
   if (device_node.Duration() > 0) {
-    memory_bandwidth = memcpy_info.num_bytes * 1.0 / device_node.Duration();
+    memory_bandwidth =
+        memcpy_info.num_bytes * 1.0 / device_node.Duration();  // NOLINT
   }
   float dur = nsToMsFloat(device_node.Duration());
   std::string dur_display;
@@ -787,7 +789,7 @@ void ChromeTracingLogger::RefineDisplayName(
     "name": "process_name", "pid": %lld, "tid": %lld,
     "ph": "M",
     "args": {
-      "name": "Deivce %lld (%s)"
+      "name": "Device %lld (%s)"
     }
   },
    {
@@ -835,5 +837,4 @@ void ChromeTracingLogger::EndLog() {
   )JSON");
 }
 
-}  // namespace platform
-}  // namespace paddle
+}  // namespace paddle::platform

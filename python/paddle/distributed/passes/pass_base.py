@@ -143,7 +143,7 @@ class CPPPassWrapper(PassBase):
 
     @property
     def cpp_name(self):
-        raise NotImplementedError()
+        raise NotImplementedError
 
     @property
     def cpp_attr_types(self):
@@ -247,6 +247,7 @@ PassBase._AFTER_WHITE_LISTS_DICT = {
 
 # The index of pass in this list represent the order in which the pass is processed.
 PassBase._PASS_PROCESS_ORDER_LIST = [
+    "fuse_resunit",
     "fuse_relu_depthwise_conv",
     "fuse_bn_add_act",
     "fuse_bn_act",

@@ -11,16 +11,29 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import pickle
 import tarfile
+from typing import TYPE_CHECKING, Any, Literal, Tuple
 
 import numpy as np
+import numpy.typing as npt
 from PIL import Image
 
 import paddle
 from paddle.dataset.common import _check_exists_and_download
 from paddle.io import Dataset
+
+if TYPE_CHECKING:
+    import numpy.typing as npt
+
+    from paddle._typing.dtype_like import _DTypeLiteral
+    from paddle.vision.transforms.transforms import _Transform
+
+    from ..image import _ImageBackend, _ImageDataType
+
+    _DatasetMode = Literal["train", "test"]
 
 __all__ = []
 
@@ -38,20 +51,20 @@ MODE_FLAG_MAP = {
 }
 
 
-class Cifar10(Dataset):
+class Cifar10(Dataset[Tuple["_ImageDataType", "npt.NDArray[Any]"]]):
     """
     Implementation of `Cifar-10 <https://www.cs.toronto.edu/~kriz/cifar.html>`_
     dataset, which has 10 categories.
 
     Args:
-        data_file (str, optional): Path to data file, can be set None if
+        data_file (str|None, optional): Path to data file, can be set None if
             :attr:`download` is True. Default None, default data path: ~/.cache/paddle/dataset/cifar
         mode (str, optional): Either train or test mode. Default 'train'.
-        transform (Callable, optional): transform to perform on image, None for no transform. Default: None.
+        transform (Callable|None, optional): transform to perform on image, None for no transform. Default: None.
         download (bool, optional): download dataset automatically if :attr:`data_file` is None. Default True.
-        backend (str, optional): Specifies which type of image to be returned:
+        backend (str|None, optional): Specifies which type of image to be returned:
             PIL.Image or numpy.ndarray. Should be one of {'pil', 'cv2'}.
-            If this option is not set, will get backend from :ref:`paddle.vision.get_image_backend <api_vision_image_get_image_backend>`,
+            If this option is not set, will get backend from :ref:`paddle.vision.get_image_backend <api_paddle_vision_get_image_backend>`,
             default backend is 'pil'. Default: None.
 
     Returns:
@@ -61,56 +74,62 @@ class Cifar10(Dataset):
 
         .. code-block:: python
 
-            import itertools
-            import paddle.vision.transforms as T
-            from paddle.vision.datasets import Cifar10
+            >>> # doctest: +TIMEOUT(60)
+            >>> import itertools
+            >>> import paddle.vision.transforms as T
+            >>> from paddle.vision.datasets import Cifar10
+
+            >>> cifar10 = Cifar10()
+            >>> print(len(cifar10))
+            50000
+
+            >>> for i in range(5):  # only show first 5 images
+            ...     img, label = cifar10[i]
+            ...     # do something with img and label
+            ...     print(type(img), img.size, label)
+            ...     # <class 'PIL.Image.Image'> (32, 32) 6
 
 
-            cifar10 = Cifar10()
-            print(len(cifar10))
-            # 50000
+            >>> transform = T.Compose(
+            ...     [
+            ...         T.Resize(64),
+            ...         T.ToTensor(),
+            ...         T.Normalize(
+            ...             mean=[0.5, 0.5, 0.5],
+            ...             std=[0.5, 0.5, 0.5],
+            ...             to_rgb=True,
+            ...         ),
+            ...     ]
+            ... )
+            >>> cifar10_test = Cifar10(
+            ...     mode="test",
+            ...     transform=transform,  # apply transform to every image
+            ...     backend="cv2",  # use OpenCV as image transform backend
+            ... )
+            >>> print(len(cifar10_test))
+            10000
 
-            for i in range(5):  # only show first 5 images
-                img, label = cifar10[i]
-                # do something with img and label
-                print(type(img), img.size, label)
-                # <class 'PIL.Image.Image'> (32, 32) 6
+            >>> for img, label in itertools.islice(iter(cifar10_test), 5):  # only show first 5 images
+            ...     # do something with img and label
+            ...     print(type(img), img.shape, label)  # type: ignore
+            ...     # <class 'paddle.Tensor'> [3, 64, 64] 3
 
-
-            transform = T.Compose(
-                [
-                    T.Resize(64),
-                    T.ToTensor(),
-                    T.Normalize(
-                        mean=[0.5, 0.5, 0.5],
-                        std=[0.5, 0.5, 0.5],
-                        to_rgb=True,
-                    ),
-                ]
-            )
-
-            cifar10_test = Cifar10(
-                mode="test",
-                transform=transform,  # apply transform to every image
-                backend="cv2",  # use OpenCV as image transform backend
-            )
-            print(len(cifar10_test))
-            # 10000
-
-            for img, label in itertools.islice(iter(cifar10_test), 5):  # only show first 5 images
-                # do something with img and label
-                print(type(img), img.shape, label)
-                # <class 'paddle.Tensor'> [3, 64, 64] 3
     """
+
+    mode: _DatasetMode
+    backend: _ImageBackend
+    data_file: str | None
+    transform: _Transform[Any, Any] | None
+    dtype: _DTypeLiteral
 
     def __init__(
         self,
-        data_file=None,
-        mode='train',
-        transform=None,
-        download=True,
-        backend=None,
-    ):
+        data_file: str | None = None,
+        mode: _DatasetMode = 'train',
+        transform: _Transform[Any, Any] | None = None,
+        download: bool = True,
+        backend: _ImageBackend | None = None,
+    ) -> None:
         assert mode.lower() in [
             'train',
             'test',
@@ -121,9 +140,7 @@ class Cifar10(Dataset):
             backend = paddle.vision.get_image_backend()
         if backend not in ['pil', 'cv2']:
             raise ValueError(
-                "Expected backend are one of ['pil', 'cv2'], but got {}".format(
-                    backend
-                )
+                f"Expected backend are one of ['pil', 'cv2'], but got {backend}"
             )
         self.backend = backend
 
@@ -168,7 +185,7 @@ class Cifar10(Dataset):
                 for sample, label in zip(data, labels):
                     self.data.append((sample, label))
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> tuple[_ImageDataType, npt.NDArray[Any]]:
         image, label = self.data[idx]
         image = np.reshape(image, [3, 32, 32])
         image = image.transpose([1, 2, 0])
@@ -193,14 +210,14 @@ class Cifar100(Cifar10):
     dataset, which has 100 categories.
 
     Args:
-        data_file (str, optional): path to data file, can be set None if
+        data_file (str|None, optional): path to data file, can be set None if
             :attr:`download` is True. Default: None, default data path: ~/.cache/paddle/dataset/cifar
         mode (str, optional): Either train or test mode. Default 'train'.
-        transform (Callable, optional): transform to perform on image, None for no transform. Default: None.
+        transform (Callable|None, optional): transform to perform on image, None for no transform. Default: None.
         download (bool, optional): download dataset automatically if :attr:`data_file` is None. Default True.
-        backend (str, optional): Specifies which type of image to be returned:
+        backend (str|None, optional): Specifies which type of image to be returned:
             PIL.Image or numpy.ndarray. Should be one of {'pil', 'cv2'}.
-            If this option is not set, will get backend from :ref:`paddle.vision.get_image_backend <api_vision_image_get_image_backend>`,
+            If this option is not set, will get backend from :ref:`paddle.vision.get_image_backend <api_paddle_vision_get_image_backend>`,
             default backend is 'pil'. Default: None.
 
     Returns:
@@ -210,56 +227,57 @@ class Cifar100(Cifar10):
 
         .. code-block:: python
 
-            import itertools
-            import paddle.vision.transforms as T
-            from paddle.vision.datasets import Cifar100
+            >>> # doctest: +TIMEOUT(60)
+            >>> import itertools
+            >>> import paddle.vision.transforms as T
+            >>> from paddle.vision.datasets import Cifar100
+
+            >>> cifar100 = Cifar100()
+            >>> print(len(cifar100))
+            50000
+
+            >>> for i in range(5):  # only show first 5 images
+            ...     img, label = cifar100[i]
+            ...     # do something with img and label
+            ...     print(type(img), img.size, label)
+            ...     # <class 'PIL.Image.Image'> (32, 32) 19
 
 
-            cifar100 = Cifar100()
-            print(len(cifar100))
-            # 50000
+            >>> transform = T.Compose(
+            ...     [
+            ...         T.Resize(64),
+            ...         T.ToTensor(),
+            ...         T.Normalize(
+            ...             mean=[0.5, 0.5, 0.5],
+            ...             std=[0.5, 0.5, 0.5],
+            ...             to_rgb=True,
+            ...         ),
+            ...     ]
+            ... )
 
-            for i in range(5):  # only show first 5 images
-                img, label = cifar100[i]
-                # do something with img and label
-                print(type(img), img.size, label)
-                # <class 'PIL.Image.Image'> (32, 32) 19
+            >>> cifar100_test = Cifar100(
+            ...     mode="test",
+            ...     transform=transform,  # apply transform to every image
+            ...     backend="cv2",  # use OpenCV as image transform backend
+            ... )
+            >>> print(len(cifar100_test))
+            10000
 
+            >>> for img, label in itertools.islice(iter(cifar100_test), 5):  # only show first 5 images
+            ...     # do something with img and label
+            ...     print(type(img), img.shape, label)  # type: ignore
+            ...     # <class 'paddle.Tensor'> [3, 64, 64] 49
 
-            transform = T.Compose(
-                [
-                    T.Resize(64),
-                    T.ToTensor(),
-                    T.Normalize(
-                        mean=[0.5, 0.5, 0.5],
-                        std=[0.5, 0.5, 0.5],
-                        to_rgb=True,
-                    ),
-                ]
-            )
-
-            cifar100_test = Cifar100(
-                mode="test",
-                transform=transform,  # apply transform to every image
-                backend="cv2",  # use OpenCV as image transform backend
-            )
-            print(len(cifar100_test))
-            # 10000
-
-            for img, label in itertools.islice(iter(cifar100_test), 5):  # only show first 5 images
-                # do something with img and label
-                print(type(img), img.shape, label)
-                # <class 'paddle.Tensor'> [3, 64, 64] 49
     """
 
     def __init__(
         self,
-        data_file=None,
-        mode='train',
-        transform=None,
-        download=True,
-        backend=None,
-    ):
+        data_file: str | None = None,
+        mode: _DatasetMode = 'train',
+        transform: _Transform[Any, Any] | None = None,
+        download: bool = True,
+        backend: _ImageBackend | None = None,
+    ) -> None:
         super().__init__(data_file, mode, transform, download, backend)
 
     def _init_url_md5_flag(self):

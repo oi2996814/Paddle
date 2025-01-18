@@ -12,19 +12,56 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import paddle
-from paddle.fluid import Variable, core
-from paddle.fluid.data_feeder import check_type
-from paddle.fluid.framework import convert_np_dtype_to_dtype_, static_only
-from paddle.fluid.layer_helper import LayerHelper
+from __future__ import annotations
 
-from ..fluid.variable_index import _setitem_impl_, _setitem_static
+import os
+from typing import TYPE_CHECKING, Any
+
+import numpy as np
+import numpy.typing as npt
+from typing_extensions import Self
+
+import paddle
+from paddle.base import Variable, core
+from paddle.base.data_feeder import check_type
+from paddle.base.framework import (
+    convert_np_dtype_to_dtype_,
+    in_pir_mode,
+    static_only,
+)
+from paddle.base.layer_helper import LayerHelper
+from paddle.base.libpaddle import DataType
+from paddle.base.libpaddle.pir import (
+    get_current_insertion_point,
+    set_insertion_point,
+)
+
+from ..base.variable_index import _setitem_static
+
+if TYPE_CHECKING:
+    from paddle import Tensor
+    from paddle._typing import (
+        DTypeLike,
+        ShapeLike,
+        Size1,
+        TensorIndex,
+        TensorLike,
+    )
 
 __all__ = []
 
 
+def evaluate_flag(val) -> bool:
+    return str(val).lower() not in ('false', 'off', '0', 'none')
+
+
 @static_only
-def data(name, shape, dtype=None, lod_level=0):
+def data(
+    name: str,
+    shape: ShapeLike,
+    dtype: DTypeLike | None = None,
+    lod_level: int = 0,
+) -> paddle.Tensor:
     """
 
     This function creates a variable on the global block. The global variable
@@ -34,17 +71,17 @@ def data(name, shape, dtype=None, lod_level=0):
     will get from the global dtype by `paddle.get_default_dtype()`.
 
     Args:
-       name (str): The name/alias of the variable, see :ref:`api_guide_Name`
-           for more details.
-       shape (list|tuple): List|Tuple of integers declaring the shape. You can
-           set None or -1 at a dimension to indicate the dimension can be of any
-           size. For example, it is useful to set changeable batch size as None or -1.
-       dtype (np.dtype|str, optional): The type of the data. Supported
-           dtype: bool, float16, float32, float64, int8, int16, int32, int64,
-           uint8. Default: None. When `dtype` is not set, the dtype will get
-           from the global dtype by `paddle.get_default_dtype()`.
-       lod_level (int, optional): The LoD level of the LoDTensor. Usually users
-           don't have to set this value. Default: 0.
+        name (str): The name/alias of the variable, see :ref:`api_guide_Name`
+            for more details.
+        shape (list|tuple): List|Tuple of integers declaring the shape. You can
+            set None or -1 at a dimension to indicate the dimension can be of any
+            size. For example, it is useful to set changeable batch size as None or -1.
+        dtype (np.dtype|str, optional): The type of the data. Supported
+            dtype: bool, float16, float32, float64, int8, int16, int32, int64,
+            uint8. Default: None. When `dtype` is not set, the dtype will get
+            from the global dtype by `paddle.get_default_dtype()`.
+        lod_level (int, optional): The LoD level of the DenseTensor. Usually users
+            don't have to set this value. Default: 0.
 
     Returns:
         Variable: The global variable that gives access to the data.
@@ -52,40 +89,58 @@ def data(name, shape, dtype=None, lod_level=0):
     Examples:
         .. code-block:: python
 
-          import numpy as np
-          import paddle
-          paddle.enable_static()
+            >>> # doctest: +SKIP("This has diff in xdoctest env")
+            >>> import numpy as np
+            >>> import paddle
+            >>> paddle.enable_static()
 
-          # Creates a variable with fixed size [3, 2, 1]
-          # User can only feed data of the same shape to x
-          # the dtype is not set, so it will set "float32" by
-          # paddle.get_default_dtype(). You can use paddle.get_default_dtype() to
-          # change the global dtype
-          x = paddle.static.data(name='x', shape=[3, 2, 1])
+            # Creates a variable with fixed size [3, 2, 1]
+            # User can only feed data of the same shape to x
+            # the dtype is not set, so it will set "float32" by
+            # paddle.get_default_dtype(). You can use paddle.get_default_dtype() to
+            # change the global dtype
+            >>> x = paddle.static.data(name='x', shape=[3, 2, 1])
 
-          # Creates a variable with changeable batch size -1.
-          # Users can feed data of any batch size into y,
-          # but size of each data sample has to be [2, 1]
-          y = paddle.static.data(name='y', shape=[-1, 2, 1], dtype='float32')
+            # Creates a variable with changeable batch size -1.
+            # Users can feed data of any batch size into y,
+            # but size of each data sample has to be [2, 1]
+            >>> y = paddle.static.data(name='y', shape=[-1, 2, 1], dtype='float32')
 
-          z = x + y
+            >>> z = x + y
 
-          # In this example, we will feed x and y with np-ndarray "1"
-          # and fetch z, like implementing "1 + 1 = 2" in PaddlePaddle
-          feed_data = np.ones(shape=[3, 2, 1], dtype=np.float32)
+            # In this example, we will feed x and y with np-ndarray "1"
+            # and fetch z, like implementing "1 + 1 = 2" in PaddlePaddle
+            >>> feed_data = np.ones(shape=[3, 2, 1], dtype=np.float32) # type: ignore[var-annotated]
 
-          exe = paddle.static.Executor(paddle.framework.CPUPlace())
-          out = exe.run(paddle.static.default_main_program(),
-                        feed={
-                            'x': feed_data,
-                            'y': feed_data
-                        },
-                        fetch_list=[z.name])
+            >>> exe = paddle.static.Executor(paddle.framework.CPUPlace())
+            >>> out = exe.run(paddle.static.default_main_program(),
+            ...             feed={
+            ...                 'x': feed_data,
+            ...                 'y': feed_data
+            ...             },
+            ...             fetch_list=[z.name])
 
-          # np-ndarray of shape=[3, 2, 1], dtype=float32, whose elements are 2
-          print(out)
+            # np-ndarray of shape=[3, 2, 1], dtype=float32, whose elements are 2
+            >>> print(out)
+            [array([[[2.],
+                    [2.]],
+                   [[2.],
+                    [2.]],
+                   [[2.],
+                    [2.]]], dtype=float32)]
 
     """
+
+    def _reset_data_op_insertion_point():
+        default_main_program = paddle.pir.core.default_main_program()
+        ops = default_main_program.global_block().ops
+        if len(ops) == 0:
+            return
+        for op in ops:
+            if op.name() != 'pd_op.data':
+                paddle.pir.set_insertion_point(op)
+                return
+
     helper = LayerHelper('data', **locals())
     check_type(name, 'name', (bytes, str), 'data')
     check_type(shape, 'shape', (list, tuple), 'data')
@@ -94,29 +149,52 @@ def data(name, shape, dtype=None, lod_level=0):
     for i in range(len(shape)):
         if shape[i] is None:
             shape[i] = -1
+        if isinstance(shape[i], int) and shape[i] < 0 and shape[i] != -1:
+            raise ValueError(
+                f"Only -1 can be used in shape to indicate unknown dimension, but received {shape[i]}"
+            )
 
-    if dtype:
-        return helper.create_global_variable(
-            name=name,
-            shape=shape,
-            dtype=dtype,
-            type=core.VarDesc.VarType.LOD_TENSOR,
-            stop_gradient=True,
-            lod_level=lod_level,
-            is_data=True,
-            need_check_feed=True,
+    if dtype is None:
+        dtype = paddle.get_default_dtype()
+
+    if in_pir_mode():
+        ir_dtype = dtype
+        if not isinstance(ir_dtype, DataType):
+            ir_dtype = paddle.pir.core.convert_np_dtype_to_dtype_(dtype)
+        prev_insertion_point = get_current_insertion_point()
+        _reset_data_op_insertion_point()
+        out = paddle._pir_ops.data(name, shape, ir_dtype, core.Place())
+        set_insertion_point(prev_insertion_point)
+        return out
+
+    out = helper.create_global_variable(
+        name=name,
+        shape=shape,
+        dtype=dtype,
+        type=core.VarDesc.VarType.DENSE_TENSOR,
+        stop_gradient=True,
+        lod_level=lod_level,
+        is_data=True,
+        need_check_feed=True,
+    )
+
+    is_pir_mode = os.environ.get("FLAGS_enable_pir_in_executor", None)
+    if evaluate_flag(is_pir_mode):
+        helper = LayerHelper('data', **locals())
+        if not isinstance(dtype, core.VarDesc.VarType):
+            dtype = convert_np_dtype_to_dtype_(dtype)
+        helper.append_op(
+            type='data',
+            inputs={},
+            outputs={'out': out},
+            attrs={
+                'shape': shape,
+                'dtype': dtype,
+                'place': 0,
+                'name': name,
+            },
         )
-    else:
-        return helper.create_global_variable(
-            name=name,
-            shape=shape,
-            dtype=paddle.get_default_dtype(),
-            type=core.VarDesc.VarType.LOD_TENSOR,
-            stop_gradient=True,
-            lod_level=lod_level,
-            is_data=True,
-            need_check_feed=True,
-        )
+    return out
 
 
 class InputSpec:
@@ -137,26 +215,38 @@ class InputSpec:
             uint8. Default: float32.
         name (str): The name/alias of the variable, see :ref:`api_guide_Name`
             for more details.
+        stop_gradient (bool, optional): A boolean that mentions whether gradient should flow. Default is False, means don't stop calculate gradients.
 
     Examples:
         .. code-block:: python
 
-            from paddle.static import InputSpec
+            >>> import paddle
+            >>> from paddle.static import InputSpec
 
-            input = InputSpec([None, 784], 'float32', 'x')
-            label = InputSpec([None, 1], 'int64', 'label')
+            >>> input = InputSpec([None, 784], 'float32', 'x')
+            >>> label = InputSpec([None, 1], 'int64', 'label')
 
-            print(input)  # InputSpec(shape=(-1, 784), dtype=paddle.float32, name=x)
-            print(label)  # InputSpec(shape=(-1, 1), dtype=paddle.int64, name=label)
+            >>> print(input)
+            InputSpec(shape=(-1, 784), dtype=paddle.float32, name=x, stop_gradient=False)
+
+            >>> print(label)
+            InputSpec(shape=(-1, 1), dtype=paddle.int64, name=label, stop_gradient=False)
     """
 
-    def __init__(self, shape, dtype='float32', name=None, stop_gradient=False):
+    def __init__(
+        self,
+        shape: ShapeLike,
+        dtype: DTypeLike = 'float32',
+        name: str | None = None,
+        stop_gradient: bool = False,
+    ) -> None:
         # replace `None` in shape  with -1
         self.shape = self._verify(shape)
-        # convert dtype into united represention
+        # convert dtype into united representation
         if dtype is not None:
-            if not isinstance(dtype, core.VarDesc.VarType):
+            if isinstance(dtype, (np.dtype, str)):
                 dtype = convert_np_dtype_to_dtype_(dtype)
+
         self.dtype = dtype
         self.name = name
         self.stop_gradient = stop_gradient
@@ -164,17 +254,11 @@ class InputSpec:
     def _create_feed_layer(self):
         return data(self.name, shape=self.shape, dtype=self.dtype)
 
-    def __repr__(self):
-        return '{}(shape={}, dtype={}, name={}, stop_gradient={})'.format(
-            type(self).__name__,
-            self.shape,
-            self.dtype,
-            self.name,
-            self.stop_gradient,
-        )
+    def __repr__(self) -> str:
+        return f'{type(self).__name__}(shape={self.shape}, dtype={self.dtype}, name={self.name}, stop_gradient={self.stop_gradient})'
 
     @classmethod
-    def from_tensor(cls, tensor, name=None):
+    def from_tensor(cls, tensor: Tensor, name: str | None = None) -> Self:
         """
         Generates a InputSpec based on the description of input tensor.
 
@@ -187,27 +271,28 @@ class InputSpec:
         Examples:
             .. code-block:: python
 
-                import paddle
-                from paddle.static import InputSpec
+                >>> import paddle
+                >>> from paddle.static import InputSpec
 
-                paddle.disable_static()
+                >>> paddle.disable_static()
 
-                x = paddle.ones([2, 2], dtype="float32")
-                x_spec = InputSpec.from_tensor(x, name='x')
-                print(x_spec)  # InputSpec(shape=(2, 2), dtype=paddle.float32, name=x)
+                >>> x = paddle.ones([2, 2], dtype="float32")
+                >>> x_spec = InputSpec.from_tensor(x, name='x')
+                >>> print(x_spec)
+                InputSpec(shape=(2, 2), dtype=paddle.float32, name=x, stop_gradient=False)
 
         """
-        if isinstance(tensor, (Variable, core.eager.Tensor)):
+        if isinstance(tensor, (Variable, core.eager.Tensor, paddle.pir.Value)):
             return cls(tensor.shape, tensor.dtype, name or tensor.name)
         else:
             raise ValueError(
-                "Input `tensor` should be a Tensor, but received {}.".format(
-                    type(tensor).__name__
-                )
+                f"Input `tensor` should be a Tensor, but received {type(tensor).__name__}."
             )
 
     @classmethod
-    def from_numpy(cls, ndarray, name=None):
+    def from_numpy(
+        cls, ndarray: npt.NDArray[Any], name: str | None = None
+    ) -> Self:
         """
         Generates a InputSpec based on the description of input np.ndarray.
 
@@ -220,17 +305,18 @@ class InputSpec:
         Examples:
             .. code-block:: python
 
-                import numpy as np
-                from paddle.static import InputSpec
+                >>> import numpy as np
+                >>> from paddle.static import InputSpec
 
-                x = np.ones([2, 2], np.float32)
-                x_spec = InputSpec.from_numpy(x, name='x')
-                print(x_spec)  # InputSpec(shape=(2, 2), dtype=paddle.float32, name=x)
+                >>> x = np.ones([2, 2], np.float32) # type: ignore[var-annotated]
+                >>> x_spec = InputSpec.from_numpy(x, name='x')
+                >>> print(x_spec)
+                InputSpec(shape=(2, 2), dtype=paddle.float32, name=x, stop_gradient=False)
 
         """
         return cls(ndarray.shape, ndarray.dtype, name)
 
-    def batch(self, batch_size):
+    def batch(self, batch_size: int | Size1) -> Self:
         """
         Inserts `batch_size` in front of the `shape`.
 
@@ -243,34 +329,31 @@ class InputSpec:
         Examples:
             .. code-block:: python
 
-                from paddle.static import InputSpec
+                >>> from paddle.static import InputSpec
 
-                x_spec = InputSpec(shape=[64], dtype='float32', name='x')
-                x_spec.batch(4)
-                print(x_spec) # InputSpec(shape=(4, 64), dtype=paddle.float32, name=x)
+                >>> x_spec = InputSpec(shape=[64], dtype='float32', name='x')
+                >>> x_spec.batch(4)
+                >>> print(x_spec)
+                InputSpec(shape=(4, 64), dtype=paddle.float32, name=x, stop_gradient=False)
 
         """
         if isinstance(batch_size, (list, tuple)):
             if len(batch_size) != 1:
                 raise ValueError(
-                    "Length of batch_size: {} shall be 1, but received {}.".format(
-                        batch_size, len(batch_size)
-                    )
+                    f"Length of batch_size: {batch_size} shall be 1, but received {len(batch_size)}."
                 )
-            batch_size = batch_size[1]
+            batch_size = batch_size[0]
         elif not isinstance(batch_size, int):
             raise TypeError(
-                "type(batch_size) shall be `int`, but received {}.".format(
-                    type(batch_size).__name__
-                )
+                f"type(batch_size) shall be `int`, but received {type(batch_size).__name__}."
             )
 
-        new_shape = [batch_size] + list(self.shape)
+        new_shape = [batch_size, *list(self.shape)]
         self.shape = tuple(new_shape)
 
         return self
 
-    def unbatch(self):
+    def unbatch(self) -> Self:
         """
         Removes the first element of `shape`.
 
@@ -280,11 +363,12 @@ class InputSpec:
         Examples:
             .. code-block:: python
 
-                from paddle.static import InputSpec
+                >>> from paddle.static import InputSpec
 
-                x_spec = InputSpec(shape=[4, 64], dtype='float32', name='x')
-                x_spec.unbatch()
-                print(x_spec) # InputSpec(shape=(64,), dtype=paddle.float32, name=x)
+                >>> x_spec = InputSpec(shape=[4, 64], dtype='float32', name='x')
+                >>> x_spec.unbatch()
+                >>> print(x_spec) # InputSpec(shape=(64,), dtype=paddle.float32, name=x)
+                InputSpec(shape=(64,), dtype=paddle.float32, name=x, stop_gradient=False)
 
         """
         if len(self.shape) == 0:
@@ -301,25 +385,21 @@ class InputSpec:
         """
         if not isinstance(shape, (list, tuple)):
             raise TypeError(
-                "Type of `shape` in InputSpec should be one of (tuple, list), but received {}.".format(
-                    type(shape).__name__
-                )
+                f"Type of `shape` in InputSpec should be one of (tuple, list), but received {type(shape).__name__}."
             )
 
         for i, ele in enumerate(shape):
             if ele is not None:
                 if not isinstance(ele, int):
                     raise ValueError(
-                        "shape[{}] should be an `int`, but received `{}`:{}.".format(
-                            i, type(ele).__name__, ele
-                        )
+                        f"shape[{i}] should be an `int`, but received `{type(ele).__name__}`:{ele}."
                     )
             if ele is None or ele < -1:
                 shape[i] = -1
 
         return tuple(shape)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         # Note(Aurelius84): `name` is not considered as a field to compute hashkey.
         # Because it's no need to generate a new program in following cases while using
         # @paddle.jit.to_static.
@@ -336,17 +416,21 @@ class InputSpec:
         #  x_var and x_np hold same shape and dtype, they should also share a same program.
         return hash((tuple(self.shape), self.dtype, self.stop_gradient))
 
-    def __eq__(self, other):
+    def __eq__(self, other: Self) -> bool:
         slots = ['shape', 'dtype', 'name', 'stop_gradient']
         return type(self) is type(other) and all(
             getattr(self, attr) == getattr(other, attr) for attr in slots
         )
 
-    def __ne__(self, other):
+    def __ne__(self, other) -> bool:
         return not self == other
 
 
-def setitem(x, index, value):
+def setitem(
+    x: Tensor,
+    index: TensorIndex,
+    value: TensorLike,
+) -> Tensor:
     """
     x(Tensor): input Tensor.
     index(Scalar|Tuple|List|Tensor): Where should be set value.
@@ -363,12 +447,8 @@ def setitem(x, index, value):
        (3) a[1,:, 3] = v -> setitem(a, (1, slice(None,None,None),3), v)
        (4) a[1, ..., 2]=v -> setitem(a, (1, ..., 2), v)
 
-    3. You can always use TUPLE as index input， even there is only one index.
+    3. You can always use TUPLE as index input, even there is only one index.
        (1) a[Tensor([10,10])]=v -> setitem(a, (Tensor([10,10]),), v)
        (2) a[1] = v -> setitem(a, (1,), v)
     """
-    if core.is_compiled_with_xpu():
-        # (NOTE): Currently, there is no index_put_xpu kernel.
-        return _setitem_impl_(x, index, value)
-    else:
-        return _setitem_static(x, index, value)
+    return _setitem_static(x, index, value)

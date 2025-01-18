@@ -56,7 +56,7 @@ void GumbelSoftmaxKernelHelper(const Context& ctx,
 
   PADDLE_ENFORCE_GT(temperature,
                     0,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The temperature must be greater than 0. But "
                         "received temperature = %f",
                         temperature));
@@ -69,7 +69,7 @@ void GumbelSoftmaxKernelHelper(const Context& ctx,
 
   // For 0D Tensor
   if (rank == 0) {
-    phi::funcs::set_constant(ctx, out, 1.0);
+    phi::funcs::set_constant(ctx, out, static_cast<T>(1.0));
     return;
   }
 

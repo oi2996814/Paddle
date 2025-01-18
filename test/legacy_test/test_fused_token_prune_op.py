@@ -15,9 +15,18 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
+import paddle
 from paddle.framework import core
+
+
+def api_wrapper(
+    attn, x, mask, new_mask, keep_first_token=True, keep_order=False
+):
+    return paddle._C_ops.fused_token_prune(
+        attn, x, mask, new_mask, keep_first_token, keep_order
+    )
 
 
 @unittest.skipIf(
@@ -27,7 +36,7 @@ class TestFusedTokenPruneOp(OpTest):
     def setDtype(self):
         self.dtype = np.float32
 
-    def setInouts(self):
+    def setInOuts(self):
         attn = [[1, 2], [3, 4]]
         attn = np.array(attn, dtype=self.dtype)
         attn = np.expand_dims(attn, axis=0)
@@ -56,8 +65,10 @@ class TestFusedTokenPruneOp(OpTest):
 
     def setUp(self):
         self.op_type = 'fused_token_prune'
+        self.python_api = api_wrapper
+        self.python_out_sig = ["SlimmedX", "CLSInds"]
         self.setDtype()
-        self.setInouts()
+        self.setInOuts()
         self.inputs = {
             'Attn': self.attn,
             'Mask': self.mask,
@@ -86,7 +97,7 @@ class TestFusedTokenPruneOpFloat64(TestFusedTokenPruneOp):
     not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
 )
 class TestFusedTokenPruneOp2(TestFusedTokenPruneOp):
-    def setInouts(self):
+    def setInOuts(self):
         attn = [
             [
                 [[1, 2, 3, 4], [4, 3, 2, 1], [5, 9, 5, 4], [9, 6, 5, 4]],

@@ -1,4 +1,4 @@
-# Copyright (c) 2021 PaddlePaddle Authors. All Rights Reserved.
+# Copyright (c) 2023 PaddlePaddle Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,11 +20,12 @@ from get_test_cover_info import (
     create_test_class,
     get_xpu_op_support_types,
 )
+from op_test import convert_float_to_uint16
 from op_test_xpu import XPUOpTest
 
 import paddle
-from paddle import fluid
-from paddle.fluid.backward import append_backward
+from paddle import base
+from paddle.base.backward import append_backward
 
 paddle.enable_static()
 
@@ -37,13 +38,22 @@ class XPUTestWhereOp(XPUOpTestWrapper):
         def setUp(self):
             self.init_config()
             self.init_data()
+            self.convert_data_if_bf16()
             self.inputs = {'Condition': self.cond, 'X': self.x, 'Y': self.y}
             self.outputs = {'Out': np.where(self.cond, self.x, self.y)}
 
         def init_data(self):
-            self.x = np.random.uniform(-3, 5, (100)).astype(self.dtype)
-            self.y = np.random.uniform(-3, 5, (100)).astype(self.dtype)
+            self.x = np.random.uniform(-3, 5, (100))
+            self.y = np.random.uniform(-3, 5, (100))
             self.cond = np.zeros(100).astype("bool")
+
+        def convert_data_if_bf16(self):
+            if self.dtype == np.uint16:
+                self.x = convert_float_to_uint16(self.x)
+                self.y = convert_float_to_uint16(self.y)
+            else:
+                self.x = self.x.astype(self.dtype)
+                self.y = self.y.astype(self.dtype)
 
         def init_config(self):
             self.op_type = "where"
@@ -59,14 +69,14 @@ class XPUTestWhereOp(XPUOpTestWrapper):
 
     class TestXPUWhereOp2(TestXPUWhereOp):
         def init_data(self):
-            self.x = np.random.uniform(-5, 5, (60, 2)).astype(self.dtype)
-            self.y = np.random.uniform(-5, 5, (60, 2)).astype(self.dtype)
+            self.x = np.random.uniform(-5, 5, (60, 2))
+            self.y = np.random.uniform(-5, 5, (60, 2))
             self.cond = np.ones((60, 2)).astype("bool")
 
     class TestXPUWhereOp3(TestXPUWhereOp):
         def init_data(self):
-            self.x = np.random.uniform(-3, 5, (20, 2, 4)).astype(self.dtype)
-            self.y = np.random.uniform(-3, 5, (20, 2, 4)).astype(self.dtype)
+            self.x = np.random.uniform(-3, 5, (20, 2, 4))
+            self.y = np.random.uniform(-3, 5, (20, 2, 4))
             self.cond = np.array(
                 np.random.randint(2, size=(20, 2, 4)), dtype=bool
             )
@@ -99,9 +109,9 @@ class TestXPUWhereAPI(unittest.TestCase):
     def test_api(self):
         for x_stop_gradient in [False, True]:
             for y_stop_gradient in [False, True]:
-                train_prog = fluid.Program()
-                startup = fluid.Program()
-                with fluid.program_guard(train_prog, startup):
+                train_prog = base.Program()
+                startup = base.Program()
+                with base.program_guard(train_prog, startup):
                     cond = paddle.static.data(
                         name='cond', shape=self.shape, dtype='bool'
                     )
@@ -119,47 +129,62 @@ class TestXPUWhereAPI(unittest.TestCase):
                     result.stop_gradient = False
                     append_backward(paddle.mean(result))
 
-                    exe = fluid.Executor(self.place)
+                    exe = base.Executor(self.place)
                     exe.run(startup)
 
-                    fetch_list = [result, result.grad_name]
-                    if x_stop_gradient is False:
-                        fetch_list.append(x.grad_name)
-                    if y_stop_gradient is False:
-                        fetch_list.append(y.grad_name)
-                    out = exe.run(
-                        train_prog,
-                        feed={'cond': self.cond, 'x': self.x, 'y': self.y},
-                        fetch_list=fetch_list,
-                    )
-                    np.testing.assert_array_equal(out[0], self.out)
+                    if paddle.framework.use_pir_api():
+                        fetch_list = [result]
+                        out = exe.run(
+                            train_prog,
+                            feed={'cond': self.cond, 'x': self.x, 'y': self.y},
+                            fetch_list=fetch_list,
+                        )
+                        np.testing.assert_array_equal(out[0], self.out)
+                    else:
+                        fetch_list = [result, result.grad_name]
+                        if x_stop_gradient is False:
+                            fetch_list.append(x.grad_name)
+                        if y_stop_gradient is False:
+                            fetch_list.append(y.grad_name)
+                        out = exe.run(
+                            train_prog,
+                            feed={'cond': self.cond, 'x': self.x, 'y': self.y},
+                            fetch_list=fetch_list,
+                        )
+                        np.testing.assert_array_equal(out[0], self.out)
 
-                    if x_stop_gradient is False:
-                        np.testing.assert_array_equal(
-                            out[2], self.ref_x_backward(out[1])
-                        )
-                        if y.stop_gradient is False:
+                        if x_stop_gradient is False:
                             np.testing.assert_array_equal(
-                                out[3], self.ref_y_backward(out[1])
+                                out[2], self.ref_x_backward(out[1])
                             )
-                    elif y.stop_gradient is False:
-                        np.testing.assert_array_equal(
-                            out[2], self.ref_y_backward(out[1])
-                        )
+                            if y.stop_gradient is False:
+                                np.testing.assert_array_equal(
+                                    out[3], self.ref_y_backward(out[1])
+                                )
+                        elif y.stop_gradient is False:
+                            np.testing.assert_array_equal(
+                                out[2], self.ref_y_backward(out[1])
+                            )
 
     def test_api_broadcast(self, use_cuda=False):
-        train_prog = fluid.Program()
-        startup = fluid.Program()
-        with fluid.program_guard(train_prog, startup):
+        train_prog = base.Program()
+        startup = base.Program()
+        with base.program_guard(train_prog, startup):
             x = paddle.static.data(name='x', shape=[-1, 4, 1], dtype='float32')
             y = paddle.static.data(name='y', shape=[-1, 4, 2], dtype='float32')
-            x_i = np.array([[0.9383, 0.1983, 3.2, 1.2]]).astype("float32")
-            y_i = np.array([[1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0]]).astype(
-                "float32"
+            x_i = (
+                np.array([[0.9383, 0.1983, 3.2, 1.2]])
+                .astype("float32")
+                .reshape([1, 4, 1])
+            )
+            y_i = (
+                np.array([[1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0]])
+                .astype("float32")
+                .reshape([1, 4, 2])
             )
             result = paddle.where(x > 1, x=x, y=y)
 
-            exe = fluid.Executor(self.place)
+            exe = base.Executor(self.place)
             exe.run(startup)
 
             out = exe.run(
@@ -170,13 +195,13 @@ class TestXPUWhereAPI(unittest.TestCase):
 
 class TestWhereDygraphAPI(unittest.TestCase):
     def test_api(self):
-        with fluid.dygraph.guard(paddle.XPUPlace(0)):
+        with base.dygraph.guard(paddle.XPUPlace(0)):
             x_i = np.array([0.9383, 0.1983, 3.2, 1.2]).astype("float32")
             y_i = np.array([1.0, 1.0, 1.0, 1.0]).astype("float32")
             cond_i = np.array([False, False, True, True]).astype("bool")
-            x = fluid.dygraph.to_variable(x_i)
-            y = fluid.dygraph.to_variable(y_i)
-            cond = fluid.dygraph.to_variable(cond_i)
+            x = paddle.to_tensor(x_i)
+            y = paddle.to_tensor(y_i)
+            cond = paddle.to_tensor(cond_i)
             out = paddle.where(cond, x, y)
             np.testing.assert_array_equal(
                 out.numpy(), np.where(cond_i, x_i, y_i)

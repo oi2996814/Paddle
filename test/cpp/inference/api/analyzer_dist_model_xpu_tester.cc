@@ -28,14 +28,8 @@ TEST(test_dist_model_xpu, dist_model_xpu) {
   AnalysisConfig config;
   config.SetModel(FLAGS_infer_model + "/__model__",
                   FLAGS_infer_model + "/__params__");
-  config.SwitchUseFeedFetchOps(false);
   config.EnableXpu();
   config.SetXpuDeviceId(0);
-  DistConfig dist_config;
-  dist_config.SetRanks(1, 0);
-  dist_config.EnableDistModel(true);
-  dist_config.SetEndpoints({""}, "");
-  config.SetDistConfig(dist_config);
 
   auto predictor = paddle_infer::CreatePredictor(config);
   int batch_size = 1;

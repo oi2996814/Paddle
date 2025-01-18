@@ -15,26 +15,34 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
-from paddle.fluid.framework import convert_np_dtype_to_dtype_
+from paddle import base
+from paddle.base import core
+from paddle.base.framework import convert_np_dtype_to_proto_type
 
 
 # Situation 1: Attr(shape) is a list(without tensor)
 class TestEmptyOp(OpTest):
     def setUp(self):
         self.op_type = "empty"
+        self.python_api = paddle.tensor.empty
         self.init_config()
 
     def test_check_output(self):
-        self.check_output_customized(self.verify_output)
+        self.check_output_customized(self.verify_output, check_pir=True)
 
     def verify_output(self, outs):
         data_type = outs[0].dtype
-        if data_type in ['float16', 'float32', 'float64', 'int32', 'int64']:
+        if data_type in [
+            'float16',
+            'float32',
+            'float64',
+            'int32',
+            'int64',
+            'uint16',
+        ]:
             max_value = np.nanmax(outs[0])
             min_value = np.nanmin(outs[0])
 
@@ -58,7 +66,7 @@ class TestEmptyOp(OpTest):
     def init_config(self):
         shape = [500, 3]
         dtype = 'float32'
-        dtype_inner = convert_np_dtype_to_dtype_(dtype)
+        dtype_inner = convert_np_dtype_to_proto_type(dtype)
         self.attrs = {'shape': shape, 'dtype': dtype_inner}
         self.inputs = {}
         self.outputs = {'Out': np.zeros(shape).astype(dtype)}
@@ -68,7 +76,7 @@ class TestEmptyOp2(TestEmptyOp):
     def init_config(self):
         shape = [500, 3]
         dtype = 'float64'
-        dtype_inner = convert_np_dtype_to_dtype_(dtype)
+        dtype_inner = convert_np_dtype_to_proto_type(dtype)
         self.attrs = {'shape': shape, 'dtype': dtype_inner}
         self.inputs = {}
         self.outputs = {'Out': np.zeros(shape).astype(dtype)}
@@ -78,7 +86,7 @@ class TestEmptyOp3(TestEmptyOp):
     def init_config(self):
         shape = [500, 3]
         dtype = 'int32'
-        dtype_inner = convert_np_dtype_to_dtype_(dtype)
+        dtype_inner = convert_np_dtype_to_proto_type(dtype)
         self.attrs = {'shape': shape, 'dtype': dtype_inner}
         self.inputs = {}
         self.outputs = {'Out': np.zeros(shape).astype(dtype)}
@@ -88,7 +96,7 @@ class TestEmptyOp4(TestEmptyOp):
     def init_config(self):
         shape = [500, 3]
         dtype = 'int64'
-        dtype_inner = convert_np_dtype_to_dtype_(dtype)
+        dtype_inner = convert_np_dtype_to_proto_type(dtype)
         self.attrs = {'shape': shape, 'dtype': dtype_inner}
         self.inputs = {}
         self.outputs = {'Out': np.zeros(shape).astype(dtype)}
@@ -98,7 +106,7 @@ class TestEmptyOp5(TestEmptyOp):
     def init_config(self):
         shape = [500, 3]
         dtype = 'bool'
-        dtype_inner = convert_np_dtype_to_dtype_(dtype)
+        dtype_inner = convert_np_dtype_to_proto_type(dtype)
         self.attrs = {'shape': shape, 'dtype': dtype_inner}
         self.inputs = {}
         self.outputs = {'Out': np.zeros(shape).astype(dtype)}
@@ -108,18 +116,19 @@ class TestEmptyOp5(TestEmptyOp):
 class TestEmptyOp_ShapeTensor(OpTest):
     def setUp(self):
         self.op_type = "empty"
+        self.python_api = paddle.empty
         self.init_config()
 
     def init_config(self):
         self.shape = [500, 3]
         dtype = 'float32'
-        dtype_inner = convert_np_dtype_to_dtype_(dtype)
+        dtype_inner = convert_np_dtype_to_proto_type(dtype)
         self.attrs = {'dtype': dtype_inner}
         self.inputs = {"ShapeTensor": np.array(self.shape).astype("int32")}
         self.outputs = {'Out': np.zeros(self.shape).astype(dtype)}
 
     def test_check_output(self):
-        self.check_output_customized(self.verify_output)
+        self.check_output_customized(self.verify_output, check_pir=True)
 
     def verify_output(self, outs):
         data_type = outs[0].dtype
@@ -149,6 +158,7 @@ class TestEmptyOp_ShapeTensor(OpTest):
 class TestEmptyOp_ShapeTensorList(OpTest):
     def setUp(self):
         self.op_type = "empty"
+        self.python_api = paddle.empty
         self.init_config()
 
     def init_config(self):
@@ -156,7 +166,7 @@ class TestEmptyOp_ShapeTensorList(OpTest):
         self.infer_shape = [-1, 92]
 
         dtype = 'float32'
-        dtype_inner = convert_np_dtype_to_dtype_(dtype)
+        dtype_inner = convert_np_dtype_to_proto_type(dtype)
 
         shape_tensor_list = []
         for index, ele in enumerate(self.shape):
@@ -169,7 +179,7 @@ class TestEmptyOp_ShapeTensorList(OpTest):
         self.outputs = {'Out': np.zeros(self.shape).astype(dtype)}
 
     def test_check_output(self):
-        self.check_output_customized(self.verify_output)
+        self.check_output_customized(self.verify_output, check_pir=True)
 
     def verify_output(self, outs):
         data_type = outs[0].dtype
@@ -238,6 +248,7 @@ class TestEmptyAPI(unittest.TestCase):
         paddle.enable_static()
 
     def test_static_graph(self):
+        paddle.enable_static()
         dtype = 'float64'
 
         positive_2_int32 = paddle.tensor.fill_constant([1], "int32", 3)
@@ -263,7 +274,7 @@ class TestEmptyAPI(unittest.TestCase):
         place = paddle.CPUPlace()
         exe = paddle.static.Executor(place)
         res_1, res_2, res_3, res_4, res_5, res_6 = exe.run(
-            fluid.default_main_program(),
+            base.default_main_program(),
             feed={
                 "shape_tensor_int32": np.array([200, 3]).astype("int32"),
                 "shape_tensor_int64": np.array([200, 3]).astype("int64"),
@@ -284,7 +295,7 @@ class TestEmptyFP16Op(TestEmptyOp):
     def init_config(self):
         shape = [500, 3]
         self.dtype = np.float16
-        dtype_inner = convert_np_dtype_to_dtype_(self.dtype)
+        dtype_inner = convert_np_dtype_to_proto_type(self.dtype)
         self.attrs = {'shape': shape, 'dtype': dtype_inner}
         self.inputs = {}
         self.outputs = {'Out': np.zeros(shape).astype(self.dtype)}
@@ -293,7 +304,7 @@ class TestEmptyFP16Op(TestEmptyOp):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestEmptyBF16Op(OpTest):
     def setUp(self):
@@ -302,14 +313,14 @@ class TestEmptyBF16Op(OpTest):
         self.__class__.op_type = self.op_type
         self.python_api = paddle.empty
         shape = np.array([200, 3]).astype('int32')
-        dtype_inner = convert_np_dtype_to_dtype_(self.dtype)
+        dtype_inner = convert_np_dtype_to_proto_type(self.dtype)
         output = np.zeros(shape).astype(self.dtype)
         self.inputs = {}
         self.attrs = {'shape': shape, 'dtype': dtype_inner}
         self.outputs = {'Out': convert_float_to_uint16(output)}
 
     def test_check_output(self):
-        self.check_output_customized(self.verify_output)
+        self.check_output_customized(self.verify_output, check_pir=True)
 
     def verify_output(self, outs):
         max_value = np.nanmax(outs[0])
@@ -325,6 +336,7 @@ class TestEmptyBF16Op(OpTest):
 class TestEmptyError(unittest.TestCase):
     def test_attr(self):
         def test_dtype():
+            paddle.enable_static()
             shape = [200, 3]
             dtype = 'uint8'
             result = paddle.empty(shape=shape, dtype=dtype)

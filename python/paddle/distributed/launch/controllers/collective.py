@@ -16,7 +16,7 @@ import json
 import os
 
 from ..context.device import DeviceType
-from .controller import ControleMode, Controller
+from .controller import Controller, ControllerMode
 
 
 class CollectiveController(Controller):
@@ -29,7 +29,7 @@ class CollectiveController(Controller):
         # collective is the default mode
         if ctx:
             ctx.logger.debug(f"{cls.__name__} enabled")
-            ctx.args.run_mode = ControleMode.COLLECTIVE
+            ctx.args.run_mode = ControllerMode.COLLECTIVE
             return True
         else:
             return False
@@ -45,7 +45,10 @@ class CollectiveController(Controller):
         ):
             return self._build_pod_with_args()
         else:
-            return self._build_pod_with_master()
+            if self.ctx.args.auto_parallel_config is None:
+                skip_run = True
+            # only when skip_run is False, should not reset pod
+            return self._build_pod_with_master(skip_run)
 
     def _build_pod_with_tuner(self):
         auto_parallel_config = self.ctx.args.auto_parallel_config
@@ -75,9 +78,7 @@ class CollectiveController(Controller):
                     "PADDLE_CURRENT_ENDPOINT": endpoint,
                     "FLAGS_selected_gpus": "0",
                     "PADDLE_AUTO_PARALLEL_STAGE": "tuner",
-                    "PADDLE_GLOBAL_SIZE": "{}".format(
-                        pod_replicas * int(self.ctx.args.nnodes)
-                    ),
+                    "PADDLE_GLOBAL_SIZE": f"{pod_replicas * int(self.ctx.args.nnodes)}",
                     "PADDLE_LOCAL_SIZE": f"{pod_replicas}",
                 }
                 log_file = "tuner.log"
@@ -94,10 +95,18 @@ class CollectiveController(Controller):
         ips = self.ctx.args.ips.split(',')
 
         job_endpoints = [
-            f"{h}:{p+start_port}" for h in ips for p in range(self.pod.replicas)
+            f"{h}:{p + start_port}"
+            for h in ips
+            for p in range(self.pod.replicas)
         ]
 
         self.ctx.logger.debug(f"job endpoints: {job_endpoints}")
+
+        self.ctx.logger.warning(
+            f"master is set by args, it will be overwritten by {job_endpoints[0]}."
+        )
+        # this is necessary for tcp store to work when endpoints cannot be passed to sub processes.
+        self.ctx.args.master = job_endpoints[0]
 
         rank_offset = (
             ips.index(self.ctx.node.ip) * self.pod.replicas
@@ -114,6 +123,7 @@ class CollectiveController(Controller):
 
         for i in range(self.pod.replicas):
             e = {
+                "PADDLE_MASTER": self.ctx.args.master,
                 "PADDLE_GLOBAL_SIZE": f"{len(job_endpoints)}",
                 "PADDLE_LOCAL_SIZE": f"{self.pod.replicas}",
                 "PADDLE_GLOBAL_RANK": f"{i + rank_offset}",
@@ -124,9 +134,9 @@ class CollectiveController(Controller):
                 "PADDLE_TRAINER_ID": f"{i + rank_offset}",
                 "PADDLE_TRAINERS_NUM": f"{len(job_endpoints)}",
                 "PADDLE_RANK_IN_NODE": str(i),
+                "PADDLE_AUTO_CLUSTER": str(self.ctx.args.auto_cluster_config),
             }
-            if len(",".join(job_endpoints)) < 120 * 1024:
-                e.update({"PADDLE_TRAINER_ENDPOINTS": ",".join(job_endpoints)})
+            e.update({"PADDLE_TRAINER_ENDPOINTS": ",".join(job_endpoints)})
 
             if self._tuner_run_mode is not None:
                 e.update(
@@ -150,7 +160,7 @@ class CollectiveController(Controller):
 
         return True
 
-    def _build_pod_with_master(self):
+    def _build_pod_with_master(self, reset_pod=True):
         self.pod.replicas = self.pod_replicas()
 
         # rank will be reset when restart
@@ -161,7 +171,9 @@ class CollectiveController(Controller):
         # compatible
         endpoints = [
             f"{self.ctx.node.ip}:{p}"
-            for p in self.ctx.node.get_free_ports(self.pod.replicas)
+            for p in self.ctx.node.get_free_ports(
+                self.pod.replicas, self.pod.rank
+            )
         ]
 
         data = json.dumps(
@@ -199,9 +211,14 @@ class CollectiveController(Controller):
         '''
         collective_master = peer_list[0]['candidate']
 
+        # get collective master ip
+        collective_master_ip = collective_master.split(':')[0].strip()
+        os.environ["COLLECTIVE_MASTER_IP"] = collective_master_ip
+
         job_endpoints = [i['endpoints'] for i in peer_list]
 
-        # self.pod.reset()
+        if reset_pod:
+            self.pod.reset()
         selected_dev_key = self.ctx.node.device.get_selected_device_key()
         selected_dev_list = self.ctx.node.device.get_selected_devices(
             self.ctx.args.devices
@@ -219,9 +236,9 @@ class CollectiveController(Controller):
                 "PADDLE_TRAINER_ID": f"{i + rank_offset}",
                 "PADDLE_TRAINERS_NUM": f"{global_size}",
                 "PADDLE_RANK_IN_NODE": str(i),
+                "PADDLE_AUTO_CLUSTER": str(self.ctx.args.auto_cluster_config),
             }
-            if len(",".join(job_endpoints)) < 120 * 1024:
-                e.update({"PADDLE_TRAINER_ENDPOINTS": ",".join(job_endpoints)})
+            e.update({"PADDLE_TRAINER_ENDPOINTS": ",".join(job_endpoints)})
 
             if self._tuner_run_mode is not None:
                 e.update(
@@ -252,7 +269,7 @@ class CollectiveElasticController(CollectiveController):
     def enable(cls, ctx):
         if ctx.args.master and ctx.args.master.startswith("etcd://"):
             ctx.logger.debug(f"{cls.__name__} enabled")
-            ctx.args.run_mode = ControleMode.COLLECTIVE
+            ctx.args.run_mode = ControllerMode.COLLECTIVE
             return True
         else:
             return False

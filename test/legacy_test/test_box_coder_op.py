@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 import paddle
 
@@ -109,7 +110,7 @@ def batch_box_coder(p_box, pb_v, t_box, lod, code_type, norm, axis=0):
 
 class TestBoxCoderOp(OpTest):
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def setUp(self):
         self.op_type = "box_coder"
@@ -142,7 +143,7 @@ class TestBoxCoderOp(OpTest):
 
 class TestBoxCoderOpWithoutBoxVar(OpTest):
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def setUp(self):
         self.python_api = paddle.vision.ops.box_coder
@@ -207,7 +208,7 @@ class TestBoxCoderOpWithLoD(OpTest):
 
 class TestBoxCoderOpWithAxis(OpTest):
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def setUp(self):
         self.python_api = paddle.vision.ops.box_coder
@@ -286,7 +287,7 @@ def wrapper_box_coder(
 
 class TestBoxCoderOpWithVariance(OpTest):
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def setUp(self):
         self.op_type = "box_coder"
@@ -339,7 +340,13 @@ class TestBoxCoderOpWithVarianceDygraphAPI(unittest.TestCase):
             self.box_normalized,
             self.axis,
         )
-        self.place = [paddle.CPUPlace()]
+        self.place = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.is_compiled_with_cuda()
+        ):
+            self.place.append(paddle.CPUPlace())
         if paddle.is_compiled_with_cuda():
             self.place.append(paddle.CUDAPlace(0))
 
@@ -372,27 +379,30 @@ class TestBoxCoderAPI(unittest.TestCase):
 
     def test_dygraph_with_static(self):
         paddle.enable_static()
-        prior_box = paddle.static.data(
-            name='prior_box', shape=[80, 4], dtype='float32'
-        )
-        prior_box_var = paddle.static.data(
-            name='prior_box_var', shape=[80, 4], dtype='float32'
-        )
-        target_box = paddle.static.data(
-            name='target_box', shape=[20, 80, 4], dtype='float32'
-        )
-
-        boxes = paddle.vision.ops.box_coder(
-            prior_box=prior_box,
-            prior_box_var=prior_box_var,
-            target_box=target_box,
-            code_type="decode_center_size",
-            box_normalized=False,
-        )
-
         exe = paddle.static.Executor()
+        main = paddle.static.Program()
+        startup = paddle.static.Program()
+        with paddle.static.program_guard(main, startup):
+            prior_box = paddle.static.data(
+                name='prior_box', shape=[80, 4], dtype='float32'
+            )
+            prior_box_var = paddle.static.data(
+                name='prior_box_var', shape=[80, 4], dtype='float32'
+            )
+            target_box = paddle.static.data(
+                name='target_box', shape=[20, 80, 4], dtype='float32'
+            )
+
+            boxes = paddle.vision.ops.box_coder(
+                prior_box=prior_box,
+                prior_box_var=prior_box_var,
+                target_box=target_box,
+                code_type="decode_center_size",
+                box_normalized=False,
+            )
+
         boxes_np = exe.run(
-            paddle.static.default_main_program(),
+            main,
             feed={
                 'prior_box': self.prior_box_np,
                 'prior_box_var': self.prior_box_var_np,
@@ -416,6 +426,59 @@ class TestBoxCoderAPI(unittest.TestCase):
         boxes_dy_np = boxes_dy.numpy()
 
         np.testing.assert_allclose(boxes_np[0], boxes_dy_np)
+        paddle.enable_static()
+
+
+class TestBoxCoderSupporttuple(unittest.TestCase):
+    def setUp(self):
+        np.random.seed(678)
+        self.prior_box_np = np.random.random((80, 4)).astype('float32')
+        self.target_box_np = np.random.random((20, 80, 4)).astype('float32')
+
+    def test_support_tuple(self):
+        paddle.enable_static()
+        exe = paddle.static.Executor()
+        main = paddle.static.Program()
+        startup = paddle.static.Program()
+        with paddle.static.program_guard(main, startup):
+            prior_box = paddle.static.data(
+                name='prior_box', shape=[80, 4], dtype='float32'
+            )
+            target_box = paddle.static.data(
+                name='target_box', shape=[20, 80, 4], dtype='float32'
+            )
+
+            boxes = paddle.vision.ops.box_coder(
+                prior_box=prior_box,
+                prior_box_var=(1, 2, 3, 4),
+                target_box=target_box,
+                code_type="decode_center_size",
+                box_normalized=False,
+            )
+
+        boxes_np = exe.run(
+            main,
+            feed={
+                'prior_box': self.prior_box_np,
+                'target_box': self.target_box_np,
+            },
+            fetch_list=[boxes],
+        )[0]
+
+        paddle.disable_static()
+        prior_box_dy = paddle.to_tensor(self.prior_box_np)
+        target_box_dy = paddle.to_tensor(self.target_box_np)
+
+        boxes_dy = paddle.vision.ops.box_coder(
+            prior_box=prior_box_dy,
+            prior_box_var=(1, 2, 3, 4),
+            target_box=target_box_dy,
+            code_type="decode_center_size",
+            box_normalized=False,
+        )
+        boxes_dy_np = boxes_dy.numpy()
+
+        np.testing.assert_allclose(boxes_np, boxes_dy_np)
         paddle.enable_static()
 
 

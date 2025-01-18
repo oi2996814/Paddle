@@ -14,19 +14,18 @@
 
 #pragma once
 
-#include <gflags/gflags.h>
-
 #include <string>
 #include <vector>
 
 #include "paddle/cinn/common/common.h"
 #include "paddle/cinn/ir/intrinsic_ops.h"
 #include "paddle/cinn/ir/ir.h"
+#include "paddle/cinn/ir/ir_printer.h"
 #include "paddle/cinn/ir/lowered_func.h"
 #include "paddle/cinn/ir/module.h"
-#include "paddle/cinn/ir/utils/ir_printer.h"
 #include "paddle/cinn/lang/packed_func.h"
 #include "paddle/cinn/runtime/cinn_runtime.h"
+#include "paddle/common/flags.h"
 
 namespace cinn {
 
@@ -103,6 +102,8 @@ class CodeGenC : public ir::IrPrinter {
 #define __DEFINE_VISIT(op__) void Visit(const ir::op__* op) override;
   NODETY_FORALL(__DEFINE_VISIT)
 #undef __DEFINE_VISIT
+  void Visit(const ir::_Module_* op) override;
+  void Visit(const ir::_LoweredFunc_* op) override;
 
 #define __DEFINE_VISIT(op__) \
   void Visit(const ir::intrinsics::op__* op) override;
@@ -119,6 +120,8 @@ class CodeGenC : public ir::IrPrinter {
   Target target_;
   std::stringstream ss_;
   bool inline_builtin_codes_{true};
+  std::unordered_map<const ir::Store*, ir::Expr> store_to_offset_;
+  std::unordered_map<const ir::Load*, ir::Expr> load_to_offset_;
 };
 
 namespace detail {

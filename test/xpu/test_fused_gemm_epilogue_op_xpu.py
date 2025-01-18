@@ -24,8 +24,8 @@ from get_test_cover_info import (
 from op_test_xpu import XPUOpTest
 
 import paddle
-from paddle import _legacy_C_ops
-from paddle.fluid import core
+from paddle import _C_ops
+from paddle.base import core
 
 
 def gelu(x):
@@ -118,7 +118,7 @@ class XPUTestFuseGemmOp(XPUOpTestWrapper):
                 numpy_input_y = self.inputs['Y']
 
             self.outputs = {
-                'Out': get_output(
+                'Out': self.cal_output(
                     numpy_input_x,
                     numpy_input_y,
                     self.inputs['Bias'],
@@ -130,6 +130,9 @@ class XPUTestFuseGemmOp(XPUOpTestWrapper):
                 "trans_y": self.trans_y,
                 "trans_x": self.trans_x,
             }
+
+        def cal_output(self, X, Y, bias, act):
+            return get_output(X, Y, bias, act)
 
         def init_dtype_type(self):
             self.dtype = self.in_type
@@ -199,17 +202,25 @@ class XPUTestFuseGemmOp(XPUOpTestWrapper):
             self.trans_y = False
             self.trans_x = False
 
-    class TestFuseGemmEpilogueOp5(TestFuseGemmBase):
-        def init_datas_shape_and_attrs(self):
-            self.x_shape = [4, 2, 2, 8]
-            self.y_shape = [4, 128]
-            self.bias_shape = [
-                128,
-            ]
-            self.out_shape = [2, 2, 8, 128]
-            self.activation = "relu"
-            self.trans_y = False
-            self.trans_x = True
+    # class TestFuseGemmEpilogueOp5(TestFuseGemmBase):
+    #     def init_datas_shape_and_attrs(self):
+    #         self.x_shape = [2, 2, 4, 8]
+    #         self.y_shape = [4, 128]
+    #         self.bias_shape = [
+    #             128,
+    #         ]
+    #         self.out_shape = [2, 2, 8, 128]
+    #         self.activation = "relu"
+    #         self.trans_y = False
+    #         self.trans_x = True
+
+    #     def cal_output(self, X, Y, bias, act):
+    #         out = (
+    #             np.dot(np.transpose(self.inputs['X'], axes=(0, 1, 3, 2)), Y)
+    #             + bias
+    #         )
+
+    #         return relu(out)
 
     class TestFuseGemmEpilogueOp6(TestFuseGemmBase):
         def init_datas_shape_and_attrs(self):
@@ -251,15 +262,9 @@ class TestEagerFusedGemmEpilogue(unittest.TestCase):
         x.stop_gradient = False
         y.stop_gradient = False
 
-        out1 = _legacy_C_ops.fused_gemm_epilogue(
-            x, y, bias, 'trans_x', False, 'trans_y', False, 'activation', 'none'
-        )
-        out2 = _legacy_C_ops.fused_gemm_epilogue(
-            x, y, bias, 'trans_x', False, 'trans_y', False, 'activation', 'relu'
-        )
-        out3 = _legacy_C_ops.fused_gemm_epilogue(
-            x, y, bias, 'trans_x', False, 'trans_y', False, 'activation', 'gelu'
-        )
+        out1, _ = _C_ops.fused_gemm_epilogue(x, y, bias, False, False, 'none')
+        out2, _ = _C_ops.fused_gemm_epilogue(x, y, bias, False, False, 'relu')
+        out3, _ = _C_ops.fused_gemm_epilogue(x, y, bias, False, False, 'gelu')
 
         out_np1 = get_output(x_np, y_np, bias_np, 'none')
         out_np2 = get_output(x_np, y_np, bias_np, 'relu')

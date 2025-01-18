@@ -17,16 +17,14 @@ limitations under the License. */
 #ifndef UNUSED
 #define UNUSED __attribute__((unused))
 #endif
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 void AddVarToScope(Scope* param_scope,
                    const std::string& name,
                    const DDim& dims) {
   auto* tensor = param_scope->Var(name)->GetMutable<phi::DenseTensor>();
   tensor->Resize(dims);
-  tensor->mutable_data<float>(platform::CPUPlace());
+  tensor->mutable_data<float>(phi::CPUPlace());
 }
 
 Scope* CreateParamScope() {
@@ -192,17 +190,17 @@ TEST(FusedMultiTransformerEncoderPass, basic) {
       PassRegistry::Instance().Get("fused_multi_transformer_encoder_pass");
   if (pass.get() == nullptr)
     LOG(INFO) << "get fused_multi_transformer_encoder_pass failed";
-  int num_nodes_before = graph->Nodes().size();
+  int num_nodes_before = static_cast<int>(graph->Nodes().size());
   VLOG(3) << DebugString(graph);
 
   graph.reset(pass->Apply(graph.release()));
-  int num_nodes_after = graph->Nodes().size();
+  int num_nodes_after = static_cast<int>(graph->Nodes().size());
   VLOG(3) << DebugString(graph);
   int num_fused_nodes_after = GetNumOpNodes(graph, "fused_multi_transformer");
 
   PADDLE_ENFORCE_EQ(num_nodes_before,
                     num_nodes_after + 58,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "After the fused_multi_transformer_encoder_pass, The "
                         "node num in graph "
                         "should be %d, but the result is %d",
@@ -210,7 +208,7 @@ TEST(FusedMultiTransformerEncoderPass, basic) {
                         num_nodes_after));
   PADDLE_ENFORCE_EQ(num_fused_nodes_after,
                     1,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "After the fused_multi_transformer_encoder pass, "
                         "there should be one fused_multi_transformer op, "
                         "but the result is %d",
@@ -368,17 +366,17 @@ TEST(MultiDevicesFusedMultiTransformerEncoderPass, basic) {
   if (pass.get() == nullptr)
     LOG(INFO)
         << "get multi_devices_fused_multi_transformer_encoder_pass failed";
-  int num_nodes_before = graph->Nodes().size();
+  int num_nodes_before = static_cast<int>(graph->Nodes().size());
   VLOG(3) << DebugString(graph);
 
   graph.reset(pass->Apply(graph.release()));
-  int num_nodes_after = graph->Nodes().size();
+  int num_nodes_after = static_cast<int>(graph->Nodes().size());
   VLOG(3) << DebugString(graph);
   int num_fused_nodes_after = GetNumOpNodes(graph, "fused_multi_transformer");
 
   PADDLE_ENFORCE_EQ(num_nodes_before,
                     num_nodes_after + 70,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "After the fused_multi_transformer_encoder_pass, The "
                         "node num in graph "
                         "should be %d, but the result is %d",
@@ -386,7 +384,7 @@ TEST(MultiDevicesFusedMultiTransformerEncoderPass, basic) {
                         num_nodes_after));
   PADDLE_ENFORCE_EQ(num_fused_nodes_after,
                     1,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "After the fused_multi_transformer_encoder pass, "
                         "there should be one fused_multi_transformer op, "
                         "but the result is %d",
@@ -518,25 +516,25 @@ TEST(FusedMultiTransformerEncoderFuseQKVPass, basic) {
       "fused_multi_transformer_encoder_fuse_qkv_pass");
   if (pass.get() == nullptr)
     LOG(INFO) << "get fused_multi_transformer_encoder_fuse_qkv_pass failed";
-  int num_nodes_before = graph->Nodes().size();
+  int num_nodes_before = static_cast<int>(graph->Nodes().size());
   VLOG(3) << DebugString(graph);
 
   graph.reset(pass->Apply(graph.release()));
-  int num_nodes_after = graph->Nodes().size();
+  int num_nodes_after = static_cast<int>(graph->Nodes().size());
   VLOG(3) << DebugString(graph);
   int num_fused_nodes_after = GetNumOpNodes(graph, "fused_multi_transformer");
 
   PADDLE_ENFORCE_EQ(
       num_nodes_before,
       num_nodes_after + 46,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "After the fused_multi_transformer_encoder_fuse_qkv_pass, "
           "The node num in graph should be %d, but the result is %d",
           num_nodes_before - 46,
           num_nodes_after));
   PADDLE_ENFORCE_EQ(num_fused_nodes_after,
                     1,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "After the fused_multi_transformer_encoder_fuse_qkv "
                         "pass, there should be one fused_multi_transformer "
                         "op, but the result is %d",
@@ -678,25 +676,25 @@ TEST(MultiDevicesFusedMultiTransformerEncoderFuseQKVPass, basic) {
     LOG(INFO)
         << "get multi_devices_fused_multi_transformer_encoder_fuse_qkv_pass "
            "failed";
-  int num_nodes_before = graph->Nodes().size();
+  int num_nodes_before = static_cast<int>(graph->Nodes().size());
   VLOG(3) << DebugString(graph);
 
   graph.reset(pass->Apply(graph.release()));
-  int num_nodes_after = graph->Nodes().size();
+  int num_nodes_after = static_cast<int>(graph->Nodes().size());
   VLOG(3) << DebugString(graph);
   int num_fused_nodes_after = GetNumOpNodes(graph, "fused_multi_transformer");
 
   PADDLE_ENFORCE_EQ(
       num_nodes_before,
       num_nodes_after + 54,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "After the fused_multi_transformer_encoder_fuse_qkv_pass, "
           "The node num in graph should be %d, but the result is %d",
           num_nodes_before - 54,
           num_nodes_after));
   PADDLE_ENFORCE_EQ(num_fused_nodes_after,
                     1,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "After the fused_multi_transformer_encoder_fuse_qkv "
                         "multi-devices pass, there should be one "
                         "fused_multi_transformer op, but the result is %d",
@@ -711,9 +709,7 @@ TEST(MultiDevicesFusedMultiTransformerEncoderFuseQKVPass,
               "multi_devices_fused_multi_transformer_encoder_fuse_qkv_pass"));
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 USE_PASS(fused_multi_transformer_encoder_pass);
 USE_PASS(fused_multi_transformer_encoder_fuse_qkv_pass);

@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import unittest
 from functools import partial
-from typing import List
 
 import numpy as np
 from program_config import ProgramConfig, TensorConfig
@@ -81,21 +82,24 @@ class TrtConvertIndexSelectTest(TrtLayerAutoScanTest):
                                         ),
                                         "index_data": TensorConfig(
                                             data_gen=partial(
-                                                generate_input2
-                                                if index_type_int32
-                                                else generate_input4,
+                                                (
+                                                    generate_input2
+                                                    if index_type_int32
+                                                    else generate_input4
+                                                ),
                                                 index,
                                             )
                                         ),
                                     },
                                     outputs=["output_data"],
+                                    no_cast_list=["index_data"],
                                 )
 
                                 yield program_config
 
     def sample_predictor_configs(
         self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
+    ) -> tuple[paddle_infer.Config, list[int], float]:
         def generate_dynamic_shape(attrs):
             if len(self.shape) == 1:
                 self.dynamic_shape.min_input_shape = {

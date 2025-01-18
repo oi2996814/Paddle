@@ -17,8 +17,7 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle.base import core
 
 
 def adaptive_start_index(index, input_size, output_size):
@@ -140,50 +139,55 @@ class TestAdaptiveAvgPool3DAPI(unittest.TestCase):
         ):
             place = paddle.CUDAPlace(0) if use_cuda else paddle.CPUPlace()
             paddle.enable_static()
-            x = paddle.static.data(
-                name="x", shape=[2, 3, 5, 7, 7], dtype="float32"
-            )
+            with paddle.static.program_guard(
+                paddle.static.Program(), paddle.static.Program()
+            ):
+                x = paddle.static.data(
+                    name="x", shape=[2, 3, 5, 7, 7], dtype="float32"
+                )
 
-            out_1 = paddle.nn.functional.adaptive_avg_pool3d(
-                x=x, output_size=[3, 3, 3]
-            )
+                out_1 = paddle.nn.functional.adaptive_avg_pool3d(
+                    x=x, output_size=[3, 3, 3]
+                )
 
-            out_2 = paddle.nn.functional.adaptive_avg_pool3d(x=x, output_size=5)
+                out_2 = paddle.nn.functional.adaptive_avg_pool3d(
+                    x=x, output_size=5
+                )
 
-            out_3 = paddle.nn.functional.adaptive_avg_pool3d(
-                x=x, output_size=[2, 3, 5]
-            )
+                out_3 = paddle.nn.functional.adaptive_avg_pool3d(
+                    x=x, output_size=[2, 3, 5]
+                )
 
-            out_4 = paddle.nn.functional.adaptive_avg_pool3d(
-                x=x, output_size=[3, 3, 3], data_format="NDHWC"
-            )
+                out_4 = paddle.nn.functional.adaptive_avg_pool3d(
+                    x=x, output_size=[3, 3, 3], data_format="NDHWC"
+                )
 
-            out_5 = paddle.nn.functional.adaptive_avg_pool3d(
-                x=x, output_size=[None, 3, None]
-            )
+                out_5 = paddle.nn.functional.adaptive_avg_pool3d(
+                    x=x, output_size=[None, 3, None]
+                )
 
-            exe = paddle.static.Executor(place=place)
-            [res_1, res_2, res_3, res_4, res_5] = exe.run(
-                fluid.default_main_program(),
-                feed={"x": self.x_np},
-                fetch_list=[out_1, out_2, out_3, out_4, out_5],
-            )
+                exe = paddle.static.Executor(place=place)
+                [res_1, res_2, res_3, res_4, res_5] = exe.run(
+                    paddle.static.default_main_program(),
+                    feed={"x": self.x_np},
+                    fetch_list=[out_1, out_2, out_3, out_4, out_5],
+                )
 
-            np.testing.assert_allclose(
-                res_1, self.res_1_np, rtol=1e-5, atol=1e-8
-            )
-            np.testing.assert_allclose(
-                res_2, self.res_2_np, rtol=1e-5, atol=1e-8
-            )
-            np.testing.assert_allclose(
-                res_3, self.res_3_np, rtol=1e-5, atol=1e-8
-            )
-            np.testing.assert_allclose(
-                res_4, self.res_4_np, rtol=1e-5, atol=1e-8
-            )
-            np.testing.assert_allclose(
-                res_5, self.res_5_np, rtol=1e-5, atol=1e-8
-            )
+                np.testing.assert_allclose(
+                    res_1, self.res_1_np, rtol=1e-5, atol=1e-8
+                )
+                np.testing.assert_allclose(
+                    res_2, self.res_2_np, rtol=1e-5, atol=1e-8
+                )
+                np.testing.assert_allclose(
+                    res_3, self.res_3_np, rtol=1e-5, atol=1e-8
+                )
+                np.testing.assert_allclose(
+                    res_4, self.res_4_np, rtol=1e-5, atol=1e-8
+                )
+                np.testing.assert_allclose(
+                    res_5, self.res_5_np, rtol=1e-5, atol=1e-8
+                )
 
     def test_dynamic_graph(self):
         for use_cuda in (
@@ -267,55 +271,58 @@ class TestAdaptiveAvgPool3DClassAPI(unittest.TestCase):
         ):
             place = paddle.CUDAPlace(0) if use_cuda else paddle.CPUPlace()
             paddle.enable_static()
-            x = paddle.static.data(
-                name="x", shape=[2, 3, 5, 7, 7], dtype="float32"
-            )
+            with paddle.static.program_guard(
+                paddle.static.Program(), paddle.static.Program()
+            ):
+                x = paddle.static.data(
+                    name="x", shape=[2, 3, 5, 7, 7], dtype="float32"
+                )
 
-            adaptive_avg_pool = paddle.nn.AdaptiveAvgPool3D(
-                output_size=[3, 3, 3]
-            )
-            out_1 = adaptive_avg_pool(x=x)
+                adaptive_avg_pool = paddle.nn.AdaptiveAvgPool3D(
+                    output_size=[3, 3, 3]
+                )
+                out_1 = adaptive_avg_pool(x=x)
 
-            adaptive_avg_pool = paddle.nn.AdaptiveAvgPool3D(output_size=5)
-            out_2 = adaptive_avg_pool(x=x)
+                adaptive_avg_pool = paddle.nn.AdaptiveAvgPool3D(output_size=5)
+                out_2 = adaptive_avg_pool(x=x)
 
-            adaptive_avg_pool = paddle.nn.AdaptiveAvgPool3D(
-                output_size=[2, 3, 5]
-            )
-            out_3 = adaptive_avg_pool(x=x)
+                adaptive_avg_pool = paddle.nn.AdaptiveAvgPool3D(
+                    output_size=[2, 3, 5]
+                )
+                out_3 = adaptive_avg_pool(x=x)
 
-            adaptive_avg_pool = paddle.nn.AdaptiveAvgPool3D(
-                output_size=[3, 3, 3], data_format="NDHWC"
-            )
-            out_4 = adaptive_avg_pool(x=x)
+                adaptive_avg_pool = paddle.nn.AdaptiveAvgPool3D(
+                    output_size=[3, 3, 3], data_format="NDHWC"
+                )
+                out_4 = adaptive_avg_pool(x=x)
 
-            adaptive_avg_pool = paddle.nn.AdaptiveAvgPool3D(
-                output_size=[None, 3, None]
-            )
-            out_5 = adaptive_avg_pool(x=x)
+                adaptive_avg_pool = paddle.nn.AdaptiveAvgPool3D(
+                    output_size=[None, 3, None]
+                )
+                out_5 = adaptive_avg_pool(x=x)
 
-            exe = paddle.static.Executor(place=place)
-            [res_1, res_2, res_3, res_4, res_5] = exe.run(
-                fluid.default_main_program(),
-                feed={"x": self.x_np},
-                fetch_list=[out_1, out_2, out_3, out_4, out_5],
-            )
+                exe = paddle.static.Executor(place=place)
+                [res_1, res_2, res_3, res_4, res_5] = exe.run(
+                    paddle.static.default_main_program(),
+                    feed={"x": self.x_np},
+                    fetch_list=[out_1, out_2, out_3, out_4, out_5],
+                )
 
-            np.testing.assert_allclose(
-                res_1, self.res_1_np, rtol=1e-5, atol=1e-8
-            )
-            np.testing.assert_allclose(
-                res_2, self.res_2_np, rtol=1e-5, atol=1e-8
-            )
-            np.testing.assert_allclose(
-                res_3, self.res_3_np, rtol=1e-5, atol=1e-8
-            )
-            np.testing.assert_allclose(
-                res_4, self.res_4_np, rtol=1e-5, atol=1e-8
-            )
-            np.testing.assert_allclose(
-                res_5, self.res_5_np, rtol=1e-5, atol=1e-8
-            )
+                np.testing.assert_allclose(
+                    res_1, self.res_1_np, rtol=1e-5, atol=1e-8
+                )
+                np.testing.assert_allclose(
+                    res_2, self.res_2_np, rtol=1e-5, atol=1e-8
+                )
+                np.testing.assert_allclose(
+                    res_3, self.res_3_np, rtol=1e-5, atol=1e-8
+                )
+                np.testing.assert_allclose(
+                    res_4, self.res_4_np, rtol=1e-5, atol=1e-8
+                )
+                np.testing.assert_allclose(
+                    res_5, self.res_5_np, rtol=1e-5, atol=1e-8
+                )
 
     def test_dynamic_graph(self):
         for use_cuda in (

@@ -298,7 +298,7 @@ __inline__ __device__ T PartialWarpReduceMin(T val, warp_mask_t lane_mask) {
   T warp_val = __shfl_sync(lane_mask, val, 0, warpSize);
 #else
   T warp_val = __shfl(
-      val, 0, warpSize);  // To fullfill the data in each thread of this warp.
+      val, 0, warpSize);  // To fulfill the data in each thread of this warp.
 #endif
   warp_val = val;
 
@@ -327,7 +327,7 @@ __inline__ __device__ T BlockReduceMax(T val, warp_mask_t mask) {
 
   // align block_span to warpSize
   int block_span = (blockDim.x + warpSize - 1) >> WARP_SIZE_WIDTH;
-  val = (lane < block_span) ? shared[lane] : -1e10f;
+  val = (lane < block_span) ? shared[lane] : (T)(-FLT_MAX);
   val = WarpReduceMax(val, mask);
 
   return val;
@@ -375,7 +375,7 @@ __inline__ __device__ T BlockReduceMin(T val, warp_mask_t mask) {
 
   // align block_span to warpSize
   int block_span = (blockDim.x + warpSize - 1) >> WARP_SIZE_WIDTH;
-  val = (lane < block_span) ? shared[lane] : 1e10f;
+  val = (lane < block_span) ? shared[lane] : (T)(FLT_MAX);
   val = WarpReduceMin(val, mask);
 
   return val;

@@ -12,24 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 from .primitives import *  # noqa: F403
 from .register import register_decomp
 
 
-@register_decomp('pd.mean')
-def mean(x, axis, keepdim):
-    """define composite rule of op mean"""
-    x_shape = x.shape
-    axes = axis or tuple(range(0, len(x_shape)))
-    axes = (axes,) if isinstance(axes, int) else axes
-    sum_x = sum(x, axis=axes, keepdim=keepdim)
-    value_to_fill = 1
-    for axis in axes:
-        value_to_fill *= x_shape[axis]
-    norm = fill_constant(
-        shape=[],
-        value=value_to_fill,
-        dtype=sum_x.dtype,
-    )
-    res = divide(sum_x, norm)
-    return res
+# TODO(kevincheng2): python implementation of prim feature,
+# now it has been sunk to c++, waiting for further deletion.
+@register_decomp('pd_op.unsqueeze')
+def unsqueeze(x, axis):
+    """define composite rule of op unsqueeze"""
+    """using reshape to implement unsqueeze op"""
+    axis = axis.get_defining_op().attrs()["value"]
+    x_shape = list(x.shape)
+    axis_list = list(axis)
+    for i in axis_list:
+        if i < 0:
+            i += len(x_shape) + 1
+        x_shape = (
+            x_shape[:i]
+            + [
+                1,
+            ]
+            + x_shape[i:]
+        )
+    out = reshape(x, x_shape)
+    return [out, None]

@@ -165,7 +165,7 @@ class TestFusedAttention(unittest.TestCase):
         out = layer(x, mask, use_ref)
         loss = out.mean()
         loss.backward()
-        vars_need_gradients = [('out', x)] + list(layer.named_parameters())
+        vars_need_gradients = [('out', x), *layer.named_parameters()]
         numpy_values = [out.numpy()]
         for i, (name, var) in enumerate(vars_need_gradients):
             tmp = var.grad.numpy()
@@ -195,7 +195,7 @@ class TestFusedAttentionNormalizeBefore(TestFusedAttention):
 class TestFusedAttentionAPIError(unittest.TestCase):
     def test_invalid_x_rank(self):
         def test_x_rank_1():
-            with paddle.fluid.dygraph.guard():
+            with paddle.base.dygraph.guard():
                 layer = FusedMultiHeadAttention(embed_dim=1, num_heads=1)
                 array = np.array([1.9], dtype=np.float32)
                 x = paddle.to_tensor(np.reshape(array, [1]), dtype='float32')

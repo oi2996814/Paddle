@@ -31,7 +31,20 @@ class TestCollectiveScatterAPI(TestDistBase):
         )
 
     def test_scatter_nccl(self):
-        self.check_with_place("collective_scatter_api.py", "scatter", "nccl")
+        dtypes_to_test = [
+            "float16",
+            "float32",
+            "float64",
+            "int32",
+            "int64",
+        ]
+        for dtype in dtypes_to_test:
+            self.check_with_place(
+                "collective_scatter_api.py",
+                "scatter",
+                "nccl",
+                dtype=dtype,
+            )
 
     def test_scatter_nccl_dygraph(self):
         dtypes_to_test = [

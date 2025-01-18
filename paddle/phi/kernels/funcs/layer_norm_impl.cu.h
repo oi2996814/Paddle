@@ -26,12 +26,13 @@ namespace cub = hipcub;
 
 #include "glog/logging.h"
 
+#include "paddle/common/ddim.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
 #include "paddle/phi/backends/gpu/gpu_device_function.h"
 #include "paddle/phi/backends/gpu/gpu_dnn.h"
 #include "paddle/phi/common/memory_utils.h"
-#include "paddle/phi/core/ddim.h"
 #include "paddle/phi/kernels/funcs/aligned_vector.h"
+#include "paddle/phi/kernels/funcs/fake_quantize_functor.h"
 
 namespace phi {
 namespace funcs {
@@ -42,11 +43,10 @@ template <typename T>
 using LayerNormParamType = typename CudnnDataType<T>::BatchNormParamType;
 
 inline static int GetDesiredBlockDim(int64_t block_dim) {
+  const int kMaxBlockDim = 512;
 #ifdef __HIPCC__
-  const int kMaxBlockDim = 256;
   const int lwarpSize = 64;
 #else
-  const int kMaxBlockDim = 512;
   const int lwarpSize = 32;
 #endif
   return block_dim >= kMaxBlockDim ? kMaxBlockDim : lwarpSize;
@@ -167,14 +167,14 @@ __inline__ __device__ double rsqrt_(const double val) {
   return ::rsqrt(val);
 }
 
-#if CUDA_ARCH_FP16_SUPPORTED(__CUDA_ARCH__)
+#if CUDA_ARCH_FP16_SUPPORTED(__CUDA_ARCH__) || defined(PADDLE_WITH_HIP)
 template <>
 __inline__ __device__ half rsqrt_(const half val) {
   return hrsqrt(val);
 }
 #endif
 
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 template <typename T,
           typename U,
           typename ScaleT = U,
@@ -255,7 +255,11 @@ __global__ __launch_bounds__(THREADS_PER_CTA) void fast_ln_fwd_kernel(
 
 #pragma unroll
     for (int it = 1; it < THREADS_PER_WARP; it *= 2) {
+#ifdef PADDLE_WITH_HIP
+      mu_local += __shfl_xor(mu_local, it);
+#else
       mu_local += __shfl_xor_sync(uint32_t(-1), mu_local, it);
+#endif
     }
     if (WARPS_N > 1) {
       if (lane == 0) {
@@ -268,10 +272,10 @@ __global__ __launch_bounds__(THREADS_PER_CTA) void fast_ln_fwd_kernel(
         for (int it = 0; it < WARPS_N; ++it) {
           mu_local += smem[warp_m * WARPS_N + it];
         }
-        smem[warp_m] = mu_local;
+        smem[warp_m * WARPS_N] = mu_local;
       }
       __syncthreads();
-      mu_local = smem[warp_m];
+      mu_local = smem[warp_m * WARPS_N];
     }
 
     mu_local *= rn;
@@ -291,10 +295,15 @@ __global__ __launch_bounds__(THREADS_PER_CTA) void fast_ln_fwd_kernel(
 
 #pragma unroll
     for (int it = 1; it < THREADS_PER_WARP; it *= 2) {
+#ifdef PADDLE_WITH_HIP
+      var_local += __shfl_xor(var_local, it);
+#else
       var_local += __shfl_xor_sync(uint32_t(-1), var_local, it);
+#endif
     }
 
     if (WARPS_N > 1) {
+      __syncthreads();
       if (lane == 0) {
         smem[warp_m * WARPS_N + warp_n] = var_local;
       }
@@ -305,10 +314,10 @@ __global__ __launch_bounds__(THREADS_PER_CTA) void fast_ln_fwd_kernel(
         for (int it = 0; it < WARPS_N; ++it) {
           var_local += smem[warp_m * WARPS_N + it];
         }
-        smem[warp_m] = var_local;
+        smem[warp_m * WARPS_N] = var_local;
       }
       __syncthreads();
-      var_local = smem[warp_m];
+      var_local = smem[warp_m * WARPS_N];
     }
 
     // Note: to assure if it is right for double
@@ -343,20 +352,6 @@ __global__ __launch_bounds__(THREADS_PER_CTA) void fast_ln_fwd_kernel(
   }
 }
 #endif
-
-template <typename T>
-inline HOSTDEVICE T roundWithTiesToEven(T x) {
-  T xLower = floor(x);
-  T xUpper = ceil(x);
-  // x is in interval [xl,xu]. Choose closest of two bounds, breaking ties to
-  // even.
-  T dLower = x - xLower;
-  T dUpper = xUpper - x;
-  return static_cast<T>(
-      (dLower == dUpper ? fmod(xLower, 2.0F) == 0.0F : dLower < dUpper)
-          ? xLower
-          : xUpper);
-}
 
 template <typename T>
 __forceinline__ __device__ int8_t quant_helper(const T input,
@@ -546,7 +541,7 @@ __inline__ __device__ void cuLoadAddStridedInputs(const int64_t i1_block,
   }
 }
 
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 template <bool IsFusedDropoutResidualLn,
           bool NeedDDropoutSrcPtr,
           typename T,
@@ -678,16 +673,26 @@ __global__ __launch_bounds__(THREADS_PER_CTA) void fused_ln_bwd_fast_kernel(
 #pragma unroll
       // row reduction among 32 threads.
       for (int it = 1; it < THREADS_PER_WARP; it *= 2) {
+#ifdef PADDLE_WITH_HIP
+        sum_loss1 += __shfl_xor(sum_loss1, it);
+        sum_loss2 += __shfl_xor(sum_loss2, it);
+#else
         sum_loss1 += __shfl_xor_sync(uint32_t(-1), sum_loss1, it);
         sum_loss2 += __shfl_xor_sync(uint32_t(-1), sum_loss2, it);
+#endif
       }
       sum_loss1 *= rn;
       sum_loss2 *= rn;
     } else {
 #pragma unroll
       for (int it = 16; it > 0; it /= 2) {
+#ifdef PADDLE_WITH_HIP
+        sum_loss1 += __shfl_down(sum_loss1, it);
+        sum_loss2 += __shfl_down(sum_loss2, it);
+#else
         sum_loss1 += __shfl_down_sync(uint32_t(-1), sum_loss1, it);
         sum_loss2 += __shfl_down_sync(uint32_t(-1), sum_loss2, it);
+#endif
       }
 
       if (lane == 0) {
@@ -974,7 +979,7 @@ void ln_bwd_fast_kernel_driver(const phi::GPUContext &dev_ctx,
   auto stream = dev_ctx.stream();
   if (cols == 1024 || cols == 384 || cols == 256) {
     // step-1: compute dx and reduced part results of dscale and dbias.
-    const int WARPS_M = 4;  // how many rows delt in a cta.
+    const int WARPS_M = 4;  // how many rows deal in a cta.
     const int WARPS_N = 1;  // how many warps to deal with a row.
     const int BYTES_PER_LDG = 16;
     const int VecSize = BYTES_PER_LDG / sizeof(T);
@@ -1003,7 +1008,7 @@ void ln_bwd_fast_kernel_driver(const phi::GPUContext &dev_ctx,
 
     if (mask_ptr != nullptr) {
       if (d_dropout_src_ptr == nullptr) {
-        PADDLE_THROW(phi::errors::InvalidArgument(
+        PADDLE_THROW(common::errors::InvalidArgument(
             "To compute fused_dropout_residual_ln grad, d_dropout_src_ptr "
             "can't be null"));
       }
@@ -1116,7 +1121,7 @@ void ln_bwd_fast_kernel_driver(const phi::GPUContext &dev_ctx,
     // Note: it is not supported for double type.
     if (sizeof(U) > 4) {
       PADDLE_THROW(
-          phi::errors::InvalidArgument("Only support float and fp16 type"));
+          common::errors::InvalidArgument("Only support float and fp16 type"));
     } else {
       int gridx_2 = 0;
 
@@ -1149,7 +1154,7 @@ void ln_bwd_fast_kernel_driver(const phi::GPUContext &dev_ctx,
 #undef LAUNCH_LN_BWD_BETA_GAMMMA_KERNEL
     }
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "Fast layer_norm kernel is only used when feature_size is 1024"));
   }
 }
@@ -1874,11 +1879,7 @@ static void LayerNormBackward(
     int64_t feature_size,
     const phi::GPUContext &dev_ctx) {
   auto stream = dev_ctx.stream();
-#ifdef __HIPCC__
-  const int kMaxBlockDim = 256;
-#else
   const int kMaxBlockDim = 512;
-#endif
   const int kMaxBlockNum = 128;
   int gradient_flag = ((d_x != nullptr ? 1 : 0) << 2) |
                       ((d_scale != nullptr ? 1 : 0) << 1) |

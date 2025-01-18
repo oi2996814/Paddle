@@ -25,7 +25,7 @@ from .master import Master
 from .watcher import Watcher
 
 
-class ControleMode:
+class ControllerMode:
     COLLECTIVE = "collective"
     PS = "ps"
     IPU = "ipu"
@@ -95,7 +95,7 @@ class ControllerBase:
         while not self.ctx.status.is_done():
             status = self.pod.watch(timeout=2)
 
-            # if self.ctx.continous_log():
+            # if self.ctx.continuous_log():
             # default to print log
             self.pod.logs()
 
@@ -210,7 +210,25 @@ class Controller(ControllerBase):
 
     def _get_entrypoint(self):
         if self.ctx.args.training_script.endswith('.py'):
-            entrypoint = [sys.executable, "-u", self.ctx.args.training_script]
+            if os.environ.get("WITH_COVERAGE") == "ON":
+                entrypoint = [
+                    sys.executable,
+                    "-u",
+                    "-m",
+                    "coverage",
+                    "run",
+                    "--branch",
+                    "-p",
+                    self.ctx.args.training_script,
+                ]
+            else:
+                entrypoint = [
+                    sys.executable,
+                    "-u",
+                    self.ctx.args.training_script,
+                ]
+        elif self.ctx.args.training_script.endswith('.pyxes'):
+            entrypoint = [sys.executable, self.ctx.args.training_script]
         else:
             entrypoint = [self.ctx.args.training_script]
 
@@ -307,9 +325,11 @@ class Controller(ControllerBase):
     def _save_container_env(self, container, is_init=False):
         f = os.path.join(
             self.ctx.args.log_dir,
-            f'envlog.init.{container.rank}'
-            if is_init
-            else f'envlog.{container.rank}',
+            (
+                f'envlog.init.{container.rank}'
+                if is_init
+                else f'envlog.{container.rank}'
+            ),
         )
         try:
             os.makedirs(os.path.dirname(f), exist_ok=True)

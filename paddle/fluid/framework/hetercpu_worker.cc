@@ -12,12 +12,13 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
+#include "paddle/common/enforce.h"
 #include "paddle/fluid/framework/device_worker.h"
 #include "paddle/fluid/framework/device_worker_factory.h"
 #include "paddle/fluid/framework/fleet/fleet_wrapper.h"
 #include "paddle/fluid/framework/fleet/heter_wrapper.h"
-#include "paddle/fluid/platform/cpu_helper.h"
-#include "paddle/fluid/string/string_helper.h"
+#include "paddle/phi/core/platform/cpu_helper.h"
+#include "paddle/utils/string/string_helper.h"
 
 #if defined(PADDLE_WITH_PSLIB) && !defined(PADDLE_WITH_HETERPS)
 
@@ -26,8 +27,7 @@ limitations under the License. */
 #define _LINUX
 #endif
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 void HeterTask::PackTask(Scope* thread_scope,
                          int taskid,
@@ -58,7 +58,7 @@ void HeterTask::PackTask(Scope* thread_scope,
         thread_var->GetMutable<phi::DenseTensor>();
     Variable* task_var = scope_->FindVar(use_slots[i]);
     phi::DenseTensor* task_tensor = task_var->GetMutable<phi::DenseTensor>();
-    TensorCopy(*thread_tensor, platform::CPUPlace(), task_tensor);
+    TensorCopy(*thread_tensor, phi::CPUPlace(), task_tensor);
     auto& tensor_lod = thread_tensor->lod()[0];
     LoD thread_lod{tensor_lod};
     task_tensor->set_lod(thread_lod);
@@ -180,7 +180,7 @@ void HeterCpuWorker::Initialize(const TrainerDesc& desc) {
             << dest_table;
     copy_dense_tables_.push_back(std::make_pair(src_table, dest_table));
   }
-  for (auto& m : copy_table_config_.table_denpendency_map()) {
+  for (auto& m : copy_table_config_.table_dependency_map()) {
     if (sparse_key_names_.find(m.key()) != sparse_key_names_.end()) {
       // currently only support one dependency
       for (auto& value : m.values()) {
@@ -199,7 +199,7 @@ void HeterCpuWorker::SetNeedDump(bool need_dump_field) {
 }
 
 // template <typename T>
-// std::string PrintLodTensorType(phi::DenseTensor* tensor,
+// std::string PrintDenseTensorType(phi::DenseTensor* tensor,
 //                                int64_t start, int64_t end) {
 //   auto count = tensor->numel();
 //   if (start < 0 || end > count) {
@@ -213,7 +213,7 @@ void HeterCpuWorker::SetNeedDump(bool need_dump_field) {
 //   return os.str();
 // }
 //
-// std::string PrintLodTensorIntType(phi::DenseTensor* tensor, int64_t start,
+// std::string PrintDenseTensorIntType(phi::DenseTensor* tensor, int64_t start,
 //                                   int64_t end) {
 //   auto count = tensor->numel();
 //   if (start < 0 || end > count) {
@@ -227,15 +227,15 @@ void HeterCpuWorker::SetNeedDump(bool need_dump_field) {
 //   return os.str();
 // }
 //
-// std::string PrintLodTensor(phi::DenseTensor* tensor, int64_t start, int64_t
+// std::string PrintDenseTensor(phi::DenseTensor* tensor, int64_t start, int64_t
 // end) {
 //   std::string out_val;
 //   if (tensor->type() == proto::VarType::FP32) {
-//     out_val = PrintLodTensorType<float>(tensor, start, end);
+//     out_val = PrintDenseTensorType<float>(tensor, start, end);
 //   } else if (tensor->type() == proto::VarType::INT64) {
-//     out_val = PrintLodTensorIntType(tensor, start, end);
+//     out_val = PrintDenseTensorIntType(tensor, start, end);
 //   } else if (tensor->type() == proto::VarType::FP64) {
-//     out_val = PrintLodTensorType<double>(tensor, start, end);
+//     out_val = PrintDenseTensorType<double>(tensor, start, end);
 //   } else {
 //     out_val = "unsupported type";
 //   }
@@ -280,7 +280,7 @@ void HeterCpuWorker::DumpParam() {
   //    }
   //    phi::DenseTensor* tensor = var->GetMutable<phi::DenseTensor>();
   //    int64_t len = tensor->numel();
-  //    os += PrintLodTensor(tensor, 0, len);
+  //    os += PrintDenseTensor(tensor, 0, len);
   //    writer_ << os;
   //  }
 }
@@ -317,8 +317,11 @@ void HeterCpuWorker::CollectLabelInfo(std::shared_ptr<HeterTask> task,
       continue;
     }
     phi::DenseTensor* tensor = fea_var->GetMutable<phi::DenseTensor>();
-    CHECK(tensor != nullptr)
-        << "tensor of var " << sparse_key_names_[table_id][i] << " is null";
+    PADDLE_ENFORCE_EQ(
+        tensor != nullptr,
+        true,
+        common::errors::InvalidArgument("Tensor of var %s is null.",
+                                        sparse_key_names_[table_id][i]));
 
     // skip slots which do not have embedding
     Variable* emb_var = scope->FindVar(sparse_value_names_[table_id][i]);
@@ -339,8 +342,12 @@ void HeterCpuWorker::CollectLabelInfo(std::shared_ptr<HeterTask> task,
       }
     }
   }
-  CHECK(global_index == feature.size())
-      << "expect fea info size:" << feature.size() << " real:" << global_index;
+  PADDLE_ENFORCE_EQ(global_index == feature.size(),
+                    true,
+                    common::errors::InvalidArgument(
+                        "Expect fea info size: %d, but received %d.",
+                        feature.size(),
+                        global_index));
 }
 
 void HeterCpuWorker::FillSparseValue(std::shared_ptr<HeterTask> task,
@@ -369,7 +376,10 @@ void HeterCpuWorker::FillSparseValue(std::shared_ptr<HeterTask> task,
       continue;
     }
     phi::DenseTensor* tensor = var->GetMutable<phi::DenseTensor>();
-    CHECK(tensor != nullptr) << "tensor of var " << slot_name << " is null";
+    PADDLE_ENFORCE_EQ(tensor != nullptr,
+                      true,
+                      common::errors::InvalidArgument(
+                          "Tensor of var %s is null.", slot_name));
     int64_t* ids = tensor->data<int64_t>();
     int len = tensor->numel();
     Variable* var_emb = scope->FindVar(emb_slot_name);
@@ -476,9 +486,13 @@ void HeterCpuWorker::AdjustInsWeight(std::shared_ptr<HeterTask> task) {
   float* ins_weights = ins_weight_tensor->data<float>();
   size_t len = ins_weight_tensor->numel();  // len = batch size
   // here we assume nid_show slot only has one feasign in each instance
-  CHECK(len == nid_show_.size())
-      << "ins_weight size should be equal to "
-      << "nid_show size, " << len << " vs " << nid_show_.size();
+  PADDLE_ENFORCE_EQ(
+      len == nid_show_.size(),
+      true,
+      common::errors::InvalidArgument("Ins weight size should be equal to nid "
+                                      "show size, but received %d and %d.",
+                                      len,
+                                      nid_show_.size()));
   float nid_adjw_threshold = adjust_ins_weight_config_.nid_adjw_threshold();
   float nid_adjw_ratio = adjust_ins_weight_config_.nid_adjw_ratio();
   int64_t nid_adjw_num = 0;
@@ -587,22 +601,35 @@ void HeterCpuWorker::CopyDenseVars() {
     VLOG(3) << "copy dense var from " << src_var_name << " to "
             << dest_var_name;
     Variable* src_var = thread_scope_->FindVar(src_var_name);
-    CHECK(src_var != nullptr) << src_var_name << " not found";  // NOLINT
+    PADDLE_ENFORCE_EQ(src_var != nullptr,
+                      true,
+                      common::errors::InvalidArgument(
+                          "Src var name %s not found.", src_var_name));
     phi::DenseTensor* src_tensor = src_var->GetMutable<phi::DenseTensor>();
-    CHECK(src_tensor != nullptr)
-        << src_var_name << " tensor is null";  // NOLINT
+    PADDLE_ENFORCE_EQ(
+        src_tensor != nullptr,
+        true,
+        common::errors::InvalidArgument("Tensor %s is null.", src_var_name));
     float* src_data = src_tensor->data<float>();
 
     Variable* dest_var = thread_scope_->FindVar(dest_var_name);
-    CHECK(dest_var != nullptr) << dest_var_name << " not found";  // NOLINT
+    PADDLE_ENFORCE_EQ(dest_var != nullptr,
+                      true,
+                      common::errors::InvalidArgument(
+                          "Dest var name %s not found.", dest_var_name));
     phi::DenseTensor* dest_tensor = dest_var->GetMutable<phi::DenseTensor>();
-    CHECK(dest_tensor != nullptr)
-        << dest_var_name << " tensor is null";  // NOLINT
+    PADDLE_ENFORCE_EQ(
+        dest_tensor != nullptr,
+        true,
+        common::errors::InvalidArgument("Tensor %s is null.", dest_var_name));
     float* dest_data = dest_tensor->data<float>();
 
-    CHECK(src_tensor->numel() == dest_tensor->numel())
-        << "tensor numel not equal," << src_tensor->numel() << " vs "
-        << dest_tensor->numel();
+    PADDLE_ENFORCE_EQ(
+        src_tensor->numel() == dest_tensor->numel(),
+        true,
+        common::errors::InvalidArgument("Tensor numel not equal, %d vs %d.",
+                                        src_tensor->numel(),
+                                        dest_tensor->numel()));
     for (int i = 0; i < src_tensor->numel(); i++) {
       dest_data[i] = src_data[i];
     }
@@ -1168,7 +1195,7 @@ void HeterCpuWorker::TrainFiles() {
         //           boost::lexical_cast<std::string>(output_dim);
         //       ars[i] = ars[i] + "\t" + field + ":" + output_dimstr;
         //       auto bound = GetTensorBound(tensor, i);
-        //       ars[i] += PrintLodTensor(tensor, bound.first, bound.second);
+        //       ars[i] += PrintDenseTensor(tensor, bound.first, bound.second);
         //     }
         //   }
         //   // #pragma omp parallel for
@@ -1205,6 +1232,5 @@ void HeterCpuWorker::TrainFiles() {
   }
 }
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace paddle::framework
 #endif

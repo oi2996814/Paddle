@@ -13,13 +13,13 @@
 // limitations under the License.
 
 #include "paddle/phi/kernels/layer_norm_kernel.h"
-#include "gflags/gflags.h"
+#include "paddle/common/flags.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/funcs/layer_norm_impl.cu.h"
 #include "paddle/phi/kernels/funcs/layer_norm_util.h"
 
-DECLARE_bool(use_fast_math);
+COMMON_DECLARE_bool(use_fast_math);
 
 namespace phi {
 
@@ -132,7 +132,7 @@ struct LayerNormDataReader<T, U, 1> {
 };
 
 template <typename T, typename U, bool IsSameType, int VecSize>
-struct LayerNormDataWritter {
+struct LayerNormDataWriter {
   __device__ inline void operator()(
       T *__restrict__ row_dst,
       const U *__restrict__ buffer,
@@ -215,7 +215,7 @@ struct LayerNormDataWritter {
 };
 
 template <typename T, typename U, bool IsSameType>
-struct LayerNormDataWritter<T, U, IsSameType, 1> {
+struct LayerNormDataWriter<T, U, IsSameType, 1> {
   __device__ __forceinline__ void operator()(
       T *__restrict__ row_dst,
       U *__restrict__ buffer,
@@ -343,17 +343,17 @@ __global__ void LayerNormFwdWithWelford(
       mean[row_offset] = warp_mean;
       var[row_offset] = row_variance;
     }
-    LayerNormDataWritter<T, U, IsSameType, VecSize>()(row_dst,
-                                                      buffer,
-                                                      scale,
-                                                      bias,
-                                                      warp_mean,
-                                                      row_inv_var,
-                                                      read_times,
-                                                      cols_this_thread,
-                                                      last_tid_idx,
-                                                      valid_scale,
-                                                      valid_bias);
+    LayerNormDataWriter<T, U, IsSameType, VecSize>()(row_dst,
+                                                     buffer,
+                                                     scale,
+                                                     bias,
+                                                     warp_mean,
+                                                     row_inv_var,
+                                                     read_times,
+                                                     cols_this_thread,
+                                                     last_tid_idx,
+                                                     valid_scale,
+                                                     valid_bias);
   }
 }
 
@@ -453,18 +453,19 @@ void LaunchLayerNormKernel(const Context &dev_ctx,
 #endif  // PADDLE_WITH_CUDA
 
 template <typename T, typename U>
-void LayerNormDirectCUDAFunctor<T, U>::operator()(gpuStream_t stream,
-                                                  const T *input,
-                                                  std::vector<int> input_shape,
-                                                  const U *bias,
-                                                  const U *scale,
-                                                  T *output,
-                                                  U *mean,
-                                                  U *variance,
-                                                  int begin_norm_axis,
-                                                  float eps) {
-  const auto x_dims = phi::make_ddim(input_shape);
-  auto matrix_dim = phi::flatten_to_2d(x_dims, begin_norm_axis);
+void LayerNormDirectCUDAFunctor<T, U>::operator()(
+    gpuStream_t stream,
+    const T *input,
+    std::vector<int64_t> input_shape,
+    const U *bias,
+    const U *scale,
+    T *output,
+    U *mean,
+    U *variance,
+    int begin_norm_axis,
+    float eps) {
+  const auto x_dims = common::make_ddim(input_shape);
+  auto matrix_dim = common::flatten_to_2d(x_dims, begin_norm_axis);
   int64_t batch_size = static_cast<int64_t>(matrix_dim[0]);
   int64_t feature_size = static_cast<int64_t>(matrix_dim[1]);
   switch (phi::funcs::GetDesiredBlockDim(feature_size)) {
@@ -473,7 +474,7 @@ void LayerNormDirectCUDAFunctor<T, U>::operator()(gpuStream_t stream,
         <<<batch_size, kBlockDim, 0, stream>>>(
             input, scale, bias, output, mean, variance, eps, feature_size));
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "Product from begin_norm_axis to end in layer_norm must be larger "
           "than 1"));
       break;
@@ -516,11 +517,11 @@ void LayerNormKernel(const Context &dev_ctx,
   if (valid_scale) {
     scale_bias_dtype = scale->dtype();
     if (valid_bias) {
-      PADDLE_ENFORCE_EQ(
-          scale->dtype(),
-          bias->dtype(),
-          phi::errors::InvalidArgument("This Scale and Bias of layer_norm op "
-                                       "should have the same data type."));
+      PADDLE_ENFORCE_EQ(scale->dtype(),
+                        bias->dtype(),
+                        common::errors::InvalidArgument(
+                            "This Scale and Bias of layer_norm op "
+                            "should have the same data type."));
     }
   } else {
     scale_bias_dtype = valid_bias ? bias->dtype() : x_dtype;
@@ -530,11 +531,11 @@ void LayerNormKernel(const Context &dev_ctx,
   if (!is_scale_bias_same_dtype_with_x) {
     PADDLE_ENFORCE_EQ(scale_bias_dtype,
                       phi::CppTypeToDataType<U>::Type(),
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Unsupported data type of Scale and Bias"));
   }
 
-  auto matrix_dim = phi::flatten_to_2d(x_dims, begin_norm_axis);
+  auto matrix_dim = common::flatten_to_2d(x_dims, begin_norm_axis);
   int64_t batch_size = static_cast<int64_t>(matrix_dim[0]);
   int64_t feature_size = static_cast<int64_t>(matrix_dim[1]);
   auto stream = dev_ctx.stream();
@@ -555,7 +556,7 @@ void LayerNormKernel(const Context &dev_ctx,
               epsilon,                                                     \
               feature_size));                                              \
       default:                                                             \
-        PADDLE_THROW(phi::errors::InvalidArgument(                         \
+        PADDLE_THROW(common::errors::InvalidArgument(                      \
             "Product from begin_norm_axis to end must be larger than 1")); \
         break;                                                             \
     }                                                                      \
@@ -606,7 +607,7 @@ void LayerNormKernel(const Context &dev_ctx,
   if ((feature_size >= 768 && feature_size <= 2048 && feature_size % 256 == 0 ||
        feature_size == 4096) &&
       scale != nullptr && bias != nullptr) {
-    can_call_fast_kernel = false;
+    can_call_fast_kernel = true;
   }
 
   if (can_call_fast_kernel) {
@@ -614,7 +615,7 @@ void LayerNormKernel(const Context &dev_ctx,
       switch (feature_size) {
         PADDLE_LAUNCH_FAST_LAYERNORM_FWD(T);
         default:
-          PADDLE_THROW(phi::errors::InvalidArgument(
+          PADDLE_THROW(common::errors::InvalidArgument(
               "Only when feature_size is from 256 to 4096 and is diviaible by "
               "256 is supported "
               "now"));
@@ -624,7 +625,7 @@ void LayerNormKernel(const Context &dev_ctx,
       switch (feature_size) {
         PADDLE_LAUNCH_FAST_LAYERNORM_FWD(U);
         default:
-          PADDLE_THROW(phi::errors::InvalidArgument(
+          PADDLE_THROW(common::errors::InvalidArgument(
               "Only when feature_size is from 256 to 4096 and is diviaible by "
               "is supported "
               "now"));

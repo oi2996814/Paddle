@@ -55,7 +55,7 @@ class TreeIndex : public Index {
                                          int level);
   std::vector<uint64_t> GetChildrenCodes(uint64_t ancestor, int level);
   std::vector<uint64_t> GetTravelCodes(uint64_t id, int start_level);
-  std::vector<IndexNode> GetAllLeafs();
+  std::vector<IndexNode> GetAllLeaves();
 
   std::unordered_map<uint64_t, IndexNode> data_;
   std::unordered_map<uint64_t, uint64_t> id_codes_map_;
@@ -78,7 +78,7 @@ class IndexWrapper {
   TreePtr get_tree_index(const std::string name) {
     PADDLE_ENFORCE_NE(tree_map.find(name),
                       tree_map.end(),
-                      paddle::platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "tree [%s] doesn't exist. Please insert it firstly "
                           "by API[\' insert_tree_index \'].",
                           name));
@@ -94,7 +94,7 @@ class IndexWrapper {
     int ret = tree->Load(tree_path);
     PADDLE_ENFORCE_EQ(ret,
                       0,
-                      paddle::platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Load tree[%s] from path[%s] failed. Please "
                           "check whether the file exists.",
                           name,
@@ -121,5 +121,5 @@ class IndexWrapper {
   std::unordered_map<std::string, TreePtr> tree_map;
 };
 
-}  // end namespace distributed
-}  // end namespace paddle
+}  // namespace distributed
+}  // namespace paddle

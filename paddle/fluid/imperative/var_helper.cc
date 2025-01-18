@@ -16,19 +16,17 @@
 
 #include "paddle/fluid/eager/eager_tensor.h"
 #include "paddle/fluid/framework/convert_utils.h"
+#include "paddle/fluid/framework/dense_tensor_array.h"
 #include "paddle/fluid/framework/feed_fetch_type.h"
-#include "paddle/fluid/framework/lod_rank_table.h"
 #include "paddle/fluid/framework/lod_tensor.h"
-#include "paddle/fluid/framework/lod_tensor_array.h"
-#include "paddle/fluid/framework/reader.h"
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/framework/tensor.h"
 #include "paddle/fluid/framework/var_type_traits.h"
 #include "paddle/fluid/imperative/layer.h"
-#include "paddle/fluid/platform/place.h"
+#include "paddle/phi/common/place.h"
+#include "paddle/phi/core/framework/reader.h"
 #include "paddle/phi/core/selected_rows.h"
-namespace paddle {
-namespace imperative {
+namespace paddle::imperative {
 
 /* GetVariableWrapper */
 template <>
@@ -44,34 +42,34 @@ const std::shared_ptr<VariableWrapper> &GetVariableWrapper<VariableWrapper>(
 
 void InitializeVariable(paddle::framework::Variable *var,
                         paddle::framework::proto::VarType::Type var_type) {
-  if (var_type == paddle::framework::proto::VarType::LOD_TENSOR) {
+  if (var_type == paddle::framework::proto::VarType::DENSE_TENSOR) {
     var->GetMutable<phi::DenseTensor>();
   } else if (var_type == paddle::framework::proto::VarType::SELECTED_ROWS) {
     var->GetMutable<phi::SelectedRows>();
   } else if (var_type == paddle::framework::proto::VarType::FEED_MINIBATCH) {
     var->GetMutable<paddle::framework::FeedList>();
-  } else if (var_type == paddle::framework::proto::VarType::FETCH_LIST) {
+  } else if (var_type ==
+             paddle::framework::proto::VarType::FETCH_LIST) {  // NOLINT
     var->GetMutable<paddle::framework::FetchList>();
   } else if (var_type == paddle::framework::proto::VarType::STEP_SCOPES) {
     var->GetMutable<std::vector<paddle::framework::Scope *>>();
-  } else if (var_type == paddle::framework::proto::VarType::LOD_RANK_TABLE) {
-    var->GetMutable<paddle::framework::LoDRankTable>();
-  } else if (var_type == paddle::framework::proto::VarType::LOD_TENSOR_ARRAY) {
-    var->GetMutable<paddle::framework::LoDTensorArray>();
+  } else if (var_type ==
+             paddle::framework::proto::VarType::DENSE_TENSOR_ARRAY) {
+    var->GetMutable<phi::TensorArray>();
   } else if (var_type == paddle::framework::proto::VarType::STRINGS) {
-    var->GetMutable<paddle::framework::Strings>();
+    var->GetMutable<phi::Strings>();
   } else if (var_type == paddle::framework::proto::VarType::VOCAB) {
-    var->GetMutable<paddle::framework::Vocab>();
+    var->GetMutable<phi::Vocab>();
   } else if (var_type == paddle::framework::proto::VarType::PLACE_LIST) {
-    var->GetMutable<paddle::platform::PlaceList>();
+    var->GetMutable<phi::PlaceList>();
   } else if (var_type == paddle::framework::proto::VarType::READER) {
     var->GetMutable<paddle::framework::ReaderHolder>();
   } else if (var_type == paddle::framework::proto::VarType::RAW) {
     // GetMutable will be called in operator
   } else {
-    PADDLE_THROW(paddle::platform::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "paddle::framework::Variable type %d is not in "
-        "[LOD_TENSOR, SELECTED_ROWS, FEED_MINIBATCH, FETCH_LIST, "
+        "[DENSE_TENSOR, SELECTED_ROWS, FEED_MINIBATCH, FETCH_LIST, "
         "LOD_RANK_TABLE, PLACE_LIST, READER, RAW].",
         var_type));
   }
@@ -79,23 +77,23 @@ void InitializeVariable(paddle::framework::Variable *var,
 
 /* GetPlace */
 template <typename VarType>
-const paddle::platform::Place &GetPlace(const std::shared_ptr<VarType> &var) {
+const phi::Place &GetPlace(const std::shared_ptr<VarType> &var) {
   paddle::framework::Variable variable = var->Var();
   if (variable.IsType<phi::DenseTensor>()) {
     return variable.Get<phi::DenseTensor>().place();
   } else if (variable.IsType<phi::SelectedRows>()) {
     return variable.Get<phi::SelectedRows>().place();
   } else {
-    PADDLE_THROW(paddle::platform::errors::InvalidArgument(
-        "Variable type is %s, expect LoDTensor or SelectedRows.",
+    PADDLE_THROW(common::errors::InvalidArgument(
+        "Variable type is %s, expect DenseTensor or SelectedRows.",
         paddle::framework::ToTypeName(var->Var().Type())));
   }
 }
-template const paddle::platform::Place &GetPlace<VarBase>(
+template const phi::Place &GetPlace<VarBase>(
     const std::shared_ptr<VarBase> &var);
-template const paddle::platform::Place &GetPlace<VariableWrapper>(
+template const phi::Place &GetPlace<VariableWrapper>(
     const std::shared_ptr<VariableWrapper> &var);
-template const paddle::platform::Place &GetPlace<egr::EagerVariable>(
+template const phi::Place &GetPlace<egr::EagerVariable>(
     const std::shared_ptr<egr::EagerVariable> &var);
 
 /* GetNameFromVar */
@@ -123,7 +121,7 @@ template <>
 void SetType<egr::EagerVariable>(std::shared_ptr<egr::EagerVariable> var,
                                  framework::proto::VarType::Type type) {
   switch (type) {
-    case paddle::framework::proto::VarType::LOD_TENSOR: {
+    case paddle::framework::proto::VarType::DENSE_TENSOR: {
       var->MutableVar()->GetMutable<phi::DenseTensor>();
       break;
     }
@@ -132,7 +130,7 @@ void SetType<egr::EagerVariable>(std::shared_ptr<egr::EagerVariable> var,
       break;
     }
     default: {
-      PADDLE_THROW(paddle::platform::errors::NotFound(
+      PADDLE_THROW(common::errors::NotFound(
           "Cannot found var type: %s while running runtime InferVarType",
           paddle::framework::ToTypeName(type)));
     }
@@ -154,7 +152,7 @@ framework::proto::VarType::Type GetType<egr::EagerVariable>(
   if (var->Var().IsInitialized()) {
     return paddle::framework::ToVarType(var->Var().Type());
   } else {
-    return paddle::framework::proto::VarType::LOD_TENSOR;
+    return paddle::framework::proto::VarType::DENSE_TENSOR;
   }
 }
 template framework::proto::VarType::Type GetType<VarBase>(
@@ -177,7 +175,7 @@ framework::proto::VarType::Type GetDataType<egr::EagerVariable>(
     return framework::TransToProtoVarType(
         var->Var().Get<phi::DenseTensor>().type());
   } else {
-    PADDLE_THROW(paddle::platform::errors::PermissionDenied(
+    PADDLE_THROW(common::errors::PermissionDenied(
         "We only support phi::SelectedRows and phi::DenseTensor in "
         "eager mode, but we got %s here, please checkout your var type of "
         "tensor: %s",
@@ -201,7 +199,7 @@ phi::DataLayout GetDataLayout<egr::EagerVariable>(
   if (var->Var().IsType<phi::DenseTensor>()) {
     return var->Var().Get<phi::DenseTensor>().layout();
   } else {
-    PADDLE_THROW(paddle::platform::errors::PermissionDenied(
+    PADDLE_THROW(common::errors::PermissionDenied(
         "Only support phi::DenseTensor, but got %s here, please checkout "
         "var type of "
         "tensor: %s",
@@ -224,7 +222,7 @@ void SetDataLayout<egr::EagerVariable>(std::shared_ptr<egr::EagerVariable> var,
   if (var->Var().IsType<phi::DenseTensor>()) {
     var->MutableVar()->GetMutable<phi::DenseTensor>()->set_layout(layout);
   } else {
-    PADDLE_THROW(paddle::platform::errors::PermissionDenied(
+    PADDLE_THROW(common::errors::PermissionDenied(
         "Only support phi::DenseTensor, but got %s here, please checkout "
         "var type of "
         "tensor: %s",
@@ -265,7 +263,7 @@ template <>
 std::shared_ptr<VariableWrapper> GetCachedValue(
     std::shared_ptr<egr::EagerVariable> var, const phi::KernelKey &key) {
   // TODO(jiabin): Support this later
-  //   PADDLE_THROW(platform::errors::Fatal("In eager mode program should not
+  //   PADDLE_THROW(common::errors::Fatal("In eager mode program should not
   //   reach this, support cache and remove this error check later, or this
   //   should not be supported."));
   //   VLOG(10) << "CheckCachedKey with tensor: " << tensor->name() << "and key
@@ -289,7 +287,7 @@ void SetCachedValue<egr::EagerVariable>(
     std::shared_ptr<egr::EagerVariable> tensor,
     const phi::KernelKey &key,
     std::shared_ptr<egr::EagerVariable> res) {
-  //   PADDLE_THROW(platform::errors::Fatal("In eager mode program should not
+  //   PADDLE_THROW(common::errors::Fatal("In eager mode program should not
   //   reach this, support cache and remove this error check later, or this
   //   should not be supported."));
   //   VLOG(10) << "CheckCachedKey with tensor: " << tensor->name() << "and key
@@ -302,5 +300,4 @@ template void SetCachedValue<VariableWrapper>(
     std::shared_ptr<VariableWrapper> var,
     const phi::KernelKey &key,
     std::shared_ptr<VariableWrapper> res);
-}  // namespace imperative
-}  // namespace paddle
+}  // namespace paddle::imperative

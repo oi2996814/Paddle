@@ -18,7 +18,7 @@ limitations under the License. */
 #include <fstream>
 #include <string>
 
-#include "gflags/gflags.h"
+#include "paddle/common/flags.h"
 #include "paddle/fluid/framework/executor.h"
 #include "paddle/fluid/inference/analysis/helper.h"
 
@@ -30,7 +30,7 @@ extern void ReadBinaryFile(const std::string& filename, std::string* contents);
 
 namespace analysis {
 
-DEFINE_string(inference_model_dir, "", "inference test model dir");
+PD_DEFINE_string(inference_model_dir, "", "inference test model dir");
 
 }  // namespace analysis
 }  // namespace inference

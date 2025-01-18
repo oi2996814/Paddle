@@ -16,11 +16,12 @@
 
 #include "glog/logging.h"
 
+#include "paddle/common/flags.h"
 #include "paddle/phi/backends/all_context.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/funcs/slice_utils.h"
 
-PHI_DECLARE_bool(set_to_1d);
+COMMON_DECLARE_bool(use_stride_kernel);
 
 namespace phi {
 
@@ -33,9 +34,14 @@ void SliceStridedKernel(const Context& ctx,
                         const std::vector<int64_t>& infer_flags,
                         const std::vector<int64_t>& decrease_axis,
                         DenseTensor* out) {
+  if (!FLAGS_use_stride_kernel) {
+    PADDLE_THROW(common::errors::Fatal(
+        "FLAGS_use_stride_kernel is closed. Strided kernel "
+        "be called, something wrong has happened!"));
+  }
   std::vector<int64_t> starts = starts_arr.GetData();
   std::vector<int64_t> ends = ends_arr.GetData();
-  auto in_dims = input.dims();
+  const auto& in_dims = input.dims();
 
   auto new_axes = axes;
   for (auto& item : new_axes) {
@@ -43,24 +49,26 @@ void SliceStridedKernel(const Context& ctx,
       item = std::max(int64_t(0), item + int64_t(in_dims.size()));
     }
   }
-
+  // axis = 0, dim_value = 3, st[0]=0, ed[0]=4
+  // The step seems to be regarded as 1 here
   phi::funcs::CheckAndUpdateSliceAttrs<int64_t>(
       in_dims, new_axes, &starts, &ends, nullptr, nullptr);
 
-  std::vector<int64_t> output_dims = phi::vectorize<int64_t>(input.dims());
-  std::vector<int64_t> output_stride = phi::vectorize<int64_t>(input.strides());
-  int64_t output_offset = input.offset();
+  std::vector<int64_t> output_dims = common::vectorize<int64_t>(input.dims());
+  std::vector<int64_t> output_stride =
+      common::vectorize<int64_t>(input.strides());
+  int64_t output_offset = static_cast<int64_t>(input.offset());
 
   for (size_t i = 0; i < new_axes.size(); ++i) {
-    output_offset = output_offset + starts[i] * output_stride[new_axes[i]] *
-                                        SizeOf(out->dtype());
-    output_dims[new_axes[i]] = ends[i] - starts[i];
+    output_offset = static_cast<int64_t>(
+        output_offset +
+        starts[i] * output_stride[new_axes[i]] * SizeOf(out->dtype()));
+    output_dims[new_axes[i]] = std::abs(ends[i] - starts[i]);
   }
 
   std::vector<uint8_t> decrease_flag(output_dims.size(), 0);
-  if (decrease_axis.size() > 0) {
-    for (size_t i = 0; i < decrease_axis.size(); ++i) {
-      int64_t axis = decrease_axis[i];
+  if (!decrease_axis.empty()) {
+    for (auto axis : decrease_axis) {
       decrease_flag[axis] = 1;
     }
 
@@ -72,33 +80,32 @@ void SliceStridedKernel(const Context& ctx,
         new_stride.push_back(output_stride[i]);
       }
     }
-    if (FLAGS_set_to_1d && new_shape.size() == 0) {
-      // NOTE(zoooo0820): Hack procssing to 1-D, when axes decrease to 0-D in
-      // slice. This will remove in release 2.6.
-      new_shape.push_back(1);
-      new_stride.push_back(0);
-    }
     output_dims = new_shape;
     output_stride = new_stride;
   }
 
   auto meta = out->meta();
   meta.offset = output_offset;
-  auto tmp_dim = DDim(output_dims.data(), output_dims.size());
+  auto tmp_dim = DDim(output_dims.data(), static_cast<int>(output_dims.size()));
   // if (product(meta.dims) > 0 && meta.dims != tmp_dim) {
   //   PADDLE_THROW(
-  //       phi::errors::Fatal("Slice kernel stride compute diff, infer shape is
+  //       common::errors::Fatal("Slice kernel stride compute diff, infer shape
+  //       is
   //       "
   //                          "%s, but compute is %s.",
   //                          meta.dims,
   //                          tmp_dim));
   // }
   meta.dims = tmp_dim;
-  meta.strides = DDim(output_stride.data(), output_stride.size());
+  meta.strides =
+      DDim(output_stride.data(), static_cast<int>(output_stride.size()));
   out->set_meta(meta);
   out->ResetHolder(input.Holder());
+  out->ShareInplaceVersionCounterWith(input);
 }
 
 }  // namespace phi
-PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE_EXCEPT_CUSTOM(
-    slice, STRIDED, phi::SliceStridedKernel) {}
+
+PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE(slice,
+                                         STRIDED,
+                                         phi::SliceStridedKernel) {}

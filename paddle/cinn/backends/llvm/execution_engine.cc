@@ -61,7 +61,7 @@
 #include "paddle/cinn/backends/llvm/llvm_optimizer.h"
 #include "paddle/cinn/backends/llvm/llvm_util.h"
 #include "paddle/cinn/backends/llvm/runtime_symbol_registry.h"
-#include "paddle/cinn/ir/utils/ir_printer.h"
+#include "paddle/cinn/ir/ir_printer.h"
 #include "paddle/cinn/runtime/intrinsic.h"
 #include "paddle/cinn/utils/profiler.h"
 
@@ -109,31 +109,25 @@ std::unique_ptr<llvm::MemoryBuffer> NaiveObjectCache::getObject(
 
 /*static*/ std::unique_ptr<ExecutionEngine> ExecutionEngine::Create(
     const ExecutionOptions &config) {
-  return Create(config, {});
-}
-
-/*static*/ std::unique_ptr<ExecutionEngine> ExecutionEngine::Create(
-    const ExecutionOptions &config, RuntimeSymbols &&module_symbols) {
-  VLOG(1) << "===================== Create CINN ExecutionEngine begin "
+  VLOG(6) << "===================== Create CINN ExecutionEngine begin "
              "====================";
-  VLOG(1) << "initialize llvm config";
-  VLOG(1) << "llvm version: " << LLVM_VERSION_STRING;
-  VLOG(1) << "llvm default target triple: " << LLVM_DEFAULT_TARGET_TRIPLE;
+  VLOG(6) << "initialize llvm config";
+  VLOG(6) << "llvm version: " << LLVM_VERSION_STRING;
+  VLOG(6) << "llvm default target triple: " << LLVM_DEFAULT_TARGET_TRIPLE;
 
   static std::once_flag flag;
   std::call_once(flag, InitializeLLVMPasses);
 
-  auto engine = std::make_unique<ExecutionEngine>(/*enable_object_cache=*/true,
-                                                  std::move(module_symbols));
+  auto engine = std::make_unique<ExecutionEngine>(/*enable_object_cache=*/true);
 
   auto compile_layer_creator =
       [&engine](llvm::orc::JITTargetMachineBuilder jtmb)
       -> llvm::Expected<
           std::unique_ptr<llvm::orc::IRCompileLayer::IRCompiler>> {
     auto machine = llvm::cantFail(jtmb.createTargetMachine());
-    VLOG(1) << "create llvm compile layer";
-    VLOG(1) << "Target Name: " << machine->getTarget().getName();
-    VLOG(1) << "Target CPU: " << machine->getTargetCPU().str() << std::endl;
+    VLOG(6) << "create llvm compile layer";
+    VLOG(6) << "Target Name: " << machine->getTarget().getName();
+    VLOG(6) << "Target CPU: " << machine->getTargetCPU().str() << std::endl;
     return std::make_unique<llvm::orc::TMOwningSimpleCompiler>(
         std::move(machine), engine->cache_.get());
   };
@@ -150,7 +144,7 @@ std::unique_ptr<llvm::MemoryBuffer> NaiveObjectCache::getObject(
     return object_layer;
   };
 
-  VLOG(2) << "create jit execution engine";
+  VLOG(6) << "create jit execution engine";
   engine->jit_ =
       llvm::cantFail(llvm::orc::LLJITBuilder()
                          .setCompileFunctionCreator(compile_layer_creator)
@@ -160,36 +154,44 @@ std::unique_ptr<llvm::MemoryBuffer> NaiveObjectCache::getObject(
       llvm::orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
           engine->jit_->getDataLayout().getGlobalPrefix())));
 
-  VLOG(2) << "register runtime call symbols";
+  VLOG(6) << "register global runtime call symbols";
 
-  engine->RegisterRuntimeSymbols();
+  engine->RegisterGlobalRuntimeSymbols();
 
-  VLOG(2) << "===================== Create CINN ExecutionEngine end "
+  VLOG(6) << "===================== Create CINN ExecutionEngine end "
              "====================";
+  engine->ctx = std::make_unique<llvm::LLVMContext>();
+  engine->b = std::make_unique<llvm::IRBuilder<>>(*engine->ctx);
+  llvm::SMDiagnostic error;
+  engine->m = llvm::parseAssemblyString(
+      AsStringRef(backends::kRuntimeLlvmIr), error, *engine->ctx);
+
   return engine;
 }
 
 template <typename CodeGenT>
 void ExecutionEngine::Link(const ir::Module &module) {
+  if (module.functions().size() == 0) {
+    return;
+  }
   utils::RecordEvent("ExecutionEngine Link", utils::EventType::kOrdinary);
-  llvm::SMDiagnostic error;
-  auto ctx = std::make_unique<llvm::LLVMContext>();
-  auto m = llvm::parseAssemblyString(
-      AsStringRef(backends::kRuntimeLlvmIr), error, *ctx);
-  auto b = std::make_unique<llvm::IRBuilder<>>(*ctx);
   auto ir_emitter = std::make_unique<CodeGenT>(m.get(), b.get());
   VLOG(3) << "ir_emitter->Compile(module) Begin";
   ir_emitter->Compile(module);
   VLOG(3) << "ir_emitter->Compile(module) Succeed!";
-  CHECK(!llvm::verifyModule(*m, &llvm::errs())) << "Invalid module found";
-
+  PADDLE_ENFORCE_EQ(
+      !llvm::verifyModule(*m, &llvm::errs()),
+      true,
+      ::common::errors::InvalidArgument("Sorry,Invalid module found"));
   auto machine = std::move(llvm::cantFail(
       llvm::cantFail(llvm::orc::JITTargetMachineBuilder::detectHost())
           .createTargetMachine()));
   LLVMModuleOptimizer optimize(machine.get(), 3, {}, true);
   optimize(m.get());
-  CHECK(!llvm::verifyModule(*m, &llvm::errs()))
-      << "Invalid optimized module detected";
+  PADDLE_ENFORCE_EQ(
+      !llvm::verifyModule(*m, &llvm::errs()),
+      true,
+      ::common::errors::InvalidArgument("Invalid optimized module detected"));
   for (auto &f : *m) {
     VLOG(5) << "function: " << DumpToString(f);
   }
@@ -200,8 +202,6 @@ void ExecutionEngine::Link(const ir::Module &module) {
       pass_manager, rawstream, nullptr, llvm::CGFT_ObjectFile);
   pass_manager.run(*m);
 
-  CHECK(AddModule(std::move(m), std::move(ctx)));
-
   if (VLOG_IS_ON(5)) {
     VLOG(5) << "======= dump jit execution session ======";
     std::string buffer;
@@ -211,6 +211,16 @@ void ExecutionEngine::Link(const ir::Module &module) {
     os.flush();
     VLOG(5) << buffer;
   }
+}
+
+template <>
+void ExecutionEngine::Link<CodeGenGpuHost>(const ir::Module &module) {
+  if (module.functions().size() == 0) {
+    return;
+  }
+  utils::RecordEvent("ExecutionEngine Link", utils::EventType::kOrdinary);
+  auto ir_emitter = std::make_unique<CodeGenGpuHost>(m.get(), b.get());
+  ir_emitter->Compile(module);
 }
 
 bool ExecutionEngine::AddModule(std::unique_ptr<llvm::Module> module,
@@ -232,6 +242,23 @@ bool ExecutionEngine::AddModule(std::unique_ptr<llvm::Module> module,
   return true;
 }
 
+void ExecutionEngine::RegisterModuleRuntimeSymbols(
+    RuntimeSymbols &&module_symbols) {
+  module_symbols_ = std::forward<RuntimeSymbols>(module_symbols);
+  auto *session = &jit_->getExecutionSession();
+  for (const auto &sym : module_symbols_.All()) {
+    VLOG(3) << "Add symbol: {" << sym.first << ":" << sym.second << "}";
+    llvm::cantFail(jit_->define(llvm::orc::absoluteSymbols(
+        {{session->intern(sym.first),
+          {llvm::pointerToJITTargetAddress(sym.second),
+           llvm::JITSymbolFlags::Exported}}})));
+  }
+}
+
+bool ExecutionEngine::AddSelfModule() {
+  return AddModule(std::move(m), std::move(ctx));
+}
+
 void ExecutionEngine::ExportObject(const std::string &path) {
   FILE *of = fopen(path.c_str(), "w");
   fwrite(buffer_.data(), 1, buffer_.size(), of);
@@ -249,8 +276,8 @@ void *ExecutionEngine::Lookup(absl::string_view name) {
   return nullptr;
 }
 
-void ExecutionEngine::RegisterRuntimeSymbols() {
-  utils::RecordEvent("ExecutionEngine RegisterRuntimeSymbols",
+void ExecutionEngine::RegisterGlobalRuntimeSymbols() {
+  utils::RecordEvent("ExecutionEngine RegisterGlobalRuntimeSymbols",
                      utils::EventType::kOrdinary);
   const auto &registry = GlobalSymbolRegistry::Global();
   auto *session = &jit_->getExecutionSession();
@@ -260,16 +287,12 @@ void ExecutionEngine::RegisterRuntimeSymbols() {
           {llvm::pointerToJITTargetAddress(sym.second),
            llvm::JITSymbolFlags::None}}})));
   }
-  for (const auto &sym : module_symbols_.All()) {
-    llvm::cantFail(jit_->define(llvm::orc::absoluteSymbols(
-        {{session->intern(sym.first),
-          {llvm::pointerToJITTargetAddress(sym.second),
-           llvm::JITSymbolFlags::None}}})));
-  }
 }
 
 template void ExecutionEngine::Link<CodeGenLLVM>(const ir::Module &module);
 template void ExecutionEngine::Link<CodeGenX86>(const ir::Module &module);
-template void ExecutionEngine::Link<CodeGenCUDA_Host>(const ir::Module &module);
+template void ExecutionEngine::Link<CodeGenGpuHost>(const ir::Module &module);
+template void ExecutionEngine::Link<CodeGenSwitchHost>(
+    const ir::Module &module);
 
 }  // namespace cinn::backends

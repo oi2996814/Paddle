@@ -23,8 +23,7 @@
 #include "paddle/fluid/jit/engine/base_engine.h"
 #include "paddle/fluid/jit/function_utils.h"
 
-namespace paddle {
-namespace jit {
+namespace paddle::jit {
 
 Function::Function(BaseEngine* engine) : engine_(engine) {}
 
@@ -32,8 +31,8 @@ std::vector<Tensor> Function::operator()(
     const std::vector<Tensor>& inputs) const {
   PADDLE_ENFORCE_EQ(IsValid(),
                     true,
-                    phi::errors::PreconditionNotMet(
-                        "Funtion engine ptr is nullptr, please check it."));
+                    common::errors::PreconditionNotMet(
+                        "Function engine ptr is nullptr, please check it."));
   auto dense_tensors = utils::ToDenseTensors(inputs);
   return utils::ToTensors(this->operator()(dense_tensors));
 }
@@ -42,10 +41,9 @@ std::vector<DenseTensor> Function::operator()(
     const std::vector<DenseTensor>& inputs) const {
   PADDLE_ENFORCE_EQ(IsValid(),
                     true,
-                    phi::errors::PreconditionNotMet(
-                        "Funtion engine ptr is nullptr, please check it."));
+                    common::errors::PreconditionNotMet(
+                        "Function engine ptr is nullptr, please check it."));
   return (*engine_)(inputs);
 }
 
-}  // namespace jit
-}  // namespace paddle
+}  // namespace paddle::jit

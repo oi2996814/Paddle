@@ -69,10 +69,10 @@ void AddNKernel(const Context& dev_ctx,
       auto& in_t = *(static_cast<const SelectedRows*>(x[i]));
       functor(dev_ctx, in_t, out);
     } else {
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "Expected type of Input(X) of %d-th must be Tensor, "
           "SelectedRows. But got "
-          "unsupport type: %s.",
+          "unsupported type: %s.",
           x[i]->type_info().name()));
     }
   }
@@ -90,7 +90,9 @@ PD_REGISTER_KERNEL(add_n,
                    int,
                    phi::dtype::bfloat16,
                    phi::dtype::float16,
-                   int64_t) {}
+                   int64_t,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}
 
 PD_REGISTER_KERNEL(add_n_array,
                    CPU,
@@ -101,4 +103,6 @@ PD_REGISTER_KERNEL(add_n_array,
                    int,
                    phi::dtype::bfloat16,
                    phi::dtype::float16,
-                   int64_t) {}
+                   int64_t,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}

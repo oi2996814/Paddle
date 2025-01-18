@@ -14,8 +14,8 @@
 
 #pragma once
 
+#include "paddle/common/macros.h"
 #include "paddle/phi/core/dense_tensor.h"
-#include "paddle/phi/core/macros.h"
 #include "paddle/phi/kernels/funcs/eigen/common.h"
 #include "paddle/phi/kernels/funcs/eigen/eigen_function.h"
 #include "paddle/phi/kernels/meshgrid_grad_kernel.h"
@@ -89,7 +89,7 @@ void MeshgridGradKernel(const Context& ctx,
       MeshgridBackward<T, Context, 6>(ctx, inputs, outputs_grad, inputs_grad);
       break;
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "Excepted Tensor numbers between 1 and 6, but only received d% .",
           n));
   }

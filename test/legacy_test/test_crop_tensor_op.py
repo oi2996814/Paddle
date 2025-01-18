@@ -15,7 +15,7 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 import paddle
 
@@ -81,10 +81,10 @@ class TestCropTensorOp(OpTest):
         self.offsets = [1, 2]
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad_normal(self):
-        self.check_grad(['X'], 'Out')
+        self.check_grad(['X'], 'Out', check_pir=True)
 
 
 class TestCase1(TestCropTensorOp):
@@ -108,6 +108,9 @@ class TestCase3(TestCropTensorOp):
         self.offsets = [1, 5, 3]
         self.shape_by_input = True
 
+    def test_check_output(self):
+        self.check_output(check_pir=True, check_symbol_infer=False)
+
 
 class TestCase4(TestCropTensorOp):
     def initTestCase(self):
@@ -115,6 +118,9 @@ class TestCase4(TestCropTensorOp):
         self.crop_shape = [-1, 3, -1, 4]
         self.offsets = [0, 0, 1, 0]
         self.shape_by_input = True
+
+    def test_check_output(self):
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
 
 class TestCase5(TestCropTensorOp):
@@ -132,6 +138,9 @@ class TestCase6(TestCropTensorOp):
         self.offsets = [0, 0, 0, 0, 0, 0]
         self.shape_by_input = True
         self.offset_by_input = True
+
+    def test_check_output(self):
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
 
 class TestCropTensorOpTensorAttr(OpTest):
@@ -182,10 +191,10 @@ class TestCropTensorOpTensorAttr(OpTest):
         self.shape_attr = [0, 0]
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad_normal(self):
-        self.check_grad(["X"], "Out")
+        self.check_grad(["X"], "Out", check_pir=True)
 
 
 class TestCropTensorOpTensorAttrCase1(TestCropTensorOpTensorAttr):
@@ -213,6 +222,9 @@ class TestCropTensorOpTensorAttrCase3(TestCropTensorOpTensorAttr):
         self.ShapeTensor = False
         self.OffsetsTensor = True
 
+    def test_check_output(self):
+        self.check_output(check_pir=True, check_symbol_infer=True)
+
 
 class TestCropTensorOpTensorAttrCase4(TestCropTensorOpTensorAttr):
     def initTestCase(self):
@@ -223,8 +235,12 @@ class TestCropTensorOpTensorAttrCase4(TestCropTensorOpTensorAttr):
         self.offsets_attr = [-1, -1, 3]
         self.OffsetsTensor = True
 
+    def test_check_output(self):
+        self.check_output(check_pir=True, check_symbol_infer=True)
+
 
 class TestCropTensorException(unittest.TestCase):
+
     def test_exception(self):
         input1 = paddle.static.data(
             name="input1", shape=[2, 3, 6, 6], dtype="float32"
@@ -271,6 +287,23 @@ class TestCropTensorException(unittest.TestCase):
         self.assertRaises(TypeError, attr_offsets_dtype)
         self.assertRaises(ValueError, attr_offsets_value)
         self.assertRaises(TypeError, input_dtype)
+
+
+class TestCropWithUnknownShape(unittest.TestCase):
+    def test_crop_with_unknown_shape(self):
+        main_program = paddle.static.Program()
+        with paddle.static.program_guard(main_program):
+            x = paddle.static.data(name='x', shape=[-1, 4, 4], dtype='float32')
+            shape = paddle.static.data(name='shape', shape=[3], dtype='int32')
+            out = paddle.crop(x, shape=shape, offsets=[1, 1, 1])
+            exe = paddle.static.Executor(paddle.CPUPlace())
+            x_np = np.random.random((4, 4, 4)).astype('float32')
+            shape_np = np.array([2, 2, 2]).astype('int32')
+            (out_np,) = exe.run(
+                feed={'x': x_np, 'shape': shape_np}, fetch_list=[out]
+            )
+            self.assertEqual(out.shape, [-1, -1, -1])
+            self.assertEqual(out_np.shape, (2, 2, 2))
 
 
 if __name__ == '__main__':

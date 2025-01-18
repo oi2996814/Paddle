@@ -13,6 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/phi/kernels/sparse/elementwise_kernel.h"
+#include "paddle/phi/common/complex.h"
 #include "paddle/phi/core/enforce.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/core/tensor_meta.h"
@@ -25,8 +26,7 @@ limitations under the License. */
 #include "paddle/phi/kernels/sparse/empty_kernel.h"
 #include "paddle/phi/kernels/sparse/sparse_utils_kernel.h"
 
-namespace phi {
-namespace sparse {
+namespace phi::sparse {
 
 template <typename T, typename Functor>
 struct BinaryOPWithZeroCompareFunctor {
@@ -131,7 +131,7 @@ void ElementWiseCooKernelImpl(const Context& dev_ctx,
                               const Functor& functor) {
   PADDLE_ENFORCE_EQ(x.dims(),
                     y.dims(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Currently only support same shape elementwise "
                         "compute. The input tensor X's shape "
                         "should be identical with Y's shape. But received X's "
@@ -168,8 +168,8 @@ void ElementWiseCooKernelImpl(const Context& dev_ctx,
     max_len *= x.dims()[j];
   }
 
-  std::vector<IntT> sparse_offsets(sparse_dim), x_indexs(x.nnz()),
-      y_indexs(y.nnz());
+  std::vector<IntT> sparse_offsets(sparse_dim), x_indices(x.nnz()),
+      y_indices(y.nnz());
 
   phi::funcs::sparse::CalcOffsetsPerDim<IntT>(
       x.dims(), sparse_dim, sparse_offsets.data());
@@ -180,7 +180,7 @@ void ElementWiseCooKernelImpl(const Context& dev_ctx,
                                      sparse_dim,
                                      0,
                                      1,
-                                     x_indexs.data());
+                                     x_indices.data());
 
   phi::funcs::sparse::FlattenIndices(y.indices().data<IntT>(),
                                      sparse_offsets.data(),
@@ -188,27 +188,27 @@ void ElementWiseCooKernelImpl(const Context& dev_ctx,
                                      sparse_dim,
                                      0,
                                      1,
-                                     y_indexs.data());
+                                     y_indices.data());
 
-  std::vector<IntT> out_indexs;
+  std::vector<IntT> out_indices;
   std::vector<T> out_values_vec;
   if (is_divide) {
-    out_indexs.reserve(max_len);
+    out_indices.reserve(max_len);
   } else {
-    out_indexs.reserve(x.nnz() + y.nnz());
+    out_indices.reserve(x.nnz() + y.nnz());
   }
   out_values_vec.reserve(max_len * element_size);
 
   //  merge x and y
   Merge<T, IntT, Functor>(element_size,
-                          x_indexs.data(),
+                          x_indices.data(),
                           x_values,
-                          x_indexs.size(),
-                          y_indexs.data(),
+                          x_indices.size(),
+                          y_indices.data(),
                           y_values,
-                          y_indexs.size(),
+                          y_indices.size(),
                           max_len,
-                          out_indexs.data(),
+                          out_indices.data(),
                           out_values_vec.data(),
                           &nnz,
                           functor,
@@ -222,7 +222,7 @@ void ElementWiseCooKernelImpl(const Context& dev_ctx,
     const_dims[i] = x.dims()[i];
   }
 
-  funcs::sparse::IndexToCoordinate<IntT>(out_indexs.data(),
+  funcs::sparse::IndexToCoordinate<IntT>(out_indices.data(),
                                          const_dims,
                                          nnz,
                                          sparse_dim,
@@ -237,14 +237,14 @@ void ElementWiseCooKernelImpl(const Context& dev_ctx,
   } else {
     DenseTensorMeta indices_meta(
         phi::CppTypeToDataType<IntT>::Type(),
-        phi::make_ddim(
+        common::make_ddim(
             {static_cast<int64_t>(sparse_dim), static_cast<int64_t>(nnz)}),
         DataLayout::NCHW);
-    auto indeces_dim =
-        vectorize(slice_ddim(x.values().dims(), 1, x.values().dims().size()));
-    indeces_dim.insert(indeces_dim.begin(), nnz);
+    auto indices_dim = common::vectorize(
+        slice_ddim(x.values().dims(), 1, x.values().dims().size()));
+    indices_dim.insert(indices_dim.begin(), nnz);
     DenseTensorMeta values_meta(
-        x.dtype(), phi::make_ddim(indeces_dim), DataLayout::NCHW);
+        x.dtype(), common::make_ddim(indices_dim), DataLayout::NCHW);
     phi::DenseTensor out_indices = phi::Empty(dev_ctx, std::move(indices_meta));
     phi::DenseTensor out_values = phi::Empty(dev_ctx, std::move(values_meta));
 
@@ -326,8 +326,10 @@ DEFINE_COO_ELEMENTWISE_KERNEL(Subtract)
 DEFINE_COO_ELEMENTWISE_KERNEL(Multiply)
 DEFINE_COO_ELEMENTWISE_KERNEL(Divide)
 
-}  // namespace sparse
-}  // namespace phi
+}  // namespace phi::sparse
+
+using complex64 = ::phi::dtype::complex<float>;
+using complex128 = ::phi::dtype::complex<double>;
 
 PD_REGISTER_KERNEL(add_csr_csr,
                    CPU,
@@ -337,7 +339,9 @@ PD_REGISTER_KERNEL(add_csr_csr,
                    double,
                    int16_t,
                    int,
-                   int64_t) {
+                   int64_t,
+                   complex64,
+                   complex128) {
   kernel->InputAt(0).SetDataLayout(phi::DataLayout::SPARSE_CSR);
   kernel->InputAt(1).SetDataLayout(phi::DataLayout::SPARSE_CSR);
 }
@@ -350,7 +354,9 @@ PD_REGISTER_KERNEL(add_coo_coo,
                    double,
                    int16_t,
                    int,
-                   int64_t) {
+                   int64_t,
+                   complex64,
+                   complex128) {
   kernel->InputAt(0).SetDataLayout(phi::DataLayout::SPARSE_COO);
   kernel->InputAt(1).SetDataLayout(phi::DataLayout::SPARSE_COO);
 }
@@ -363,7 +369,9 @@ PD_REGISTER_KERNEL(subtract_csr_csr,
                    double,
                    int16_t,
                    int,
-                   int64_t) {
+                   int64_t,
+                   complex64,
+                   complex128) {
   kernel->InputAt(0).SetDataLayout(phi::DataLayout::SPARSE_CSR);
   kernel->InputAt(1).SetDataLayout(phi::DataLayout::SPARSE_CSR);
 }
@@ -376,7 +384,9 @@ PD_REGISTER_KERNEL(subtract_coo_coo,
                    double,
                    int16_t,
                    int,
-                   int64_t) {
+                   int64_t,
+                   complex64,
+                   complex128) {
   kernel->InputAt(0).SetDataLayout(phi::DataLayout::SPARSE_COO);
   kernel->InputAt(1).SetDataLayout(phi::DataLayout::SPARSE_COO);
 }
@@ -389,7 +399,9 @@ PD_REGISTER_KERNEL(multiply_csr_csr,
                    double,
                    int16_t,
                    int,
-                   int64_t) {
+                   int64_t,
+                   complex64,
+                   complex128) {
   kernel->InputAt(0).SetDataLayout(phi::DataLayout::SPARSE_CSR);
   kernel->InputAt(1).SetDataLayout(phi::DataLayout::SPARSE_CSR);
 }
@@ -402,7 +414,9 @@ PD_REGISTER_KERNEL(multiply_coo_coo,
                    double,
                    int16_t,
                    int,
-                   int64_t) {
+                   int64_t,
+                   complex64,
+                   complex128) {
   kernel->InputAt(0).SetDataLayout(phi::DataLayout::SPARSE_COO);
   kernel->InputAt(1).SetDataLayout(phi::DataLayout::SPARSE_COO);
 }
@@ -415,7 +429,9 @@ PD_REGISTER_KERNEL(divide_csr_csr,
                    double,
                    int16_t,
                    int,
-                   int64_t) {
+                   int64_t,
+                   complex64,
+                   complex128) {
   kernel->InputAt(0).SetDataLayout(phi::DataLayout::SPARSE_CSR);
   kernel->InputAt(1).SetDataLayout(phi::DataLayout::SPARSE_CSR);
 }
@@ -428,7 +444,9 @@ PD_REGISTER_KERNEL(divide_coo_coo,
                    double,
                    int16_t,
                    int,
-                   int64_t) {
+                   int64_t,
+                   complex64,
+                   complex128) {
   kernel->InputAt(0).SetDataLayout(phi::DataLayout::SPARSE_COO);
   kernel->InputAt(1).SetDataLayout(phi::DataLayout::SPARSE_COO);
 }
@@ -440,6 +458,8 @@ PD_REGISTER_KERNEL(add_coo_dense,
                    float,
                    double,
                    int,
-                   int64_t) {
+                   int64_t,
+                   complex64,
+                   complex128) {
   kernel->InputAt(0).SetDataLayout(phi::DataLayout::SPARSE_COO);
 }

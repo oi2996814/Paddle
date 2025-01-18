@@ -21,7 +21,20 @@ namespace phi {
 
 template <typename T, typename Context>
 void FetchKernel(const Context& ctx, const DenseTensor& x, DenseTensor* out) {
+  if (!x.IsInitialized()) {
+    return;
+  }
   phi::Copy(ctx, x, phi::CPUPlace(), true, out);
+}
+
+template <typename T, typename Context>
+void FetchArrayKernel(const Context& ctx,
+                      const TensorArray& x,
+                      TensorArray* out) {
+  out->resize(x.size());
+  for (size_t i = 0; i < x.size(); ++i) {
+    phi::Copy(ctx, x[i], phi::CPUPlace(), true, &(out->at(i)));
+  }
 }
 
 }  // namespace phi

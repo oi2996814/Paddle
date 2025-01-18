@@ -18,9 +18,7 @@ limitations under the License. */
 
 #include "gtest/gtest.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 class Graph;
 class Node;
 
@@ -43,7 +41,7 @@ void BuildCircleGraph(Graph* g) {
 
 class TestPass : public Pass {
  protected:
-  void ApplyImpl(ir::Graph* graph) const {
+  void ApplyImpl(ir::Graph* graph) const override {
     graph->Set<int>("copy_test_pass_attr", new int);
     graph->Set<int>("copy_test_graph_attr", new int);
 
@@ -65,7 +63,7 @@ TEST(PassTest, TestPassAttrCheck) {
   } catch (paddle::platform::EnforceNotMet& e) {
     exception = std::string(e.what());
   }
-  ASSERT_TRUE(exception.find("Required atrribute test_pass_attr for pass < "
+  ASSERT_TRUE(exception.find("Required attribute test_pass_attr for pass < "
                              "test_pass > is not set") != exception.npos);
 
   int val = 1;
@@ -85,7 +83,7 @@ TEST(PassTest, TestPassAttrCheck) {
       exception = std::string(e.what());
     }
     std::string msg =
-        "Invalid type for attritube test_pass_attr, expected: " + try_type +
+        "Invalid type for attribute test_pass_attr, expected: " + try_type +
         ", actual: int";
     ASSERT_TRUE(exception.find(msg) != exception.npos);
   }
@@ -96,7 +94,7 @@ TEST(PassTest, TestPassAttrCheck) {
     exception = std::string(e.what());
   }
   ASSERT_TRUE(exception.find(
-                  "Required atrribute test_graph_attr for graph is not set") !=
+                  "Required attribute test_graph_attr for graph is not set") !=
               exception.npos);
 
   graph = std::make_unique<Graph>(prog);
@@ -150,7 +148,7 @@ TEST(PassTest, TestPassAttrCheckConvertAllBlocks) {
   } catch (paddle::platform::EnforceNotMet& e) {
     exception = std::string(e.what());
   }
-  ASSERT_TRUE(exception.find("Required atrribute test_pass_attr for pass < "
+  ASSERT_TRUE(exception.find("Required attribute test_pass_attr for pass < "
                              "test_pass > is not set") != exception.npos);
 
   int val = 1;
@@ -170,7 +168,7 @@ TEST(PassTest, TestPassAttrCheckConvertAllBlocks) {
       exception = std::string(e.what());
     }
     std::string msg =
-        "Invalid type for attritube test_pass_attr, expected: " + try_type +
+        "Invalid type for attribute test_pass_attr, expected: " + try_type +
         ", actual: int";
     ASSERT_TRUE(exception.find(msg) != exception.npos);
   }
@@ -181,7 +179,7 @@ TEST(PassTest, TestPassAttrCheckConvertAllBlocks) {
     exception = std::string(e.what());
   }
   ASSERT_TRUE(exception.find(
-                  "Required atrribute test_graph_attr for graph is not set") !=
+                  "Required attribute test_graph_attr for graph is not set") !=
               exception.npos);
 
   graph = std::make_unique<Graph>(prog);
@@ -226,7 +224,7 @@ TEST(PassTest, TestPassAttrCheckConvertAllBlocks) {
 
 class TestPassWithDefault : public Pass {
  protected:
-  void ApplyImpl(ir::Graph* graph) const {
+  void ApplyImpl(ir::Graph* graph) const override {
     graph->Set<int>("copy_default_attr", new int);
 
     int test_pass_attr = this->Get<int>("default_attr");
@@ -279,9 +277,7 @@ TEST(PassTest, TestPassRegistrarDeconstructor) {
   pass_registrary->~PassRegistrar();
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(test_pass, paddle::framework::ir::TestPass)
     .RequirePassAttr("test_pass_attr")

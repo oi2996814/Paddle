@@ -24,7 +24,7 @@ limitations under the License. */
 #include <unordered_map>
 
 #include "glog/logging.h"
-#include "paddle/phi/api/ext/exception.h"
+#include "paddle/common/exception.h"
 #include "paddle/phi/backends/context_pool.h"
 #include "paddle/phi/backends/gpu/gpu_decls.h"
 #include "paddle/phi/backends/gpu/gpu_info.h"
@@ -63,7 +63,13 @@ namespace internal {
 
 class EigenGpuStreamDevice : public Eigen::StreamInterface {
  public:
-  EigenGpuStreamDevice() : scratch_(nullptr), semaphore_(nullptr) {
+  EigenGpuStreamDevice()
+      : stream_(nullptr),
+        allocator_(nullptr),
+        device_prop_(nullptr),
+        scratch_(nullptr),
+        semaphore_(nullptr),
+        allocations_() {
     Eigen::initializeDeviceProp();
   }
   ~EigenGpuStreamDevice() override = default;
@@ -106,14 +112,14 @@ class EigenGpuStreamDevice : public Eigen::StreamInterface {
   }
 
   void* scratchpad() const override {
-    if (scratch_ == NULL) {
+    if (scratch_ == nullptr) {
       scratch_ = allocate(Eigen::kGpuScratchSize + sizeof(unsigned int));
     }
     return scratch_;
   }
 
   unsigned int* semaphore() const override {
-    if (semaphore_ == NULL) {
+    if (semaphore_ == nullptr) {
       char* scratch = static_cast<char*>(scratchpad()) + Eigen::kGpuScratchSize;
       semaphore_ = reinterpret_cast<unsigned int*>(scratch);
 #ifdef PADDLE_WITH_HIP
@@ -245,8 +251,8 @@ struct GPUContext::Impl {
   ~Impl() {
     backends::gpu::GPUDeviceGuard guard(place_.device);
     if (owned_) {
-      DestoryInternalWorkspace();
-      DestoryInternalEigenDevice();
+      DestroyInternalWorkspace();
+      DestroyInternalEigenDevice();
       phi::DestroySparseHandle(sparse_handle_);
       phi::DestroySolverHandle(solver_handle_);
       phi::DestroyDnnHandle(dnn_handle_);
@@ -278,12 +284,14 @@ struct GPUContext::Impl {
   }
 
   void InitDnnWorkspace() {
-    PD_CHECK(allocator_ != nullptr,
-             "the device allocator for gpu context is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(allocator_,
+                            common::errors::InvalidArgument(
+                                "The device allocator for GPU context is "
+                                "nullptr. It must not be null."));
     workspace_ = new DnnWorkspaceHandle(allocator_, stream());
   }
 
-  void DestoryInternalWorkspace() {
+  void DestroyInternalWorkspace() {
     if (owned_ && workspace_ != nullptr) {
       delete workspace_;
       workspace_ = nullptr;
@@ -296,8 +304,10 @@ struct GPUContext::Impl {
   //   return workspace_;
   // }
   DnnWorkspaceHandle GetDnnWorkspace() {
-    PD_CHECK(allocator_ != nullptr,
-             "the device allocator for gpu context is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(allocator_,
+                            common::errors::InvalidArgument(
+                                "The device allocator for GPU context is "
+                                "nullptr. It must not be null."));
     return DnnWorkspaceHandle(allocator_, stream());
   }
 
@@ -321,24 +331,32 @@ struct GPUContext::Impl {
 
   gpuStream_t stream() const {
     auto s = stream_->raw_stream();
-    PD_CHECK(s != nullptr, "the gpu stream is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        s,
+        common::errors::InvalidArgument(
+            "The GPU stream is nullptr. It must not be null."));
     return s;
   }
 
   CUDAStream* cuda_stream() const {
-    PD_CHECK(stream_ != nullptr, "the gpu stream is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        stream_,
+        common::errors::InvalidArgument(
+            "The GPU stream is nullptr. It must not be null."));
     return stream_;
   }
 
   void InitEigenDevice() {
-    PD_CHECK(allocator_ != nullptr,
-             "the allocator for eigen device is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        allocator_,
+        common::errors::InvalidArgument(
+            "The allocator for eigen device is nullptr. It must not be null."));
     eigen_stream_ = std::make_unique<internal::EigenGpuStreamDevice>();
     eigen_stream_->Reinitialize(stream(), allocator_, place_);
     eigen_device_ = new Eigen::GpuDevice(eigen_stream_.get());
   }
 
-  void DestoryInternalEigenDevice() {
+  void DestroyInternalEigenDevice() {
     if (owned_ && eigen_device_ != nullptr) {
       delete eigen_device_;
       eigen_device_ = nullptr;
@@ -360,7 +378,10 @@ struct GPUContext::Impl {
           eigen_device_ = eigen_device_creator_();
       }
     });
-    PD_CHECK(eigen_device_ != nullptr, "the gpu eigen_device is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        eigen_device_,
+        common::errors::InvalidArgument(
+            "The GPU eigen_device is nullptr. It must not be null."));
     return eigen_device_;
   }
 
@@ -399,7 +420,10 @@ struct GPUContext::Impl {
 #endif
 #endif
     });
-    PD_CHECK(blas_handle_ != nullptr, "the gpu blas handle is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        blas_handle_,
+        common::errors::InvalidArgument(
+            "The GPU blas handle is nullptr. It must not be null."));
     return blas_handle_;
   }
 
@@ -440,7 +464,10 @@ struct GPUContext::Impl {
           blaslt_handle_ = blaslt_handle_creator_();
       }
     });
-    PD_CHECK(blaslt_handle_ != nullptr, "the gpu blasLt handle is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        blaslt_handle_,
+        common::errors::InvalidArgument(
+            "The GPU blasLt handle is nullptr. It must not be null."));
     return blaslt_handle_;
   }
 
@@ -454,7 +481,10 @@ struct GPUContext::Impl {
         }
       }
     });
-    PD_CHECK(dnn_handle_ != nullptr, "the gpu dnn handle is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        dnn_handle_,
+        common::errors::InvalidArgument(
+            "The GPU dnn handle is nullptr. It must not be null."));
     return dnn_handle_;
   }
 
@@ -479,7 +509,7 @@ struct GPUContext::Impl {
   }
 
   solverHandle_t GetSolverHandle() {
-    std::call_once(flag_slover_, [&]() {
+    std::call_once(flag_solver_, [&]() {
       if (!solver_handle_) {
         if (!solver_handle_creator_) {
           phi::InitSolverHandle(&solver_handle_, stream());
@@ -488,7 +518,10 @@ struct GPUContext::Impl {
         }
       }
     });
-    PD_CHECK(solver_handle_ != nullptr, "the gpu solver handle is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        solver_handle_,
+        common::errors::InvalidArgument(
+            "The GPU solver handle is nullptr. It must not be null."));
     return solver_handle_;
   }
 
@@ -508,7 +541,10 @@ struct GPUContext::Impl {
         }
       }
     });
-    PD_CHECK(sparse_handle_ != nullptr, "the gpu sparse handle is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        sparse_handle_,
+        common::errors::InvalidArgument(
+            "The GPU sparse handle is nullptr. It must not be null."));
     return sparse_handle_;
   }
 
@@ -686,7 +722,7 @@ struct GPUContext::Impl {
   void AddStreamCallback(const std::function<void()>& callback) const {
     // NOTE(zhiqiu): better use threadpool here, otherwise "std::async" may
     // launch too many threads and result in thread oversubscription.
-    auto* callback_func = new std::function<void()>(std::move(callback));
+    auto* callback_func = new std::function<void()>(callback);
     auto* func = new std::function<void()>([this, callback_func] {
       std::lock_guard<std::mutex> lock(stream_call_back_mtx_);
       VLOG(4) << "Stream callback";
@@ -729,10 +765,10 @@ struct GPUContext::Impl {
 
   const Attribute& GetDnnAttr(const std::string& attr_name) const {
     auto iter = dnn_attrs_.find(attr_name);
-    PADDLE_ENFORCE_NE(
-        iter,
-        dnn_attrs_.end(),
-        phi::errors::NotFound("Attribute `%s` is not found in OneDNNContext."));
+    PADDLE_ENFORCE_NE(iter,
+                      dnn_attrs_.end(),
+                      common::errors::NotFound(
+                          "Attribute `%s` is not found in OneDNNContext."));
     return iter->second;
   }
 
@@ -747,13 +783,13 @@ struct GPUContext::Impl {
   bool owned_{false};
   bool stream_owned_{false};
   Place place_;
-  int compute_capability_;
-  int runtime_version_;
-  int driver_version_;
-  int multi_process_;
-  int max_threads_per_mp_;
-  int max_threads_per_block_;
-  std::array<int, 3> max_grid_dim_size_;
+  int compute_capability_ = 0;
+  int runtime_version_ = 0;
+  int driver_version_ = 0;
+  int multi_process_ = 0;
+  int max_threads_per_mp_ = 0;
+  int max_threads_per_block_ = 0;
+  std::array<unsigned int, 3> max_grid_dim_size_;
 
   CUDAStream* stream_{nullptr};
   Eigen::GpuDevice* eigen_device_{nullptr};
@@ -778,7 +814,7 @@ struct GPUContext::Impl {
   std::once_flag flag_blas_;
   std::once_flag flag_blaslt_;
   std::once_flag flag_dnn_;
-  std::once_flag flag_slover_;
+  std::once_flag flag_solver_;
   std::once_flag flag_cublas_;
   std::once_flag flag_tensorcore_cublas_;
   std::once_flag flag_eigen_device_;
@@ -803,7 +839,7 @@ struct GPUContext::Impl {
   mutable std::future<void> last_future_;
 
   Allocator* allocator_{nullptr};  // external resource.
-  // A internal resouce to initinalize eigen_device.
+  // A internal resource to initinalize eigen_device.
   std::unique_ptr<internal::EigenGpuStreamDevice> eigen_stream_{nullptr};
 
   // Holds some attributes only used by the gpudnn kernel calculation
@@ -814,9 +850,9 @@ struct GPUContext::Impl {
 
 thread_local AttributeMap GPUContext::Impl::dnn_attrs_ = {};
 
-GPUContext::GPUContext(GPUContext&&) = default;
+GPUContext::GPUContext(GPUContext&&) = default;  // NOLINT
 
-GPUContext& GPUContext::operator=(GPUContext&&) = default;
+GPUContext& GPUContext::operator=(GPUContext&&) = default;  // NOLINT
 
 GPUContext::GPUContext(const GPUPlace& place, bool init, int stream_priority)
     : DeviceContext(), impl_(std::make_unique<Impl>(place)) {
@@ -873,7 +909,7 @@ int GPUContext::GetMaxThreadsPerBlock() const {
   return impl_->max_threads_per_block_;
 }
 
-std::array<int, 3> GPUContext::GetCUDAMaxGridDimSize() const {
+std::array<unsigned int, 3> GPUContext::GetCUDAMaxGridDimSize() const {
   return impl_->max_grid_dim_size_;
 }
 
@@ -919,17 +955,17 @@ ncclComm_t GPUContext::nccl_comm() const { return impl_->GetNcclComm(); }
 void GPUContext::set_nccl_comm(ncclComm_t comm) { impl_->SetNcclComm(comm); }
 
 void GPUContext::Init() {
-  impl_->allocator_ = const_cast<Allocator*>(&this->GetAllocator());
+  impl_->allocator_ = const_cast<Allocator*>(&this->GetAllocator());  // NOLINT
   impl_->Init();
 }
 
 void GPUContext::SetStream(gpuStream_t stream) {
-  impl_->allocator_ = const_cast<Allocator*>(&this->GetAllocator());
+  impl_->allocator_ = const_cast<Allocator*>(&this->GetAllocator());  // NOLINT
   impl_->SetStream(stream);
 }
 
 void GPUContext::SetCUDAStream(CUDAStream* stream, bool clear) {
-  impl_->allocator_ = const_cast<Allocator*>(&this->GetAllocator());
+  impl_->allocator_ = const_cast<Allocator*>(&this->GetAllocator());  // NOLINT
   impl_->SetCUDAStream(stream, clear);
 }
 
@@ -1006,7 +1042,7 @@ void GPUContext::PartialInitWithoutAllocator(int stream_priority) {
 }
 
 void GPUContext::PartialInitWithAllocator() {
-  impl_->allocator_ = const_cast<Allocator*>(&this->GetAllocator());
+  impl_->allocator_ = const_cast<Allocator*>(&this->GetAllocator());  // NOLINT
   impl_->PartialInitWithAllocator();
 }
 
@@ -1024,7 +1060,7 @@ void GPUContext::SetMaxThreadsPerBlock(int val) {
   impl_->max_threads_per_block_ = val;
 }
 
-void GPUContext::SetMaxGridDimSize(const std::array<int, 3>& val) {
+void GPUContext::SetMaxGridDimSize(const std::array<unsigned int, 3>& val) {
   impl_->max_grid_dim_size_ = val;
 }
 

@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #pragma once
+#include "paddle/common/ddim.h"
 #include "paddle/phi/common/memory_utils.h"
-#include "paddle/phi/core/ddim.h"
 #include "paddle/phi/core/device_context.h"
 
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
@@ -48,7 +48,7 @@ struct StridedMemcpyFunctor<T, 0> {
           gpu_place, dst, gpu_place, src, sizeof(T), cuda_ctx.stream());
 #else
       PADDLE_THROW(
-          phi::errors::Unavailable("Paddle is not compiled with GPU."));
+          common::errors::Unavailable("Paddle is not compiled with GPU."));
 #endif
     }
   }
@@ -79,7 +79,7 @@ struct StridedMemcpyFunctor<T, 1> {
                          cuda_ctx.stream());
 #else
       PADDLE_THROW(
-          phi::errors::Unavailable("Paddle is not compiled with GPU."));
+          common::errors::Unavailable("Paddle is not compiled with GPU."));
 #endif
     }
   }

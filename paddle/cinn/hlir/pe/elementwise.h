@@ -17,9 +17,12 @@
 #include <string>
 #include <vector>
 
+#include "paddle/cinn/hlir/dialect/operator/ir/symbol_bindings.h"
 #include "paddle/cinn/ir/ir.h"
 #include "paddle/cinn/lang/builtin.h"
 #include "paddle/cinn/lang/compute.h"
+#include "paddle/common/enforce.h"
+#include "paddle/pir/include/dialect/shape/utils/dim_expr.h"
 
 namespace cinn {
 namespace hlir {
@@ -84,25 +87,29 @@ HLIR_DCL_UNARY_PE(Clz);
 HLIR_DCL_UNARY_PE(Popc);
 
 template <typename T>
-ir::Tensor AssignValue(const std::vector<T>& values,
-                       const common::Type& type = common::type_of<T>(),
-                       const std::string& output_name = "T_assign_value_out") {
-  CHECK(!values.empty())
-      << "The input of pe::AssignValue should not empty! Please check.";
+ir::Tensor AssignValue(
+    const std::vector<T>& values,
+    const cinn::common::Type& type = cinn::common::type_of<T>(),
+    const std::string& output_name = "T_assign_value_out") {
+  PADDLE_ENFORCE_EQ(!values.empty(),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "The input of pe::AssignValue should not be empty. "
+                        "Please provide valid values."));
 
   auto out = lang::Compute(
       {ir::Expr(static_cast<int>(values.size()))},
       [=](const std::vector<ir::Expr>& indice) {
-        auto init_value = (type == common::type_of<T>())
+        auto init_value = (type == cinn::common::type_of<T>())
                               ? ir::Expr(values[0])
-                              : common::cast(ir::Expr(values[0]), type);
+                              : cinn::common::cast(ir::Expr(values[0]), type);
         ir::Expr previous = ir::Select::Make(
             ir::EQ::Make(indice[0], ir::Expr(0)), init_value, lang::Zero(type));
 
         for (int i = 1; i < values.size(); ++i) {
-          auto val = (type == common::type_of<T>())
+          auto val = (type == cinn::common::type_of<T>())
                          ? ir::Expr(values[i])
-                         : common::cast(ir::Expr(values[i]), type);
+                         : cinn::common::cast(ir::Expr(values[i]), type);
           previous = ir::Select::Make(
               ir::EQ::Make(indice[0], ir::Expr(i)), val, previous);
         }
@@ -129,9 +136,17 @@ ir::Tensor Reshape(
     const std::vector<int>& new_shape,
     const std::string& name = UniqName("T_Elementwise_Reshape_out"));
 
+ir::Tensor Reshape(
+    const ir::Tensor& A,
+    const std::vector<ir::Dim>& new_shape,
+    const std::string& name = UniqName("T_Elementwise_Reshape_out"));
+
 ir::Tensor Cast(const ir::Tensor& A,
                 const Type& dtype,
                 const std::string& name = UniqName("T_Elementwise_Cast_out"));
+
+ir::Tensor Store(const ir::Tensor& A,
+                 const std::string& name = UniqName("T_Elementwise_Store_out"));
 
 ir::Tensor Arange(
     const float start,
@@ -139,6 +154,30 @@ ir::Tensor Arange(
     const float step,
     const Type& dtype,
     const std::string& name = UniqName("T_Elementwise_Arange_out"));
+
+ir::Tensor Tril(const ir::Tensor& A,
+                const int diagonal,
+                const std::vector<ir::Dim>& out_shape,
+                const std::string& name = UniqName("T_Elementwise_Tril_out"));
+
+ir::Tensor GenerateShape(
+    const std::vector<ir::Tensor>& inputs,
+    const cinn::dialect::SymbolBindings& symbol_bindings,
+    const std::vector<symbol::DimExpr>& output_dim_exprs,
+    const std::vector<ir::Dim>& out_shape,
+    const std::vector<Type>& out_type,
+    const std::string& name = UniqName("T_Generate_Shape_out"));
+
+// This operator checks if all x and y satisfy the condition: |x - y| <= atol +
+// rtol * |y|
+ir::Tensor IsClose(
+    const ir::Tensor& x,
+    const ir::Tensor& y,
+    int axis = -1,
+    float rtol = 1e-05f,
+    float atol = 1e-08f,
+    bool equal_nan = false,
+    const std::string& out_name = cinn::common::UniqName("IsClose_output"));
 
 }  // namespace pe
 }  // namespace hlir

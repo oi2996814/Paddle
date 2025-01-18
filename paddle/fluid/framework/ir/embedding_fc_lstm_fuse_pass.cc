@@ -64,18 +64,18 @@ static int BuildFusion(Graph* graph,
 #define SET_IN(Key, node__) op_desc.SetInput(#Key, {node__->Name()});
     SET_IN(Ids, input);
     SET_IN(WeightH, weight_h);
-    // Neet to have this passed as We need Wc data for peephole connections
+    // Need to have this passed as We need Wc data for peephole connections
     SET_IN(Bias, bias);
 #undef SET_IN
 
     // Multiply embeddings with Weights
     PADDLE_ENFORCE_NOT_NULL(
-        scope, platform::errors::InvalidArgument("Scope cannot be nullptr."));
+        scope, common::errors::InvalidArgument("Scope cannot be nullptr."));
     const std::string& embeddings = patterns::UniqueKey("Embeddings");
     auto* embeddings_var = scope->Var(embeddings);
     PADDLE_ENFORCE_NOT_NULL(
         embeddings_var,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Embeddings variable's pointer cannot be nullptr."));
     auto* embeddings_tensor = embeddings_var->GetMutable<phi::DenseTensor>();
     // Get WeightX size: [single_embedding, fc_size]
@@ -84,7 +84,7 @@ static int BuildFusion(Graph* graph,
     auto* embedding_var = scope->FindVar(W->Name());
     PADDLE_ENFORCE_NOT_NULL(
         embedding_var,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Embedding variable's pointer cannot be nullptr."));
     const auto& embedding_tensor = embedding_var->Get<phi::DenseTensor>();
 
@@ -93,24 +93,24 @@ static int BuildFusion(Graph* graph,
     embeddings_tensor->Resize(
         {embedding_tensor.dims()[0], weightx_tensor.dims()[1]});
 
-    // Multiplie embeddings via WeightsX and add bias
+    // Multiply embeddings via WeightsX and add bias
     auto embedding_data = embedding_tensor.data<float>();
     auto weightx_data = weightx_tensor.data<float>();
     auto embeddings_data =
-        embeddings_tensor->mutable_data<float>(platform::CPUPlace());
+        embeddings_tensor->mutable_data<float>(phi::CPUPlace());
 
     // Adding biases to GEMM result to be
     auto* lstm_bias_var = scope->FindVar(bias->Name());
     PADDLE_ENFORCE_NOT_NULL(lstm_bias_var,
-                            platform::errors::InvalidArgument(
+                            common::errors::InvalidArgument(
                                 "Lstm bias var ptr cannot be nullptr."));
     const auto& lstm_bias_tensor = lstm_bias_var->Get<phi::DenseTensor>();
 
     auto alpha = 1.0f;
     auto beta = 1.0f;
-    int m = embedding_tensor.dims()[0];
-    int n = weightx_tensor.dims()[1];
-    int k = embedding_tensor.dims()[1];
+    int m = static_cast<int>(embedding_tensor.dims()[0]);
+    int n = static_cast<int>(weightx_tensor.dims()[1]);
+    int k = static_cast<int>(embedding_tensor.dims()[1]);
 
     // Copy only gate biases values (only actual bias data, not peephole
     // weights)
@@ -121,7 +121,7 @@ static int BuildFusion(Graph* graph,
 
     if (with_fc_bias) {
       // Add FC-bias with LSTM-bias (into GEMM result to be)
-      auto* fc_bias_var = scope->FindVar(fc_bias->Name());
+      auto* fc_bias_var = scope->FindVar(fc_bias->Name());  // NOLINT
       const auto& fc_bias_tensor = fc_bias_var->Get<phi::DenseTensor>();
       for (int i = 0; i < fc_bias_tensor.numel(); i++) {
         combined_biases[i] += fc_bias_tensor.data<float>()[i];

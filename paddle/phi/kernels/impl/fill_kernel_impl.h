@@ -27,17 +27,18 @@ void FillKernel(const Context& dev_ctx,
                 const DenseTensor& x UNUSED,
                 const Scalar& value,
                 DenseTensor* out) {
-  T fill_var = value.to<T>();
+  double fill_var = value.to<double>();
 
-  PADDLE_ENFORCE_EQ(std::isnan(static_cast<double>(fill_var)),
-                    false,
-                    phi::errors::InvalidArgument("fill value should not be NaN,"
-                                                 " but received NaN"));
+  PADDLE_ENFORCE_EQ(
+      std::isnan(fill_var),
+      false,
+      common::errors::InvalidArgument("fill value should not be NaN,"
+                                      " but received NaN"));
 
   dev_ctx.template Alloc<T>(out);
 
   phi::funcs::SetConstant<Context, T> functor;
-  functor(dev_ctx, out, fill_var);
+  functor(dev_ctx, out, value.to<T>());
 }
 
 }  // namespace phi

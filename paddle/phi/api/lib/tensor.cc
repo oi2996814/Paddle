@@ -20,12 +20,14 @@ limitations under the License. */
 
 #include "glog/logging.h"
 
+#include "paddle/common/ddim.h"
 #include "paddle/phi/api/include/context_pool.h"
+#include "paddle/phi/api/lib/data_transform.h"
 #include "paddle/phi/api/lib/utils/allocator.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
 #include "paddle/phi/backends/gpu/gpu_info.h"
-#include "paddle/phi/core/ddim.h"
 #include "paddle/phi/core/dense_tensor.h"
+#include "paddle/phi/core/distributed/auto_parallel/dist_tensor.h"
 #include "paddle/phi/core/enforce.h"
 #include "paddle/phi/core/selected_rows.h"
 #include "paddle/phi/core/sparse_coo_tensor.h"
@@ -34,9 +36,6 @@ limitations under the License. */
 #include "paddle/phi/core/tensor_base.h"
 #include "paddle/phi/core/tensor_meta.h"
 #include "paddle/phi/core/tensor_utils.h"
-#ifdef PADDLE_WITH_DISTRIBUTE
-#include "paddle/phi/core/distributed/auto_parallel/dist_tensor.h"
-#endif
 
 namespace paddle {
 
@@ -49,9 +48,20 @@ using DefaultAllocator = experimental::DefaultAllocator;
 
 Tensor::Tensor(std::shared_ptr<phi::TensorBase> tensor_impl)
     : impl_(std::move(tensor_impl)) {
-  PADDLE_ENFORCE_NOT_NULL(
-      impl_,
-      phi::errors::InvalidArgument("TensorImpl with nullptr is not supported"));
+  PADDLE_ENFORCE_NOT_NULL(impl_,
+                          common::errors::InvalidArgument(
+                              "TensorImpl with nullptr is not supported"));
+}
+
+Tensor::Tensor(std::shared_ptr<phi::TensorBase> tensor_impl,
+               std::shared_ptr<AbstractAutogradMeta> autograd_meta,
+               const std::string &name)
+    : impl_(std::move(tensor_impl)),
+      autograd_meta_(std::move(autograd_meta)),
+      name_(name) {
+  PADDLE_ENFORCE_NOT_NULL(impl_,
+                          common::errors::InvalidArgument(
+                              "TensorImpl with nullptr is not supported"));
 }
 
 Tensor::Tensor(const Place &place) {
@@ -66,8 +76,9 @@ Tensor::Tensor(const Place &place) {
   DefaultAllocator alloc(place);
   impl_ = std::make_shared<phi::DenseTensor>(
       &alloc,
-      phi::DenseTensorMeta(
-          phi::DataType::FLOAT32, phi::make_ddim({}), phi::DataLayout::NCHW));
+      phi::DenseTensorMeta(phi::DataType::FLOAT32,
+                           common::make_ddim({}),
+                           phi::DataLayout::NCHW));
 }
 
 Tensor::Tensor(const Place &place, const std::vector<int64_t> &shape) {
@@ -83,13 +94,13 @@ Tensor::Tensor(const Place &place, const std::vector<int64_t> &shape) {
   impl_ = std::make_shared<phi::DenseTensor>(
       &alloc,
       phi::DenseTensorMeta(phi::DataType::FLOAT32,
-                           phi::make_ddim({shape}),
+                           common::make_ddim({shape}),
                            phi::DataLayout::NCHW));
 }
 
 Tensor::Tensor(std::shared_ptr<phi::TensorBase> tensor_impl,
                const std::string &name)
-    : impl_(std::move(tensor_impl)), name_(std::move(name)) {}
+    : impl_(std::move(tensor_impl)), name_(name) {}
 
 /* Part 2: Dimension, DataType and DataLayout methods */
 
@@ -101,15 +112,19 @@ const phi::DDim &Tensor::dims() const { return impl_->dims(); }
 
 std::vector<int64_t> Tensor::shape() const {
   const auto &dims = impl_->dims();
-  return phi::vectorize<int64_t>(dims);
+  return common::vectorize<int64_t>(dims);
 }
 
 const phi::DDim &Tensor::strides() const {
   if (is_dense_tensor()) {
     return static_cast<phi::DenseTensor *>(impl_.get())->strides();
+  } else if (is_dist_tensor()) {
+    return static_cast<phi::distributed::DistTensor *>(impl_.get())
+        ->value()
+        .strides();
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
-        "Only support strides operation on DenseTensor now."));
+    PADDLE_THROW(common::errors::Unimplemented(
+        "Only support strides operation on DenseTensor and DistTensor now."));
   }
 }
 
@@ -124,9 +139,10 @@ void Tensor::reshape(const std::vector<int64_t> &shape) {
          "touching underlying data, this requires the total size of "
          "the tensor to remain constant.";
   if (is_dense_tensor()) {
-    static_cast<phi::DenseTensor *>(impl_.get())->Resize(phi::make_ddim(shape));
+    static_cast<phi::DenseTensor *>(impl_.get())
+        ->Resize(common::make_ddim(shape));
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "Only support reshape operation on DenseTensor now."));
   }
 }
@@ -135,17 +151,16 @@ DataType Tensor::dtype() const { return impl_->dtype(); }
 
 DataType Tensor::type() const { return impl_->dtype(); }
 
-DataLayout Tensor::layout() const { return impl_->layout(); }
+phi::DataLayout Tensor::layout() const { return impl_->layout(); }
 
 bool Tensor::is_dense_tensor() const {
   return phi::DenseTensor::classof(impl_.get());
 }
 bool Tensor::is_dist_tensor() const {
-#ifdef PADDLE_WITH_DISTRIBUTE
+  if (impl_ == nullptr) {
+    return false;
+  }
   return phi::distributed::DistTensor::classof(impl_.get());
-#else
-  return false;
-#endif
 }
 bool Tensor::is_selected_rows() const {
   return phi::SelectedRows::classof(impl_.get());
@@ -164,7 +179,7 @@ bool Tensor::is_string_tensor() const {
 const Place &Tensor::place() const {
   PADDLE_ENFORCE_NOT_NULL(
       impl_,
-      phi::errors::PermissionDenied(
+      common::errors::PermissionDenied(
           "Null pointer error, the impl_ of Tensor should not be "
           "Null when calling Tensor::place()."));
   return impl_->place();
@@ -230,6 +245,10 @@ template PADDLE_API phi::dtype::complex<float>
     *Tensor::mutable_data<phi::dtype::complex<float>>();
 template PADDLE_API phi::dtype::complex<double>
     *Tensor::mutable_data<phi::dtype::complex<double>>();
+template PADDLE_API phi::dtype::float8_e4m3fn *
+Tensor::mutable_data<phi::dtype::float8_e4m3fn>();
+template PADDLE_API phi::dtype::float8_e5m2 *
+Tensor::mutable_data<phi::dtype::float8_e5m2>();
 
 template <typename T>
 T *Tensor::mutable_data(const Place &place) {
@@ -293,6 +312,10 @@ template PADDLE_API const phi::dtype::complex<float>
     *Tensor::data<phi::dtype::complex<float>>() const;
 template PADDLE_API const phi::dtype::complex<double>
     *Tensor::data<phi::dtype::complex<double>>() const;
+template PADDLE_API const phi::dtype::float8_e4m3fn *
+Tensor::data<phi::dtype::float8_e4m3fn>() const;
+template PADDLE_API const phi::dtype::float8_e5m2 *
+Tensor::data<phi::dtype::float8_e5m2>() const;
 
 template <typename T>
 T *Tensor::data() {
@@ -323,6 +346,10 @@ template PADDLE_API phi::dtype::complex<float>
     *Tensor::data<phi::dtype::complex<float>>();
 template PADDLE_API phi::dtype::complex<double>
     *Tensor::data<phi::dtype::complex<double>>();
+template PADDLE_API phi::dtype::float8_e4m3fn *
+Tensor::data<phi::dtype::float8_e4m3fn>();
+template PADDLE_API phi::dtype::float8_e5m2 *
+Tensor::data<phi::dtype::float8_e5m2>();
 
 const void *Tensor::data() const {
   if (is_dense_tensor()) {
@@ -353,7 +380,7 @@ Tensor Tensor::slice(int64_t begin_idx, int64_t end_idx) const {
             begin_idx,
             end_idx)));
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "Only support slice operation on DenseTensor now."));
   }
 }
@@ -385,6 +412,10 @@ void Tensor::set_name(const std::string &name) { name_ = name; }
 
 bool Tensor::defined() const { return impl_ != nullptr; }
 
+bool Tensor::has_allocation() const {
+  return defined() && impl_->has_allocation();
+}
+
 bool Tensor::initialized() const { return defined() && impl_->initialized(); }
 
 bool Tensor::is_initialized() const {
@@ -405,7 +436,7 @@ void Tensor::reset() {
 
 Tensor &Tensor::operator=(const Tensor &x) & = default;
 
-Tensor &Tensor::operator=(Tensor &&x) & {
+Tensor &Tensor::operator=(Tensor &&x) &noexcept {
   impl_ = std::move(x.impl_);
   autograd_meta_ = std::move(x.autograd_meta_);
   name_ = std::move(x.name_);
@@ -431,9 +462,16 @@ void Tensor::bump_inplace_version() {
     auto &inplace_version_counter =
         static_cast<phi::DenseTensor *>(impl_.get())->InplaceVersionCounter();
     inplace_version_counter.Bump();
+  } else if (is_dist_tensor()) {
+    auto &inplace_version_counter =
+        static_cast<phi::distributed::DistTensor *>(impl_.get())
+            ->unsafe_mutable_value()
+            ->InplaceVersionCounter();
+    inplace_version_counter.Bump();
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
-        "bump_inplace_version is only supported on DenseTensor now."));
+    PADDLE_THROW(common::errors::Unimplemented(
+        "bump_inplace_version is only supported on "
+        "DenseTensor and DistTensor now."));
   }
 }
 
@@ -442,9 +480,15 @@ uint32_t Tensor::current_inplace_version() {
     auto &inplace_version_counter =
         static_cast<phi::DenseTensor *>(impl_.get())->InplaceVersionCounter();
     return inplace_version_counter.CurrentVersion();
+  } else if (is_dist_tensor()) {
+    auto &inplace_version_counter =
+        static_cast<phi::distributed::DistTensor *>(impl_.get())
+            ->unsafe_mutable_value()
+            ->InplaceVersionCounter();
+    return inplace_version_counter.CurrentVersion();
   } else {
-    LOG_FIRST_N(WARNING, 1)
-        << "current_inplace_version is only supported on DenseTensor now.";
+    LOG_FIRST_N(WARNING, 1) << "current_inplace_version is only supported on "
+                               "DenseTensor DistTensor now.";
   }
   return 0;
 }
@@ -455,7 +499,60 @@ void Tensor::reset_inplace_version(bool set_to_zero) {
       auto &inplace_version_counter =
           static_cast<phi::DenseTensor *>(impl_.get())->InplaceVersionCounter();
       inplace_version_counter.SetInplaceVersionToZero();
+    } else if (is_dist_tensor()) {
+      auto &inplace_version_counter =
+          static_cast<phi::distributed::DistTensor *>(impl_.get())
+              ->unsafe_mutable_value()
+              ->InplaceVersionCounter();
+      return inplace_version_counter.SetInplaceVersionToZero();
     }
+  }
+}
+
+/* Part 7: Contiguous methods */
+
+bool Tensor::is_contiguous() const {
+  if (is_dense_tensor() || is_dist_tensor()) {
+    phi::DenseTensor *dense_tensor = nullptr;
+    if (is_dist_tensor()) {
+      dense_tensor = static_cast<phi::distributed::DistTensor *>(impl_.get())
+                         ->unsafe_mutable_value();
+    } else {
+      dense_tensor = static_cast<phi::DenseTensor *>(impl_.get());
+    }
+    return dense_tensor->meta().is_contiguous();
+  } else {
+    PADDLE_THROW(
+        common::errors::Unimplemented("Only support is_contiguous operation on "
+                                      "DenseTensor or DistTensor now."));
+  }
+}
+
+Tensor Tensor::contiguous() {
+  if (is_dense_tensor() || is_dist_tensor()) {
+    phi::DenseTensor *dense_tensor = nullptr;
+    if (is_dist_tensor()) {
+      dense_tensor = static_cast<phi::distributed::DistTensor *>(impl_.get())
+                         ->unsafe_mutable_value();
+    } else {
+      dense_tensor = static_cast<phi::DenseTensor *>(impl_.get());
+    }
+    PADDLE_ENFORCE_NOT_NULL(dense_tensor,
+                            common::errors::InvalidArgument(
+                                "TensorImpl with nullptr is not supported"));
+    if (!dense_tensor->meta().is_contiguous()) {
+      auto new_dense_tensor = std::make_shared<phi::DenseTensor>();
+      *new_dense_tensor = paddle::experimental::Trans2Contiguous(*dense_tensor);
+
+      return Tensor(std::shared_ptr<phi::TensorBase>(new_dense_tensor),
+                    autograd_meta_,
+                    name_);
+    } else {
+      return *this;
+    }
+  } else {
+    PADDLE_THROW(common::errors::Unimplemented(
+        "Only support contiguous operation on DenseTensor or DistTensor now."));
   }
 }
 

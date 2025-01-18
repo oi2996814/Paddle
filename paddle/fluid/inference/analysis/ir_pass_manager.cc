@@ -22,22 +22,19 @@
 #include <utility>
 #include <vector>
 
+#include "paddle/common/errors.h"
 #include "paddle/fluid/framework/ir/fuse_pass_base.h"
 #include "paddle/fluid/framework/ir/graph.h"
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/inference/analysis/argument.h"
-#include "paddle/fluid/string/pretty_log.h"
 #include "paddle/phi/common/data_type.h"
-#include "paddle/phi/core/errors.h"
+#include "paddle/utils/string/pretty_log.h"
 
-namespace paddle {
-namespace inference {
-namespace analysis {
-using string::PrettyLog;
+namespace paddle::inference::analysis {
 using string::PrettyLogEndl;
 using string::Style;
 
-IRPassManager::IRPassManager(Argument *argument) {
+IRPassManager::IRPassManager(Argument *argument) : passes_() {
   disable_logs_ = argument->disable_logs();
 
   ARGUMENT_CHECK_FIELD(argument, ir_analysis_passes);
@@ -100,7 +97,11 @@ void IRPassManager::CreatePasses(Argument *argument,
     pass->Set(
         "mixed_black_list",
         new std::unordered_set<std::string>(argument->mixed_black_list()));
+    pass->Set(
+        "mixed_white_list",
+        new std::unordered_set<std::string>(argument->mixed_white_list()));
     pass->Set("enable_gpu_mixed", new bool(argument->enable_gpu_mixed()));
+    pass->Set("use_custom_device", new bool(argument->use_custom_device()));
     pass->Set("enable_custom_device_mixed",
               new bool(argument->enable_custom_device_mixed()));
     pass->Set("mixed_precision_mode",
@@ -111,6 +112,9 @@ void IRPassManager::CreatePasses(Argument *argument,
 
     // "use_xpu" is used for passes in subgraphs.
     pass->Set("use_xpu", new bool(argument->use_xpu()));
+
+    // "use_tensorrt" is used for passes in subgraphs.
+    pass->Set("use_tensorrt", new bool(argument->use_tensorrt()));
 
     if (pass_name == "graph_viz_pass") {
       std::string optim_cache_dir = argument->optim_cache_dir();
@@ -126,7 +130,7 @@ void IRPassManager::CreatePasses(Argument *argument,
       pass->Set("graph_viz_path", new std::string(std::move(dot_file_path)));
       pass->Set("optim_cache_dir", new std::string(std::move(optim_cache_dir)));
       pass_num++;
-    } else if (pass_name == "mkldnn_placement_pass") {
+    } else if (pass_name == "onednn_placement_pass") {
       pass->Set("mkldnn_enabled_op_types",
                 new std::unordered_set<std::string>(
                     argument->mkldnn_enabled_op_types()));
@@ -154,12 +158,59 @@ void IRPassManager::CreatePasses(Argument *argument,
                 new std::unordered_set<std::string>(
                     argument->bfloat16_enabled_op_types()));
 #endif
+#ifdef PADDLE_WITH_OPENVINO
+    } else if (pass_name == "openvino_subgraph_pass") {
+      std::string model_program_path = argument->model_program_path();
+      std::string model_params_path = argument->model_params_path();
+      std::string optim_cache_dir = argument->optim_cache_dir();
+      auto inference_precision = argument->openvino_inference_precision();
+      int cpu_math_library_num_threads =
+          argument->cpu_math_library_num_threads();
+      if (optim_cache_dir.empty()) {
+        optim_cache_dir = "./__cache__";
+        LOG(INFO) << "optim_cache_dir is empty, set to ./__cache__";
+      }
+      if (!PathExists(optim_cache_dir)) {
+        PADDLE_ENFORCE_NE(
+            MKDIR(optim_cache_dir.c_str()),
+            -1,
+            common::errors::PreconditionNotMet(
+                "Can not create optimize cache directory: %s, Make sure you "
+                "have permission to write",
+                optim_cache_dir));
+      }
+      pass->Set("model_program_path", new std::string(model_program_path));
+      pass->Set("model_params_path", new std::string(model_params_path));
+      pass->Set("model_opt_cache_dir", new std::string(optim_cache_dir));
+      pass->Set("cpu_math_library_num_threads",
+                new int(cpu_math_library_num_threads));
+      pass->Set("inference_precision", new int(inference_precision));
+#endif
     } else if (pass_name == "tensorrt_subgraph_pass") {
       pass->Set("workspace_size",
                 new int64_t(argument->tensorrt_workspace_size()));
       pass->Set("max_batch_size", new int(argument->tensorrt_max_batch_size()));
       pass->Set("min_subgraph_size",
                 new int(argument->tensorrt_min_subgraph_size()));
+      pass->Set("mark_output", new bool(argument->trt_mark_output()));
+      pass->Set(
+          "output_tensor_names",
+          new std::vector<std::string>(argument->trt_output_tensor_names()));
+      pass->Set(
+          "trt_exclude_var_names",
+          new std::vector<std::string>(argument->trt_exclude_var_names()));
+      pass->Set(
+          "trt_parameter_run_fp16",
+          new std::vector<std::string>(argument->trt_parameter_run_fp16()));
+      pass->Set(
+          "trt_parameter_run_int8",
+          new std::vector<std::string>(argument->trt_parameter_run_int8()));
+      pass->Set(
+          "trt_parameter_run_bfp16",
+          new std::vector<std::string>(argument->trt_parameter_run_bfp16()));
+      pass->Set("forbid_dynamic_op",
+                new bool(argument->trt_forbid_dynamic_op()));
+
       pass->Set("program",
                 new framework::ProgramDesc *(&argument->main_program()));
       pass->Set("predictor_id", new int(argument->predictor_id()));
@@ -171,6 +222,7 @@ void IRPassManager::CreatePasses(Argument *argument,
       pass->Set("use_cuda_graph",
                 new bool(argument->tensorrt_use_cuda_graph()));
       bool use_static_engine = argument->tensorrt_use_static_engine();
+      bool inspector_serialize = argument->tensorrt_inspector_serialize();
       bool model_from_memory = argument->model_from_memory();
       std::string optim_cache_dir = argument->optim_cache_dir();
       bool int8_valid = !(model_from_memory && optim_cache_dir.empty() &&
@@ -178,7 +230,7 @@ void IRPassManager::CreatePasses(Argument *argument,
       PADDLE_ENFORCE_EQ(
           int8_valid,
           true,
-          platform::errors::PreconditionNotMet(
+          common::errors::PreconditionNotMet(
               "When you are in TRT INT8 mode, and load model from "
               "memory, you should set optim_cache_dir using "
               "config.SetOptimCacheDir()"));
@@ -186,7 +238,7 @@ void IRPassManager::CreatePasses(Argument *argument,
         PADDLE_ENFORCE_EQ(
             optim_cache_dir.empty(),
             false,
-            platform::errors::PreconditionNotMet(
+            common::errors::PreconditionNotMet(
                 "When you are using Paddle-TRT, and using load model "
                 "from memory, and also set the use_static to true. "
                 "you must set optim_cache_dir using "
@@ -198,13 +250,14 @@ void IRPassManager::CreatePasses(Argument *argument,
           PADDLE_ENFORCE_NE(
               MKDIR(optim_cache_dir.c_str()),
               -1,
-              platform::errors::PreconditionNotMet(
+              common::errors::PreconditionNotMet(
                   "Can not create optimize cache directory: %s, Make sure you "
                   "have permission to write",
                   optim_cache_dir));
         }
         pass->Set("model_opt_cache_dir", new std::string(optim_cache_dir));
-      } else if (use_static_engine || enable_int8 || with_dynamic_shape) {
+      } else if (use_static_engine || enable_int8 || with_dynamic_shape ||
+                 inspector_serialize) {
         std::string model_opt_cache_dir =
             argument->Has("model_dir")
                 ? argument->model_dir()
@@ -216,6 +269,13 @@ void IRPassManager::CreatePasses(Argument *argument,
       pass->Set("use_static_engine", new bool(use_static_engine));
       pass->Set("model_from_memory", new bool(argument->model_from_memory()));
       pass->Set("use_inspector", new bool(argument->tensorrt_use_inspector()));
+      pass->Set("inspector_serialize",
+                new bool(argument->tensorrt_inspector_serialize()));
+      pass->Set("trt_ops_run_float",
+                new std::unordered_set<std::string>(
+                    argument->tensorrt_ops_run_float()));
+      pass->Set("use_explicit_quantization",
+                new bool(argument->tensorrt_use_explicit_quantization()));
 
       // tuned trt dynamic_shape
       pass->Set("trt_shape_range_info_path",
@@ -227,120 +287,46 @@ void IRPassManager::CreatePasses(Argument *argument,
           new std::vector<std::string>(argument->tensorrt_disabled_ops()));
       pass->Set("trt_use_dla", new bool(argument->tensorrt_use_dla()));
       pass->Set("trt_dla_core", new int(argument->tensorrt_dla_core()));
+      pass->Set("optimization_level",
+                new int(argument->tensorrt_optimization_level()));
 
       // Setting the disable_trt_plugin_fp16 to true means that TRT plugin will
       // not run fp16.
       pass->Set("disable_trt_plugin_fp16",
                 new bool(argument->disable_trt_plugin_fp16()));
-    } else if (pass_name == "dlnne_subgraph_pass") {
-      auto precision_mode = argument->dlnne_precision_mode();
-      pass->Set("min_subgraph_size",
-                new int(argument->dlnne_min_subgraph_size()));
-      pass->Set("max_batch_size", new int(argument->dlnne_max_batch_size()));
-      pass->Set("use_static_batch",
-                new bool(argument->dlnne_use_static_batch()));
-      pass->Set("weight_share_mode",
-                new std::string(argument->dlnne_weight_share_mode()));
-      pass->Set("disable_nodes_by_outputs",
-                new std::unordered_set<std::string>(
-                    argument->dlnne_disable_nodes_by_outputs()));
-      pass->Set("use_calib_mode", new bool(argument->dlnne_use_calib_mode()));
-      pass->Set("dlnne_precision_mode", new int(precision_mode));
-      pass->Set("input_shape_dict",
-                new std::map<std::string, std::vector<int64_t>>(
-                    argument->dlnne_input_shape_dict()));
-      pass->Set("program",
-                new framework::ProgramDesc *(&argument->main_program()));
     } else if (pass_name == "memory_optimize_pass") {
       pass->Set("root_predictor_id", new int(argument->root_predictor_id()));
     } else if (pass_name == "build_cinn_pass") {
       pass->Set("is_inference_stage", new bool(argument->use_cinn_compiler()));
-    } else if (pass_name == "lite_subgraph_pass") {
-      bool lite_enable_int8 = argument->lite_precision_mode() ==
-                              static_cast<int>(phi::DataType::INT8);
-      pass->Set("program",
-                new framework::ProgramDesc *(&argument->main_program()));
-      pass->Set("lite_ops_filter",
-                new std::vector<std::string>(argument->lite_ops_filter()));
-      pass->Set("predictor_id", new int(argument->predictor_id()));
-      pass->Erase("enable_int8");
-      pass->Set("enable_int8", new bool(lite_enable_int8));
-      pass->Set("use_gpu", new bool(argument->use_gpu()));
-      pass->Set("zero_copy", new bool(argument->lite_zero_copy()));
-      pass->Set("xpu_device_id", new int(argument->xpu_device_id()));
-      pass->Set("xpu_l3_size", new size_t(argument->xpu_l3_size()));
-      pass->Set("xpu_l3_ptr", new void *(argument->xpu_l3_ptr()));
-      pass->Set("xpu_l3_autotune_size",
-                new size_t(argument->xpu_l3_autotune_size()));
-      pass->Set("xpu_context_gm_size",
-                new int(argument->xpu_context_gm_size()));
-      pass->Set("xpu_context", new void *(argument->xpu_context()));
-      pass->Set("xpu_stream", new void *(argument->xpu_stream()));
-      pass->Set("xpu_conv_autotune_level",
-                new int(argument->xpu_conv_autotune_level()));
-      pass->Set("xpu_conv_autotune_file",
-                new std::string(argument->xpu_conv_autotune_file()));
-      pass->Set("xpu_conv_autotune_file_writeback",
-                new bool(argument->xpu_conv_autotune_file_writeback()));
-      pass->Set("xpu_fc_autotune_level",
-                new int(argument->xpu_fc_autotune_level()));
-      pass->Set("xpu_fc_autotune_file",
-                new std::string(argument->xpu_fc_autotune_file()));
-      pass->Set("xpu_fc_autotune_file_writeback",
-                new bool(argument->xpu_fc_autotune_file_writeback()));
-      pass->Set("xpu_gemm_compute_precision",
-                new int(argument->xpu_gemm_compute_precision()));
-      pass->Set("xpu_transformer_softmax_optimize_level",
-                new int(argument->xpu_transformer_softmax_optimize_level()));
-      pass->Set("xpu_transformer_encoder_adaptive_seqlen",
-                new bool(argument->xpu_transformer_encoder_adaptive_seqlen()));
-      pass->Set(
-          "xpu_quant_post_static_gelu_out_threshold",
-          new float(argument->xpu_quant_post_static_gelu_out_threshold()));
-      pass->Set("xpu_quant_post_dynamic_activation_method",
-                new int(argument->xpu_quant_post_dynamic_activation_method()));
-      pass->Set("xpu_l3_locked", new bool(argument->xpu_lite_l3_locked()));
-      pass->Set("xpu_enable_multi_stream",
-                new bool(argument->xpu_lite_enable_multi_stream()));
-      pass->Set("use_opencl", new bool(argument->use_opencl()));
-      pass->Set("cpu_math_library_num_threads",
-                new int(argument->cpu_math_library_num_threads()));
-      // NNAdapter Related
-      pass->Set("use_nnadapter", new bool(argument->use_nnadapter()));
-      pass->Set("nnadapter_model_cache_dir",
-                new std::string(argument->nnadapter_model_cache_dir()));
-      pass->Set(
-          "nnadapter_device_names",
-          new std::vector<std::string>(argument->nnadapter_device_names()));
-      pass->Set("nnadapter_context_properties",
-                new std::string(argument->nnadapter_context_properties()));
-      pass->Set("nnadapter_subgraph_partition_config_buffer",
-                new std::string(
-                    argument->nnadapter_subgraph_partition_config_buffer()));
-      pass->Set("nnadapter_subgraph_partition_config_path",
-                new std::string(
-                    argument->nnadapter_subgraph_partition_config_path()));
-      pass->Set("nnadapter_model_cache_buffer",
-                new std::vector<std::vector<char>>(
-                    argument->nnadapter_model_cache_buffer()));
-      pass->Set("nnadapter_model_cache_token",
-                new std::vector<std::string>(
-                    argument->nnadapter_model_cache_token()));
     } else if (pass_name == "fc_fuse_pass") {
       pass->Set("use_gpu", new bool(argument->use_gpu()));
-      bool fc_mkldnn_pass = false;
+      bool fc_onednn_pass = false;
       for (const std::string &pass_n : passes) {
-        if (pass_n == "fc_mkldnn_pass") {
-          fc_mkldnn_pass = true;
+        if (pass_n == "fc_onednn_pass") {
+          fc_onednn_pass = true;
         }
       }
-      bool use_fc_padding = !fc_mkldnn_pass && argument->use_fc_padding();
+      bool use_fc_padding = !fc_onednn_pass && argument->use_fc_padding();
       pass->Set("use_fc_padding", new bool(use_fc_padding));
     } else if (pass_name == "fused_multi_transformer_xpu_pass") {
       int quant_post_dynamic_weight_precision =
           argument->xpu_quant_post_dynamic_weight_precision();
       if (quant_post_dynamic_weight_precision == 0) {
         pass->Set("quant_post_dynamic_weight_precision ", new int(0));
+      }
+    } else if (pass_name == "fc_xpu_fuse_pass") {
+      std::map<std::string, int> quant_post_type =
+          argument->xpu_quant_post_dynamic_weight_methods();
+      if (!quant_post_type.empty()) {
+        pass->Set("quant_post_dynamic_weight_methods",
+                  new std::map<std::string, int>(quant_post_type));
+      }
+    } else if (pass_name == "conv2d_xpu_fuse_pass") {
+      std::map<std::string, int> quant_post_type =
+          argument->xpu_quant_post_dynamic_weight_methods();
+      if (!quant_post_type.empty()) {
+        pass->Set("quant_post_dynamic_weight_methods",
+                  new std::map<std::string, int>(quant_post_type));
       }
     }
     pre_pass = pass_name;
@@ -351,7 +337,7 @@ void IRPassManager::CreatePasses(Argument *argument,
 
 std::unique_ptr<Graph> IRPassManager::Apply(std::unique_ptr<Graph> graph) {
   PADDLE_ENFORCE_NOT_NULL(
-      graph.get(), platform::errors::InvalidArgument("Graph cannot be null."));
+      graph.get(), common::errors::InvalidArgument("Graph cannot be null."));
   // Apply all the passes
   for (const auto &pass : passes_) {
     if (pass->Type() != "graph_viz_pass" && !disable_logs_) {
@@ -362,6 +348,4 @@ std::unique_ptr<Graph> IRPassManager::Apply(std::unique_ptr<Graph> graph) {
   return graph;
 }
 
-}  // namespace analysis
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::analysis

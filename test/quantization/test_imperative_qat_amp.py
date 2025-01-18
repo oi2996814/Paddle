@@ -22,7 +22,7 @@ import numpy as np
 from imperative_test_utils import ImperativeLenet
 
 import paddle
-from paddle import fluid
+from paddle import base
 from paddle.dataset.common import download
 from paddle.framework import set_flags
 from paddle.quantization import ImperativeQuantAware
@@ -59,8 +59,7 @@ class TestImperativeQatAmp(unittest.TestCase):
 
         seed = 1
         np.random.seed(seed)
-        paddle.static.default_main_program().random_seed = seed
-        paddle.static.default_startup_program().random_seed = seed
+        paddle.seed(seed)
 
     @classmethod
     def tearDownClass(cls):
@@ -68,8 +67,8 @@ class TestImperativeQatAmp(unittest.TestCase):
 
     def cache_unzipping(self, target_folder, zip_path):
         if not os.path.exists(target_folder):
-            cmd = 'mkdir {0} && tar xf {1} -C {0}'.format(
-                target_folder, zip_path
+            cmd = (
+                f'mkdir {target_folder} && tar xf {zip_path} -C {target_folder}'
             )
             os.system(cmd)
 
@@ -141,9 +140,7 @@ class TestImperativeQatAmp(unittest.TestCase):
 
             if batch_id % 100 == 0:
                 _logger.info(
-                    "Train | step {}: loss = {:}, acc= {:}".format(
-                        batch_id, avg_loss.numpy(), acc.numpy()
-                    )
+                    f"Train | step {batch_id}: loss = {avg_loss.numpy()}, acc= {acc.numpy()}"
                 )
 
             if batch_num > 0 and batch_id + 1 >= batch_num:
@@ -176,9 +173,7 @@ class TestImperativeQatAmp(unittest.TestCase):
             acc_top1_list.append(float(acc_top1.numpy()))
             if batch_id % 100 == 0:
                 _logger.info(
-                    "Test | At step {}: acc1 = {:}, acc5 = {:}".format(
-                        batch_id, acc_top1.numpy(), acc_top5.numpy()
-                    )
+                    f"Test | At step {batch_id}: acc1 = {acc_top1.numpy()}, acc5 = {acc_top5.numpy()}"
                 )
 
             if batch_num > 0 and batch_id + 1 >= batch_num:
@@ -197,7 +192,7 @@ class TestImperativeQatAmp(unittest.TestCase):
         )
         params_path += "/lenet_pretrained/lenet.pdparams"
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             model = ImperativeLenet()
             model_state_dict = paddle.load(params_path)
             model.set_state_dict(model_state_dict)
@@ -230,8 +225,11 @@ class TestImperativeQatAmp(unittest.TestCase):
         input_spec = [
             paddle.static.InputSpec(shape=[None, 1, 28, 28], dtype='float32')
         ]
-        paddle.jit.save(layer=model, path=self.save_path, input_spec=input_spec)
-        print('Quantized model saved in {%s}' % self.save_path)
+        with paddle.pir_utils.OldIrGuard():
+            paddle.jit.save(
+                layer=model, path=self.save_path, input_spec=input_spec
+            )
+        print(f'Quantized model saved in {{{self.save_path}}}')
 
         end_time = time.time()
         print("total time: %ss" % (end_time - start_time))

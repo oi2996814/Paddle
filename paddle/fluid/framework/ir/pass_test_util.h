@@ -18,13 +18,13 @@
 #include <utility>
 #include <vector>
 
+#include "paddle/common/ddim.h"
 #include "paddle/fluid/framework/ir/graph.h"
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/op_desc.h"
 #include "paddle/fluid/framework/program_desc.h"
 #include "paddle/fluid/framework/scope.h"
-#include "paddle/fluid/platform/place.h"
-#include "paddle/phi/core/ddim.h"
+#include "paddle/phi/common/place.h"
 
 namespace paddle {
 namespace framework {
@@ -132,11 +132,11 @@ bool RunPassAndAssert(Graph* graph,
 /// @tparam     T         phi::DenseTensor data type.
 ///
 template <typename T>
-void InitLoDTensorHolder(const Scope& scope,
-                         const paddle::platform::Place& place,
-                         const std::string& var_name,
-                         const std::vector<int64_t>& dims,
-                         const T* data = nullptr);
+void InitDenseTensorHolder(const Scope& scope,
+                           const phi::Place& place,
+                           const std::string& var_name,
+                           const std::vector<int64_t>& dims,
+                           const T* data = nullptr);
 
 ///
 /// @brief      Retrieve operator descriptor from program.

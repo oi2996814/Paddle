@@ -22,16 +22,16 @@ import numpy as np
 from simple_nets import simple_fc_net
 
 import paddle
-from paddle import fluid
-from paddle.fluid import compiler, core
+from paddle import base
+from paddle.base import compiler, core
 
 
 class TestPassBuilder(unittest.TestCase):
     def check_network_convergence(self, use_cuda, build_strategy=None):
         os.environ['CPU_NUM'] = str(4)
-        main = fluid.Program()
-        startup = fluid.Program()
-        with fluid.program_guard(main, startup):
+        main = base.Program()
+        startup = base.Program()
+        with base.program_guard(main, startup):
             loss = simple_fc_net()
             test_program = main.clone(for_test=True)
 
@@ -42,8 +42,8 @@ class TestPassBuilder(unittest.TestCase):
             image = np.random.normal(size=(batch_size, 784)).astype('float32')
             label = np.random.randint(0, 10, (batch_size, 1), dtype="int64")
 
-            place = fluid.CUDAPlace(0) if use_cuda else fluid.CPUPlace()
-            exe = fluid.Executor(place)
+            place = base.CUDAPlace(0) if use_cuda else base.CPUPlace()
+            exe = base.Executor(place)
             exe.run(startup)
             feed_dict = {'image': image, 'label': label}
 
@@ -55,12 +55,12 @@ class TestPassBuilder(unittest.TestCase):
             )
 
             for i in range(5):
-                _ = exe.run(train_cp, fetch_list=[loss.name], feed=feed_dict)
+                _ = exe.run(train_cp, fetch_list=[loss], feed=feed_dict)
                 (test_loss,) = exe.run(
-                    test_cp, fetch_list=[loss.name], feed=feed_dict
+                    test_cp, fetch_list=[loss], feed=feed_dict
                 )
                 (train_loss,) = exe.run(
-                    train_cp, fetch_list=[loss.name], feed=feed_dict
+                    train_cp, fetch_list=[loss], feed=feed_dict
                 )
 
                 avg_test_loss_val = np.array(test_loss).mean()
@@ -83,7 +83,7 @@ class TestPassBuilder(unittest.TestCase):
                 )
 
     def test_parallel_testing_with_new_strategy(self):
-        build_strategy = fluid.BuildStrategy()
+        build_strategy = base.BuildStrategy()
         self.assertFalse(build_strategy.fuse_elewise_add_act_ops)
         build_strategy.fuse_elewise_add_act_ops = True
         # FIXME: currently fuse_elewise_add_act_ops not compatible with below options
@@ -107,18 +107,19 @@ class TestPassBuilder(unittest.TestCase):
 
         pass_builder.remove_pass(len(pass_builder.all_passes()) - 1)
         self.assertEqual(origin_len + 1, len(pass_builder.all_passes()))
-        with tempfile.TemporaryDirectory(prefix="dot_path_") as tmpdir:
-            graph_viz_path = os.path.join(tmpdir, 'test_viz_pass.dot')
-            viz_pass.set("graph_viz_path", graph_viz_path)
+        with paddle.pir_utils.OldIrGuard():
+            with tempfile.TemporaryDirectory(prefix="dot_path_") as tmpdir:
+                graph_viz_path = os.path.join(tmpdir, 'test_viz_pass.dot')
+                viz_pass.set("graph_viz_path", graph_viz_path)
 
-            self.check_network_convergence(
-                use_cuda=core.is_compiled_with_cuda(),
-                build_strategy=build_strategy,
-            )
-            try:
-                os.stat(graph_viz_path)
-            except os.error:
-                self.assertFalse(True)
+                self.check_network_convergence(
+                    use_cuda=core.is_compiled_with_cuda(),
+                    build_strategy=build_strategy,
+                )
+                try:
+                    os.stat(graph_viz_path)
+                except OSError:
+                    self.assertFalse(True)
 
 
 if __name__ == '__main__':

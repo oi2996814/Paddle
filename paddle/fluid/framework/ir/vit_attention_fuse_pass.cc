@@ -52,9 +52,7 @@
   GET_IR_NODE(reshape2_op);       \
   GET_IR_NODE(reshape2_out);
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 bool HasScale(OpDesc* const op_ptr,
               std::string* name,
@@ -62,7 +60,7 @@ bool HasScale(OpDesc* const op_ptr,
   name->clear();
   std::unordered_map<std::string, Attribute> attr_map = op_ptr->GetAttrMap();
   std::unordered_map<std::string, Attribute>::iterator iter;
-  int len = regexp.size();
+  int len = static_cast<int>(regexp.size());
   for (iter = attr_map.begin(); iter != attr_map.end(); iter++) {
     if (regexp == iter->first.substr(0, len)) {
       *name = iter->first;
@@ -103,12 +101,12 @@ void VitAttentionFusePass::ApplyImpl(ir::Graph* graph) const {
     auto* w_tensor =
         scope->FindVar(matmul0_in_y->Name())->GetMutable<phi::DenseTensor>();
     auto w_dims =
-        phi::make_ddim({w_tensor->dims()[0], 3, w_tensor->dims()[1] / 3});
+        common::make_ddim({w_tensor->dims()[0], 3, w_tensor->dims()[1] / 3});
     w_tensor->Resize(w_dims);
 
     auto* b_tensor = scope->FindVar(elementwise0_in_y->Name())
                          ->GetMutable<phi::DenseTensor>();
-    auto bias_dims = phi::make_ddim({3, b_tensor->dims()[0] / 3});
+    auto bias_dims = common::make_ddim({3, b_tensor->dims()[0] / 3});
     b_tensor->Resize(bias_dims);
 
     desc.SetInput("W", {matmul0_in_y->Name()});
@@ -136,7 +134,7 @@ void VitAttentionFusePass::ApplyImpl(ir::Graph* graph) const {
     PADDLE_ENFORCE_NE(
         subgraph.count(x),
         0,
-        platform::errors::NotFound("Detector did not find input x of conv2d."));
+        common::errors::NotFound("Detector did not find input x of conv2d."));
 
     IR_NODE_LINK_TO(subgraph.at(x), vit_attention_node);  // Input
     IR_NODE_LINK_TO(matmul0_in_y, vit_attention_node);
@@ -160,9 +158,7 @@ void VitAttentionFusePass::ApplyImpl(ir::Graph* graph) const {
   AddStatis(fusion_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(vit_attention_fuse_pass,
               paddle::framework::ir::VitAttentionFusePass);

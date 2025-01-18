@@ -20,8 +20,7 @@ limitations under the License. */
 
 #include "paddle/fluid/framework/io/fs.h"
 
-namespace paddle {
-namespace distributed {
+namespace paddle::distributed {
 
 std::shared_ptr<IndexWrapper> IndexWrapper::s_instance_(nullptr);
 
@@ -31,7 +30,7 @@ int TreeIndex::Load(const std::string filename) {
   PADDLE_ENFORCE_NE(
       fp,
       nullptr,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Open file %s failed. Please check whether the file exists.",
           filename));
 
@@ -49,7 +48,7 @@ int TreeIndex::Load(const std::string filename) {
     PADDLE_ENFORCE_EQ(
         read_num,
         static_cast<size_t>(num),
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Read from file: %s failed. Valid Format is "
             "an integer representing the length of the following string, "
             "and the string itself.We got an integer[% d], "
@@ -62,9 +61,9 @@ int TreeIndex::Load(const std::string filename) {
     PADDLE_ENFORCE_EQ(
         item.ParseFromString(content),
         true,
-        platform::errors::InvalidArgument("Parse from file: %s failed. It's "
-                                          "content can't be parsed by KVItem.",
-                                          filename));
+        common::errors::InvalidArgument("Parse from file: %s failed. It's "
+                                        "content can't be parsed by KVItem.",
+                                        filename));
 
     if (item.key() == ".tree_meta") {
       meta_.ParseFromString(item.value());
@@ -74,7 +73,7 @@ int TreeIndex::Load(const std::string filename) {
       node.ParseFromString(item.value());
 
       // PADDLE_ENFORCE_NE(node.id(), 0,
-      //                  platform::errors::InvalidArgument(
+      //                  common::errors::InvalidArgument(
       //                      "Node'id should not be equal to zero."));
       if (node.is_leaf()) {
         id_codes_map_[node.id()] = code;
@@ -173,10 +172,10 @@ std::vector<uint64_t> TreeIndex::GetChildrenCodes(uint64_t ancestor,
 
 std::vector<uint64_t> TreeIndex::GetTravelCodes(uint64_t id, int start_level) {
   std::vector<uint64_t> res;
-  PADDLE_ENFORCE_NE(id_codes_map_.find(id),
-                    id_codes_map_.end(),
-                    paddle::platform::errors::InvalidArgument(
-                        "id = %d doesn't exist in Tree.", id));
+  PADDLE_ENFORCE_NE(
+      id_codes_map_.find(id),
+      id_codes_map_.end(),
+      common::errors::InvalidArgument("id = %d doesn't exist in Tree.", id));
   auto code = id_codes_map_.at(id);
   int level = meta_.height() - 1;
 
@@ -188,7 +187,7 @@ std::vector<uint64_t> TreeIndex::GetTravelCodes(uint64_t id, int start_level) {
   return res;
 }
 
-std::vector<IndexNode> TreeIndex::GetAllLeafs() {
+std::vector<IndexNode> TreeIndex::GetAllLeaves() {
   std::vector<IndexNode> res;
   res.reserve(id_codes_map_.size());
   for (auto& ite : id_codes_map_) {
@@ -198,5 +197,4 @@ std::vector<IndexNode> TreeIndex::GetAllLeafs() {
   return res;
 }
 
-}  // end namespace distributed
-}  // end namespace paddle
+}  // namespace paddle::distributed

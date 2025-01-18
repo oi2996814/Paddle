@@ -41,10 +41,7 @@ custom_ops = load(
 
 
 def is_complex(dtype):
-    return (
-        dtype == paddle.fluid.core.VarDesc.VarType.COMPLEX64
-        or dtype == paddle.fluid.core.VarDesc.VarType.COMPLEX128
-    )
+    return dtype == paddle.complex64 or dtype == paddle.complex128
 
 
 def to_complex(dtype):
@@ -86,10 +83,16 @@ def conj_static(func, shape, dtype, np_input):
             exe = static.Executor()
             exe.run(static.default_startup_program())
 
+            if paddle.framework.in_pir_mode():
+                ops = static.default_main_program().global_block().ops
+                fetch_list = [out, ops[-1].result(0)]
+            else:
+                fetch_list = [out.name, x.name + "@GRAD"]
+
             out_v, x_grad_v = exe.run(
                 static.default_main_program(),
                 feed={"x": np_input},
-                fetch_list=[out.name, x.name + "@GRAD"],
+                fetch_list=fetch_list,
             )
     paddle.disable_static()
     return out_v, x_grad_v

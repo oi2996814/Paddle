@@ -15,9 +15,7 @@ limitations under the License. */
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 #include "paddle/fluid/inference/tensorrt/plugin/anchor_generator_op_plugin.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 /* Anchor Generator Op */
 class AnchorGeneratorOpConverter : public OpConverter {
@@ -45,7 +43,7 @@ class AnchorGeneratorOpConverter : public OpConverter {
         PADDLE_GET_CONST(std::vector<float>, op_desc.GetAttr("variances"));
     const auto offset = PADDLE_GET_CONST(float, op_desc.GetAttr("offset"));
     const int num_anchors = aspect_ratios.size() * anchor_sizes.size();
-    bool is_dynamic = engine_->with_dynamic_shape();
+    bool is_dynamic = true;
     const auto height = input_dims.d[1];
     const auto width = input_dims.d[2];
     const int box_num = width * height * num_anchors;
@@ -80,13 +78,11 @@ class AnchorGeneratorOpConverter : public OpConverter {
                                         anchor_generator_inputs.size(),
                                         *anchor_generator_plugin);
 
-    RreplenishLayerAndOutput(
+    ReplenishLayerAndOutput(
         anchor_generator_layer, "anchor_generator", output_names, test_mode);
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(anchor_generator, AnchorGeneratorOpConverter);

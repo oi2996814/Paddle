@@ -18,8 +18,8 @@ import unittest
 
 import numpy as np
 
-from paddle import fluid
-from paddle.fluid.reader import _reader_process_loop
+from paddle import base
+from paddle.base.reader import _reader_process_loop
 
 
 def get_random_images_and_labels(image_shape, label_shape):
@@ -57,13 +57,13 @@ class TestDygraphDataLoaderProcess(unittest.TestCase):
                 except queue.Empty:
                     break
 
-        with fluid.dygraph.guard():
-            loader = fluid.io.DataLoader.from_generator(
+        with base.dygraph.guard():
+            loader = base.io.DataLoader.from_generator(
                 capacity=self.batch_num + 1, use_multiprocess=True
             )
             loader.set_batch_generator(
                 batch_generator_creator(self.batch_size, self.batch_num),
-                places=fluid.CPUPlace(),
+                places=base.CPUPlace(),
             )
             loader._data_queue = queue.Queue(self.batch_num + 1)
             _reader_process_loop(loader._batch_reader, loader._data_queue)
@@ -80,19 +80,19 @@ class TestDygraphDataLoaderProcess(unittest.TestCase):
             clear_process.start()
 
     def test_reader_process_loop_simple_none(self):
-        def none_sample_genarator(batch_num):
+        def none_sample_generator(batch_num):
             def __reader__():
                 for _ in range(batch_num):
                     yield None
 
             return __reader__
 
-        with fluid.dygraph.guard():
-            loader = fluid.io.DataLoader.from_generator(
+        with base.dygraph.guard():
+            loader = base.io.DataLoader.from_generator(
                 capacity=self.batch_num + 1, use_multiprocess=True
             )
             loader.set_batch_generator(
-                none_sample_genarator(self.batch_num), places=fluid.CPUPlace()
+                none_sample_generator(self.batch_num), places=base.CPUPlace()
             )
             loader._data_queue = queue.Queue(self.batch_num + 1)
             exception = None

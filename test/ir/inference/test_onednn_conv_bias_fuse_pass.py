@@ -21,8 +21,7 @@ from program_config import OpConfig, ProgramConfig, TensorConfig
 
 class TestConvBiasOneDNNFusePass(PassAutoScanTest):
     def sample_predictor_configs(self, program_config):
-        config = self.create_inference_config(use_gpu=False)
-        config.enable_mkldnn()
+        config = self.create_inference_config(use_gpu=False, use_mkldnn=True)
         yield config, ['fused_conv2d'], (1e-4, 1e-5)
 
     def is_program_valid(self, prog_config):
@@ -190,7 +189,7 @@ class TestConvBiasOneDNNFusePass(PassAutoScanTest):
 
     def test(self):
         self.run_and_statis(
-            quant=False, passes=['conv_bias_mkldnn_fuse_pass'], max_examples=130
+            quant=False, passes=['conv_bias_onednn_fuse_pass'], max_examples=130
         )
 
 

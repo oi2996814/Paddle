@@ -15,7 +15,7 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 
 def fully_connected_naive(input, weights, bias_data):
@@ -54,8 +54,8 @@ class TestFCMKLDNNOp(OpTest):
         }
 
     def test_check_output(self):
-        # TODO(wangzhongpu): support mkldnn op in dygraph mode
-        self.check_output(check_dygraph=False)
+        # TODO(wangzhongpu): support onednn op in dygraph mode
+        self.check_output(check_dygraph=False, check_pir_onednn=True)
 
     def test_check_grad_normal(self):
         pass

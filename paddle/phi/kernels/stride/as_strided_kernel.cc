@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 #include "paddle/phi/kernels/as_strided_kernel.h"
+#include "paddle/common/flags.h"
 #include "paddle/phi/backends/all_context.h"
 #include "paddle/phi/core/kernel_registry.h"
+
+COMMON_DECLARE_bool(use_stride_kernel);
 
 namespace phi {
 
@@ -24,13 +27,22 @@ void AsStridedKernel(const Context& dev_ctx,
                      const std::vector<int64_t>& stride,
                      int64_t offset,
                      DenseTensor* out) {
-  out->Resize(DDim(dims.data(), dims.size()));
-  out->set_strides(DDim(stride.data(), stride.size()));
-  out->set_offset(offset);
+  if (!FLAGS_use_stride_kernel) {
+    PADDLE_THROW(common::errors::Fatal(
+        "FLAGS_use_stride_kernel is closed. Strided kernel "
+        "be called, something wrong has happened!"));
+  }
+  auto meta = out->meta();
+  meta.dims = DDim(dims.data(), static_cast<int>(dims.size()));
+  meta.strides = DDim(stride.data(), static_cast<int>(stride.size()));
+  meta.offset = offset;
+  out->set_meta(meta);
   out->ResetHolder(input.Holder());
+  out->ShareInplaceVersionCounterWith(input);
 }
 
 }  // namespace phi
-PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE_EXCEPT_CUSTOM(as_strided,
-                                                       STRIDED,
-                                                       phi::AsStridedKernel) {}
+
+PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE(as_strided,
+                                         STRIDED,
+                                         phi::AsStridedKernel) {}

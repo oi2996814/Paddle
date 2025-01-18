@@ -67,7 +67,7 @@ def softmax_with_cross_entropy_grad(softmax, label, loss_grad, axis):
 
 
 class TestCSoftmaxWithCrossEntropy(unittest.TestCase):
-    def test_model(self, data_type="float32"):
+    def setUp(self):
         self.num_class = 1000
         self.batch_size = 1024
         fleet.init(is_collective=True)
@@ -75,6 +75,7 @@ class TestCSoftmaxWithCrossEntropy(unittest.TestCase):
         strategy.tensor_parallel = True
         strategy.tensor_parallel_configs = {'tensor_parallel_degree': 2}
 
+    def test_model(self, data_type="float32"):
         rank = fleet.worker_index()
 
         # get data that is shared by both ranks
@@ -122,6 +123,80 @@ class TestCSoftmaxWithCrossEntropy(unittest.TestCase):
         need_softmax = np.apply_along_axis(stable_softmax, 1, inputs)
         need_loss = cross_entropy(
             need_softmax, label, False, 1, ignore_index=ignore_index
+        )
+
+        softmax = np.concatenate(
+            (softmax_list[0].numpy(), softmax_list[1].numpy()), axis=1
+        )
+
+        # compare results
+        rtol = 1e-6
+        np.testing.assert_allclose(loss.numpy(), need_loss, rtol=rtol)
+        np.testing.assert_allclose(softmax, need_softmax, rtol=rtol)
+
+    def test_model_soft_label(self, data_type="float32"):
+        rank = fleet.worker_index()
+
+        # get data that is shared by both ranks
+        np.random.seed(os.getuid())
+
+        C = 4
+
+        label = []
+        for _ in range(self.batch_size):
+            tmp = np.random.choice(
+                range(0, self.num_class), size=C, replace=False
+            )
+            label.append(tmp)
+        label = np.array(label)
+
+        ignore_index = -100
+
+        local_elements = int(self.num_class / 2)
+        # get input data for rank 0
+        np.random.seed(0)
+        input0 = np.random.uniform(
+            low=-40.0, high=40.0, size=(self.batch_size, local_elements)
+        ).astype(data_type)
+
+        # get input data for rank 1
+        np.random.seed(1)
+        input1 = np.random.uniform(
+            low=-40.0, high=40.0, size=(self.batch_size, local_elements)
+        ).astype(data_type)
+
+        # get combined input data
+        inputs = np.concatenate((input0, input1), axis=1)
+
+        if rank == 0:
+            loss, softmax = _c_softmax_with_cross_entropy(
+                paddle.to_tensor(input0),
+                paddle.to_tensor(label),
+                ignore_index=ignore_index,
+                return_softmax=True,
+            )
+        else:
+            loss, softmax = _c_softmax_with_cross_entropy(
+                paddle.to_tensor(input1),
+                paddle.to_tensor(label),
+                ignore_index=ignore_index,
+                return_softmax=True,
+            )
+        paddle.device.cuda.synchronize()
+        softmax_list = []
+        paddle.distributed.all_gather(softmax_list, softmax)
+
+        # calculate analytic result
+        need_softmax = np.apply_along_axis(stable_softmax, 1, inputs)
+        prob = 1.0 / C
+        need_label = np.zeros_like(inputs)
+
+        for i in range(len(label)):
+            for c in label[i]:
+                need_label[i][c] = prob
+
+        need_loss = cross_entropy(
+            need_softmax, need_label, True, 1, ignore_index=ignore_index
         )
 
         softmax = np.concatenate(

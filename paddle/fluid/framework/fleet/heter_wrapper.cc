@@ -31,8 +31,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/fluid/framework/device_worker.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 std::shared_ptr<HeterWrapper> HeterWrapper::s_instance_ = NULL;
 bool HeterWrapper::is_initialized_ = false;
@@ -91,14 +90,14 @@ void HeterWrapper::SerializeToReq(const std::string& varname,
   }
   phi::DenseTensor* tensor = var->GetMutable<phi::DenseTensor>();
   req_var->set_varname(varname);
-  req_var->set_type(LOD_TENSOR);
+  req_var->set_type(DENSE_TENSOR);
   req_var->set_data_type(static_cast<VariableMessage::Type>(
       framework::TransToProtoVarType(tensor->dtype())));
 
-  for (auto& dim : phi::vectorize(tensor->dims())) {
+  for (auto& dim : common::vectorize(tensor->dims())) {
     req_var->add_dims(dim);
   }
-  const framework::LoD lod = tensor->lod();
+  const phi::LegacyLoD lod = tensor->lod();
   if (lod.size() > 0) {
     req_var->set_lod_level(lod.size());
     for (auto& each : lod) {
@@ -115,14 +114,14 @@ void HeterWrapper::SerializeToReq(const std::string& varname,
                    SizeOfType(framework::TransToProtoVarType(tensor->dtype())));
   char* data_ptr = const_cast<char*>(req_data->data());
 
-  if (platform::is_cpu_place(tensor->place())) {
+  if (phi::is_cpu_place(tensor->place())) {
     memcpy(data_ptr,
            tensor->data(),
            tensor->numel() *
                SizeOfType(framework::TransToProtoVarType(tensor->dtype())));
   } else {
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
-    memory::Copy(platform::CPUPlace(),
+    memory::Copy(phi::CPUPlace(),
                  data_ptr,
                  tensor->place(),
                  tensor->data(),
@@ -131,7 +130,7 @@ void HeterWrapper::SerializeToReq(const std::string& varname,
                  nullptr);
 #endif
 #ifdef PADDLE_WITH_XPU
-    memory::Copy(platform::CPUPlace(),
+    memory::Copy(phi::CPUPlace(),
                  data_ptr,
                  tensor->place(),
                  tensor->data(),
@@ -144,7 +143,7 @@ void HeterWrapper::SerializeToReq(const std::string& varname,
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 void HeterWrapper::DeSerializeToTensor(Scope* scope,
                                        const VariableMessage& req_var,
-                                       platform::Place place,
+                                       phi::Place place,
                                        gpuStream_t stream) {
   // const VariableMessage& req_var = request->vars();
   auto* var = scope->FindVar(req_var.varname());
@@ -154,7 +153,7 @@ void HeterWrapper::DeSerializeToTensor(Scope* scope,
   for (auto& x : req_var.dims()) {
     vec_dim.push_back(x);
   }
-  tensor->Resize(phi::make_ddim(vec_dim));
+  tensor->Resize(common::make_ddim(vec_dim));
 
   LoD lod;
   for (int i = 0; i < req_var.lod_level(); ++i) {
@@ -167,12 +166,12 @@ void HeterWrapper::DeSerializeToTensor(Scope* scope,
   tensor->set_lod(lod);
 
   void* tensor_data = tensor->mutable_data(
-      place, framework::TransToPhiDataType(ToVarType(req_var.data_type())));
+      place, phi::TransToPhiDataType(ToVarType(req_var.data_type())));
 
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
   memory::Copy(place,
                tensor_data,
-               platform::CPUPlace(),
+               phi::CPUPlace(),
                req_var.data().data(),
                tensor->numel() *
                    SizeOfType(framework::TransToProtoVarType(tensor->dtype())),
@@ -190,7 +189,7 @@ void HeterWrapper::DeSerializeToTensor(Scope* scope,
 // const HeterRequest* request) {
 void HeterWrapper::DeSerializeToTensor(Scope* scope,
                                        const VariableMessage& req_var,
-                                       platform::Place place) {
+                                       phi::Place place) {
   // const VariableMessage& req_var = request->vars();
   auto* var = scope->FindVar(req_var.varname());
   auto* tensor = var->GetMutable<phi::DenseTensor>();
@@ -199,7 +198,7 @@ void HeterWrapper::DeSerializeToTensor(Scope* scope,
   for (auto& x : req_var.dims()) {
     vec_dim.push_back(x);
   }
-  tensor->Resize(phi::make_ddim(vec_dim));
+  tensor->Resize(common::make_ddim(vec_dim));
 
   LoD lod;
   for (int i = 0; i < req_var.lod_level(); ++i) {
@@ -212,12 +211,12 @@ void HeterWrapper::DeSerializeToTensor(Scope* scope,
   tensor->set_lod(lod);
 
   void* tensor_data = tensor->mutable_data(
-      place, framework::TransToPhiDataType(ToVarType(req_var.data_type())));
+      place, phi::TransToPhiDataType(ToVarType(req_var.data_type())));
 
 #ifdef PADDLE_WITH_XPU
   memory::Copy(place,
                tensor_data,
-               platform::CPUPlace(),
+               phi::CPUPlace(),
                req_var.data().data(),
                tensor->numel() *
                    SizeOfType(framework::TransToProtoVarType(tensor->dtype())));
@@ -243,7 +242,7 @@ framework::proto::VarType::Type HeterWrapper::ToVarType(
     case VariableMessage::BOOL:
       return framework::proto::VarType::BOOL;  // NOLINT
     default:
-      PADDLE_THROW(platform::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "ToVarType:Unsupported type %d", type));
   }
 }
@@ -277,7 +276,7 @@ void HeterWrapper::EndPass(Scope* scope, int num) {
   } else {
     VLOG(3) << "call end pass success";
     for (int j = 0; j < response.vars_size(); ++j) {
-      DeSerializeToTensor(scope, response.vars(j), platform::CPUPlace());
+      DeSerializeToTensor(scope, response.vars(j), phi::CPUPlace());
     }
   }
   // }
@@ -299,10 +298,10 @@ void HeterWrapper::CallRemoteXpu(std::shared_ptr<HeterTask> task,
       VLOG(3) << "call xpu success";
     }
     // DeSerializeToTensor(task->scope_,
-    // closure->response.vars(), platform::CPUPlace());
+    // closure->response.vars(), phi::CPUPlace());
     for (int i = 0; i < closure->response.vars_size(); ++i) {
       DeSerializeToTensor(
-          task->scope_, closure->response.vars(i), platform::CPUPlace());
+          task->scope_, closure->response.vars(i), phi::CPUPlace());
     }
 
     worker->Schedule(task->taskid_);
@@ -353,11 +352,10 @@ void HeterWrapper::CallRemoteXpuSync(
   } else {
     VLOG(3) << "call xpu success";
     for (int i = 0; i < response.vars_size(); ++i) {
-      DeSerializeToTensor(task->scope_, response.vars(i), platform::CPUPlace());
+      DeSerializeToTensor(task->scope_, response.vars(i), phi::CPUPlace());
     }
   }
 }
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace paddle::framework
 #endif

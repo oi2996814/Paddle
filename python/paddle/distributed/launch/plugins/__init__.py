@@ -43,17 +43,24 @@ def process_args(ctx):
 
 
 def collective_compatible(ctx):
+    force_use_args = int(os.getenv("PADDLE_LAUNCH_WITH_ARGS", "0"))
     if 'PADDLE_TRAINER_ENDPOINTS' in ctx.envs:
         eps = ctx.envs['PADDLE_TRAINER_ENDPOINTS'].split(',')
         hosts = {h.split(':')[0] for h in eps}
-        ctx.args.master = eps[0] if ':' in eps[0] else f'{eps[0]}:6768'
+        if force_use_args:
+            ctx.args.master = None
+        else:
+            ctx.args.master = eps[0] if ':' in eps[0] else f'{eps[0]}:6768'
         ctx.args.nnodes = len(hosts)
         ctx.logger.info(f'args reset by env PADDLE_TRAINER_ENDPOINTS\n{eps}')
 
     if 'DISTRIBUTED_TRAINER_ENDPOINTS' in ctx.envs:
         eps = ctx.envs['DISTRIBUTED_TRAINER_ENDPOINTS'].split(',')
         hosts = {h.split(':')[0] for h in eps}
-        ctx.args.master = eps[0]
+        if force_use_args:
+            ctx.args.master = None
+        else:
+            ctx.args.master = eps[0]
         ctx.args.nnodes = len(hosts)
         ctx.logger.info(
             f'args reset by env DISTRIBUTED_TRAINER_ENDPOINTS\n{eps}'
@@ -71,9 +78,7 @@ def test_mode(ctx):
         ctx.logger.info('Paddle Distributed Test begin...')
         if int(ctx.args.nnodes) < 2:
             ctx.args.nnodes = 2
-        ctx.args.training_script = '{}/test.py'.format(
-            os.path.dirname(__file__)
-        )
+        ctx.args.training_script = f'{os.path.dirname(__file__)}/test.py'
 
 
 enabled_plugins = [

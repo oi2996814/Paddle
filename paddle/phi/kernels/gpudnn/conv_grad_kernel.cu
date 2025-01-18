@@ -358,7 +358,7 @@ void ConvCudnnGradKernelImplV8(
   PADDLE_ENFORCE_EQ(
       groups,
       1,
-      phi::errors::Unimplemented(
+      common::errors::Unimplemented(
           "Group concolution using CUDNNv8 API is unsupported for now"));
 
   cudnnHandle_t handle = const_cast<cudnnHandle_t>(ctx.cudnn_handle());
@@ -444,8 +444,8 @@ void ConvCudnnGradKernel(const Context& ctx,
   auto exhaustive_deterministic = exhaustive_search && deterministic;
   PADDLE_ENFORCE_EQ(exhaustive_deterministic,
                     false,
-                    phi::errors::InvalidArgument(
-                        "Cann't set exhaustive_search True and "
+                    common::errors::InvalidArgument(
+                        "Can't set exhaustive_search True and "
                         "FLAGS_cudnn_deterministic True at same time."));
 
   const bool channel_last = (data_format == "NHWC" || data_format == "NDHWC");
@@ -536,7 +536,7 @@ void ConvCudnnGradKernel(const Context& ctx,
     in_data_dims = slice_ddim(in_dims, 1, in_dims.size() - 1);
     filter_data_dims = slice_ddim(filter_dims, 1, filter_dims.size() - 1);
   }
-  std::vector<int> ksize = vectorize<int>(filter_data_dims);
+  std::vector<int> ksize = common::vectorize<int>(filter_data_dims);
   UpdatePaddingAndDilation(
       &paddings, &dilations, padding_algorithm, in_data_dims, strides, ksize);
 
@@ -579,7 +579,7 @@ void ConvCudnnGradKernel(const Context& ctx,
         input_pad[2 * i + 2 + 1] = paddings[2 * i + 1] - padding_common[i];
       }
     }
-    DDim new_input_shape(make_ddim(new_input_shape_vec));
+    DDim new_input_shape(common::make_ddim(new_input_shape_vec));
     transformed_input.Resize(new_input_shape);
     ctx.template Alloc<T>(&transformed_input);
 
@@ -607,7 +607,7 @@ void ConvCudnnGradKernel(const Context& ctx,
                                           &transformed_input);
       } break;
       default:
-        PADDLE_THROW(phi::errors::InvalidArgument(
+        PADDLE_THROW(common::errors::InvalidArgument(
             "ConvOp only support tensors with 4 or 5 dimensions."));
     }
   } else {
@@ -852,8 +852,8 @@ void ConvCudnnGradGradKernel(
   auto exhaustive_deterministic = exhaustive_search && deterministic;
   PADDLE_ENFORCE_EQ(exhaustive_deterministic,
                     false,
-                    phi::errors::InvalidArgument(
-                        "Cann't set exhaustive_search True and "
+                    common::errors::InvalidArgument(
+                        "Can't set exhaustive_search True and "
                         "FLAGS_cudnn_deterministic True at same time."));
 
   std::vector<int> paddings = paddings_t;
@@ -906,7 +906,7 @@ void ConvCudnnGradGradKernel(
   auto filter_dims = W->dims();
   DDim in_data_dims = slice_ddim(in_dims, 2, in_dims.size());
   DDim filter_data_dims = slice_ddim(filter_dims, 2, filter_dims.size());
-  std::vector<int> ksize = vectorize<int>(filter_data_dims);
+  std::vector<int> ksize = common::vectorize<int>(filter_data_dims);
   UpdatePaddingAndDilation(
       &paddings, &dilations, padding_algorithm, in_data_dims, strides, ksize);
 
@@ -935,7 +935,7 @@ void ConvCudnnGradGradKernel(
       input_pad[2 * i + 4] = paddings[2 * i] - padding_common[i];
       input_pad[2 * i + 4 + 1] = paddings[2 * i + 1] - padding_common[i];
     }
-    DDim new_input_shape(make_ddim(new_input_shape_vec));
+    DDim new_input_shape(common::make_ddim(new_input_shape_vec));
     transformed_X.Resize(new_input_shape);
     transformed_ddX.Resize(new_input_shape);
     transformed_dX.Resize(new_input_shape);
@@ -976,7 +976,7 @@ void ConvCudnnGradGradKernel(
         }
       } break;
       default:
-        PADDLE_THROW(phi::errors::InvalidArgument(
+        PADDLE_THROW(common::errors::InvalidArgument(
             "ConvOp only support tensors with 4 or 5 dimensions."));
     }
 
@@ -1466,13 +1466,6 @@ PD_REGISTER_KERNEL(conv3d_grad,
                    GPUDNN,
                    ALL_LAYOUT,
                    phi::Conv3DCudnnGradKernel,
-                   float,
-                   phi::dtype::float16) {}
-
-PD_REGISTER_KERNEL(depthwise_conv2d_grad,
-                   GPUDNN,
-                   ALL_LAYOUT,
-                   phi::DepthwiseConvCudnnGradKernel,
                    float,
                    phi::dtype::float16) {}
 PD_REGISTER_KERNEL(conv2d_double_grad,

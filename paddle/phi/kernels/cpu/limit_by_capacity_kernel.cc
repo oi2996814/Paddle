@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #include "paddle/phi/kernels/limit_by_capacity_kernel.h"
-#include "paddle/phi/core/errors.h"
+#include "paddle/common/errors.h"
 #include "paddle/phi/core/kernel_registry.h"
 
 #if defined(PADDLE_WITH_GLOO)
@@ -27,8 +27,8 @@ void LimitByCapacityKernel(const Context& dev_ctx,
                            const DenseTensor& capacity,
                            int n_worker,
                            DenseTensor* Out) {
-  PADDLE_THROW(
-      phi::errors::Unimplemented("limit_by_capacity is not supported on CPU."));
+  PADDLE_THROW(common::errors::Unimplemented(
+      "limit_by_capacity is not supported on CPU."));
 }
 
 }  // namespace phi

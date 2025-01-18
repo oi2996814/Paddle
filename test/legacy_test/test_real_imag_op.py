@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 import paddle
-from paddle import fluid, static
+from paddle import base, static
 
 numpy_apis = {
     "real": np.real,
@@ -57,7 +58,7 @@ class TestRealOp(OpTest):
         )
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
         self.check_grad(
@@ -65,6 +66,7 @@ class TestRealOp(OpTest):
             'Out',
             user_defined_grads=[self.grad_x],
             user_defined_grad_outputs=[self.grad_out],
+            check_pir=True,
         )
 
 
@@ -94,7 +96,13 @@ class TestRealAPI(unittest.TestCase):
         # prepare test attrs
         self.api = "real"
         self.dtypes = ["complex64", "complex128"]
-        self.places = [paddle.CPUPlace()]
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.is_compiled_with_cuda()
+        ):
+            self.places.append(paddle.CPUPlace())
         if paddle.is_compiled_with_cuda():
             self.places.append(paddle.CUDAPlace(0))
         self._shape = [2, 20, 2, 3]
@@ -114,7 +122,7 @@ class TestRealAPI(unittest.TestCase):
                     out = paddle_apis[self.api](x)
 
                     exe = static.Executor(place)
-                    out_value = exe.run(feed=input_dict, fetch_list=[out.name])
+                    out_value = exe.run(feed=input_dict, fetch_list=[out])
                     np.testing.assert_array_equal(np_res, out_value[0])
 
     def test_in_dynamic_mode(self):
@@ -125,7 +133,7 @@ class TestRealAPI(unittest.TestCase):
             np_res = numpy_apis[self.api](input)
             for place in self.places:
                 # it is more convenient to use `guard` than `enable/disable_**` here
-                with fluid.dygraph.guard(place):
+                with base.dygraph.guard(place):
                     input_t = paddle.to_tensor(input)
                     res = paddle_apis[self.api](input_t).numpy()
                     np.testing.assert_array_equal(np_res, res)
@@ -137,21 +145,25 @@ class TestRealAPI(unittest.TestCase):
                     np.testing.assert_array_equal(np_res, res_t)
 
     def test_name_argument(self):
-        with static.program_guard(static.Program()):
-            x = static.data(name="x", shape=self._shape, dtype=self.dtypes[0])
-            out = paddle_apis[self.api](x, name="real_res")
-            self.assertTrue("real_res" in out.name)
+        with paddle.pir_utils.OldIrGuard():
+            with static.program_guard(static.Program()):
+                x = static.data(
+                    name="x", shape=self._shape, dtype=self.dtypes[0]
+                )
+                out = paddle_apis[self.api](x, name="real_res")
+                self.assertTrue("real_res" in out.name)
 
-    def test_dtype_error(self):
+    def test_dtype_static_error(self):
         # in static graph mode
         with self.assertRaises(TypeError):
             with static.program_guard(static.Program()):
                 x = static.data(name="x", shape=self._shape, dtype="float32")
                 out = paddle_apis[self.api](x, name="real_res")
 
+    def test_dtype_dygraph_error(self):
         # in dynamic mode
         with self.assertRaises(RuntimeError):
-            with fluid.dygraph.guard():
+            with base.dygraph.guard():
                 input = np.random.random(self._shape).astype("float32")
                 input_t = paddle.to_tensor(input)
                 res = paddle_apis[self.api](input_t)
@@ -164,7 +176,13 @@ class TestImagAPI(TestRealAPI):
         # prepare test attrs
         self.api = "imag"
         self.dtypes = ["complex64", "complex128"]
-        self.places = [paddle.CPUPlace()]
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.is_compiled_with_cuda()
+        ):
+            self.places.append(paddle.CPUPlace())
         if paddle.is_compiled_with_cuda():
             self.places.append(paddle.CUDAPlace(0))
         self._shape = [2, 20, 2, 3]

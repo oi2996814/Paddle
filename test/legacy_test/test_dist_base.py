@@ -15,6 +15,9 @@
 import argparse
 import ast
 import os
+
+os.environ['FLAGS_enable_pir_api'] = '0'
+
 import pickle
 import random
 import socket
@@ -28,11 +31,11 @@ from contextlib import closing
 import numpy as np
 
 import paddle
-from paddle import fluid
+from paddle import base
+from paddle.base import compiler
 from paddle.distributed.fleet.meta_optimizers import (
     RawProgramOptimizer as RawProgram,
 )
-from paddle.fluid import compiler
 from paddle.incubate.distributed.fleet import role_maker
 from paddle.incubate.distributed.fleet.collective import (
     DistributedStrategy,
@@ -149,7 +152,7 @@ class TestDistRunnerBase:
         nccl_comm_num=1,
         hogwild_mode=False,
     ):
-        # NOTE: import fluid until runtime, or else forking processes will cause error.
+        # NOTE: import base until runtime, or else forking processes will cause error.
         config = paddle.distributed.transpiler.DistributeTranspilerConfig()
         config.enable_dc_asgd = dc_asgd
         config.sync_mode = sync_mode
@@ -186,7 +189,7 @@ class TestDistRunnerBase:
 
         t = self.get_transpiler(
             trainer_id=args.trainer_id,
-            main_program=fluid.default_main_program(),
+            main_program=base.default_main_program(),
             pserver_endpoints=args.endpoints,
             trainers=args.trainers,
             sync_mode=args.sync_mode,
@@ -198,8 +201,8 @@ class TestDistRunnerBase:
             args.current_endpoint, pserver_prog
         )
 
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         exe.run(startup_prog)
         print_to_err(type(self).__name__, "run pserver startup program done.")
         exe.run(pserver_prog)
@@ -222,11 +225,11 @@ class TestDistRunnerBase:
         )
 
         device_id = int(os.getenv("FLAGS_selected_gpus", "0"))
-        eprint(type(self).__name__, "device_id: %d." % device_id)
-        place = fluid.CUDAPlace(device_id)
+        eprint(type(self).__name__, f"device_id: {device_id}.")
+        place = base.CUDAPlace(device_id)
 
-        exe = fluid.Executor(place)
-        exe.run(fluid.default_startup_program())
+        exe = base.Executor(place)
+        exe.run(base.default_startup_program())
         eprint(type(self).__name__, "run worker startup program done.")
 
         data_loader.set_sample_list_generator(train_reader, place)
@@ -234,13 +237,13 @@ class TestDistRunnerBase:
         print_to_err(type(self).__name__, "begin to train on trainer")
         out_losses = []
 
-        main_program = fluid.default_main_program()
+        main_program = base.default_main_program()
         lr_scheduler = self.get_lr_scheduler(main_program)
         for i in range(RUN_STEP):
             loss = exe.run(main_program, fetch_list=[avg_cost])
             loss = loss[0] if loss else None
             out_losses.append(loss)
-            print_to_err(type(self).__name__, "run step %d finished" % i)
+            print_to_err(type(self).__name__, f"run step {i} finished")
             if lr_scheduler is not None:
                 lr_scheduler.step()
 
@@ -269,33 +272,33 @@ class TestDistRunnerBase:
             predict,
         ) = self.get_model(batch_size=args.batch_size)
 
-        if fluid.core.is_compiled_with_cuda():
+        if base.core.is_compiled_with_cuda():
             device_id = int(os.getenv("FLAGS_selected_gpus", "0"))
-            place = fluid.CUDAPlace(device_id)
-        elif fluid.core.is_compiled_with_xpu():
+            place = base.CUDAPlace(device_id)
+        elif base.core.is_compiled_with_xpu():
             device_id = int(os.getenv("FLAGS_selected_xpus", "0"))
-            place = fluid.XPUPlace(device_id)
+            place = base.XPUPlace(device_id)
         else:
             raise ValueError(
                 "fleet dygraph api must in paddlepaddle-xpu or paddlepaddle-gpu."
             )
 
-        exe = fluid.Executor(place)
-        exe.run(fluid.default_startup_program())
+        exe = base.Executor(place)
+        exe.run(base.default_startup_program())
         eprint(type(self).__name__, "run worker startup program done.")
 
         feed_var_list = [
             var
-            for var in fluid.default_main_program().global_block().vars.values()
+            for var in base.default_main_program().global_block().vars.values()
             if var.is_data
         ]
 
         eprint("feed_var_list:", feed_var_list)
 
         if feed_var_list[0].name == 'label':
-            feed_var_list = feed_var_list[::-1]
+            feed_var_list.reverse()
 
-        feeder = fluid.DataFeeder(feed_var_list, place)
+        feeder = base.DataFeeder(feed_var_list, place)
         reader_generator = train_reader()
 
         def get_data():
@@ -319,12 +322,12 @@ class TestDistRunnerBase:
         out_losses = []
         for i in range(RUN_STEP):
             (loss,) = exe.run(
-                fluid.default_main_program(),
+                base.default_main_program(),
                 fetch_list=[avg_cost.name],
                 feed=feeder.feed(get_data()),
             )
             out_losses.append(float(loss))
-            print_to_err(type(self).__name__, "run step %d finished" % i)
+            print_to_err(type(self).__name__, f"run step {i} finished")
         print_to_err(type(self).__name__, "trainer run finished")
         print_to_err(type(self).__name__, f"dist losses: {out_losses}")
 
@@ -332,14 +335,12 @@ class TestDistRunnerBase:
 
     def run_use_fleet_api_trainer(self, args):
         assert args.update_method == "nccl2" or "bkcl"
+        backend = "bkcl" if args.update_method == "bkcl" else "nccl"
+        paddle.distributed.collective._init_parallel_env(backend)
 
         self.lr = args.lr
 
-        exec_strategy = fluid.ExecutionStrategy()
-        exec_strategy.num_threads = 1
-
         dist_strategy = DistributedStrategy()
-        dist_strategy.exec_strategy = exec_strategy
         dist_strategy.fuse_memory_size = 1  # MB
         dist_strategy.fuse_laryer_size = 1
         if args.use_local_sgd:
@@ -369,19 +370,19 @@ class TestDistRunnerBase:
         trainer_prog = fleet._origin_program
         dist_prog = fleet.main_program
 
-        if fluid.core.is_compiled_with_cuda():
+        if base.core.is_compiled_with_cuda():
             device_id = int(os.getenv("FLAGS_selected_gpus", "0"))
-            place = fluid.CUDAPlace(device_id)
-        elif fluid.core.is_compiled_with_xpu():
+            place = base.CUDAPlace(device_id)
+        elif base.core.is_compiled_with_xpu():
             device_id = int(os.getenv("FLAGS_selected_xpus", "0"))
-            place = fluid.XPUPlace(device_id)
+            place = base.XPUPlace(device_id)
         else:
             raise ValueError(
                 "fleet dygraph api must in paddlepaddle-xpu or paddlepaddle-gpu."
             )
 
-        exe = fluid.Executor(place)
-        exe.run(fluid.default_startup_program())
+        exe = base.Executor(place)
+        exe.run(base.default_startup_program())
         eprint(type(self).__name__, "run worker startup program done.")
 
         feed_var_list = [
@@ -395,9 +396,9 @@ class TestDistRunnerBase:
         # tmp add this code to pass python35 gcc8 CI
         # Fixme(gongweibao, wangxi), need fix fleet api program order
         if feed_var_list[0].name == 'label':
-            feed_var_list = feed_var_list[::-1]
+            feed_var_list.reverse()
 
-        feeder = fluid.DataFeeder(feed_var_list, place)
+        feeder = base.DataFeeder(feed_var_list, place)
         reader_generator = train_reader()
 
         def get_data():
@@ -420,7 +421,7 @@ class TestDistRunnerBase:
                 feed=feeder.feed(get_data()),
             )
             out_losses.append(float(loss))
-            print_to_err(type(self).__name__, "run step %d finished" % i)
+            print_to_err(type(self).__name__, f"run step {i} finished")
         print_to_err(type(self).__name__, "trainer run finished")
 
         dump_output(out_losses)
@@ -428,37 +429,37 @@ class TestDistRunnerBase:
         if args.save_model:
             model_save_dir = "/tmp"
             if fleet.worker_index() == 0:
-                model_save_dir_fluid = os.path.join(
-                    model_save_dir, "fluid_persistables"
+                model_save_dir_base = os.path.join(
+                    model_save_dir, "base_persistables"
                 )
                 model_save_dir_fleet = os.path.join(
                     model_save_dir, "fleet_persistables"
                 )
-                infer_save_dir_fluid = os.path.join(
-                    model_save_dir, "fluid_infer/infer"
+                infer_save_dir_base = os.path.join(
+                    model_save_dir, "base_infer/infer"
                 )
                 infer_save_dir_fleet = os.path.join(
                     model_save_dir, "fleet_infer/infer"
                 )
             else:
-                model_save_dir_fluid = os.path.join(
-                    model_save_dir, "fluid_persistables_2"
+                model_save_dir_base = os.path.join(
+                    model_save_dir, "base_persistables_2"
                 )
                 model_save_dir_fleet = os.path.join(
                     model_save_dir, "fleet_persistables_2"
                 )
-                infer_save_dir_fluid = os.path.join(
-                    model_save_dir, "fluid_infer_2/infer_2"
+                infer_save_dir_base = os.path.join(
+                    model_save_dir, "base_infer_2/infer_2"
                 )
                 infer_save_dir_fleet = os.path.join(
                     model_save_dir, "fleet_infer_2/infer_2"
                 )
             paddle.distributed.io.save_persistables(
-                exe, model_save_dir_fluid, fleet._origin_program
+                exe, model_save_dir_base, fleet._origin_program
             )
             fleet.save_persistables(executor=exe, dirname=model_save_dir_fleet)
             paddle.static.io.save_inference_model(
-                path_prefix=infer_save_dir_fluid,
+                path_prefix=infer_save_dir_base,
                 feed_vars=feed_var_list,
                 fetch_vars=[avg_cost],
                 executor=exe,
@@ -474,7 +475,7 @@ class TestDistRunnerBase:
         old_stdout = sys.stdout
         sys.stdout = StringIO()
 
-        build_stra = fluid.BuildStrategy()
+        build_stra = base.BuildStrategy()
         # FIXME force disable enable_inplace and memory_optimize
         build_stra.enable_inplace = False
         build_stra.memory_optimize = False
@@ -491,11 +492,11 @@ class TestDistRunnerBase:
 
         if args.use_reduce:
             build_stra.reduce_strategy = (
-                fluid.BuildStrategy.ReduceStrategy.Reduce
+                base.BuildStrategy.ReduceStrategy.Reduce
             )
         else:
             build_stra.reduce_strategy = (
-                fluid.BuildStrategy.ReduceStrategy.AllReduce
+                base.BuildStrategy.ReduceStrategy.AllReduce
             )
         pass_builder = None
         if args.batch_merge_repeat > 1:
@@ -554,7 +555,7 @@ class TestDistRunnerBase:
             )
             t = self.get_transpiler(
                 trainer_id=args.trainer_id,
-                main_program=fluid.default_main_program(),
+                main_program=base.default_main_program(),
                 pserver_endpoints=args.endpoints,
                 trainers=args.trainers,
                 sync_mode=args.sync_mode,
@@ -589,21 +590,21 @@ class TestDistRunnerBase:
             )
             nccl2_t.transpile(
                 args.trainer_id,
-                program=fluid.default_main_program(),
-                startup_program=fluid.default_startup_program(),
+                program=base.default_main_program(),
+                startup_program=base.default_startup_program(),
                 trainers=args.endpoints,
                 current_endpoint=args.current_endpoint,
             )
             print_to_err(
                 type(self).__name__, "get trainer program done. with nccl2 mode"
             )
-            trainer_prog = fluid.default_main_program()
+            trainer_prog = base.default_main_program()
         else:
             print_to_err(
                 type(self).__name__,
                 "do nothing about main program, just use it",
             )
-            trainer_prog = fluid.default_main_program()
+            trainer_prog = base.default_main_program()
             print_to_err(type(self).__name__, "use main program done.")
 
         # FIXME(gongwb):wait pserver initialization.
@@ -611,16 +612,13 @@ class TestDistRunnerBase:
 
         if args.use_cuda:
             device_id = int(os.getenv("FLAGS_selected_gpus", "0"))
-            place = fluid.CUDAPlace(device_id)
+            place = base.CUDAPlace(device_id)
         else:
-            place = fluid.CPUPlace()
+            place = base.CPUPlace()
 
-        exe = fluid.Executor(place)
-        exe.run(fluid.default_startup_program())
+        exe = base.Executor(place)
+        exe.run(base.default_startup_program())
         print_to_err(type(self).__name__, "run worker startup program done.")
-
-        exec_strategy = fluid.ExecutionStrategy()
-        exec_strategy.num_threads = 1
 
         print_to_err(type(self).__name__, "begin to compile with data parallel")
         binary = compiler.CompiledProgram(
@@ -634,7 +632,7 @@ class TestDistRunnerBase:
             if var.is_data
         ]
 
-        feeder = fluid.DataFeeder(feed_var_list, place)
+        feeder = base.DataFeeder(feed_var_list, place)
         reader_generator = train_reader()
 
         def get_data():
@@ -656,7 +654,7 @@ class TestDistRunnerBase:
                 binary, fetch_list=[avg_cost.name], feed=feeder.feed(get_data())
             )
             out_losses.append(float(loss))
-            print_to_err(type(self).__name__, "run step %d finished" % i)
+            print_to_err(type(self).__name__, f"run step {i} finished")
             if lr_scheduler is not None:
                 lr_scheduler.step()
 
@@ -715,19 +713,18 @@ class TestParallelDyGraphRunnerBase:
     def run_trainer(self, args):
         seed = 90
         if args.update_method == 'gloo':
-            place = fluid.CPUPlace()
-        elif fluid.core.is_compiled_with_cuda():
+            place = base.CPUPlace()
+        elif base.core.is_compiled_with_cuda():
             device_id = int(os.getenv("FLAGS_selected_gpus", "0"))
-            place = fluid.CUDAPlace(device_id)
-        elif fluid.core.is_compiled_with_xpu():
+            place = base.CUDAPlace(device_id)
+        elif base.core.is_compiled_with_xpu():
             device_id = int(os.getenv("FLAGS_selected_xpus", "0"))
-            place = fluid.XPUPlace(device_id)
+            place = base.XPUPlace(device_id)
         else:
             assert "Only support CUDAPlace or XPUPlace or CPU(Gloo) for now."
 
-        with fluid.dygraph.guard(place):
-            fluid.default_startup_program().random_seed = seed
-            fluid.default_main_program().random_seed = seed
+        with base.dygraph.guard(place):
+            paddle.seed(seed)
             np.random.seed(seed)
             import random
 
@@ -778,7 +775,7 @@ class TestParallelDyGraphRunnerBase:
                 if step_id % 10 == 0:
                     print_to_err(
                         type(self).__name__,
-                        "loss at step %d: %f" % (step_id, loss.numpy()),
+                        f"loss at step {step_id}: {loss.numpy().item():f}",
                     )
                 out_losses.append(loss.numpy())
 
@@ -795,8 +792,7 @@ class TestParallelDyGraphRunnerBase:
 
         # 2. init seed
         seed = 90
-        paddle.static.default_startup_program().random_seed = seed
-        paddle.static.default_main_program().random_seed = seed
+        paddle.seed(seed)
         np.random.seed(seed)
         random.seed(seed)
         # get trainer id
@@ -836,8 +832,7 @@ class TestParallelDyGraphRunnerBase:
 
         # 2. init seed
         seed = 90
-        paddle.static.default_startup_program().random_seed = seed
-        paddle.static.default_main_program().random_seed = seed
+        paddle.seed(seed)
         np.random.seed(seed)
         random.seed(seed)
         # get trainer id
@@ -976,7 +971,7 @@ class TestDistBase(unittest.TestCase):
             self.__use_xpu = True
             self._use_dgc = False
         else:
-            if fluid.core.is_compiled_with_cuda():
+            if base.core.is_compiled_with_cuda():
                 self.__use_cuda = True
             else:
                 self.__use_cuda = False
@@ -1028,14 +1023,10 @@ class TestDistBase(unittest.TestCase):
             DIST_UT_PORT = int(os.getenv("PADDLE_DIST_UT_PORT"))
 
         if DIST_UT_PORT == 0:
-            self._ps_endpoints = "127.0.0.1:{},127.0.0.1:{}".format(
-                self._find_free_port(),
-                self._find_free_port(),
-            )
+            self._ps_endpoints = f"127.0.0.1:{self._find_free_port()},127.0.0.1:{self._find_free_port()}"
         else:
-            self._ps_endpoints = "127.0.0.1:{},127.0.0.1:{}".format(
-                DIST_UT_PORT,
-                DIST_UT_PORT + 1,
+            self._ps_endpoints = (
+                f"127.0.0.1:{DIST_UT_PORT},127.0.0.1:{DIST_UT_PORT + 1}"
             )
             DIST_UT_PORT += 2
             self._dist_port = DIST_UT_PORT
@@ -1054,7 +1045,7 @@ class TestDistBase(unittest.TestCase):
             ) as s:
                 s.bind(('', 0))
                 print_to_err(
-                    type(self).__name__, "socket name: %s" % s.getsockname()[1]
+                    type(self).__name__, f"socket name: {s.getsockname()[1]}"
                 )
                 return s.getsockname()[1]
 
@@ -1095,21 +1086,17 @@ class TestDistBase(unittest.TestCase):
             ps0_cmd += " --sync_mode"
             ps1_cmd += " --sync_mode"
 
-        print(ps0_cmd)
-        print(ps1_cmd)
         path0 = os.path.join(self.temp_dir.name, log_name + "_ps0_err.log")
         path1 = os.path.join(self.temp_dir.name, log_name + "_ps1_err.log")
         ps0_pipe = open(path0, "wb")
         ps1_pipe = open(path1, "wb")
 
-        print_to_err(type(self).__name__, "going to start pserver process 0")
         ps0_proc = subprocess.Popen(
             ps0_cmd.strip().split(" "),
             stdout=subprocess.PIPE,
             stderr=ps0_pipe,
             env=modify_envs(required_envs),
         )
-        print_to_err(type(self).__name__, "going to start pserver process 1")
         ps1_proc = subprocess.Popen(
             ps1_cmd.strip().split(" "),
             stdout=subprocess.PIPE,
@@ -1130,20 +1117,20 @@ class TestDistBase(unittest.TestCase):
         devices="1",
     ):
         cmd = self._python_interp
+        envs['PADDLE_TRAINER_ENDPOINTS'] = self._ps_endpoints
 
         if os.getenv('WITH_COVERAGE', 'OFF') == 'ON':
             envs['COVERAGE_FILE'] = os.getenv('COVERAGE_FILE', '')
             cmd += " -m coverage run --branch -p"
 
-        cmd += " {} --role trainer --update_method local --lr {:f}".format(
-            model,
-            self._lr,
+        cmd += (
+            f" {model} --role trainer --update_method local --lr {self._lr:f}"
         )
 
         if batch_size != DEFAULT_BATCH_SIZE:
-            cmd += " --batch_size %d" % batch_size
+            cmd += f" --batch_size {batch_size}"
         if batch_merge_repeat > 1:
-            cmd += " --batch_merge_repeat %d" % batch_merge_repeat
+            cmd += f" --batch_merge_repeat {batch_merge_repeat}"
         if self._nccl2_reduce_layer:
             cmd += " --nccl2_reduce_layer_local_run 1"
 
@@ -1175,7 +1162,7 @@ class TestDistBase(unittest.TestCase):
             cmd += " --find_unused_parameters"
 
         env_local.update(envs)
-        print(f"local_cmd: {cmd}, env: {env_local}")
+        # print(f"local_cmd: {cmd}, env: {env_local}")
 
         if check_error_log:
             path = os.path.join(self.temp_dir.name, log_name + "_local.log")
@@ -1199,7 +1186,7 @@ class TestDistBase(unittest.TestCase):
         if check_error_log:
             err_log.close()
 
-        sys.stderr.write('local_stderr: %s\n' % local_err)
+        # sys.stderr.write('local_stderr: %s\n' % local_err)
 
         return load_and_remove_dump_file()
 
@@ -1215,9 +1202,7 @@ class TestDistBase(unittest.TestCase):
     ):
         saved_endpoints = self._ps_endpoints
         self._ps_endpoints = self._ps_endpoints.split(',')[0]
-        result = self._run_cluster_gloo(
-            model, envs, 'gloo', check_error_log, log_name
-        )
+        result = self._run_cluster_gloo(model, envs, 'gloo', False, log_name)
         self._ps_endpoints = saved_endpoints
         return result
 
@@ -1280,8 +1265,8 @@ class TestDistBase(unittest.TestCase):
         env0.update(envs)
         env1.update(envs)
 
-        print(f"tr0_cmd: {tr0_cmd}, env: {env0}")
-        print(f"tr1_cmd: {tr1_cmd}, env: {env1}")
+        # print(f"tr0_cmd: {tr0_cmd}, env: {env0}")
+        # print(f"tr1_cmd: {tr1_cmd}, env: {env1}")
 
         path0 = os.path.join(self.temp_dir.name, log_name + "_tr0_err.log")
         path1 = os.path.join(self.temp_dir.name, log_name + "_tr1_err.log")
@@ -1500,10 +1485,9 @@ class TestDistBase(unittest.TestCase):
     def _run_cluster_gloo(
         self, model, envs, update_method, check_error_log, log_name
     ):
-        assert update_method == "gloo", (
-            "_run_cluster_gloo must have update_method: gloo, but get %s"
-            % update_method
-        )
+        assert (
+            update_method == "gloo"
+        ), f"_run_cluster_gloo must have update_method: gloo, but get {update_method}"
         assert (
             not self._use_hallreduce
         ), "_run_cluster_gloo must have _use_hallreduce = false"
@@ -1521,11 +1505,9 @@ class TestDistBase(unittest.TestCase):
             tr_env.update(envs)
             tr_env["GLOG_vmodule"] = 'gloo_context=4'
             tr_env["GLOG_v"] = '3'
-            print(
-                "use_hallreduce:{} tr_cmd:{}, env: {}".format(
-                    self._use_hallreduce, tr_cmd, tr_env
-                )
-            )
+            # print(
+            # f"use_hallreduce:{self._use_hallreduce} tr_cmd:{tr_cmd}, env: {tr_env}"
+            # )
 
             path = os.path.join(
                 self.temp_dir.name, log_name + f"_tr{i}_err.log"
@@ -1574,9 +1556,7 @@ class TestDistBase(unittest.TestCase):
             if DIST_UT_PORT == 0:
                 # NOTE(wangxi). hallreduce test must use 4cards after nccl>=2.7
                 for i in range(0, 4):
-                    self._ps_endpoints += "127.0.0.1:%s," % (
-                        self._find_free_port()
-                    )
+                    self._ps_endpoints += f"127.0.0.1:{self._find_free_port()},"
             else:
                 for i in range(0, 4):
                     self._ps_endpoints += "127.0.0.1:%s," % (DIST_UT_PORT + i)
@@ -1596,9 +1576,7 @@ class TestDistBase(unittest.TestCase):
             )
             tr_env.update(envs)
             print(
-                "use_hallreduce:{} tr_cmd:{}, env: {}".format(
-                    self._use_hallreduce, tr_cmd, tr_env
-                )
+                f"use_hallreduce:{self._use_hallreduce} tr_cmd:{tr_cmd}, env: {tr_env}"
             )
 
             path = os.path.join(
@@ -1701,9 +1679,9 @@ class TestDistBase(unittest.TestCase):
 
         if check_error_log:
             required_envs["GLOG_vmodule"] = (
-                "fused_all_reduce_op_handle=10,all_reduce_op_handle=10,alloc_continuous_space_op=10,fuse_all_reduce_op_pass=10,"
+                "alloc_continuous_space_op=10,"
                 "alloc_continuous_space_for_grad_pass=10,fast_threaded_ssa_graph_executor=10,executor=10,operator=10,"
-                "sparse_all_reduce_op_handle=10,gen_nccl_id_op=10,gen_nccl_id_op_help=10,nccl_helper=10,grpc_client=10,"
+                "gen_nccl_id_op=10,gen_nccl_id_op_help=10,nccl_helper=10,grpc_client=10,"
                 "grpc_server=10,request_handler_impl=10,section_worker=10"
             )
             required_envs["GLOG_logtostderr"] = "1"
@@ -1724,22 +1702,13 @@ class TestDistBase(unittest.TestCase):
         need_envs={},
         log_name="",
     ):
-        if self._dygraph and (self._gloo_mode or self._nccl2_mode):
-            self.check_with_place_func(
-                model_file=model_file,
-                delta=delta,
-                check_error_log=check_error_log,
-                need_envs=need_envs,
-                log_name=log_name,
-            )
-        else:
-            self.check_with_place_func(
-                model_file=model_file,
-                delta=delta,
-                check_error_log=check_error_log,
-                need_envs=need_envs,
-                log_name=log_name,
-            )
+        self.check_with_place_func(
+            model_file=model_file,
+            delta=delta,
+            check_error_log=check_error_log,
+            need_envs=need_envs,
+            log_name=log_name,
+        )
 
     def check_with_place_func(
         self,

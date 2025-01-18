@@ -15,11 +15,11 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 
 def cal_kthvalue(x, k, axis, keepdim=False):
@@ -45,9 +45,11 @@ class TestKthvalueOp(OpTest):
 
     def setUp(self):
         self.op_type = "kthvalue"
+        self.prim_op_type = "prim"
         self.python_api = paddle.kthvalue
+        self.public_python_api = paddle.kthvalue
         self.init_dtype()
-        self.input_data = np.random.random((2, 1, 2, 4, 10)).astype(self.dtype)
+        self.input_data = np.random.random([2, 1, 2, 4, 10]).astype(self.dtype)
         self.init_args()
         self.inputs = {'X': self.input_data}
         self.attrs = {'k': self.k, 'axis': self.axis}
@@ -58,11 +60,16 @@ class TestKthvalueOp(OpTest):
 
     def test_check_output(self):
         paddle.enable_static()
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
         paddle.enable_static()
-        self.check_grad({'X'}, 'Out')
+        self.check_grad(
+            ['X'],
+            'Out',
+            check_pir=True,
+            check_prim_pir=True,
+        )
 
 
 class TestKthvalueOpFp16(TestKthvalueOp):
@@ -82,8 +89,10 @@ class TestKthvalueOpWithKeepdim(OpTest):
         self.init_args()
         self.init_dtype()
         self.op_type = "kthvalue"
+        self.prim_op_type = "prim"
         self.python_api = paddle.kthvalue
-        self.input_data = np.random.random((1, 3, 2, 4, 10)).astype(self.dtype)
+        self.public_python_api = paddle.kthvalue
+        self.input_data = np.random.random([1, 3, 2, 4, 10]).astype(self.dtype)
         self.inputs = {'X': self.input_data}
         self.attrs = {'k': self.k, 'axis': self.axis, 'keepdim': True}
         output, indices = cal_kthvalue(
@@ -93,11 +102,16 @@ class TestKthvalueOpWithKeepdim(OpTest):
 
     def test_check_output(self):
         paddle.enable_static()
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
         paddle.enable_static()
-        self.check_grad({'X'}, 'Out')
+        self.check_grad(
+            ['X'],
+            'Out',
+            check_pir=True,
+            check_prim_pir=True,
+        )
 
 
 class TestKthvalueOpWithKeepdimFp16(TestKthvalueOpWithKeepdim):
@@ -107,7 +121,7 @@ class TestKthvalueOpWithKeepdimFp16(TestKthvalueOpWithKeepdim):
 
 class TestKthvalueOpKernels(unittest.TestCase):
     def setUp(self):
-        self.axises = [2, -1]
+        self.axes = [2, -1]
 
     def test_kthvalue_op(self):
         paddle.disable_static()
@@ -118,7 +132,7 @@ class TestKthvalueOpKernels(unittest.TestCase):
             paddle.set_device('cpu')
             inputs = np.random.random(shape)
             tensor = paddle.to_tensor(inputs)
-            for axis in self.axises:
+            for axis in self.axes:
                 value_expect, indice_expect = cal_kthvalue(inputs, k, axis)
                 v, inds = paddle.kthvalue(tensor, k, axis)
                 np.testing.assert_allclose(v.numpy(), value_expect, rtol=1e-05)
@@ -132,7 +146,7 @@ class TestKthvalueOpKernels(unittest.TestCase):
             paddle.set_device('gpu')
             inputs = np.random.random(shape)
             tensor = paddle.to_tensor(inputs)
-            for axis in self.axises:
+            for axis in self.axes:
                 value_expect, indice_expect = cal_kthvalue(inputs, k, axis)
                 v, inds = paddle.kthvalue(tensor, k, axis)
                 np.testing.assert_allclose(v.numpy(), value_expect, rtol=1e-05)
@@ -141,7 +155,7 @@ class TestKthvalueOpKernels(unittest.TestCase):
                 )
 
         test_cpu_kernel()
-        if fluid.core.is_compiled_with_cuda():
+        if base.core.is_compiled_with_cuda():
             test_gpu_kernel()
 
 
@@ -168,7 +182,7 @@ class TestKthvalueOpWithNaN(unittest.TestCase):
             self.assertEqual(inds[0, 2].numpy(), nan_position)
 
         test_nan_in_cpu_kernel()
-        if fluid.core.is_compiled_with_cuda():
+        if base.core.is_compiled_with_cuda():
             test_nan_in_gpu_kernel()
 
 
@@ -245,11 +259,11 @@ class TestKthvalueFP16Op(OpTest):
 
     def test_check_output(self):
         paddle.enable_static()
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
         paddle.enable_static()
-        self.check_grad({'X'}, 'Out')
+        self.check_grad({'X'}, 'Out', check_pir=True)
 
 
 class TestKthvalueWithKeepdimFP16Op(TestKthvalueFP16Op):
@@ -264,7 +278,7 @@ class TestKthvalueWithKeepdimFP16Op(TestKthvalueFP16Op):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestKthvalueBF16Op(OpTest):
     def init_args(self):
@@ -285,12 +299,12 @@ class TestKthvalueBF16Op(OpTest):
     def test_check_output(self):
         paddle.enable_static()
         place = core.CUDAPlace(0)
-        self.check_output_with_place(place)
+        self.check_output_with_place(place, check_pir=True)
 
     def test_check_grad(self):
         paddle.enable_static()
         place = core.CUDAPlace(0)
-        self.check_grad_with_place(place, {'X'}, 'Out')
+        self.check_grad_with_place(place, {'X'}, 'Out', check_pir=True)
 
 
 if __name__ == '__main__':

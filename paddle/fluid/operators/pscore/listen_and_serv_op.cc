@@ -14,27 +14,25 @@ limitations under the License. */
 
 #include "paddle/fluid/framework/op_registry.h"
 
-constexpr char kLRDecayBlockId[] = "lr_decay_block_id";
-constexpr char kCheckpointBlockId[] = "checkpint_block_id";
-constexpr char kPrefetchVarNameToBlockId[] = "prefetch_var_name_to_block_id";
-constexpr char kOptimizeBlocks[] = "optimize_blocks";
-constexpr char kSparseGradToParam[] = "sparse_grad_to_param";
+constexpr char kLRDecayBlockId[] = "lr_decay_block_id";      // NOLINT
+constexpr char kCheckpointBlockId[] = "checkpint_block_id";  // NOLINT
+constexpr char kPrefetchVarNameToBlockId[] =
+    "prefetch_var_name_to_block_id";                           // NOLINT
+constexpr char kOptimizeBlocks[] = "optimize_blocks";          // NOLINT
+constexpr char kSparseGradToParam[] = "sparse_grad_to_param";  // NOLINT
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class InferShapeContext;
 class OpDesc;
 class Scope;
 template <typename T>
 class EmptyGradOpMaker;
-}  // namespace framework
-namespace imperative {
+}  // namespace paddle::framework
+namespace paddle::imperative {
 class OpBase;
-}  // namespace imperative
-}  // namespace paddle
+}  // namespace paddle::imperative
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class ListenAndServOp : public framework::OperatorBase {
  public:
@@ -45,7 +43,7 @@ class ListenAndServOp : public framework::OperatorBase {
       : OperatorBase(type, inputs, outputs, attrs) {}
 
   void RunImpl(const framework::Scope& scope,
-               const platform::Place& place) const override {
+               const phi::Place& place) const override {
     VLOG(1) << "just for recorder";
   }
 };
@@ -89,9 +87,9 @@ class ListenAndServOpMaker : public framework::OpProtoAndCheckerMaker {
     AddAttr<int>("Fanin", "How many clients send to this server.")
         .SetDefault(1);
     AddAttr<int>(kCheckpointBlockId,
-                 "BolckID to run save checkpoint on pserer.")
+                 "BlockID to run save checkpoint on pserver.")
         .SetDefault(-1);
-    AddAttr<int>(kLRDecayBlockId, "BolckID to run lr decay on pserer.")
+    AddAttr<int>(kLRDecayBlockId, "BlockID to run lr decay on pserver.")
         .SetDefault(-1);
     AddAttr<int>("rpc_get_thread_num", "pserver get thread num.").SetDefault(1);
     AddAttr<int>("rpc_send_thread_num", "pserver send thread num.")
@@ -106,8 +104,7 @@ class ListenAndServOpShapeInference : public framework::InferShapeBase {
   void operator()(framework::InferShapeContext* ctx) const override {}
 };
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
 

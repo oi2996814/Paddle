@@ -148,7 +148,7 @@ class CompileTimeStrategy:
             self.is_heter_ps_mode = role_maker._is_heter_parameter_server_mode
         except:
             warnings.warn(
-                "Using paddle.distributed.fleet instead of paddle.fluid.incubate.fleet"
+                "Using paddle.distributed.fleet instead of paddle.base.incubate.fleet"
             )
             self.is_heter_ps_mode = False
 
@@ -329,7 +329,7 @@ class CompileTimeStrategy:
                         "Beta2Tensor",
                     ]:
                         continue
-                    # check varibale shape related param, e.g: Moment1
+                    # check variable shape related param, e.g: Moment1
                     optimize_var_names += (
                         self._get_optimizer_param_related_var_name(
                             op, op.type, key
@@ -361,7 +361,7 @@ class CompileTimeStrategy:
             pass
         else:
             raise ValueError(
-                "Not supported optimizer for distributed training: %s" % op_type
+                f"Not supported optimizer for distributed training: {op_type}"
             )
         return related_var_names
 
@@ -426,7 +426,7 @@ class CompileTimeStrategy:
 
     def get_trainer_send_context(self):
         send_ctx = {}
-        distibuted_varnames = get_sparse_tablenames(
+        distributed_varnames = get_sparse_tablenames(
             self.origin_main_program, True
         )
         idx = 0
@@ -446,7 +446,7 @@ class CompileTimeStrategy:
                 param_name = param.merged_var.name
 
                 is_distributed = (
-                    True if param_name in distibuted_varnames else False
+                    True if param_name in distributed_varnames else False
                 )
 
                 ctx = self.build_ctx(
@@ -468,7 +468,7 @@ class CompileTimeStrategy:
                 param, grad = pairs
                 param_name = param.name
                 is_distributed = (
-                    True if param_name in distibuted_varnames else False
+                    True if param_name in distributed_varnames else False
                 )
 
                 param_ctx = self.build_ctx(
@@ -509,7 +509,7 @@ class CompileTimeStrategy:
 
     def get_communicator_send_context(self):
         send_ctx = {}
-        distibuted_varnames = get_sparse_tablenames(
+        distributed_varnames = get_sparse_tablenames(
             self.origin_main_program, True
         )
         idx = 0
@@ -526,7 +526,7 @@ class CompileTimeStrategy:
                 param = pairs[0]
                 param_name = param.merged_var.name
                 is_distributed = (
-                    True if param_name in distibuted_varnames else False
+                    True if param_name in distributed_varnames else False
                 )
 
                 ctx = self.build_ctx(
@@ -554,7 +554,7 @@ class CompileTimeStrategy:
                 param_name = param.merged_var.name
 
                 is_distributed = (
-                    True if param_name in distibuted_varnames else False
+                    True if param_name in distributed_varnames else False
                 )
 
                 ctx = self.build_ctx(
@@ -577,7 +577,7 @@ class CompileTimeStrategy:
     ):
         # recv_type
         # 1 : DENSE 2. SPARSE 3. DISTRIBUTED 4. ALL
-        distibuted_varnames = get_sparse_tablenames(
+        distributed_varnames = get_sparse_tablenames(
             self.origin_main_program, True
         )
         sparse_varnames = []
@@ -607,7 +607,7 @@ class CompileTimeStrategy:
         for pairs in self.origin_sparse_pairs:
             param, grad = pairs
 
-            if param.name in distibuted_varnames:
+            if param.name in distributed_varnames:
                 ctx = self.build_ctx(
                     param, self.param_var_mapping, False, True, False, True
                 )
@@ -638,7 +638,7 @@ class CompileTimeStrategy:
             trainer_id = self.get_role_id()
             idx = 0
 
-            distibuted_varnames = get_sparse_tablenames(
+            distributed_varnames = get_sparse_tablenames(
                 self.origin_main_program, True
             )
             for merged in self.merged_sparse_pairs:
@@ -646,7 +646,7 @@ class CompileTimeStrategy:
                 grad_name = grad.merged_var.name
                 param_name = param.merged_var.name
                 is_distributed = (
-                    True if param_name in distibuted_varnames else False
+                    True if param_name in distributed_varnames else False
                 )
 
                 var = self.origin_main_program.global_block().vars[
@@ -781,7 +781,7 @@ class CompileTimeStrategy:
             send_ctx, idx, merged_dense_pairs, trainer_id, split_dense_table
         )
 
-        distibuted_varnames = get_sparse_tablenames(
+        distributed_varnames = get_sparse_tablenames(
             self.origin_main_program, True
         )
         for merged in merged_sparse_pairs:
@@ -794,7 +794,7 @@ class CompileTimeStrategy:
                 splited_varname.append(f"{param_name}.block{i}")
 
             is_distributed = (
-                True if param_name in distibuted_varnames else False
+                True if param_name in distributed_varnames else False
             )
 
             var = self.origin_main_program.global_block().vars[
@@ -967,7 +967,7 @@ class CompileTimeStrategy:
                     if len(orig_shape) >= 2:
                         splited_shape.extend(orig_shape[1:])
 
-                    new_var_name = "%s.block%d" % (varname, i)
+                    new_var_name = f"{varname}.block{i}"
                     slice_var = vars_metatools.VarStruct(
                         name=new_var_name,
                         shape=splited_shape,
@@ -1219,9 +1219,9 @@ class CompileTimeStrategy:
 
         for merged in self.merged_variables_pairs:
             m_param, m_grad = merged
-            self.merged_variable_map[
-                m_param.merged_var.name
-            ] = m_param.merged_var
+            self.merged_variable_map[m_param.merged_var.name] = (
+                m_param.merged_var
+            )
             self.merged_variable_map[m_grad.merged_var.name] = m_grad.merged_var
 
         param_merges = []
@@ -1397,7 +1397,7 @@ def _get_lr_param_dict(opt_ops):
 
 
 def _get_lr_scheduler_program(lr_scheduler, lr_param_dict, lr_decay_steps):
-    schedler_decay = [
+    scheduler_decay = [
         'NoamDecay',
         'NaturalExpDecay',
         'InverseTimeDecay',
@@ -1427,12 +1427,11 @@ def _get_lr_scheduler_program(lr_scheduler, lr_param_dict, lr_decay_steps):
                 1.0, lr_decay_steps, lr_scheduler.gamma, True
             )
             lr_name = lr.name
-            logging.warn(
-                "ExponentialDecay is set, staircase = True, global learning rate decay step is [ %d ], Change decay steps as follow: \n"
+            logging.warning(
+                f"ExponentialDecay is set, staircase = True, global learning rate decay step is [ {lr_decay_steps} ], Change decay steps as follow: \n"
                 "\t strategy = paddle.distributed.fleet.DistributedStrategy() \n "
                 "\t strategy.a_sync = True \n"
                 "\t strategy.a_sync_configs= { 'lr_decay_steps' : YOUR_DECAY_STEP } \n"
-                % lr_decay_steps
             )
     elif isinstance(lr_scheduler, NoamDecay):
         with paddle.static.program_guard(
@@ -1442,9 +1441,8 @@ def _get_lr_scheduler_program(lr_scheduler, lr_param_dict, lr_decay_steps):
                 lr_scheduler.d_model, lr_scheduler.warmup_steps, 1.0
             )
             lr_name = lr.name
-            logging.warn(
-                "NoamDecay is set, warmup steps is [ %d ]"
-                % lr_scheduler.warmup_steps
+            logging.warning(
+                f"NoamDecay is set, warmup steps is [ {lr_scheduler.warmup_steps} ]"
             )
     elif isinstance(lr_scheduler, NaturalExpDecay):
         with paddle.static.program_guard(
@@ -1454,12 +1452,11 @@ def _get_lr_scheduler_program(lr_scheduler, lr_param_dict, lr_decay_steps):
                 1.0, lr_decay_steps, lr_scheduler.gamma, True
             )
             lr_name = lr.name
-            logging.warn(
-                "NaturalExpDecay is set, staircase = True, global learning rate decay step is [ %d ], Change decay steps as follow: \n"
+            logging.warning(
+                f"NaturalExpDecay is set, staircase = True, global learning rate decay step is [ {lr_decay_steps} ], Change decay steps as follow: \n"
                 "\t strategy = paddle.distributed.fleet.DistributedStrategy() \n "
                 "\t strategy.a_sync = True \n"
                 "\t strategy.a_sync_configs= { 'lr_decay_steps' : YOUR_DECAY_STEP } \n"
-                % lr_decay_steps
             )
     elif isinstance(lr_scheduler, InverseTimeDecay):
         with paddle.static.program_guard(
@@ -1469,18 +1466,15 @@ def _get_lr_scheduler_program(lr_scheduler, lr_param_dict, lr_decay_steps):
                 1.0, lr_decay_steps, lr_scheduler.gamma, True
             )
             lr_name = lr.name
-            logging.warn(
-                "InverseTimeDecay is set, staircase = True, global learning rate decay step is [ %d ], Change decay steps as follow: \n"
+            logging.warning(
+                f"InverseTimeDecay is set, staircase = True, global learning rate decay step is [ {lr_decay_steps} ], Change decay steps as follow: \n"
                 "\t strategy = paddle.distributed.fleet.DistributedStrategy() \n "
                 "\t strategy.a_sync = True \n"
                 "\t strategy.a_sync_configs= { 'lr_decay_steps' : YOUR_DECAY_STEP } \n"
-                % lr_decay_steps
             )
     else:
         raise ValueError(
-            "Not supported current LearningRate strategy, please use follow decay strategy: {}".format(
-                schedler_decay
-            )
+            f"Not supported current LearningRate strategy, please use follow decay strategy: {scheduler_decay}"
         )
 
     return decay_main_program, decay_startup_program, lr_name

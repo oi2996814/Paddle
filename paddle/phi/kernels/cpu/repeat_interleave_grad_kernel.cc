@@ -39,7 +39,7 @@ void RepeatInterleaveWithTensorIndexGradKernel(
   DenseTensor index;
   PADDLE_ENFORCE_EQ(repeats_tensor.dims()[0] == x_grad->dims()[dim],
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The length of Input(RepeatsTensor) must be the "
                         "same as length of Input(X) in axis. "
                         "But received: [%s], required: [%d].",
@@ -52,7 +52,7 @@ void RepeatInterleaveWithTensorIndexGradKernel(
       index_type == phi::DataType::INT32 || index_type == phi::DataType::INT64;
   PADDLE_ENFORCE_EQ(index_type_match,
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Input(Repeats) holds the wrong type, it holds %s, but "
                         "desires to be %s or %s",
                         DataTypeToString(index_type),
@@ -90,7 +90,7 @@ void RepeatInterleaveGradKernel(const Context& ctx,
   for (int i = 0; i < x_grad->dims()[dim]; i++) {
     std::fill_n(index_vec.begin() + i * repeats, repeats, i);
   }
-  index.Resize(phi::make_ddim({index_size}));
+  index.Resize(common::make_ddim({index_size}));
   phi::TensorFromVector<int>(index_vec, ctx, &index);
   const DenseTensor index_copy = index;
   IndexSelectGradInner<Context, T, int>(ctx, out_grad, index_copy, x_grad, dim);
@@ -104,7 +104,8 @@ PD_REGISTER_KERNEL(repeat_interleave_with_tensor_index_grad,
                    float,
                    double,
                    int,
-                   int64_t) {}
+                   int64_t,
+                   phi::dtype::bfloat16) {}
 
 PD_REGISTER_KERNEL(repeat_interleave_grad,
                    CPU,
@@ -113,4 +114,5 @@ PD_REGISTER_KERNEL(repeat_interleave_grad,
                    float,
                    double,
                    int,
-                   int64_t) {}
+                   int64_t,
+                   phi::dtype::bfloat16) {}

@@ -18,9 +18,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/ir/pass_tester_helper.h"
 #include "paddle/fluid/framework/op_version_registry.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 TEST(EmbeddingElewiseLayernormFusePass, basic) {
   // inputs                           operator            output
@@ -84,13 +82,13 @@ TEST(EmbeddingElewiseLayernormFusePass, basic) {
 
   PADDLE_ENFORCE_EQ(num_nodes_before,
                     num_nodes_after + 28,
-                    platform::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "The number of nodes before and after the fuse does "
                         "not meet expectations"));
   PADDLE_ENFORCE_EQ(
       num_fused_nodes_after,
       2,
-      platform::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "The number of fusion nodes does not meet expectations after fuse"));
 }
 
@@ -100,8 +98,6 @@ TEST(EmbeddingElewiseLayernormFusePass, pass_op_version_check) {
           .IsPassCompatible("embedding_eltwise_layernorm_fuse_pass"));
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 USE_PASS(embedding_eltwise_layernorm_fuse_pass);

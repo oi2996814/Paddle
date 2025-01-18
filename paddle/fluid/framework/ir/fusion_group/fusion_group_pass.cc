@@ -24,9 +24,7 @@ namespace phi {
 class DeviceCodePool;
 }  // namespace phi
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 class Node;
 
@@ -37,7 +35,7 @@ void FusionGroupPass::ApplyImpl(ir::Graph* graph) const {
     // if (!phi::GPUDeviceCode::IsAvailable()) {
     //   LOG(WARNING)
     //       << "Disable fusion_group because CUDA Driver or NVRTC is not
-    //       avaiable.";
+    //       available.";
     //   return 0;
     // }
 
@@ -51,7 +49,7 @@ void FusionGroupPass::ApplyImpl(ir::Graph* graph) const {
 
 int FusionGroupPass::DetectFusionGroup(Graph* graph, int type) const {
   // TODO(liuyiqun): supported different places
-  platform::CUDAPlace place = platform::CUDAPlace(0);
+  phi::GPUPlace place = phi::GPUPlace(0);
   int index = phi::DeviceCodePool::Init({place}).size(place);
 
   std::vector<std::vector<Node*>> subgraphs =
@@ -85,7 +83,7 @@ bool FusionGroupPass::GenerateCode(fusion_group::SubGraph* subgraph) const {
   VLOG(4) << code_str;
 
   // TODO(liuyiqun): supported different places
-  platform::CUDAPlace place = platform::CUDAPlace(0);
+  phi::GPUPlace place = phi::GPUPlace(0);
   std::unique_ptr<phi::GPUDeviceCode> device_code(
       new phi::GPUDeviceCode(place, subgraph->GetFuncName(), code_str));
   bool is_compiled = device_code->Compile();
@@ -173,9 +171,7 @@ void FusionGroupPass::InsertFusionGroupOp(
   GraphSafeRemoveNodes(graph, internal_nodes);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(fusion_group_pass, paddle::framework::ir::FusionGroupPass)
     .RequirePassAttr("use_gpu");

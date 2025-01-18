@@ -14,8 +14,7 @@ limitations under the License. */
 
 #include "paddle/phi/kernels/funcs/concat_and_split_functor.h"
 
-namespace phi {
-namespace funcs {
+namespace phi::funcs {
 
 /*
  * All tensors' dimension should be the same and the values of
@@ -40,7 +39,7 @@ struct ConcatFunctor<phi::CPUContext, T> {
     PADDLE_ENFORCE_NE(
         rows,
         0,
-        phi::errors::InvalidArgument("The input size should not be 0."));
+        common::errors::InvalidArgument("The input size should not be 0."));
 
     std::vector<int64_t> input_cols(input.size());
     for (size_t i = 0; i < num; ++i) {
@@ -92,14 +91,14 @@ struct SplitFunctor<phi::CPUContext, T> {
     int input_rows = 1;
     auto dim_0 = ref_inputs[0]->dims();
     for (int i = 0; i < axis; ++i) {
-      input_rows *= dim_0[i];
+      input_rows *= static_cast<int>(dim_0[i]);
     }
 
     int input_cols = 0;
 
     std::vector<int64_t> output_cols(outputs->size());
     for (size_t i = 0; i < num; ++i) {
-      int t_cols = ref_inputs[i]->numel() / input_rows;
+      int t_cols = static_cast<int>(ref_inputs[i]->numel() / input_rows);
       input_cols += t_cols;
       output_cols[i] = t_cols;
     }
@@ -110,7 +109,7 @@ struct SplitFunctor<phi::CPUContext, T> {
       const T* src_ptr = input.data<T>() + k * input_cols;
       int col_idx = 0;
       for (size_t j = 0; j < num; ++j) {
-        int col_len = output_cols[j];
+        int col_len = static_cast<int>(output_cols[j]);
         auto* out_tensor = outputs->at(j);
         if (out_tensor != nullptr) {
           T* dst_ptr = out_tensor->data<T>() + k * col_len;
@@ -132,5 +131,4 @@ struct SplitFunctor<phi::CPUContext, T> {
 
 FOR_ALL_TYPES(DEFINE_FUNCTOR);
 
-}  // namespace funcs
-}  // namespace phi
+}  // namespace phi::funcs

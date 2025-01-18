@@ -13,6 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #pragma once
+#include "paddle/common/ddim.h"
 #include "paddle/phi/core/dense_tensor.h"
 #include "paddle/phi/core/enforce.h"
 
@@ -54,7 +55,7 @@ inline void GetMidDims(const DDim &x_dims,
     if (x_dims[i + axis] != y_dims[i]) {
       PADDLE_ENFORCE_EQ(y_dims[i] == 1 || x_dims[i + axis] == 1,
                         true,
-                        phi::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "Broadcast dimension mismatch. Operands "
                             "could not be broadcast together with the shape of "
                             "X = [%s] and the shape of Y = [%s]. Received [%d] "
@@ -75,6 +76,7 @@ inline void GetMidDims(const DDim &x_dims,
 
 inline DDim TrimTrailingSingularDims(const DDim &dims) {
   // Remove trailing dimensions of size 1 for y
+  using common::make_dim;
   auto actual_dims_size = dims.size();
   for (; actual_dims_size != 0; --actual_dims_size) {
     if (dims[actual_dims_size - 1] != 1) break;
@@ -86,9 +88,9 @@ inline DDim TrimTrailingSingularDims(const DDim &dims) {
     trim_dims[i] = dims[i];
   }
   if (trim_dims.size() == 0) {
-    return DDim(phi::make_dim());
+    return DDim(make_dim());
   }
-  DDim actual_dims = phi::make_ddim(trim_dims);
+  DDim actual_dims = common::make_ddim(trim_dims);
   return actual_dims;
 }
 

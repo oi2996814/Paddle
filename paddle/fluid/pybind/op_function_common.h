@@ -42,9 +42,21 @@ namespace pybind {
 
 bool PyObject_CheckBool(PyObject** obj);
 
-bool PyObject_CheckLongOrToLong(PyObject** obj);
+bool PyObject_CheckLong(PyObject* obj);
 
-bool PyObject_CheckFloatOrToFloat(PyObject** obj);
+int32_t PyObject_ToInt32(PyObject* obj);
+
+uint32_t PyObject_ToUInt32(PyObject* obj);
+
+int64_t PyObject_ToInt64(PyObject* obj);
+
+uint64_t PyObject_ToUInt64(PyObject* obj);
+
+size_t PyObject_ToSize_t(PyObject* obj);
+
+bool PyObject_CheckFloat(PyObject* obj);
+
+double PyObject_ToDouble(PyObject* obj);
 
 bool PyObject_CheckComplexOrToComplex(PyObject** obj);
 
@@ -188,6 +200,13 @@ void CastPyArg2AttrBlock(PyObject* obj,
                          ssize_t arg_pos);
 
 void ConstructAttrMapFromPyArgs(
+    const std::string& op_type,
+    PyObject* args,
+    ssize_t attr_start,
+    ssize_t attr_end,
+    paddle::framework::AttributeMap& attrs);  // NOLINT
+
+void ConstructAttrMapForRunProgram(
     const std::string& op_type,
     PyObject* args,
     ssize_t attr_start,

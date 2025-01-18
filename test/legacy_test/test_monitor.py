@@ -23,8 +23,8 @@ import os
 import tempfile
 import unittest
 
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 
 class TestDatasetWithStat(unittest.TestCase):
@@ -54,16 +54,14 @@ class TestDatasetWithStat(unittest.TestCase):
         slots = ["slot1", "slot2", "slot3", "slot4"]
         slots_vars = []
         for slot in slots:
-            var = paddle.static.data(
-                name=slot, shape=[-1, 1], dtype="int64", lod_level=1
-            )
+            var = paddle.static.data(name=slot, shape=[-1, 1], dtype="int64")
             slots_vars.append(var)
 
         embs = []
         for x in slots_vars:
-            emb = paddle.static.nn.embedding(
-                x, is_sparse=True, size=[100001, 4]
-            )
+            emb = paddle.nn.Embedding(
+                num_embeddings=100001, embedding_dim=4, sparse=True
+            )(x)
             embs.append(emb)
 
         dataset = paddle.distributed.InMemoryDataset()
@@ -76,21 +74,21 @@ class TestDatasetWithStat(unittest.TestCase):
         dataset._set_fea_eval(1, True)
         dataset.slots_shuffle(["slot1"])
 
-        exe = fluid.Executor(fluid.CPUPlace())
-        exe.run(fluid.default_startup_program())
+        exe = base.Executor(base.CPUPlace())
+        exe.run(base.default_startup_program())
         if self.use_data_loader:
-            data_loader = fluid.io.DataLoader.from_dataset(
-                dataset, fluid.cpu_places(), self.drop_last
+            data_loader = base.io.DataLoader.from_dataset(
+                dataset, base.cpu_places(), self.drop_last
             )
             for i in range(self.epoch_num):
                 for data in data_loader():
-                    exe.run(fluid.default_main_program(), feed=data)
+                    exe.run(base.default_main_program(), feed=data)
 
         else:
             for i in range(self.epoch_num):
                 try:
                     exe.train_from_dataset(
-                        fluid.default_main_program(),
+                        base.default_main_program(),
                         dataset,
                         fetch_list=[embs[0], embs[1]],
                         fetch_info=["emb0", "emb1"],

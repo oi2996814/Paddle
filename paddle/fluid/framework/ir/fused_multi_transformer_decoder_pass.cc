@@ -20,16 +20,11 @@
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/op_version_registry.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Scope;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 
-namespace paddle {
-namespace framework {
-namespace ir {
-namespace patterns {
+namespace paddle::framework::ir::patterns {
 
 static const std::unordered_set<std::string> FFN_ACTS{"relu", "gelu"};
 
@@ -1089,7 +1084,8 @@ PDNode* MultiDevicesFusedMultiTransformerDecoderFuseQKVPattern::operator()() {
   return ffn_output;
 }
 
-}  // namespace patterns
+}  // namespace paddle::framework::ir::patterns
+namespace paddle::framework::ir {
 
 inline Node* CreatePersistableVarNode(Graph* graph, const std::string& name) {
   auto var_desc = VarDesc(name);
@@ -1118,7 +1114,7 @@ int FusedMultiTransformerDecoderPass::BuildFusion(Graph* graph,
   fused_multi_transformer_pattern();
 
   // Create New OpDesc
-  auto fuse_creater = [&](Node* input0,
+  auto fuse_creator = [&](Node* input0,
                           Node* layer_norm,
                           Node* layer_norm_scale,
                           Node* layer_norm_bias,
@@ -1552,7 +1548,7 @@ int FusedMultiTransformerDecoderPass::BuildFusion(Graph* graph,
     GET_IR_NODE_FROM_SUBGRAPH(
         eltadd_out, eltadd_out, fused_multi_transformer_pattern)
 
-    fuse_creater(input0,
+    fuse_creator(input0,
                  layer_norm,
                  layer_norm_scale,
                  layer_norm_bias,
@@ -1668,8 +1664,18 @@ void FusedMultiTransformerDecoderPass::ApplyImpl(Graph* graph) const {
   auto* scope = param_scope();
   PADDLE_ENFORCE_NOT_NULL(
       scope,
-      platform::errors::Fatal("During the multi_transformer pass, "
-                              "The scope should not be null."));
+      common::errors::Fatal("During the multi_transformer pass, "
+                            "The scope should not be null."));
+
+  VLOG(3) << "Running fused_multi_transformer_decoder_pass.";
+  if (graph->IsMainGraph()) {
+    VLOG(3) << "The ID of block running fused_multi_transformer_decoder_pass "
+               "is: 0(main_graph)";
+  } else {
+    VLOG(3)
+        << "The ID of block running fused_multi_transformer_decoder_pass is: "
+        << graph->GetBlockId();
+  }
 
   int fusion_count = BuildFusion(graph, name_scope_, scope);
   if (fusion_count > 0) {
@@ -1708,13 +1714,13 @@ FusedMultiTransformerDecoderPass::FusedMultiTransformerDecoderPass() {
       .End();
 
   AddOpCompat(OpCompat("matmul_v2"))
-      .AddInput("X")  // the shape shoule be (B, S, N*H)
+      .AddInput("X")  // the shape should be (B, S, N*H)
       .IsTensor()
       .End()
-      .AddInput("Y")  // the shape shoule be (N*H, N*H)
+      .AddInput("Y")  // the shape should be (N*H, N*H)
       .IsTensor()
       .End()
-      .AddOutput("Out")  // the shape shoule be (B, S, N*H)
+      .AddOutput("Out")  // the shape should be (B, S, N*H)
       .IsTensor()
       .End()
       .AddAttr("trans_x")
@@ -1852,7 +1858,7 @@ int FusedMultiTransformerDecoderFuseQKVPass::BuildFusion(
   fused_multi_transformer_fuse_qkv_pattern();
 
   // Create New OpDesc
-  auto fuse_creater = [&](Node* input0,
+  auto fuse_creator = [&](Node* input0,
                           Node* layer_norm,
                           Node* layer_norm_scale,
                           Node* layer_norm_bias,
@@ -2271,7 +2277,7 @@ int FusedMultiTransformerDecoderFuseQKVPass::BuildFusion(
     GET_IR_NODE_FROM_SUBGRAPH(
         eltadd_out, eltadd_out, fused_multi_transformer_fuse_qkv_pattern)
 
-    fuse_creater(input0,
+    fuse_creator(input0,
                  layer_norm,
                  layer_norm_scale,
                  layer_norm_bias,
@@ -2373,8 +2379,19 @@ void FusedMultiTransformerDecoderFuseQKVPass::ApplyImpl(Graph* graph) const {
   auto* scope = param_scope();
   PADDLE_ENFORCE_NOT_NULL(
       scope,
-      platform::errors::Fatal("During the fused_multi_transformer_decoder "
-                              "pass, The scope should not be null."));
+      common::errors::Fatal("During the fused_multi_transformer_decoder "
+                            "pass, The scope should not be null."));
+
+  VLOG(3) << "Running fused_multi_transformer_decoder_fuse_qkv_pass.";
+  if (graph->IsMainGraph()) {
+    VLOG(3)
+        << "The ID of block running "
+           "fused_multi_transformer_decoder_fuse_qkv_pass is: 0(main_graph)";
+  } else {
+    VLOG(3) << "The ID of block running "
+               "fused_multi_transformer_decoder_fuse_qkv_pass is: "
+            << graph->GetBlockId();
+  }
 
   int fusion_count = BuildFusion(graph, name_scope_, scope);
   if (fusion_count > 0) {
@@ -2431,13 +2448,13 @@ FusedMultiTransformerDecoderFuseQKVPass::
       .End();
 
   AddOpCompat(OpCompat("matmul_v2"))
-      .AddInput("X")  // the shape shoule be (B, S, N*H)
+      .AddInput("X")  // the shape should be (B, S, N*H)
       .IsTensor()
       .End()
-      .AddInput("Y")  // the shape shoule be (N*H, N*H)
+      .AddInput("Y")  // the shape should be (N*H, N*H)
       .IsTensor()
       .End()
-      .AddOutput("Out")  // the shape shoule be (B, S, N*H)
+      .AddOutput("Out")  // the shape should be (B, S, N*H)
       .IsTensor()
       .End()
       .AddAttr("trans_x")
@@ -2575,7 +2592,7 @@ int MultiDevicesFusedMultiTransformerDecoderFuseQKVPass::BuildFusion(
   fused_multi_transformer_fuse_qkv_pattern();
 
   // Create New OpDesc
-  auto fuse_creater = [&](Node* input0,
+  auto fuse_creator = [&](Node* input0,
                           Node* layer_norm,
                           Node* layer_norm_scale,
                           Node* layer_norm_bias,
@@ -3030,7 +3047,7 @@ int MultiDevicesFusedMultiTransformerDecoderFuseQKVPass::BuildFusion(
     GET_IR_NODE_FROM_SUBGRAPH(
         eltadd_out, eltadd_out, fused_multi_transformer_fuse_qkv_pattern)
 
-    fuse_creater(input0,
+    fuse_creator(input0,
                  layer_norm,
                  layer_norm_scale,
                  layer_norm_bias,
@@ -3143,8 +3160,21 @@ void MultiDevicesFusedMultiTransformerDecoderFuseQKVPass::ApplyImpl(
   auto* scope = param_scope();
   PADDLE_ENFORCE_NOT_NULL(
       scope,
-      platform::errors::Fatal("During the fused_multi_transformer_decoder "
-                              "pass, The scope should not be null."));
+      common::errors::Fatal("During the fused_multi_transformer_decoder "
+                            "pass, The scope should not be null."));
+
+  VLOG(3)
+      << "Running multi_devices_fused_multi_transformer_decoder_fuse_qkv_pass.";
+  if (graph->IsMainGraph()) {
+    VLOG(3) << "The ID of block running "
+               "multi_devices_fused_multi_transformer_decoder_fuse_qkv_pass "
+               "is: 0(main_graph)";
+  } else {
+    VLOG(3)
+        << "The ID of block running "
+           "multi_devices_fused_multi_transformer_decoder_fuse_qkv_pass is: "
+        << graph->GetBlockId();
+  }
 
   int fusion_count = BuildFusion(graph, name_scope_, scope);
   if (fusion_count > 0) {
@@ -3201,13 +3231,13 @@ MultiDevicesFusedMultiTransformerDecoderFuseQKVPass::
       .End();
 
   AddOpCompat(OpCompat("matmul_v2"))
-      .AddInput("X")  // the shape shoule be (B, S, N*H)
+      .AddInput("X")  // the shape should be (B, S, N*H)
       .IsTensor()
       .End()
-      .AddInput("Y")  // the shape shoule be (N*H, N*H)
+      .AddInput("Y")  // the shape should be (N*H, N*H)
       .IsTensor()
       .End()
-      .AddOutput("Out")  // the shape shoule be (B, S, N*H)
+      .AddOutput("Out")  // the shape should be (B, S, N*H)
       .IsTensor()
       .End()
       .AddAttr("trans_x")
@@ -3327,9 +3357,7 @@ MultiDevicesFusedMultiTransformerDecoderFuseQKVPass::
       .End();
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(fused_multi_transformer_decoder_pass,
               paddle::framework::ir::FusedMultiTransformerDecoderPass);

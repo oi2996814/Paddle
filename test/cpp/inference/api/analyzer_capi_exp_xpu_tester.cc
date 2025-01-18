@@ -12,15 +12,19 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include <stddef.h>
-#include <stdint.h>
-#include <stdio.h>
+#include <glog/logging.h>
+#include <gtest/gtest.h>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
 
 #include <string>
 #include <vector>
 
+#include "paddle/common/flags.h"
 #include "paddle/fluid/inference/capi_exp/pd_inference_api.h"
-#include "test/cpp/inference/api/tester_helper.h"
+
+PD_DEFINE_string(infer_model, "", "model path");
 
 namespace paddle {
 namespace inference {
@@ -40,7 +44,7 @@ TEST(PD_Config, use_xpu) {
   bool use_xpu = PD_ConfigUseXpu(config);
   EXPECT_TRUE(use_xpu);
   int32_t device_id = PD_ConfigXpuDeviceId(config);
-  EXPECT_EQ(devive_id, 0);
+  EXPECT_EQ(device_id, 0);
   PD_ConfigSwitchIrOptim(config, TRUE);
   bool ir_optim = PD_IrOptim(config);
   EXPECT_TRUE(ir_optim);

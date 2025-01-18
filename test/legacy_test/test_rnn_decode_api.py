@@ -19,9 +19,9 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle import Model, fluid, nn, set_device
-from paddle.fluid import layers
-from paddle.fluid.data_feeder import convert_dtype
+from paddle import Model, base, nn, set_device
+from paddle.base import layers
+from paddle.base.data_feeder import convert_dtype
 from paddle.nn import (
     RNN,
     BeamSearchDecoder,
@@ -171,19 +171,18 @@ class SeqPGAgent:
         seed=None,
     ):
         self.main_program = (
-            fluid.Program() if main_program is None else main_program
+            base.Program() if main_program is None else main_program
         )
         self.startup_program = (
-            fluid.Program() if startup_program is None else startup_program
+            base.Program() if startup_program is None else startup_program
         )
         if seed is not None:
-            self.main_program.random_seed = seed
-            self.startup_program.random_seed = seed
+            paddle.seed(seed)
         self.build_program(model_cls, alg_cls, model_hparams, alg_hparams)
         self.executor = executor
 
     def build_program(self, model_cls, alg_cls, model_hparams, alg_hparams):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             source = paddle.static.data(
                 name="src", shape=[None, None], dtype="int64"
             )
@@ -300,22 +299,29 @@ class ModuleApiTest(unittest.TestCase):
 
     def _calc_output(self, place, mode="test", dygraph=True):
         if dygraph:
-            fluid.enable_dygraph(place)
+            base.enable_dygraph(place)
         else:
-            fluid.disable_dygraph()
+            base.disable_dygraph()
         gen = paddle.seed(self._random_seed)
-        paddle.framework.random._manual_program_seed(self._random_seed)
-        scope = fluid.core.Scope()
-        with fluid.scope_guard(scope):
+        if paddle.framework.use_pir_api():
+            with paddle.pir_utils.OldIrGuard():
+                paddle.framework.random._manual_program_seed(self._random_seed)
+            paddle.framework.random._manual_program_seed(self._random_seed)
+        else:
+            paddle.framework.random._manual_program_seed(self._random_seed)
+        scope = base.core.Scope()
+        with base.scope_guard(scope):
             layer = (
                 self.model_cls(**self.attrs)
                 if isinstance(self.attrs, dict)
                 else self.model_cls(*self.attrs)
             )
+
             model = Model(layer, inputs=self.make_inputs())
             model.prepare()
             if self.param_states:
                 model.load(self.param_states, optim_state=None)
+
             return model.predict_batch(self.inputs)
 
     def check_output_with_place(self, place, mode="test"):
@@ -331,7 +337,7 @@ class ModuleApiTest(unittest.TestCase):
                 )
 
     def check_output(self):
-        devices = ["CPU", "GPU"] if fluid.is_compiled_with_cuda() else ["CPU"]
+        devices = ["CPU", "GPU"] if base.is_compiled_with_cuda() else ["CPU"]
         for device in devices:
             place = set_device(device)
             self.check_output_with_place(place)
@@ -364,17 +370,18 @@ class TestBeamSearch(ModuleApiTest):
         beam_size=4,
         max_step_num=20,
     ):
-        embedder = Embedding(vocab_size, embed_dim)
-        output_layer = nn.Linear(hidden_size, vocab_size)
-        cell = nn.LSTMCell(embed_dim, hidden_size)
+        self.embedder = Embedding(vocab_size, embed_dim)
+        self.output_layer = nn.Linear(hidden_size, vocab_size)
+        self.cell = nn.LSTMCell(embed_dim, hidden_size)
+
         self.max_step_num = max_step_num
         self.beam_search_decoder = BeamSearchDecoder(
-            cell,
+            self.cell,
             start_token=bos_id,
             end_token=eos_id,
             beam_size=beam_size,
-            embedding_fn=embedder,
-            output_fn=output_layer,
+            embedding_fn=self.embedder,
+            output_fn=self.output_layer,
         )
 
     @staticmethod
@@ -416,7 +423,7 @@ class EncoderCell(SimpleRNNCell):
         for i in range(num_layers):
             self.lstm_cells.append(
                 self.add_sublayer(
-                    "lstm_%d" % i,
+                    f"lstm_{i}",
                     LSTMCell(
                         input_size=input_size if i == 0 else hidden_size,
                         hidden_size=hidden_size,
@@ -514,9 +521,11 @@ class TrainingHelper:
         self.inputs_ = paddle.utils.map_structure(
             lambda x: paddle.nn.functional.pad(
                 x,
-                pad=([0, 1] + [0, 0] * (len(x.shape) - 1))
-                if time_major
-                else ([0, 0, 0, 1] + [0, 0] * (len(x.shape) - 2)),
+                pad=(
+                    ([0, 1] + [0, 0] * (len(x.shape) - 1))
+                    if time_major
+                    else ([0, 0, 0, 1] + [0, 0] * (len(x.shape) - 2))
+                ),
             ),
             self.inputs,
         )

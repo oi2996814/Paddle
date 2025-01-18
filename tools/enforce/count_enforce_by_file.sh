@@ -16,8 +16,8 @@
 
 # This script is used to count PADDLE checks by files in the paddle/fluid/operators directory,
 #   contains the number of PADDLE checks under each file.
-#   
-#   The three columns of data are: total number, valid number, invalid number. 
+#
+#   The three columns of data are: total number, valid number, invalid number.
 #   The output format is easy to display as a markdown table.
 
 # Usage: bash count_enforce_by_file.sh  [target directory or file] (run in tools directory)
@@ -53,7 +53,6 @@ fi
 FILE_WHITE_LIST="\
     box_clip_op.cc \
     box_clip_op.h \
-    random_crop_op.h \
     elementwise_op_function.cu.h \
     fused_elemwise_activation_op.cc \
     auc_op.cu \

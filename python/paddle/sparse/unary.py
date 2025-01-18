@@ -12,18 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 import paddle
-from paddle import _C_ops, in_dynamic_mode
-from paddle.common_ops_import import Variable
-from paddle.fluid.data_feeder import check_type, check_variable_and_dtype
-from paddle.fluid.framework import (
+from paddle import _C_ops
+from paddle.base.data_feeder import check_type, check_variable_and_dtype
+from paddle.base.framework import (
     convert_np_dtype_to_dtype_,
     core,
-    dygraph_only,
+    in_dynamic_or_pir_mode,
 )
+from paddle.common_ops_import import Variable
 from paddle.framework import LayerHelper
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from paddle import Tensor
+    from paddle._typing import DTypeLike, ShapeLike
 
 __all__ = []
 
@@ -37,8 +47,7 @@ _int_dtype_ = [
 ]
 
 
-@dygraph_only
-def sin(x, name=None):
+def sin(x: Tensor, name: str | None = None) -> Tensor:
     """
     Calculate elementwise sin of SparseTensor, requiring x to be a SparseCooTensor or SparseCsrTensor.
 
@@ -47,8 +56,8 @@ def sin(x, name=None):
         out = sin(x)
 
     Parameters:
-        x (Tensor): The input Sparse Tensor with data type float32, float64.
-        name (str, optional): Name for the operation (optional, default is None).
+        x (Tensor): The input Sparse Tensor with data type float32, float64, complex64, complex128.
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -57,18 +66,23 @@ def sin(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([-2., 0., 1.])
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.sin(sparse_x)
-
+            >>> dense_x = paddle.to_tensor([-2., 0., 1.])
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.sin(sparse_x)
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[-0.90929741,  0.84147102])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     return _C_ops.sparse_sin(x)
 
 
-@dygraph_only
-def tan(x, name=None):
+def tan(x: Tensor, name: str | None = None) -> Tensor:
     """
     Calculate elementwise tan of SparseTensor, requiring x to be a SparseCooTensor or SparseCsrTensor.
 
@@ -77,8 +91,8 @@ def tan(x, name=None):
         out = tan(x)
 
     Parameters:
-        x (Tensor): The input Sparse Tensor with data type float32, float64.
-        name (str, optional): Name for the operation (optional, default is None).
+        x (Tensor): The input Sparse Tensor with data type float32, float64, complex64, complex128.
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -87,18 +101,23 @@ def tan(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([-2., 0., 1.])
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.tan(sparse_x)
-
+            >>> dense_x = paddle.to_tensor([-2., 0., 1.])
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.tan(sparse_x)
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[2.18503976, 1.55740774])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     return _C_ops.sparse_tan(x)
 
 
-@dygraph_only
-def asin(x, name=None):
+def asin(x: Tensor, name: str | None = None) -> Tensor:
     """
     Calculate elementwise asin of SparseTensor, requiring x to be a SparseCooTensor or SparseCsrTensor.
 
@@ -107,8 +126,8 @@ def asin(x, name=None):
         out = asin(x)
 
     Parameters:
-        x (Tensor): The input Sparse Tensor with data type float32, float64.
-        name (str, optional): Name for the operation (optional, default is None).
+        x (Tensor): The input Sparse Tensor with data type float32, float64, complex64, complex128.
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -117,18 +136,25 @@ def asin(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([-2., 0., 1.])
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.asin(sparse_x)
-
+            >>> dense_x = paddle.to_tensor([-2., 0., 1.])
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.asin(sparse_x)
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[nan       , 1.57079625])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     return _C_ops.sparse_asin(x)
 
 
-@dygraph_only
-def transpose(x, perm, name=None):
+def transpose(
+    x: Tensor, perm: Sequence[int], name: str | None = None
+) -> Tensor:
     """
     Changes the perm order of ``x`` without changing its data, requiring x to be a SparseCooTensor or SparseCsrTensor.
 
@@ -139,7 +165,7 @@ def transpose(x, perm, name=None):
     Parameters:
         x (Tensor): The input Sparse Tensor with data type float32, float64.
         perm (list|tuple): Permute the input according to the data of perm.
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -148,34 +174,50 @@ def transpose(x, perm, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> # doctest: +SKIP('indices overflow')
+            >>> # doctest: +REQUIRES(env:GPU)
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([[-2., 0.], [1., 2.]])
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.transpose(sparse_x, [1, 0])
+            >>> dense_x = paddle.to_tensor([[-2., 0.], [1., 2.]])
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.transpose(sparse_x, [1, 0])
+            >>> out
+            Tensor(shape=[2, 2], dtype=paddle.float32, place=Place(gpu:0), stop_gradient=True,
+                indices=[[0, 0]],
+                values=[[-2.,  0.],
+                        [ 1.,  2.]])
 
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     return _C_ops.sparse_transpose(x, perm)
 
 
-def sum(x, axis=None, dtype=None, keepdim=False, name=None):
+def sum(
+    x: Tensor,
+    axis: int | Sequence[int] | None = None,
+    dtype: DTypeLike | None = None,
+    keepdim: bool = False,
+    name: str | None = None,
+) -> Tensor:
     """
     Computes the sum of sparse tensor elements over the given dimension, requiring x to be a SparseCooTensor or SparseCsrTensor.
 
     Args:
         x (Tensor): An N-D Tensor, the data type is bool, float16, float32, float64, int32 or int64.
-        axis (int|list|tuple, optional): The dimensions along which the sum is performed. If
+        axis (int|list|tuple|None, optional): The dimensions along which the sum is performed. If
             :attr:`None`, sum all elements of :attr:`x` and return a
             Tensor with a single element, otherwise must be in the
             range :math:`[-rank(x), rank(x))`. If :math:`axis[i] < 0`,
             the dimension to reduce is :math:`rank + axis[i]`.
-        dtype (str, optional): The dtype of output Tensor. The default value is None, the dtype
+        dtype (str|None, optional): The dtype of output Tensor. The default value is None, the dtype
             of output is the same as input Tensor `x`.
         keepdim (bool, optional): Whether to reserve the reduced dimension in the
             output Tensor. The result Tensor will have one fewer dimension
             than the :attr:`x` unless :attr:`keepdim` is true, default
             value is False.
-        name (str, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
+        name (str|None, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
         Tensor: Results of summation operation on the specified axis of input Tensor `x`.
@@ -185,21 +227,38 @@ def sum(x, axis=None, dtype=None, keepdim=False, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([[-2., 0.], [1., 2.]])
-            sparse_x = dense_x.to_sparse_coo(1)
-            out1 = paddle.sparse.sum(sparse_x)  # [1.]
-            out2 = paddle.sparse.sum(sparse_x, axis=0)  # [-1., 2.]
-            out3 = paddle.sparse.sum(sparse_x, axis=-1)  # [-2., 3.]
-            out4 = paddle.sparse.sum(sparse_x, axis=1, keepdim=True)  # [[-2.], [3.]]
+            >>> dense_x = paddle.to_tensor([[-2., 0.], [1., 2.]])
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out1 = paddle.sparse.sum(sparse_x)
+            >>> out1
+            Tensor(shape=[1], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[0],
+                values=1.)
+            >>> out2 = paddle.sparse.sum(sparse_x, axis=0)
+            >>> out2
+            Tensor(shape=[1, 2], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0]],
+                values=[[-1.,  2.]])
+            >>> out3 = paddle.sparse.sum(sparse_x, axis=-1)
+            >>> out3
+            Tensor(shape=[2], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 1]],
+                values=[-2.,  3.])
+            >>> out4 = paddle.sparse.sum(sparse_x, axis=1, keepdim=True)
+            >>> out4
+            Tensor(shape=[2, 1], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 1]],
+                values=[[-2.],
+                        [ 3.]])
     """
     dtype_flag = False
     if dtype is not None:
         dtype_flag = True
         dtype = convert_np_dtype_to_dtype_(dtype)
 
-    if in_dynamic_mode():
+    if in_dynamic_or_pir_mode():
         return _C_ops.sparse_sum(x, axis, dtype, keepdim)
     else:
         if axis is None:
@@ -243,8 +302,7 @@ def sum(x, axis=None, dtype=None, keepdim=False, name=None):
         return out
 
 
-@dygraph_only
-def atan(x, name=None):
+def atan(x: Tensor, name: str | None = None) -> Tensor:
     """
     Calculate elementwise atan of SparseTensor, requiring x to be a SparseCooTensor or SparseCsrTensor.
 
@@ -253,8 +311,8 @@ def atan(x, name=None):
         out = atan(x)
 
     Parameters:
-        x (Tensor): The input Sparse Tensor with data type float32, float64.
-        name (str, optional): Name for the operation (optional, default is None).
+        x (Tensor): The input Sparse Tensor with data type float32, float64, complex64, complex128.
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -263,18 +321,23 @@ def atan(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([-2., 0., 1.])
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.atan(sparse_x)
-
+            >>> dense_x = paddle.to_tensor([-2., 0., 1.])
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.atan(sparse_x)
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[-1.10714877,  0.78539819])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     return _C_ops.sparse_atan(x)
 
 
-@dygraph_only
-def sinh(x, name=None):
+def sinh(x: Tensor, name: str | None = None) -> Tensor:
     """
     Calculate elementwise sinh of SparseTensor, requiring x to be a SparseCooTensor or SparseCsrTensor.
 
@@ -283,8 +346,8 @@ def sinh(x, name=None):
         out = sinh(x)
 
     Parameters:
-        x (Tensor): The input Sparse Tensor with data type float32, float64.
-        name (str, optional): Name for the operation (optional, default is None).
+        x (Tensor): The input Sparse Tensor with data type float32, float64, complex64, complex128.
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -293,18 +356,23 @@ def sinh(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([-2., 0., 1.])
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.sinh(sparse_x)
-
+            >>> dense_x = paddle.to_tensor([-2., 0., 1.])
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.sinh(sparse_x)
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[-3.62686038,  1.17520118])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     return _C_ops.sparse_sinh(x)
 
 
-@dygraph_only
-def asinh(x, name=None):
+def asinh(x: Tensor, name: str | None = None) -> Tensor:
     """
     Calculate elementwise asinh of SparseTensor, requiring x to be a SparseCooTensor or SparseCsrTensor.
 
@@ -313,8 +381,8 @@ def asinh(x, name=None):
         out = asinh(x)
 
     Parameters:
-        x (Tensor): The input Sparse Tensor with data type float32, float64.
-        name (str, optional): Name for the operation (optional, default is None).
+        x (Tensor): The input Sparse Tensor with data type float32, float64, complex64, complex128.
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -323,18 +391,23 @@ def asinh(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([-2., 0., 1.])
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.asinh(sparse_x)
-
+            >>> dense_x = paddle.to_tensor([-2., 0., 1.])
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.asinh(sparse_x)
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[-1.44363546,  0.88137358])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     return _C_ops.sparse_asinh(x)
 
 
-@dygraph_only
-def atanh(x, name=None):
+def atanh(x: Tensor, name: str | None = None) -> Tensor:
     """
     Calculate elementwise atanh of SparseTensor, requiring x to be a SparseCooTensor or SparseCsrTensor.
 
@@ -343,8 +416,8 @@ def atanh(x, name=None):
         out = atanh(x)
 
     Parameters:
-        x (Tensor): The input Sparse Tensor with data type float32, float64.
-        name (str, optional): Name for the operation (optional, default is None).
+        x (Tensor): The input Sparse Tensor with data type float32, float64, complex64, complex128.
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -353,18 +426,23 @@ def atanh(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([-2., 0., 1.])
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.atanh(sparse_x)
-
+            >>> dense_x = paddle.to_tensor([-2., 0., 1.])
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.atanh(sparse_x)
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[nan , inf.])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     return _C_ops.sparse_atanh(x)
 
 
-@dygraph_only
-def tanh(x, name=None):
+def tanh(x: Tensor, name: str | None = None) -> Tensor:
     """
     Calculate elementwise tanh of SparseTensor, requiring x to be a SparseCooTensor or SparseCsrTensor.
 
@@ -373,8 +451,8 @@ def tanh(x, name=None):
         out = tanh(x)
 
     Parameters:
-        x (Tensor): The input Sparse Tensor with data type float32, float64.
-        name (str, optional): Name for the operation (optional, default is None).
+        x (Tensor): The input Sparse Tensor with data type float32, float64, complex64, complex128.
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -383,18 +461,23 @@ def tanh(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([-2., 0., 1.])
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.tanh(sparse_x)
-
+            >>> dense_x = paddle.to_tensor([-2., 0., 1.])
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.tanh(sparse_x)
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[-0.96402758,  0.76159418])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     return _C_ops.sparse_tanh(x)
 
 
-@dygraph_only
-def square(x, name=None):
+def square(x: Tensor, name: str | None = None) -> Tensor:
     """
     Calculate elementwise square of SparseTensor, requiring x to be a SparseCooTensor or SparseCsrTensor.
 
@@ -403,8 +486,8 @@ def square(x, name=None):
         out = square(x)
 
     Parameters:
-        x (Tensor): The input Sparse Tensor with data type float32, float64.
-        name (str, optional): Name for the operation (optional, default is None).
+        x (Tensor): The input Sparse Tensor with data type float32, float64, complex64, complex128.
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -413,18 +496,23 @@ def square(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([-2., 0., 1.])
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.square(sparse_x)
-
+            >>> dense_x = paddle.to_tensor([-2., 0., 1.])
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.square(sparse_x)
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[4., 1.])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     return _C_ops.sparse_square(x)
 
 
-@dygraph_only
-def sqrt(x, name=None):
+def sqrt(x: Tensor, name: str | None = None) -> Tensor:
     """
     Calculate elementwise sqrt of SparseTensor, requiring x to be a SparseCooTensor or SparseCsrTensor.
 
@@ -434,7 +522,7 @@ def sqrt(x, name=None):
 
     Parameters:
         x (Tensor): The input Sparse Tensor with data type float32, float64.
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -443,18 +531,23 @@ def sqrt(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([-2., 0., 1.])
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.sqrt(sparse_x)
-
+            >>> dense_x = paddle.to_tensor([-2., 0., 1.])
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.sqrt(sparse_x)
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[nan, 1. ])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     return _C_ops.sparse_sqrt(x)
 
 
-@dygraph_only
-def log1p(x, name=None):
+def log1p(x: Tensor, name: str | None = None) -> Tensor:
     """
     Calculate the natural log of (1+x), requiring x to be a SparseCooTensor or SparseCsrTensor.
 
@@ -463,8 +556,8 @@ def log1p(x, name=None):
         out = ln(1+x)
 
     Parameters:
-        x (Tensor): The input Sparse Tensor with data type float32, float64.
-        name (str, optional): Name for the operation (optional, default is None).
+        x (Tensor): The input Sparse Tensor with data type float32, float64, complex64, complex128.
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -473,18 +566,28 @@ def log1p(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([-2, 0, 1], dtype='float32')
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.log1p(sparse_x)
-
+            >>> dense_x = paddle.to_tensor([-2, 0, 1], dtype='float32')
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.log1p(sparse_x)
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[nan       , 0.69314718])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     return _C_ops.sparse_log1p(x)
 
 
-@dygraph_only
-def cast(x, index_dtype=None, value_dtype=None, name=None):
+def cast(
+    x: Tensor,
+    index_dtype: DTypeLike | None = None,
+    value_dtype: DTypeLike | None = None,
+    name: str | None = None,
+) -> Tensor:
     """
     cast non-zero-index of SparseTensor to `index_dtype`, non-zero-element of SparseTensor to
     `value_dtype` , requiring x to be a SparseCooTensor or SparseCsrTensor.
@@ -495,7 +598,7 @@ def cast(x, index_dtype=None, value_dtype=None, name=None):
             or crows/cols of SparseCsrTensor. Can be uint8, int8, int16, int32, int64.
         value_dtype (np.dtype|str, optional): Data type of the value of SparseCooTensor,
             SparseCsrTensor. Can be bool, float16, float32, float64, int8, int32, int64, uint8.
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -504,13 +607,19 @@ def cast(x, index_dtype=None, value_dtype=None, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([-2, 0, 1])
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.cast(sparse_x, 'int32', 'float64')
-
+            >>> dense_x = paddle.to_tensor([-2, 0, 1])
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.cast(sparse_x, 'int32', 'float64')
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float64, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[-2.,  1.])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     if index_dtype and not isinstance(index_dtype, core.VarDesc.VarType):
         index_dtype = convert_np_dtype_to_dtype_(index_dtype)
     if value_dtype and not isinstance(value_dtype, core.VarDesc.VarType):
@@ -518,8 +627,7 @@ def cast(x, index_dtype=None, value_dtype=None, name=None):
     return _C_ops.sparse_cast(x, index_dtype, value_dtype)
 
 
-@dygraph_only
-def pow(x, factor, name=None):
+def pow(x: Tensor, factor: float, name: str | None = None) -> Tensor:
     """
     Calculate elementwise pow of x, requiring x to be a SparseCooTensor or SparseCsrTensor.
 
@@ -530,7 +638,7 @@ def pow(x, factor, name=None):
     Parameters:
         x (Tensor): The input Sparse Tensor with data type float32, float64.
         factor (float|int): factor of pow.
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -539,18 +647,23 @@ def pow(x, factor, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([-2, 0, 3], dtype='float32')
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.pow(sparse_x, 2)
-
+            >>> dense_x = paddle.to_tensor([-2, 0, 3], dtype='float32')
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.pow(sparse_x, 2)
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[4., 9.])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     return _C_ops.sparse_pow(x, float(factor))
 
 
-@dygraph_only
-def neg(x, name=None):
+def neg(x: Tensor, name: str | None = None) -> Tensor:
     """
     Calculate elementwise negative of x, requiring x to be a SparseCooTensor or SparseCsrTensor.
 
@@ -560,7 +673,7 @@ def neg(x, name=None):
 
     Parameters:
         x (Tensor): The input Sparse Tensor with data type float32, float64.
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -569,18 +682,23 @@ def neg(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([-2, 0, 3], dtype='float32')
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.neg(sparse_x)
-
+            >>> dense_x = paddle.to_tensor([-2, 0, 3], dtype='float32')
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.neg(sparse_x)
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[ 2., -3.])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     return _C_ops.sparse_scale(x, -1.0, 0.0, True)
 
 
-@dygraph_only
-def abs(x, name=None):
+def abs(x: Tensor, name: str | None = None) -> Tensor:
     """
     Calculate elementwise absolute value of x, requiring x to be a SparseCooTensor or SparseCsrTensor.
 
@@ -589,8 +707,8 @@ def abs(x, name=None):
         out = |x|
 
     Parameters:
-        x (Tensor): The input Sparse Tensor with data type float32, float64.
-        name (str, optional): Name for the operation (optional, default is None).
+        x (Tensor): The input Sparse Tensor with data type float32, float64, complex64, complex128.
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -599,24 +717,29 @@ def abs(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([-2, 0, 3], dtype='float32')
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.abs(sparse_x)
-
+            >>> dense_x = paddle.to_tensor([-2, 0, 3], dtype='float32')
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.abs(sparse_x)
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[2., 3.])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     return _C_ops.sparse_abs(x)
 
 
-@dygraph_only
-def coalesce(x, name=None):
+def coalesce(x: Tensor, name: str | None = None) -> Tensor:
     r"""
     the coalesced operator include sorted and merge, after coalesced, the indices of x is sorted and unique.
 
     Parameters:
         x (Tensor): the input SparseCooTensor.
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -625,22 +748,27 @@ def coalesce(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            indices = [[0, 0, 1], [1, 1, 2]]
-            values = [1.0, 2.0, 3.0]
-            sp_x = paddle.sparse.sparse_coo_tensor(indices, values)
-            sp_x = paddle.sparse.coalesce(sp_x)
-            print(sp_x.indices())
-            #[[0, 1], [1, 2]]
-            print(sp_x.values())
-            #[3.0, 3.0]
+            >>> indices = [[0, 0, 1], [1, 1, 2]]
+            >>> values = [1.0, 2.0, 3.0]
+            >>> sp_x = paddle.sparse.sparse_coo_tensor(indices, values)
+            >>> sp_x = paddle.sparse.coalesce(sp_x)
+            >>> print(sp_x.indices())
+            Tensor(shape=[2, 2], dtype=int64, place=Place(cpu), stop_gradient=True,
+            [[0, 1],
+             [1, 2]])
+            >>> print(sp_x.values())
+            Tensor(shape=[2], dtype=float32, place=Place(cpu), stop_gradient=True,
+            [3., 3.])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     return _C_ops.sparse_coalesce(x)
 
 
-@dygraph_only
-def rad2deg(x, name=None):
+def rad2deg(x: Tensor, name: str | None = None) -> Tensor:
     r"""
     Convert each of the elements of input x from radian to degree,
     requiring x to be a SparseCooTensor or SparseCsrTensor.
@@ -651,7 +779,7 @@ def rad2deg(x, name=None):
 
     Parameters:
         x (Tensor): The input Sparse Tensor with data type float32, float64, int32, int64.
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -660,20 +788,25 @@ def rad2deg(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([3.142, 0., -3.142])
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.rad2deg(sparse_x)
-
+            >>> dense_x = paddle.to_tensor([3.142, 0., -3.142])
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.rad2deg(sparse_x)
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[ 180.02334595, -180.02334595])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     if x.dtype in _int_dtype_:
         x = _C_ops.sparse_cast(x, None, core.VarDesc.VarType.FP32)
     return _C_ops.sparse_scale(x, 180.0 / np.pi, 0.0, True)
 
 
-@dygraph_only
-def deg2rad(x, name=None):
+def deg2rad(x: Tensor, name: str | None = None) -> Tensor:
     r"""
     Convert each of the elements of input x from degree to radian,
     requiring x to be a SparseCooTensor or SparseCsrTensor.
@@ -684,7 +817,7 @@ def deg2rad(x, name=None):
 
     Parameters:
         x (Tensor): The input Sparse Tensor with data type float32, float64, int32, int64.
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -693,20 +826,25 @@ def deg2rad(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([-180, 0, 180])
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.deg2rad(sparse_x)
-
+            >>> dense_x = paddle.to_tensor([-180, 0, 180])
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.deg2rad(sparse_x)
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[-3.14159274,  3.14159274])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     if x.dtype in _int_dtype_:
         x = _C_ops.sparse_cast(x, None, core.VarDesc.VarType.FP32)
     return _C_ops.sparse_scale(x, np.pi / 180.0, 0.0, True)
 
 
-@dygraph_only
-def expm1(x, name=None):
+def expm1(x: Tensor, name: str | None = None) -> Tensor:
     """
     Calculate elementwise `exp(x)-1` , requiring x to be a SparseCooTensor or SparseCsrTensor.
 
@@ -715,8 +853,8 @@ def expm1(x, name=None):
         out = exp(x) - 1
 
     Parameters:
-        x (Tensor): The input Sparse Tensor with data type float32, float64.
-        name (str, optional): Name for the operation (optional, default is None).
+        x (Tensor): The input Sparse Tensor with data type float32, float64, complex64, complex128.
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -725,16 +863,23 @@ def expm1(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            dense_x = paddle.to_tensor([-2., 0., 1.])
-            sparse_x = dense_x.to_sparse_coo(1)
-            out = paddle.sparse.expm1(sparse_x)
+            >>> dense_x = paddle.to_tensor([-2., 0., 1.])
+            >>> sparse_x = dense_x.to_sparse_coo(1)
+            >>> out = paddle.sparse.expm1(sparse_x)
+            >>> out
+            Tensor(shape=[3], dtype=paddle.float32, place=Place(cpu), stop_gradient=True,
+                indices=[[0, 2]],
+                values=[-0.86466473,  1.71828187])
     """
+    assert (
+        in_dynamic_or_pir_mode()
+    ), "Currently, Sparse API only support dynamic mode or pir mode."
     return _C_ops.sparse_expm1(x)
 
 
-def reshape(x, shape, name=None):
+def reshape(x: Tensor, shape: ShapeLike, name: str | None = None) -> Tensor:
     """
     Changes the shape of ``x`` without changing its value, requiring x to be a SparseCooTensor or SparseCsrTensor.
     Currently this function can only reshape the sparse dims of ``x`` , but ``shape`` argument must be specified
@@ -760,7 +905,7 @@ def reshape(x, shape, name=None):
         x (Tensor): The input sparse tensor with data type ``float32``, ``float64``, ``int32``, ``int64`` or ``bool``.
         shape (list|tuple): Define the target shape. At most one dimension of the target shape can be -1.
                         The data type is ``int32``.
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -769,25 +914,25 @@ def reshape(x, shape, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            x_shape = [6, 2, 3]
-            new_shape = [1, 0, 2, -1, 3]
-            format = "coo"
+            >>> x_shape = [6, 2, 3]
+            >>> new_shape = [1, 0, 2, -1, 3]
+            >>> format = "coo"
 
-            dense_x = paddle.randint(-100, 100, x_shape) * paddle.randint(0, 2, x_shape)
+            >>> dense_x = paddle.randint(-100, 100, x_shape) * paddle.randint(0, 2, x_shape)
 
-            if format == "coo":
-                sp_x = dense_x.to_sparse_coo(len(x_shape))
-            else:
-                sp_x = dense_x.to_sparse_csr()
-            sp_out = paddle.sparse.reshape(sp_x, new_shape)
+            >>> if format == "coo":
+            ...     sp_x = dense_x.to_sparse_coo(len(x_shape))
+            >>> else:
+            ...     sp_x = dense_x.to_sparse_csr()
+            >>> sp_out = paddle.sparse.reshape(sp_x, new_shape)
 
-            print(sp_out)
-            # the shape of sp_out is [1, 2, 2, 3, 3]
+            >>> print(sp_out.shape)
+            [1, 2, 2, 3, 3]
 
     """
-    if in_dynamic_mode():
+    if in_dynamic_or_pir_mode():
         return _C_ops.sparse_reshape(x, shape)
     else:
         check_variable_and_dtype(
@@ -821,14 +966,14 @@ def reshape(x, shape, name=None):
         return out
 
 
-def isnan(x, name=None):
+def isnan(x: Tensor, name: str | None = None) -> Tensor:
     """
 
     Return whether every element of input tensor is `NaN` or not, requiring x to be a SparseCooTensor or SparseCsrTensor.
 
     Args:
         x (Tensor): The input tensor (SparseCooTensor or SparseCsrTensor), it's data type should be float16, float32, float64, int32, int64.
-        name (str, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
+        name (str|None, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
         A Sparse Tensor with the same shape as ``x``,  the bool result which shows every element of `x` whether it is `NaN` or not.
@@ -836,28 +981,28 @@ def isnan(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
-            import numpy as np
+            >>> import paddle
+            >>> import numpy as np
 
-            format = "coo"
-            np_x = np.asarray([[[0., 0], [1., 2.]], [[0., 0], [3., float('nan')]]])
-            dense_x = paddle.to_tensor(np_x)
+            >>> format = "coo"
+            >>> np_x = np.asarray([[[0., 0], [1., 2.]], [[0., 0], [3., float('nan')]]])
+            >>> dense_x = paddle.to_tensor(np_x)
 
-            if format == "coo":
-                sparse_x = dense_x.to_sparse_coo(len(np_x.shape))
-            else:
-                sparse_x = dense_x.to_sparse_csr()
-
-            sparse_out = paddle.sparse.isnan(sparse_x)
-            print(sparse_out)
-            # Tensor(shape=[2, 2, 2], dtype=paddle.bool, place=Place(gpu:0), stop_gradient=True,
-            #        indices=[[0, 0, 1, 1],
-            #                 [1, 1, 1, 1],
-            #                 [0, 1, 0, 1]],
-            #        values=[False, False, False, True ])
+            >>> if format == "coo":
+            ...     sparse_x = dense_x.to_sparse_coo(len(np_x.shape))
+            >>> else:
+            ...     sparse_x = dense_x.to_sparse_csr()
+            ...
+            >>> sparse_out = paddle.sparse.isnan(sparse_x)
+            >>> print(sparse_out)
+            Tensor(shape=[2, 2, 2], dtype=paddle.bool, place=Place(gpu:0), stop_gradient=True,
+                   indices=[[0, 0, 1, 1],
+                            [1, 1, 1, 1],
+                            [0, 1, 0, 1]],
+                   values=[False, False, False, True ])
 
     """
-    if in_dynamic_mode():
+    if in_dynamic_or_pir_mode():
         return _C_ops.sparse_isnan(x)
     else:
         op_type = 'sparse_isnan'
@@ -869,7 +1014,13 @@ def isnan(x, name=None):
         return out
 
 
-def slice(x, axes, starts, ends, name=None):
+def slice(
+    x: Tensor,
+    axes: Sequence[int] | Sequence[Tensor] | Tensor,
+    starts: Sequence[int] | Sequence[Tensor] | Tensor,
+    ends: Sequence[int] | Sequence[Tensor] | Tensor,
+    name: str | None = None,
+) -> Tensor:
     """
     This operator produces a slice of ``x`` along multiple axes for sparse tensors.
     Slice uses ``axes``, ``starts`` and ``ends`` attributes to specify the start and
@@ -878,20 +1029,20 @@ def slice(x, axes, starts, ends, name=None):
     ``starts`` or ``ends`` such as :math:`-i`, it represents the reverse position of
     the axis :math:`i-1` (here 0 is the initial position).
     If the value passed to ``starts`` or ``ends`` is greater than the number of elements
-    in the dimenstion (n), it represents n.
+    in the dimension (n), it represents n.
     For slicing to the end of a dimension with unknown size, it is recommended to pass
     in INT_MAX. The size of ``axes`` must be equal to ``starts`` and ``ends``.
 
     Args:
         x (Tensor): The input Tensor (``SparseCooTensor`` or ``SparseCsrTensor``), it's data type should be ``float16``, ``float32``, ``float64``, ``int32``, ``int64``.
         axes (list|tuple|Tensor): The data type is ``int32``.If ``axes`` is a list or tuple, the elements of
-                it should be integers or Tensors with shape [1]. If ``axes`` is a Tensor, it should be a 1-D Tensor.
+                it should be integers or a 0-D Tensor with shape []. If ``axes`` is a Tensor, it should be a 1-D Tensor.
                 Axes that `starts` and `ends` apply to.
         starts (list|tuple|Tensor): The data type is ``int32``. If ``starts`` is a list or tuple, the elements of
-                it should be integers or Tensors with shape [1]. If ``starts`` is a Tensor, it should be a 1-D Tensor.
+                it should be integers or a 0-D Tensor with shape []. If ``starts`` is a Tensor, it should be a 1-D Tensor.
                 It represents starting indices of corresponding axis in ``axes``.
         ends (list|tuple|Tensor): The data type is ``int32``. If ``ends`` is a list or tuple, the elements of
-                it should be integers or Tensors with shape [1]. If ``ends`` is a Tensor, it should be a 1-D Tensor.
+                it should be integers or a 0-D Tensor with shape []. If ``ends`` is a Tensor, it should be a 1-D Tensor.
                 It represents ending indices of corresponding axis in ``axes``.
 
     Returns:
@@ -900,31 +1051,31 @@ def slice(x, axes, starts, ends, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
-            import numpy as np
+            >>> import paddle
+            >>> import numpy as np
 
-            format = 'coo'
-            np_x = np.asarray([[4, 0, 7, 0], [0, 0, 5, 0], [-4, 2, 0, 0]])
-            dense_x = paddle.to_tensor(np_x)
-            if format == 'coo':
-                sp_x = dense_x.to_sparse_coo(len(np_x.shape))
-            else:
-                sp_x = dense_x.to_sparse_csr()
+            >>> format = 'coo'
+            >>> np_x = np.asarray([[4, 0, 7, 0], [0, 0, 5, 0], [-4, 2, 0, 0]])
+            >>> dense_x = paddle.to_tensor(np_x)
+            >>> if format == 'coo':
+            ...     sp_x = dense_x.to_sparse_coo(len(np_x.shape))
+            >>> else:
+            ...     sp_x = dense_x.to_sparse_csr()
+            ...
+            >>> axes = [0, 1]
+            >>> starts = [1, 0]
+            >>> ends = [3, -2]
+            >>> sp_out = paddle.sparse.slice(sp_x, axes, starts, ends)
+            >>> # sp_out is x[1:3, 0:-2]
 
-            axes = [0, 1]
-            starts = [1, 0]
-            ends = [3, -2]
-            sp_out = paddle.sparse.slice(sp_x, axes, starts, ends)
-            # sp_out is x[1:3, 0:-2]
-
-            print(sp_out)
-            # Tensor(shape=[2, 2], dtype=paddle.int64, place=Place(cpu), stop_gradient=True,
-            #        indices=[[1, 1],
-            #                 [0, 1]],
-            #        values=[-4,  2])
+            >>> print(sp_out)
+            Tensor(shape=[2, 2], dtype=paddle.int64, place=Place(cpu), stop_gradient=True,
+                   indices=[[1, 1],
+                            [0, 1]],
+                   values=[-4,  2])
 
     """
-    if in_dynamic_mode():
+    if in_dynamic_or_pir_mode():
         return _C_ops.sparse_slice(x, axes, starts, ends)
     else:
         attrs = {'axes': axes, 'starts': starts, 'ends': ends}
@@ -953,7 +1104,13 @@ def slice(x, axes, starts, ends, name=None):
         return out
 
 
-def pca_lowrank(x, q=None, center=True, niter=2, name=None):
+def pca_lowrank(
+    x: Tensor,
+    q: int | None = None,
+    center: bool = True,
+    niter: int = 2,
+    name: str | None = None,
+) -> tuple[Tensor, Tensor, Tensor]:
     r"""
     Performs linear Principal Component Analysis (PCA) on a sparse matrix.
 
@@ -964,13 +1121,13 @@ def pca_lowrank(x, q=None, center=True, niter=2, name=None):
 
     Args:
         x (Tensor): The input tensor. Its shape should be `[N, M]`,
-            N and M can be arbitraty positive number.
+            N and M can be arbitrary positive number.
             The data type of x should be float32 or float64.
-        q (int, optional): a slightly overestimated rank of :math:`X`.
+        q (int|None, optional): a slightly overestimated rank of :math:`X`.
             Default value is :math:`q=min(6,N,M)`.
         center (bool, optional): if True, center the input tensor.
             Default value is True.
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -983,40 +1140,43 @@ def pca_lowrank(x, q=None, center=True, niter=2, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> # doctest: +REQUIRES(env:GPU)
+            >>> import paddle
+            >>> paddle.device.set_device('gpu')
 
-            format = "coo"
-            dense_x = paddle.randn((5, 5), dtype='float64')
+            >>> format = "coo"
+            >>> paddle.seed(2023)
+            >>> dense_x = paddle.randn((5, 5), dtype='float64')
 
-            if format == "coo":
-                sparse_x = dense_x.to_sparse_coo(len(dense_x.shape))
-            else:
-                sparse_x = dense_x.to_sparse_csr()
+            >>> if format == "coo":
+            ...     sparse_x = dense_x.to_sparse_coo(len(dense_x.shape))
+            >>> else:
+            ...     sparse_x = dense_x.to_sparse_csr()
 
-            print("sparse.pca_lowrank API only support CUDA 11.x")
-            U, S, V = None, None, None
-            # use code blow when your device CUDA version >= 11.0
-            # U, S, V = paddle.sparse.pca_lowrank(sparse_x)
+            >>> print("sparse.pca_lowrank API only support CUDA 11.x")
+            >>> # U, S, V = None, None, None
+            >>> # use code blow when your device CUDA version >= 11.0
+            >>> U, S, V = paddle.sparse.pca_lowrank(sparse_x)
 
-            print(U)
-            # Tensor(shape=[5, 5], dtype=float64, place=Place(gpu:0), stop_gradient=True,
-            #        [[ 0.02206024,  0.53170082, -0.22392168, -0.48450657,  0.65720625],
-            #         [ 0.02206024,  0.53170082, -0.22392168, -0.32690402, -0.74819812],
-            #         [ 0.02206024,  0.53170082, -0.22392168,  0.81141059,  0.09099187],
-            #         [ 0.15045792,  0.37840027,  0.91333217, -0.00000000,  0.00000000],
-            #         [ 0.98787775, -0.09325209, -0.12410317, -0.00000000, -0.00000000]])
+            >>> print(U)
+            Tensor(shape=[5, 5], dtype=float64, place=Place(gpu:0), stop_gradient=True,
+                   [[-0.31412600,  0.44814876,  0.18390454, -0.19967630, -0.79170452],
+                    [-0.31412600,  0.44814876,  0.18390454, -0.58579808,  0.56877700],
+                    [-0.31412600,  0.44814876,  0.18390454,  0.78547437,  0.22292751],
+                    [-0.38082462,  0.10982129, -0.91810233,  0.00000000,  0.00000000],
+                    [ 0.74762770,  0.62082796, -0.23585052,  0.00000000, -0.00000000]])
 
-            print(S)
-            # Tensor(shape=[5], dtype=float64, place=Place(gpu:0), stop_gradient=True,
-            #        [2.28621761, 0.93618564, 0.53234942, 0.00000000, 0.00000000])
+            >>> print(S)
+            Tensor(shape=[5], dtype=float64, place=Place(gpu:0), stop_gradient=True,
+                   [1.56031096, 1.12956227, 0.27922715, 0.00000000, 0.00000000])
 
-            print(V)
-            # Tensor(shape=[5, 5], dtype=float64, place=Place(gpu:0), stop_gradient=True,
-            #        [[ 0.26828910, -0.57116436, -0.26548201,  0.67342660, -0.27894114],
-            #         [-0.19592125, -0.31629129,  0.02001645, -0.50484498, -0.77865626],
-            #         [-0.82913017, -0.09391036,  0.37975388,  0.39938099, -0.00241046],
-            #         [-0.41163516,  0.27490410, -0.86666276,  0.03382656, -0.05230341],
-            #         [ 0.18092947,  0.69952818,  0.18385126,  0.36190987, -0.55959343]])
+            >>> print(V)
+            Tensor(shape=[5, 5], dtype=float64, place=Place(gpu:0), stop_gradient=True,
+                   [[ 0.88568469, -0.29081908,  0.06163676,  0.19597228, -0.29796422],
+                    [-0.26169364, -0.27616183,  0.43148760, -0.42522796, -0.69874939],
+                    [ 0.28587685,  0.30695344, -0.47790836, -0.76982533, -0.05501437],
+                    [-0.23958121, -0.62770647, -0.71141770,  0.11463224, -0.17125926],
+                    [ 0.08918713, -0.59238761,  0.27478686, -0.41833534,  0.62498824]])
     """
 
     def get_floating_dtype(x):
@@ -1123,8 +1283,8 @@ def pca_lowrank(x, q=None, center=True, niter=2, name=None):
         q = min(6, m, n)
     elif not (q >= 0 and q <= min(m, n)):
         raise ValueError(
-            'q(={}) must be non-negative integer'
-            ' and not greater than min(m, n)={}'.format(q, min(m, n))
+            f'q(={q}) must be non-negative integer'
+            f' and not greater than min(m, n)={min(m, n)}'
         )
     if not (niter >= 0):
         raise ValueError(f'niter(={niter}) must be non-negative integer')

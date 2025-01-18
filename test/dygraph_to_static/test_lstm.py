@@ -17,17 +17,25 @@ import tempfile
 import unittest
 
 import numpy as np
-from dygraph_to_static_util import ast_only_test, dy2static_unittest
+from dygraph_to_static_utils import (
+    Dy2StTestBase,
+    enable_to_static_guard,
+    test_ast_only,
+)
 
 import paddle
 from paddle import nn
 
 
 class LSTMLayer(nn.Layer):
-    def __init__(self, in_channels, hidden_size):
+    def __init__(self, in_channels, hidden_size, proj_size=0):
         super().__init__()
         self.cell = nn.LSTM(
-            in_channels, hidden_size, direction='bidirectional', num_layers=2
+            in_channels,
+            hidden_size,
+            direction='bidirectional',
+            num_layers=2,
+            proj_size=proj_size,
         )
 
     def forward(self, x):
@@ -36,17 +44,16 @@ class LSTMLayer(nn.Layer):
 
 
 class Net(nn.Layer):
-    def __init__(self, in_channels, hidden_size):
+    def __init__(self, in_channels, hidden_size, proj_size=0):
         super().__init__()
-        self.lstm = LSTMLayer(in_channels, hidden_size)
+        self.lstm = LSTMLayer(in_channels, hidden_size, proj_size=proj_size)
 
     def forward(self, x):
         x = self.lstm(x)
         return x
 
 
-@dy2static_unittest
-class TestLstm(unittest.TestCase):
+class TestLstm(Dy2StTestBase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
 
@@ -54,26 +61,20 @@ class TestLstm(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def run_lstm(self, to_static):
-        paddle.jit.enable_to_static(to_static)
+        with enable_to_static_guard(to_static):
+            paddle.seed(1001)
 
-        paddle.disable_static()
-        paddle.static.default_main_program().random_seed = 1001
-        paddle.static.default_startup_program().random_seed = 1001
-
-        net = Net(12, 2)
-        net = paddle.jit.to_static(net)
-        x = paddle.zeros((2, 10, 12))
-        y = net(paddle.to_tensor(x))
-        return y.numpy()
+            net = paddle.jit.to_static(Net(12, 2))
+            x = paddle.zeros((2, 10, 12))
+            y = net(x)
+            return y.numpy()
 
     def test_lstm_to_static(self):
         dygraph_out = self.run_lstm(to_static=False)
         static_out = self.run_lstm(to_static=True)
         np.testing.assert_allclose(dygraph_out, static_out, rtol=1e-05)
 
-    @ast_only_test
-    def test_save_in_eval(self, with_training=True):
-        paddle.jit.enable_to_static(True)
+    def save_in_eval(self, with_training: bool):
         net = Net(12, 2)
         x = paddle.randn((2, 10, 12))
         if with_training:
@@ -91,6 +92,7 @@ class TestLstm(unittest.TestCase):
         net = paddle.jit.to_static(
             net, input_spec=[paddle.static.InputSpec(shape=[-1, 10, 12])]
         )
+
         model_path = os.path.join(self.temp_dir.name, 'simple_lstm')
         paddle.jit.save(net, model_path)
 
@@ -103,9 +105,7 @@ class TestLstm(unittest.TestCase):
             dygraph_out.numpy(),
             static_out.numpy(),
             rtol=1e-05,
-            err_msg='dygraph_out is {}\n static_out is \n{}'.format(
-                dygraph_out, static_out
-            ),
+            err_msg=f'dygraph_out is {dygraph_out}\n static_out is \n{static_out}',
         )
         # switch back into train mode.
         net.train()
@@ -114,13 +114,32 @@ class TestLstm(unittest.TestCase):
             dygraph_out.numpy(),
             train_out.numpy(),
             rtol=1e-05,
-            err_msg='dygraph_out is {}\n static_out is \n{}'.format(
-                dygraph_out, train_out
-            ),
+            err_msg=f'dygraph_out is {dygraph_out}\n static_out is \n{train_out}',
         )
 
+    @test_ast_only
     def test_save_without_training(self):
-        self.test_save_in_eval(with_training=False)
+        self.save_in_eval(with_training=False)
+
+    @test_ast_only
+    def test_save_with_training(self):
+        self.save_in_eval(with_training=True)
+
+
+class TestLstmWithProjsize(TestLstm):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.net = Net(12, 8, 4)
+        self.inputs = paddle.zeros((2, 10, 12))
+
+    def test_error(self):
+        # proj_size < 0
+        with self.assertRaises(ValueError):
+            nn.LSTM(4, 4, 4, proj_size=-1)
+
+        # proj_size >= hidden_size
+        with self.assertRaises(ValueError):
+            nn.LSTM(4, 4, 4, proj_size=20)
 
 
 class LinearNet(nn.Layer):
@@ -129,15 +148,13 @@ class LinearNet(nn.Layer):
         self.fc = nn.Linear(10, 12)
         self.dropout = nn.Dropout(0.5)
 
-    @paddle.jit.to_static
     def forward(self, x):
         y = self.fc(x)
         y = self.dropout(y)
         return y
 
 
-@dy2static_unittest
-class TestSaveInEvalMode(unittest.TestCase):
+class TestSaveInEvalMode(Dy2StTestBase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
 
@@ -145,8 +162,7 @@ class TestSaveInEvalMode(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_save_in_eval(self):
-        paddle.jit.enable_to_static(True)
-        net = LinearNet()
+        net = paddle.jit.to_static(LinearNet())
         x = paddle.randn((2, 10))
         x.stop_gradient = False
         dygraph_out = net(x)
@@ -176,14 +192,11 @@ class TestSaveInEvalMode(unittest.TestCase):
             eval_out.numpy(),
             infer_out.numpy(),
             rtol=1e-05,
-            err_msg='eval_out is {}\n infer_out is \n{}'.format(
-                eval_out, infer_out
-            ),
+            err_msg=f'eval_out is {eval_out}\n infer_out is \n{infer_out}',
         )
 
 
-@dy2static_unittest
-class TestEvalAfterSave(unittest.TestCase):
+class TestEvalAfterSave(Dy2StTestBase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
 
@@ -203,9 +216,27 @@ class TestEvalAfterSave(unittest.TestCase):
         sgd.step()
         x = paddle.randn((2, 10, 12)).astype('float32')
         dy_out = net(x)
+
         # save model
         model_path = os.path.join(self.temp_dir.name, 'jit.save/lstm')
         paddle.jit.save(net, model_path, input_spec=[x])
+        paddle.enable_static()
+        exe = paddle.base.Executor()
+        [
+            inference_program,
+            feed_target_names,
+            fetch_targets,
+        ] = paddle.static.io.load_inference_model(model_path, executor=exe)
+
+        load_out = exe.run(
+            inference_program,
+            feed={feed_target_names[0]: x.numpy()},
+            fetch_list=fetch_targets,
+        )
+
+        np.testing.assert_allclose(dy_out.numpy(), load_out[0], rtol=1e-05)
+
+        paddle.disable_static()
         load_net = paddle.jit.load(model_path)
         load_out = load_net(x)
         np.testing.assert_allclose(dy_out.numpy(), load_out.numpy(), rtol=1e-05)

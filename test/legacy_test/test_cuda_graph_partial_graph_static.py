@@ -39,6 +39,10 @@ class SimpleModel(nn.Layer):
         return x
 
 
+@unittest.skipIf(
+    not paddle.is_compiled_with_cuda() or float(paddle.version.cuda()) < 11.0,
+    "only support cuda >= 11.0",
+)
 class TestCudaGraphAttrAll(unittest.TestCase):
     def test_all_program(self):
         if not is_cuda_graph_supported():
@@ -55,16 +59,17 @@ class TestCudaGraphAttrAll(unittest.TestCase):
             opt.minimize(loss)
             block = main_prog.global_block()
             for op in block.ops:
-                if op._cuda_graph_attr is None:
-                    # the loss and opt are not wrapped
-                    assert op.type in [
-                        'sgd',
-                        'reduce_mean',
-                        'fill_constant',
-                        'reduce_mean_grad',
-                    ]
-                else:
-                    assert op._cuda_graph_attr == 'thread_local;0;0'
+                if not paddle.framework.use_pir_api():
+                    if op._cuda_graph_attr is None:
+                        # the loss and opt are not wrapped
+                        assert op.type in [
+                            'sgd',
+                            'reduce_mean',
+                            'fill_constant',
+                            'reduce_mean_grad',
+                        ]
+                    else:
+                        assert op._cuda_graph_attr == 'thread_local;0;0'
 
 
 if __name__ == "__main__":

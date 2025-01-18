@@ -39,7 +39,7 @@ class DistributedLookupTableKernel : public framework::OpKernel<T> {
     } else if (var->IsType<phi::SelectedRows>()) {
       emb_dim = var->Get<phi::SelectedRows>().value().dims()[1];
     } else {
-      PADDLE_THROW(platform::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "Expected type of `W` must be Tensor, SelectedRows.But got "
           "unsupport type: %s.",
           framework::ToTypeName(var->Type())));
@@ -50,7 +50,7 @@ class DistributedLookupTableKernel : public framework::OpKernel<T> {
 
     auto fleet = distributed::FleetWrapper::GetInstance();
 
-    if (platform::is_cpu_place(context.GetPlace())) {
+    if (context.GetPlace().GetType() == phi::AllocationType::CPU) {
       fleet->PullSparseToTensorSync(static_cast<uint64_t>(table_id),
                                     emb_dim,
                                     static_cast<uint64_t>(padding_idx),
@@ -62,7 +62,7 @@ class DistributedLookupTableKernel : public framework::OpKernel<T> {
       auto inputs_variable = context.MultiInputVar("Ids");
       auto outputs_variable = context.MultiOutputVar("Outputs");
 
-      auto cpu_place = platform::CPUPlace();
+      auto cpu_place = phi::CPUPlace();
 
       std::vector<const phi::DenseTensor *> tmp_input_vec;
       auto input_var_size = inputs_variable.size();
@@ -119,10 +119,10 @@ class DistributedLookupTableKernel : public framework::OpKernel<T> {
         auto *id_tensor = id_vars[i]->GetMutable<phi::DenseTensor>();
         auto *out_tensor = out_vars[i]->GetMutable<phi::DenseTensor>();
 
-        auto id_dims = phi::vectorize<int64_t>(id_tensor->dims());
-        out_tensor->Resize(phi::make_ddim({static_cast<int64_t>(id_dims[0]),
-                                           static_cast<int64_t>(id_dims[1]),
-                                           static_cast<int64_t>(emb_dim)}));
+        auto id_dims = common::vectorize<int64_t>(id_tensor->dims());
+        out_tensor->Resize(common::make_ddim({static_cast<int64_t>(id_dims[0]),
+                                              static_cast<int64_t>(id_dims[1]),
+                                              static_cast<int64_t>(emb_dim)}));
       }
     }
   }

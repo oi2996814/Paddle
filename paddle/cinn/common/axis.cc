@@ -19,11 +19,11 @@
 #include "paddle/cinn/poly/dim.h"
 #include "paddle/cinn/poly/domain.h"
 #include "paddle/cinn/poly/stage.h"
-
+#include "paddle/common/enforce.h"
 namespace cinn {
 namespace common {
 
-static const std::vector<std::string> kAxises({
+static const std::vector<std::string> kAxes({
     "i",  // level 0
     "j",  // level 1
     "k",  // level 2
@@ -49,12 +49,12 @@ static const std::vector<std::string> kAxises({
 });
 
 std::string axis_name(int level) {
-  if (level < kAxises.size()) {
-    return kAxises[level];
+  if (level < kAxes.size()) {
+    return kAxes[level];
   }
   // upper level
-  int repeat_num = 1 + (level / kAxises.size());
-  const auto& base_axis = kAxises[level % kAxises.size()];
+  int repeat_num = 1 + (level / kAxes.size());
+  const auto& base_axis = kAxes[level % kAxes.size()];
 
   // if the level greater than kAxis, repeat the axis, like:
   // level == 22 ==> axis = "ii"
@@ -68,8 +68,13 @@ std::string axis_name(int level) {
 std::vector<ir::Var> GenDefaultAxis(int naxis) {
   std::vector<ir::Var> axis;
   for (int i = 0; i < naxis; i++) {
-    axis.emplace_back(common::axis_name(i));
-    CHECK(axis.back()->type().valid());
+    axis.emplace_back(cinn::common::axis_name(i));
+    PADDLE_ENFORCE_EQ(axis.back()->type().valid(),
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "The type of axis at index %d is invalid. Please "
+                          "ensure each axis has a valid type.",
+                          i));
   }
   return axis;
 }
@@ -84,7 +89,7 @@ std::vector<ir::Expr> GenDefaultAxisAsExpr(int naxis) {
 }
 
 static const std::set<std::string>& axis_set() {
-  static std::set<std::string> x(kAxises.begin(), kAxises.end());
+  static std::set<std::string> x(kAxes.begin(), kAxes.end());
   return x;
 }
 
@@ -97,13 +102,13 @@ bool IsAxisNameReserved(const std::string& x) {
     return true;
   }
   if (!axis_set().count(std::string(1, x[0]))) {
-    // all char in axis should in kAxises
+    // all char in axis should in kAxes
     return false;
   }
   bool is_repeat_axis = true;
   for (int i = 1; i < x.size(); ++i) {
     if (x[i] != x[0]) {
-      // the axis are repeat with the char in kAxises
+      // the axis are repeat with the char in kAxes
       is_repeat_axis = false;
       break;
     }

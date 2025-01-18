@@ -17,7 +17,7 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle import fluid
+from paddle import base
 
 
 class TestGraphKhopSampler(unittest.TestCase):
@@ -78,7 +78,7 @@ class TestGraphKhopSampler(unittest.TestCase):
                 continue
             # Ensure no repetitive sample neighbors.
             self.assertTrue(
-                edge_src_n.shape[0] == paddle.unique(edge_src_n).shape[0]
+                edge_src_n.shape[0] == np.unique(edge_src_n).shape[0]
             )
             # Ensure the correct sample size.
             self.assertTrue(
@@ -91,20 +91,20 @@ class TestGraphKhopSampler(unittest.TestCase):
 
     def test_uva_sample_result(self):
         paddle.disable_static()
-        if paddle.fluid.core.is_compiled_with_cuda():
+        if paddle.base.core.is_compiled_with_cuda():
             row = None
-            if fluid.framework.in_dygraph_mode():
-                row = paddle.fluid.core.eager.to_uva_tensor(
+            if base.framework.in_dygraph_mode():
+                row = paddle.base.core.eager.to_uva_tensor(
                     self.row.astype(self.row.dtype), 0
                 )
-                sorted_eid = paddle.fluid.core.eager.to_uva_tensor(
+                sorted_eid = paddle.base.core.eager.to_uva_tensor(
                     self.sorted_eid.astype(self.sorted_eid.dtype), 0
                 )
             else:
-                row = paddle.fluid.core.to_uva_tensor(
+                row = paddle.base.core.to_uva_tensor(
                     self.row.astype(self.row.dtype)
                 )
-                sorted_eid = paddle.fluid.core.to_uva_tensor(
+                sorted_eid = paddle.base.core.to_uva_tensor(
                     self.sorted_eid.astype(self.sorted_eid.dtype)
                 )
             colptr = paddle.to_tensor(self.colptr)
@@ -137,7 +137,7 @@ class TestGraphKhopSampler(unittest.TestCase):
                 if edge_src_n.shape[0] == 0:
                     continue
                 self.assertTrue(
-                    edge_src_n.shape[0] == paddle.unique(edge_src_n).shape[0]
+                    edge_src_n.shape[0] == np.unique(edge_src_n).shape[0]
                 )
                 self.assertTrue(
                     edge_src_n.shape[0] == self.sample_sizes[0]

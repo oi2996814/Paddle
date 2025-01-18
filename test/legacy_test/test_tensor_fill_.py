@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
 
 import paddle
-from paddle import fluid
+from paddle import base
 
 
 class TensorFill_Test(unittest.TestCase):
@@ -26,10 +27,16 @@ class TensorFill_Test(unittest.TestCase):
 
     def test_tensor_fill_true(self):
         typelist = ['float32', 'float64', 'int32', 'int64', 'float16']
-        places = [fluid.CPUPlace()]
-        if fluid.core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
-            places.append(fluid.CUDAPinnedPlace())
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
+        if base.core.is_compiled_with_cuda():
+            places.append(base.CUDAPlace(0))
+            places.append(base.CUDAPinnedPlace())
 
         for idx, p in enumerate(places):
             if idx == 0:
@@ -50,10 +57,16 @@ class TensorFill_Test(unittest.TestCase):
 
     def test_tensor_fill_backward(self):
         typelist = ['float32']
-        places = [fluid.CPUPlace()]
-        if fluid.core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
-            places.append(fluid.CUDAPinnedPlace())
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
+        if base.core.is_compiled_with_cuda():
+            places.append(base.CUDAPlace(0))
+            places.append(base.CUDAPinnedPlace())
 
         for idx, p in enumerate(places):
             if idx == 0:
@@ -64,7 +77,7 @@ class TensorFill_Test(unittest.TestCase):
                 np.array(range(np.prod(self.shape))), self.shape
             )
             for dtype in typelist:
-                var = int(1)
+                var = 1
                 tensor = paddle.to_tensor(np_arr, place=p, dtype=dtype)
                 tensor.stop_gradient = False
                 y = tensor * 2

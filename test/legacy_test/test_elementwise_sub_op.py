@@ -17,12 +17,12 @@ import unittest
 import warnings
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16, skip_check_grad_ci
+from op_test import OpTest, convert_float_to_uint16, skip_check_grad_ci
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
-from paddle.fluid.layer_helper import LayerHelper
+from paddle import base
+from paddle.base import core
+from paddle.base.layer_helper import LayerHelper
 
 
 class TestElementwiseOp(OpTest):
@@ -44,31 +44,42 @@ class TestElementwiseOp(OpTest):
         self.dtype = np.float64
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad_normal(self):
-        self.check_grad(['X', 'Y'], 'Out', check_prim=self.check_prim)
+        self.check_grad(
+            ['X', 'Y'],
+            'Out',
+            check_prim=self.check_prim,
+            check_prim_pir=self.check_prim_pir,
+            check_pir=True,
+        )
 
-    def test_check_grad_ingore_x(self):
+    def test_check_grad_ignore_x(self):
         self.check_grad(
             ['Y'],
             'Out',
             max_relative_error=0.005,
             no_grad_set=set("X"),
             check_prim=self.check_prim,
+            check_prim_pir=self.check_prim_pir,
+            check_pir=True,
         )
 
-    def test_check_grad_ingore_y(self):
+    def test_check_grad_ignore_y(self):
         self.check_grad(
             ['X'],
             'Out',
             max_relative_error=0.005,
             no_grad_set=set('Y'),
             check_prim=self.check_prim,
+            check_prim_pir=self.check_prim_pir,
+            check_pir=True,
         )
 
     def if_check_prim(self):
         self.check_prim = True
+        self.check_prim_pir = True
 
     def if_enable_cinn(self):
         pass
@@ -113,13 +124,20 @@ class TestElementwiseBF16OP(TestElementwiseOp):
             place, ['X', 'Y'], 'Out', max_relative_error=0.1
         )
 
-    def test_check_grad_ingore_x(self):
+    def test_check_grad_ignore_x(self):
         place = core.CUDAPlace(0)
         self.check_grad_with_place(
-            place, ['Y'], 'Out', no_grad_set=set("X"), max_relative_error=0.1
+            place,
+            ['Y'],
+            'Out',
+            no_grad_set=set("X"),
+            max_relative_error=0.1,
+            check_prim=True,
+            check_prim_pir=True,
+            check_pir=True,
         )
 
-    def test_check_grad_ingore_y(self):
+    def test_check_grad_ignore_y(self):
         place = core.CUDAPlace(0)
         self.check_grad_with_place(
             place,
@@ -128,6 +146,8 @@ class TestElementwiseBF16OP(TestElementwiseOp):
             no_grad_set=set('Y'),
             max_relative_error=0.1,
             check_prim=True,
+            check_prim_pir=True,
+            check_pir=True,
         )
 
 
@@ -317,7 +337,7 @@ class TestBF16ElementwiseOp(OpTest):
     def test_check_grad_normal(self):
         self.check_grad(['X', 'Y'], 'Out', check_prim=self.check_prim)
 
-    def test_check_grad_ingore_x(self):
+    def test_check_grad_ignore_x(self):
         self.check_grad(
             ['Y'], 'Out', no_grad_set=set("X"), check_prim=self.check_prim
         )
@@ -372,27 +392,29 @@ class TestElementwiseSubOp_broadcast_0(TestElementwiseOp):
         }
 
     def test_check_output(self):
-        self.check_output(check_dygraph=False)
+        self.check_output(check_dygraph=False, check_pir=False)
 
     def test_check_grad_normal(self):
-        self.check_grad(['X', 'Y'], 'Out', check_dygraph=False)
+        self.check_grad(['X', 'Y'], 'Out', check_dygraph=False, check_pir=False)
 
-    def test_check_grad_ingore_x(self):
+    def test_check_grad_ignore_x(self):
         self.check_grad(
             ['Y'],
             'Out',
             max_relative_error=0.005,
             no_grad_set=set("X"),
             check_dygraph=False,
+            check_pir=False,
         )
 
-    def test_check_grad_ingore_y(self):
+    def test_check_grad_ignore_y(self):
         self.check_grad(
             ['X'],
             'Out',
             max_relative_error=0.005,
             no_grad_set=set('Y'),
             check_dygraph=False,
+            check_pir=False,
         )
 
 
@@ -427,24 +449,36 @@ class TestElementwiseBF16OP_broadcast_0(TestElementwiseBF16OP):
 
     def test_check_output(self):
         place = core.CUDAPlace(0)
-        self.check_output_with_place(place, check_dygraph=False)
+        self.check_output_with_place(
+            place, check_dygraph=False, check_pir=False
+        )
 
     def test_check_grad_normal(self):
         place = core.CUDAPlace(0)
         self.check_grad_with_place(
-            place, ['X', 'Y'], 'Out', check_dygraph=False
+            place, ['X', 'Y'], 'Out', check_dygraph=False, check_pir=False
         )
 
-    def test_check_grad_ingore_x(self):
+    def test_check_grad_ignore_x(self):
         place = core.CUDAPlace(0)
         self.check_grad_with_place(
-            place, ['Y'], 'Out', no_grad_set=set("X"), check_dygraph=False
+            place,
+            ['Y'],
+            'Out',
+            no_grad_set=set("X"),
+            check_dygraph=False,
+            check_pir=False,
         )
 
-    def test_check_grad_ingore_y(self):
+    def test_check_grad_ignore_y(self):
         place = core.CUDAPlace(0)
         self.check_grad_with_place(
-            place, ['X'], 'Out', no_grad_set=set('Y'), check_dygraph=False
+            place,
+            ['X'],
+            'Out',
+            no_grad_set=set('Y'),
+            check_dygraph=False,
+            check_pir=False,
         )
 
 
@@ -784,13 +818,13 @@ class TestComplexElementwiseSubOp(OpTest):
         self.python_api = paddle.subtract
         self.public_python_api = paddle.subtract
         self.prim_op_type = "prim"
-        self.dtype = np.float64
+        self.dtype = np.complex128
         self.shape = (2, 3, 4, 5)
         self.init_input_output()
 
         self.inputs = {
-            'X': OpTest.np_dtype_to_fluid_dtype(self.x),
-            'Y': OpTest.np_dtype_to_fluid_dtype(self.y),
+            'X': OpTest.np_dtype_to_base_dtype(self.x),
+            'Y': OpTest.np_dtype_to_base_dtype(self.y),
         }
         self.attrs = {'axis': -1, 'use_mkldnn': False}
         self.outputs = {'Out': self.out}
@@ -798,7 +832,7 @@ class TestComplexElementwiseSubOp(OpTest):
         self.if_enable_cinn()
 
     def init_base_dtype(self):
-        self.dtype = np.float64
+        self.dtype = np.complex128
 
     def init_input_output(self):
         self.x = np.random.random(self.shape).astype(
@@ -810,29 +844,29 @@ class TestComplexElementwiseSubOp(OpTest):
         self.out = self.x - self.y
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=False)
 
     def test_check_grad_normal(self):
         self.check_grad(
-            ['X', 'Y'],
-            'Out',
-            check_prim=self.check_prim,
+            ['X', 'Y'], 'Out', check_prim=self.check_prim, check_pir=False
         )
 
-    def test_check_grad_ingore_x(self):
+    def test_check_grad_ignore_x(self):
         self.check_grad(
             ['Y'],
             'Out',
             no_grad_set=set("X"),
             check_prim=self.check_prim,
+            check_pir=False,
         )
 
-    def test_check_grad_ingore_y(self):
+    def test_check_grad_ignore_y(self):
         self.check_grad(
             ['X'],
             'Out',
             no_grad_set=set('Y'),
             check_prim=self.check_prim,
+            check_pir=False,
         )
 
     def if_enable_cinn(self):
@@ -862,15 +896,16 @@ class TestSubtractApi(unittest.TestCase):
         return paddle.subtract(x, y, name)
 
     def test_name(self):
-        with fluid.program_guard(fluid.Program()):
-            x = paddle.static.data(name="x", shape=[2, 3], dtype="float32")
-            y = paddle.static.data(name='y', shape=[2, 3], dtype=np.float32)
+        with paddle.pir_utils.OldIrGuard():
+            with base.program_guard(base.Program()):
+                x = paddle.static.data(name="x", shape=[2, 3], dtype="float32")
+                y = paddle.static.data(name='y', shape=[2, 3], dtype=np.float32)
 
-            y_1 = self._executed_api(x, y, name='subtract_res')
-            self.assertEqual(('subtract_res' in y_1.name), True)
+                y_1 = self._executed_api(x, y, name='subtract_res')
+                self.assertEqual(('subtract_res' in y_1.name), True)
 
     def test_declarative(self):
-        with fluid.program_guard(fluid.Program()):
+        with paddle.static.program_guard(paddle.static.Program()):
 
             def gen_data():
                 return {
@@ -881,18 +916,21 @@ class TestSubtractApi(unittest.TestCase):
             x = paddle.static.data(name="x", shape=[3], dtype=np.float32)
             y = paddle.static.data(name="y", shape=[3], dtype=np.float32)
             z = self._executed_api(x, y)
-            place = fluid.CPUPlace()
-            exe = fluid.Executor(place)
-            z_value = exe.run(feed=gen_data(), fetch_list=[z.name])
+            place = base.CPUPlace()
+            exe = base.Executor(place)
+            if paddle.framework.in_pir_mode():
+                z_value = exe.run(feed=gen_data(), fetch_list=[z])
+            else:
+                z_value = exe.run(feed=gen_data(), fetch_list=[z.name])
             z_expected = np.array([1.0, -2.0, 2.0])
             self.assertEqual((z_value == z_expected).all(), True)
 
     def test_dygraph(self):
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             np_x = np.array([2, 3, 4]).astype('float64')
             np_y = np.array([1, 5, 2]).astype('float64')
-            x = fluid.dygraph.to_variable(np_x)
-            y = fluid.dygraph.to_variable(np_y)
+            x = paddle.to_tensor(np_x)
+            y = paddle.to_tensor(np_y)
             z = self._executed_api(x, y)
             np_z = z.numpy(False)
             z_expected = np.array([1.0, -2.0, 2.0])
@@ -1024,27 +1062,30 @@ class TestFloatElementwiseSubop1(unittest.TestCase):
 
 class TestTensorSubAPIWarnings(unittest.TestCase):
     def test_warnings(self):
-        with warnings.catch_warnings(record=True) as context:
-            warnings.simplefilter("always")
+        with paddle.pir_utils.OldIrGuard():
+            with warnings.catch_warnings(record=True) as context:
+                warnings.simplefilter("always")
 
-            paddle.enable_static()
-            helper = LayerHelper("elementwise_sub")
-            data = paddle.static.data(
-                name='data', shape=[None, 3, 32, 32], dtype=np.float32
-            )
-            out = helper.create_variable_for_type_inference(dtype=data.dtype)
-            os.environ['FLAGS_print_extra_attrs'] = "1"
-            helper.append_op(
-                type="elementwise_sub",
-                inputs={'X': data, 'Y': data},
-                outputs={'Out': out},
-                attrs={'axis': 1, 'use_mkldnn': False},
-            )
-            self.assertTrue(
-                "op elementwise_sub's attr axis = 1 is not the default value: -1"
-                in str(context[-1].message)
-            )
-            os.environ['FLAGS_print_extra_attrs'] = "0"
+                paddle.enable_static()
+                helper = LayerHelper("elementwise_sub")
+                data = paddle.static.data(
+                    name='data', shape=[None, 3, 32, 32], dtype=np.float32
+                )
+                out = helper.create_variable_for_type_inference(
+                    dtype=data.dtype
+                )
+                os.environ['FLAGS_print_extra_attrs'] = "1"
+                helper.append_op(
+                    type="elementwise_sub",
+                    inputs={'X': data, 'Y': data},
+                    outputs={'Out': out},
+                    attrs={'axis': 1, 'use_mkldnn': False},
+                )
+                self.assertTrue(
+                    "op elementwise_sub's attr axis = 1 is not the default value: -1"
+                    in str(context[-1].message)
+                )
+                os.environ['FLAGS_print_extra_attrs'] = "0"
 
 
 if __name__ == '__main__':

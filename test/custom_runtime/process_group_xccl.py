@@ -18,14 +18,14 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 
 def init_process_group(strategy=None):
     nranks = paddle.distributed.ParallelEnv().nranks
     rank = paddle.distributed.ParallelEnv().local_rank
     is_master = True if rank == 0 else False
-    store = paddle.fluid.core.TCPStore("127.0.0.1", 6173, is_master, nranks)
+    store = paddle.base.core.TCPStore("127.0.0.1", 6173, is_master, nranks)
     pg_group = core.ProcessGroupCustom.create(
         store,
         paddle.distributed.ParallelEnv().device_type,
@@ -49,7 +49,7 @@ class TestProcessGroupFp32(unittest.TestCase):
 
     def test_create_process_group_xccl(self):
         device_id = paddle.distributed.ParallelEnv().dev_id
-        paddle.set_device('custom_cpu:%d' % device_id)
+        paddle.set_device(f'custom_cpu:{device_id}')
 
         pg = init_process_group()
 
@@ -68,7 +68,7 @@ class TestProcessGroupFp32(unittest.TestCase):
             task.wait()
             # assert np.array_equal(tensor_y, sum_result)
 
-        print("test allreduce sum api ok")
+        print("test allreduce sum api ok", flush=True)
 
         x = np.random.random(self.shape).astype(self.dtype)
         tensor_x = paddle.to_tensor(x)
@@ -86,7 +86,7 @@ class TestProcessGroupFp32(unittest.TestCase):
             task.wait()
             # assert np.array_equal(tensor_y, max_result)
 
-        print("test allreduce max api ok")
+        print("test allreduce max api ok", flush=True)
 
         # test broadcast
         # rank 0
@@ -100,17 +100,17 @@ class TestProcessGroupFp32(unittest.TestCase):
         if pg.rank() == 0:
             task = pg.broadcast(tensor_x, 0, sync_op=True)
             task.wait()
-            # paddle.fluid.core._custom_device_synchronize("custom_cpu", -1)
+            # paddle.base.core._custom_device_synchronize("custom_cpu", -1)
             assert task.is_completed()
             # assert np.array_equal(broadcast_result, tensor_x)
         else:
             task = pg.broadcast(tensor_y, 0, sync_op=True)
             task.wait()
-            # paddle.fluid.core._custom_device_synchronize("custom_cpu", -1)
+            # paddle.base.core._custom_device_synchronize("custom_cpu", -1)
             assert task.is_completed()
             # assert np.array_equal(broadcast_result, tensor_y)
 
-        print("test broadcast api ok")
+        print("test broadcast api ok", flush=True)
 
         # test barrier
         # rank 0
@@ -122,7 +122,7 @@ class TestProcessGroupFp32(unittest.TestCase):
             task = pg.barrier(device_id)
             task.wait()
 
-        print("test barrier api ok\n")
+        print("test barrier api ok\n", flush=True)
         return
 
         # test allgather
@@ -138,19 +138,19 @@ class TestProcessGroupFp32(unittest.TestCase):
         if pg.rank() == 0:
             task = pg.all_gather(tensor_out, tensor_x, sync_op=True)
             task.wait()
-            # paddle.fluid.core._custom_device_synchronize("custom_cpu", -1)
+            # paddle.base.core._custom_device_synchronize("custom_cpu", -1)
         # rank 1
         else:
             task = pg.all_gather(tensor_out, tensor_y, sync_op=True)
             task.wait()
-            # paddle.fluid.core._custom_device_synchronize("custom_cpu", -1)
+            # paddle.base.core._custom_device_synchronize("custom_cpu", -1)
         out_1 = paddle.slice(tensor_out, [0], [0], [out_shape[0] // 2])
         out_2 = paddle.slice(
             tensor_out, [0], [out_shape[0] // 2], [out_shape[0]]
         )
         # assert np.array_equal(tensor_x, out_1)
         # assert np.array_equal(tensor_y, out_2)
-        print("test allgather api ok\n")
+        print("test allgather api ok\n", flush=True)
 
         # test alltoall
         # rank 0
@@ -167,14 +167,14 @@ class TestProcessGroupFp32(unittest.TestCase):
         )
         raw_tensor_y_1 = paddle.slice(tensor_y, [0], [0], [self.shape[0] // 2])
         if pg.rank() == 0:
-            task = pg.alltoall(tensor_x, tensor_out1)
+            task = pg.alltoall(tensor_out1, tensor_x)
             task.wait()
-            # paddle.fluid.core._custom_device_synchronize("custom_cpu", -1)
+            # paddle.base.core._custom_device_synchronize("custom_cpu", -1)
         # rank 1
         else:
-            task = pg.alltoall(tensor_y, tensor_out2)
+            task = pg.alltoall(tensor_out2, tensor_y)
             task.wait()
-            # paddle.fluid.core._custom_device_synchronize("custom_cpu", -1)
+            # paddle.base.core._custom_device_synchronize("custom_cpu", -1)
         out1_2 = paddle.slice(
             tensor_out1, [0], [self.shape[0] // 2], [self.shape[0]]
         )
@@ -183,7 +183,7 @@ class TestProcessGroupFp32(unittest.TestCase):
         #     assert np.array_equal(out1_2.numpy(), raw_tensor_y_1.numpy())
         # else:
         #     assert np.array_equal(out2_1, raw_tensor_x_2)
-        print("test alltoall api ok\n")
+        print("test alltoall api ok\n", flush=True)
 
         # test Reduce
         # rank 0
@@ -195,15 +195,15 @@ class TestProcessGroupFp32(unittest.TestCase):
         if pg.rank() == 0:
             task = pg.reduce(tensor_x, 0)
             task.wait()
-            # paddle.fluid.core._custom_device_synchronize("custom_cpu", -1)
+            # paddle.base.core._custom_device_synchronize("custom_cpu", -1)
         # rank 1
         else:
             task = pg.reduce(tensor_y, 0)
             task.wait()
-            # paddle.fluid.core._custom_device_synchronize("custom_cpu", -1)
+            # paddle.base.core._custom_device_synchronize("custom_cpu", -1)
         # if pg.rank() == 0:
         #     assert np.array_equal(tensor_x, sum_result)
-        print("test reduce sum api ok\n")
+        print("test reduce sum api ok\n", flush=True)
 
         # test Scatter
         # rank 0
@@ -216,19 +216,19 @@ class TestProcessGroupFp32(unittest.TestCase):
         if pg.rank() == 0:
             task = pg.scatter(tensor_x, tensor_y, 0)
             task.wait()
-            # paddle.fluid.core._custom_device_synchronize("custom_cpu", -1)
+            # paddle.base.core._custom_device_synchronize("custom_cpu", -1)
         # rank 1
         else:
             task = pg.scatter(tensor_x, tensor_y, 0)
             task.wait()
-            # paddle.fluid.core._custom_device_synchronize("custom_cpu", -1)
+            # paddle.base.core._custom_device_synchronize("custom_cpu", -1)
         out1 = paddle.slice(tensor_x, [0], [0], [self.shape[0]])
         out2 = paddle.slice(tensor_x, [0], [self.shape[0]], [self.shape[0] * 2])
         # if pg.rank() == 0:
         #     assert np.array_equal(tensor_y, out1)
         # else:
         #     assert np.array_equal(tensor_y, out2)
-        print("test scatter api ok\n")
+        print("test scatter api ok\n", flush=True)
 
 
 if __name__ == "__main__":

@@ -57,6 +57,16 @@ void AllReduceKernel(const Context& dev_ctx,
     case ReduceType::kRedProd:
       red_type = ncclProd;
       break;
+#if NCCL_VERSION_CODE >= 21000
+    case ReduceType::kRedAvg:
+      red_type = ncclAvg;
+      break;
+#endif
+    case ReduceType::kRedAll:
+      // NOTE(zhonghui): There is no reduce_all type of ncclRedOp_t, just use
+      // min to replace
+      red_type = ncclMin;
+      break;
   }
   comm_ctx->AllReduce(out, x, red_type, stream);
 #else
@@ -78,6 +88,7 @@ PD_REGISTER_KERNEL(all_reduce,
                    bool,
                    int8_t,
                    uint8_t,
+                   int16_t,
                    int64_t,
                    phi::dtype::bfloat16,
                    phi::dtype::float16) {}
@@ -92,6 +103,7 @@ PD_REGISTER_KERNEL(all_reduce,
                    bool,
                    int8_t,
                    uint8_t,
+                   int16_t,
                    int64_t,
                    phi::dtype::float16) {}
 #endif

@@ -19,10 +19,10 @@ import time
 import unittest
 
 import numpy as np
-from cinn.common import DefaultHostTarget, DefaultNVGPUTarget
-from cinn.frontend import Interpreter
 
-from paddle import fluid
+from paddle import base
+from paddle.cinn.common import DefaultHostTarget, DefaultNVGPUTarget
+from paddle.cinn.frontend import Interpreter
 
 enable_gpu = sys.argv.pop()
 model_dir = sys.argv.pop()
@@ -40,13 +40,13 @@ class TestLoadResnetModel(unittest.TestCase):
         self.input_tensor = 'image'
 
     def get_paddle_inference_result(self, model_dir, data):
-        config = fluid.core.AnalysisConfig(
+        config = base.core.AnalysisConfig(
             model_dir + '/__model__', model_dir + '/params'
         )
         config.disable_gpu()
         config.switch_ir_optim(False)
-        self.paddle_predictor = fluid.core.create_paddle_predictor(config)
-        data = fluid.core.PaddleTensor(data)
+        self.paddle_predictor = base.core.create_paddle_predictor(config)
+        data = base.core.PaddleTensor(data)
         results = self.paddle_predictor.run([data])
         get_tensor = self.paddle_predictor.get_output_tensor(
             self.target_tensor
@@ -79,8 +79,7 @@ class TestLoadResnetModel(unittest.TestCase):
             self.executor.run()
         end5 = time.perf_counter()
         print(
-            "Repeat %d times, average Executor.run() time is: %.3f ms"
-            % (repeat, (end5 - end4) * 1000 / repeat)
+            f"Repeat {repeat} times, average Executor.run() time is: {(end5 - end4) * 1000 / repeat:.3f} ms"
         )
 
         a_t.from_numpy(x_data, self.target)
@@ -110,7 +109,7 @@ class TestLoadResnetModel(unittest.TestCase):
 
     def test_model(self):
         self.apply_test()
-        # self.target.arch = Target.Arch.NVGPU
+        # self.target.arch = Target.NVGPUArch()
         # self.apply_test()
 
 

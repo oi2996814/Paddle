@@ -16,7 +16,7 @@ limitations under the License. */
 
 #include <ostream>
 
-#include "paddle/phi/api/ext/exception.h"
+#include "paddle/common/exception.h"
 #include "paddle/phi/common/place.h"
 
 namespace paddle {
@@ -191,6 +191,20 @@ inline std::string BackendToString(const Backend& backend) {
       }
     }
   }
+}
+
+inline Backend get_accelerat_backend() {
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+  return Backend::GPU;
+#elif defined(PADDLE_WITH_XPU)
+  return Backend::XPU;
+#elif defined(PADDLE_WITH_IPU)
+  return Backend::IPU;
+#elif defined(PADDLE_WITH_CUSTOM_DEVICE)
+  return Backend::CUSTOM;
+#else
+  return Backend::UNDEFINED;
+#endif
 }
 
 }  // namespace experimental

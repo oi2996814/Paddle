@@ -19,8 +19,11 @@ limitations under the License. */
 #include "paddle/fluid/operators/data_norm_op.h"
 #include "paddle/phi/backends/gpu/gpu_primitives.h"
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
-#include "paddle/fluid/platform/collective_helper.h"
+#include "paddle/common/flags.h"
 #include "paddle/fluid/platform/device/gpu/nccl_helper.h"
+#include "paddle/phi/core/distributed/comm_context_manager.h"
+#include "paddle/phi/core/distributed/nccl_comm_context.h"
+#include "paddle/phi/core/platform/collective_helper.h"
 #endif
 
 namespace paddle {
@@ -111,17 +114,17 @@ class DataNormKernel<T, phi::GPUContext> : public framework::OpKernel<T> {
     PADDLE_ENFORCE_EQ(
         x_dims.size(),
         2,
-        platform::errors::PreconditionNotMet("The Input dim size should be 2"));
+        common::errors::PreconditionNotMet("The Input dim size should be 2"));
     const int N = x_dims[0];
     const int C = x_dims[1];
 
     PADDLE_ENFORCE_LT(0,
                       N,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dims of Input(X) should be greater than 0."));
     PADDLE_ENFORCE_LT(0,
                       C,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dims of Input(X) should be greater than 0."));
 
     const T *batch_size_in =
@@ -170,7 +173,7 @@ class DataNormGradKernel<T, phi::GPUContext> : public framework::OpKernel<T> {
     PADDLE_ENFORCE_EQ(
         x_dims.size(),
         2,
-        platform::errors::PreconditionNotMet("The Input dim size should be 2"));
+        common::errors::PreconditionNotMet("The Input dim size should be 2"));
     const int N = x_dims[0];
     const int C = x_dims[1];
 
@@ -213,35 +216,53 @@ class DataNormGradKernel<T, phi::GPUContext> : public framework::OpKernel<T> {
 
     if (need_sync_stats) {
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
-      auto comm = platform::NCCLCommContext::Instance().Get(0, ctx.GetPlace());
-      PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(
+      int rid = 0;
+      const auto &comm_context_manager =
+          phi::distributed::CommContextManager::GetInstance();
+      phi::distributed::NCCLCommContext *comm_ctx = nullptr;
+      PADDLE_ENFORCE_EQ(comm_context_manager.Has(std::to_string(rid)),
+                        true,
+                        common::errors::InvalidArgument(
+                            "You choose to use new communication library. "
+                            "But ring_id(%d) is "
+                            "not found in comm_context_manager.",
+                            std::to_string(rid)));
+      comm_ctx = static_cast<phi::distributed::NCCLCommContext *>(
+          comm_context_manager.Get(std::to_string(rid)));
+      PADDLE_ENFORCE_NE(comm_ctx,
+                        nullptr,
+                        common::errors::Unavailable(
+                            "NCCLCommContext is nullptr, collective op should "
+                            "has ring_id attr."));
+
+      PADDLE_ENFORCE_GPU_SUCCESS(phi::dynload::ncclAllReduce(
           reinterpret_cast<const void *>(d_batch_size),
           reinterpret_cast<void *>(d_batch_size),
           C,
-          platform::ToNCCLDataType(framework::TransToProtoVarType(x->dtype())),
+          phi::ToNCCLDataType(x->dtype()),
           ncclSum,
-          comm->comm(),
+          comm_ctx->GetNcclComm(),
           stream));
-      PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(
+      PADDLE_ENFORCE_GPU_SUCCESS(phi::dynload::ncclAllReduce(
           reinterpret_cast<const void *>(d_batch_sum),
           reinterpret_cast<void *>(d_batch_sum),
           C,
-          platform::ToNCCLDataType(framework::TransToProtoVarType(x->dtype())),
+          phi::ToNCCLDataType(x->dtype()),
           ncclSum,
-          comm->comm(),
+          comm_ctx->GetNcclComm(),
           stream));
-      PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(
+      PADDLE_ENFORCE_GPU_SUCCESS(phi::dynload::ncclAllReduce(
           reinterpret_cast<const void *>(d_batch_square_sum),
           reinterpret_cast<void *>(d_batch_square_sum),
           C,
-          platform::ToNCCLDataType(framework::TransToProtoVarType(x->dtype())),
+          phi::ToNCCLDataType(x->dtype()),
           ncclSum,
-          comm->comm(),
+          comm_ctx->GetNcclComm(),
           stream));
-      platform::GpuStreamSync(stream);
+      phi::backends::gpu::GpuStreamSync(stream);
 #else
-      PADDLE_THROW(platform::errors::PreconditionNotMet(
-          "PaddlePaddle should compile with GPU, and need_sync_stats connot be "
+      PADDLE_THROW(common::errors::PreconditionNotMet(
+          "PaddlePaddle should compile with GPU, and need_sync_stats cannot be "
           "supported on windows now."));
 #endif
     }

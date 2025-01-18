@@ -15,7 +15,7 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 import paddle
 
@@ -63,10 +63,10 @@ class TestGraphSendUVOp(OpTest):
         self.outputs = {'out': out}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['x', 'y'], 'out')
+        self.check_grad(['x', 'y'], 'out', check_pir=True)
 
     def set_config(self):
         self.x = np.random.random((10, 20)).astype("float64")
@@ -189,9 +189,7 @@ class API_GeometricSendUVTest(unittest.TestCase):
                 paddle_res,
                 rtol=1e-05,
                 atol=1e-06,
-                err_msg='two value is                {}\n{}, check diff!'.format(
-                    np_res, paddle_res
-                ),
+                err_msg=f'two value is                {np_res}\n{paddle_res}, check diff!',
             )
 
     def test_compute_all_static(self):
@@ -258,9 +256,7 @@ class API_GeometricSendUVTest(unittest.TestCase):
                     paddle_res,
                     rtol=1e-05,
                     atol=1e-06,
-                    err_msg='two value is                    {}\n{}, check diff!'.format(
-                        np_res, paddle_res
-                    ),
+                    err_msg=f'two value is                    {np_res}\n{paddle_res}, check diff!',
                 )
 
 

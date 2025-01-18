@@ -20,17 +20,11 @@ limitations under the License. */
 
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 class Node;
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
-namespace paddle {
-namespace inference {
-namespace analysis {
+namespace paddle::inference::analysis {
 using framework::ir::Node;
 
 std::vector<std::string> ExtractParameters(
@@ -134,7 +128,7 @@ void RenameAndGetOutputs(
     auto arg_var_node = graph_var_map.find(graph_arg);
     PADDLE_ENFORCE_NE(arg_var_node,
                       graph_var_map.end(),
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Can not find %s in graph_var_map", graph_arg));
     auto *var_t = block_desc->Var(block_arg);
     var_t->SetShape(arg_var_node->second->Var()->GetShape());
@@ -142,15 +136,16 @@ void RenameAndGetOutputs(
   };
 
   for (size_t index = 0; index < block_desc->OpSize(); ++index) {
-    framework::proto::OpDesc *op = block_desc->Op(index)->Proto();
+    framework::proto::OpDesc *op =
+        block_desc->Op(static_cast<int>(index))->Proto();
     framework::OpDesc op_desc(*op, nullptr);
     auto correspond_node = subgraph_nodes[index];
     PADDLE_ENFORCE_EQ(
         correspond_node->Name(),
         op->type(),
-        platform::errors::PreconditionNotMet("We should get %s, but get %s",
-                                             op->type(),
-                                             correspond_node->Name()));
+        common::errors::PreconditionNotMet("We should get %s, but get %s",
+                                           op->type(),
+                                           correspond_node->Name()));
 
     std::unordered_map<std::string, size_t> var2id;
     std::unordered_map<std::string, framework::ir::Node *> in_vars;
@@ -166,7 +161,7 @@ void RenameAndGetOutputs(
       for (int k = 0; k < in_var->arguments_size(); k++) {  // all the arguments
         const std::string arg_value = in_var->arguments(k);
         const std::string arg_value_with_id =
-            arg_value + std::to_string(var2id[arg_value]);
+            RenameVarBeUnique(arg_value, std::to_string(var2id[arg_value]));
         if (input_names_with_id.count(arg_value_with_id)) {
           replaced_names.push_back(arg_value);
           if (graph_var_map.count(arg_value)) {
@@ -199,7 +194,8 @@ void RenameAndGetOutputs(
           PADDLE_GET_CONST(std::vector<int>, op_desc.GetAttr("paddings"));
       if (same_hierarchy_conv2d_num_map[input_var_name] > 0) {
         (*output_names_with_id)
-            .insert(out_var_name + std::to_string(var2id[out_var_name]));
+            .insert(RenameVarBeUnique(out_var_name,
+                                      std::to_string(var2id[out_var_name])));
         (*output_names).insert(out_var_name);
       } else if (filter_shape[2] == 1 && filter_shape[3] == 1 &&
                  strides[0] == 1 && strides[1] == 1 && paddings[0] == 0 &&
@@ -214,7 +210,7 @@ void RenameAndGetOutputs(
       for (int k = 0; k < out_var->arguments_size(); k++) {
         const std::string arg_value = out_var->arguments(k);
         const std::string arg_value_with_id =
-            arg_value + std::to_string(var2id[arg_value]);
+            RenameVarBeUnique(arg_value, std::to_string(var2id[arg_value]));
         if (graph_var_map.count(arg_value)) {
           add_block_var(arg_value, arg_value_with_id);
         }
@@ -231,6 +227,9 @@ void RenameAndGetOutputs(
   }
 }
 
-}  // namespace analysis
-}  // namespace inference
-}  // namespace paddle
+std::string RenameVarBeUnique(std::string original_var_name,
+                              std::string var_id) {
+  return original_var_name + "_subgraph_" + var_id;
+}
+
+}  // namespace paddle::inference::analysis

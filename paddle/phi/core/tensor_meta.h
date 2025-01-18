@@ -16,12 +16,13 @@ limitations under the License. */
 
 #include <vector>
 
+#include "paddle/common/layout.h"
 #include "paddle/phi/common/backend.h"
 #include "paddle/phi/common/data_type.h"
-#include "paddle/phi/common/layout.h"
 #include "paddle/phi/core/ddim.h"
 #include "paddle/utils/any.h"
 #include "paddle/utils/optional.h"
+#include "paddle/utils/test_macros.h"
 
 namespace phi {
 
@@ -40,12 +41,13 @@ namespace phi {
  *    0 2 4 7
  *    0 2 5 7 10 12 15 20
  */
-using LoD = std::vector<std::vector<size_t>>;
+using LegacyLoD = std::vector<std::vector<size_t>>;
+using LoD = LegacyLoD;
 
 /// \brief The meta data of dense tensor. Take the structure type
 /// and use all default operations.
 ///
-struct DenseTensorMeta {
+struct TEST_API DenseTensorMeta {
   DenseTensorMeta();
   DenseTensorMeta(DataType dtype, const DDim& dims);
   DenseTensorMeta(DataType dtype, const DDim& dims, const DDim& stride);
@@ -56,7 +58,7 @@ struct DenseTensorMeta {
   DenseTensorMeta(DataType dtype,
                   const DDim& dims,
                   DataLayout layout,
-                  const LoD& lod,
+                  const LegacyLoD& legacy_lod,
                   size_t offset = 0);
 
   DenseTensorMeta(const DenseTensorMeta& other);
@@ -70,16 +72,16 @@ struct DenseTensorMeta {
   /// \return Whether the metadata is valid.
   bool valid() const noexcept;
 
-  bool is_contiguous() const noexcept;
+  bool is_contiguous() const;
 
   bool is_scalar{false};
   /// \brief Determine whether using gpudnn speed-up library in the new dygraph.
-  /// It maybe also support MKLDNN library in the near future.
+  /// It maybe also support OneDNN library in the near future.
   bool use_gpudnn{true};
   DDim dims;
   DataType dtype{DataType::UNDEFINED};
   DataLayout layout{DataLayout::NCHW};
-  LoD lod;
+  LegacyLoD legacy_lod;
   size_t offset{0};
   DDim strides;
 };
@@ -87,7 +89,7 @@ struct DenseTensorMeta {
 inline bool operator==(const DenseTensorMeta& lhs, const DenseTensorMeta& rhs) {
   return (lhs.is_scalar == rhs.is_scalar) && lhs.use_gpudnn == rhs.use_gpudnn &&
          (lhs.dims == rhs.dims) && (lhs.dtype == rhs.dtype) &&
-         (lhs.layout == rhs.layout) && (lhs.lod == rhs.lod) &&
+         (lhs.layout == rhs.layout) && (lhs.legacy_lod == rhs.legacy_lod) &&
          (lhs.offset == rhs.offset) && (lhs.strides == rhs.strides);
 }
 
@@ -120,7 +122,7 @@ struct SparseTensorMeta {
   bool valid() const noexcept;
 
   DDim dims;
-  DataType dtype;
+  DataType dtype{DataType::UNDEFINED};
   DataLayout layout{DataLayout::NCHW};
 };
 

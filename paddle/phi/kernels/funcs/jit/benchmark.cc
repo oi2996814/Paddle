@@ -15,18 +15,18 @@
 #include <iostream>
 #include <random>
 
-#include "gflags/gflags.h"
 #include "glog/logging.h"
+#include "paddle/common/flags.h"
 #include "paddle/phi/api/profiler/device_tracer.h"
 #include "paddle/phi/common/place.h"
 #include "paddle/phi/core/dense_tensor.h"
 #include "paddle/phi/core/enforce.h"
 #include "paddle/phi/kernels/funcs/jit/kernels.h"
 
-DEFINE_int32(burning, 10, "Burning times.");
-DEFINE_int32(repeat, 3000, "Repeat times.");
-DEFINE_int32(max_size, 1000, "The Max size would be tested.");
-DEFINE_string(filter, "", "The Benchmark name would be run.");  // NOLINT
+PD_DEFINE_int32(burning, 10, "Burning times.");
+PD_DEFINE_int32(repeat, 3000, "Repeat times.");
+PD_DEFINE_int32(max_size, 1000, "The Max size would be tested.");
+PD_DEFINE_string(filter, "", "The Benchmark name would be run.");  // NOLINT
 
 class BenchJITKernel {
  public:
@@ -97,11 +97,11 @@ struct BenchFunc {
     for (int i = 0; i < FLAGS_burning; ++i) {
       tgt(args...);
     }
-    auto start = phi::PosixInNsec() * 1e-3;
+    double start = static_cast<double>(phi::PosixInNsec()) * 1e-3;
     for (int i = 0; i < FLAGS_repeat; ++i) {
       tgt(args...);
     }
-    auto end = phi::PosixInNsec() * 1e-3;
+    double end = static_cast<double>(phi::PosixInNsec()) * 1e-3;
     return static_cast<double>(end - start) / FLAGS_repeat;
   }
 };
@@ -113,14 +113,15 @@ void BenchAllImpls(const typename KernelTuple::attr_type& attr, Args... args) {
   BenchFunc<KernelTuple, Args...> benchmark;
   std::vector<std::pair<std::string, double>> infos;
   auto funcs = jit::GetAllCandidateFuncsWithTypes<KernelTuple, PlaceType>(attr);
-  for (auto f : funcs) {
+  infos.reserve(funcs.size());
+  for (auto const& f : funcs) {
     infos.push_back(std::make_pair(f.first, benchmark(f.second, args...)));
   }
 
   // Test result from Get function
   auto tgt = jit::KernelFuncs<KernelTuple, PlaceType>::Cache().At(attr);
   if (!tgt) {
-    PADDLE_THROW(phi::errors::Fatal("Benchmark target can not be empty."));
+    PADDLE_THROW(common::errors::Fatal("Benchmark target can not be empty."));
   }
   infos.push_back(std::make_pair("Target", benchmark(tgt, args...)));
 
@@ -128,7 +129,7 @@ void BenchAllImpls(const typename KernelTuple::attr_type& attr, Args... args) {
   std::ostringstream loginfos;
   loginfos << "Kernel Type " << jit::to_string(KernelTuple::kernel_type) << ": "
            << attr << ": ";
-  for (auto pair : infos) {
+  for (auto const& pair : infos) {
     loginfos << pair.first << " takes " << pair.second << " us; ";
   }
   LOG(INFO) << loginfos.str();
@@ -311,7 +312,7 @@ void BenchKernelSgd() {
     PADDLE_ENFORCE_LE(
         static_cast<size_t>(upper - lower),
         n - 1,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The range of Sgd (upper - lower) should be equal to or lower "
             "than n-1 (Sgd size -1). But upper - lower is %d and n-1 is %d.",
             static_cast<size_t>(upper - lower),
@@ -319,7 +320,7 @@ void BenchKernelSgd() {
     PADDLE_ENFORCE_GT(
         n,
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The Sgd size should be larger than 0. But the n is %d.", n));
     std::vector<int64_t> all, out;
     for (int i = 0; i < n; ++i) {
@@ -546,7 +547,7 @@ BENCH_FP32_CPU(VBroadcast);
 //     --max_size: the max size would be tested
 //     --filter: the bench name would be run
 int main(int argc, char* argv[]) {
-  ::GFLAGS_NAMESPACE::ParseCommandLineFlags(&argc, &argv, true);
+  paddle::flags::ParseCommandLineFlags(&argc, &argv);
   google::InitGoogleLogging(argv[0]);
   LOG(INFO) << "Burning " << FLAGS_burning << " times, Repeat " << FLAGS_repeat
             << " times.";

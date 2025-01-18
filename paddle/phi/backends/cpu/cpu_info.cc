@@ -33,11 +33,11 @@ limitations under the License. */
 
 #include <algorithm>
 
-#include "paddle/phi/core/flags.h"
+#include "paddle/common/flags.h"
 
-DECLARE_double(fraction_of_cpu_memory_to_use);
-DECLARE_uint64(initial_cpu_memory_in_mb);
-DECLARE_double(fraction_of_cuda_pinned_memory_to_use);
+COMMON_DECLARE_double(fraction_of_cpu_memory_to_use);
+COMMON_DECLARE_uint64(initial_cpu_memory_in_mb);
+COMMON_DECLARE_double(fraction_of_cuda_pinned_memory_to_use);
 
 // If use_pinned_memory is true, CPUAllocator calls mlock, which
 // returns pinned and locked memory as staging areas for data exchange
@@ -48,9 +48,7 @@ PHI_DEFINE_EXPORTED_bool(use_pinned_memory,  // NOLINT
                          true,
                          "If set, allocate cpu pinned memory.");
 
-namespace phi {
-namespace backends {
-namespace cpu {
+namespace phi::backends::cpu {
 
 size_t CpuTotalPhysicalMemory() {
 #ifdef __APPLE__
@@ -78,7 +76,8 @@ size_t CpuTotalPhysicalMemory() {
 size_t CpuMaxAllocSize() {
   // For distributed systems, it requires configuring and limiting
   // the fraction of memory to use.
-  return FLAGS_fraction_of_cpu_memory_to_use * CpuTotalPhysicalMemory();
+  return static_cast<size_t>(FLAGS_fraction_of_cpu_memory_to_use *
+                             static_cast<double>(CpuTotalPhysicalMemory()));
 }
 
 size_t CpuMaxChunkSize() {
@@ -97,7 +96,8 @@ size_t CpuMinChunkSize() {
 size_t CUDAPinnedMaxAllocSize() {
   // For distributed systems, it requires configuring and limiting
   // the fraction of memory to use.
-  return FLAGS_fraction_of_cuda_pinned_memory_to_use * CpuTotalPhysicalMemory();
+  return static_cast<size_t>(FLAGS_fraction_of_cuda_pinned_memory_to_use *
+                             static_cast<double>(CpuTotalPhysicalMemory()));
 }
 
 size_t CUDAPinnedMinChunkSize() {
@@ -197,6 +197,4 @@ bool MayIUse(const cpu_isa_t cpu_isa) {
 }
 #endif
 
-}  // namespace cpu
-}  // namespace backends
-}  // namespace phi
+}  // namespace phi::backends::cpu

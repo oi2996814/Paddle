@@ -56,7 +56,7 @@ class StringTensor : public TensorBase,
   /// \brief StringTensor shallow copy assignment.
   StringTensor& operator=(const StringTensor& other);
 
-  StringTensor& operator=(StringTensor&& other);
+  StringTensor& operator=(StringTensor&& other) noexcept;
   /// \brief Destroy the tensor object and release exclusive resources.
   virtual ~StringTensor() = default;
 
@@ -96,6 +96,10 @@ class StringTensor : public TensorBase,
   /// \brief Test whether the metadata is valid.
   /// \return Whether the metadata is valid.
   bool valid() const noexcept override { return meta_.valid(); }
+
+  /// \brief Test whether the holder is created.
+  /// \return Whether the holder is created.
+  bool has_allocation() const override { return holder_ != nullptr; }
 
   /// \brief Test whether the storage is allocated.
   /// return Whether the storage is allocated.

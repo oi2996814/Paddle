@@ -30,9 +30,7 @@ from paddle.utils.cpp_extension.extension_utils import run_cmd
 
 # Because Windows don't use docker, the shared lib already exists in the
 # cache dir, it will not be compiled again unless the shared lib is removed.
-file = '{}\\custom_cast_module_jit\\custom_cast_module_jit.pyd'.format(
-    get_build_directory()
-)
+file = f'{get_build_directory()}\\custom_cast_module_jit\\custom_cast_module_jit.pyd'
 if os.name == 'nt' and os.path.isfile(file):
     cmd = f'del {file}'
     run_cmd(cmd, True)
@@ -73,14 +71,23 @@ def custom_cast_static(device, dtype, np_x):
             x.stop_gradient = False
             out = custom_module.custom_cast(x, dtype)
             static.append_backward(out)
-
+            if paddle.framework.in_pir_mode():
+                fetch_list = [
+                    out,
+                    static.default_main_program()
+                    .global_block()
+                    .ops[-1]
+                    .result(0),
+                ]
+            else:
+                fetch_list = [out, x.name + "@GRAD"]
             exe = static.Executor()
             exe.run(static.default_startup_program())
             # in static graph mode, x data has been covered by out
             out_v, x_grad_v = exe.run(
                 static.default_main_program(),
                 feed={'X': np_x},
-                fetch_list=[out.name, x.name + "@GRAD"],
+                fetch_list=fetch_list,
             )
 
             assert x_grad_v[0].dtype == dtype

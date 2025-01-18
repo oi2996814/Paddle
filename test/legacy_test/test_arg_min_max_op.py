@@ -13,14 +13,18 @@
 # limitations under the License.
 
 import os
+import sys
 import unittest
 
+sys.path.append("../../legacy_test")
+
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 from test_attribute_var import UnittestBase
 
 import paddle
-from paddle.fluid import Program, core, program_guard
+from paddle.base import Program, program_guard
+from paddle.framework import in_pir_mode
 
 
 class BaseTestCase(OpTest):
@@ -42,7 +46,7 @@ class BaseTestCase(OpTest):
             self.outputs = {'Out': np.argmax(self.x, axis=self.axis)}
 
     def test_check_output(self):
-        self.check_output(check_cinn=True)
+        self.check_output(check_cinn=True, check_pir=True)
 
 
 class TestCase0(BaseTestCase):
@@ -122,7 +126,7 @@ class TestArgMinBF16OP(OpTest):
             self.outputs = {'Out': np.argmax(x, axis=self.axis)}
 
     def test_check_output(self):
-        self.check_output_with_place(paddle.CUDAPlace(0))
+        self.check_output_with_place(paddle.CUDAPlace(0), check_pir=True)
 
 
 class TestArgMaxBF16OP(TestArgMinBF16OP):
@@ -141,6 +145,8 @@ class TestArgMinMaxTypeCheck(unittest.TestCase):
 
     def test_bfp16(self):
         # in static mode
+        if not paddle.is_compiled_with_cuda():
+            return
         with program_guard(Program(), Program()):
             x = paddle.zeros(name='x', shape=[100, 10], dtype='uint16')
             t1 = paddle.argmin(x)
@@ -195,7 +201,7 @@ class BaseTestComplex1_1(OpTest):
         self.x = (np.random.random(self.dims)).astype(self.dtype)
         self.inputs = {'X': self.x}
         self.attrs = {'axis': self.axis}
-        self.attrs = {'dtype': int(core.VarDesc.VarType.INT32)}
+        self.attrs = {'dtype': paddle.int32}
         if self.op_type == "arg_min":
             self.outputs = {
                 'Out': np.argmin(self.x, axis=self.axis).asdtype("int32")
@@ -219,7 +225,7 @@ class BaseTestComplex1_2(OpTest):
         self.x = (np.random.random(self.dims)).astype(self.dtype)
         self.inputs = {'X': self.x}
         self.attrs = {'axis': self.axis}
-        self.attrs = {'dtype': int(core.VarDesc.VarType.INT32)}
+        self.attrs = {'dtype': paddle.int32}
         if self.op_type == "arg_min":
             self.outputs = {
                 'Out': np.argmin(self.x, axis=self.axis).asdtype("int32")
@@ -243,7 +249,7 @@ class BaseTestComplex2_1(OpTest):
         self.x = (np.random.random(self.dims)).astype(self.dtype)
         self.inputs = {'X': self.x}
         self.attrs = {'axis': self.axis}
-        self.attrs = {'dtype': int(core.VarDesc.VarType.INT32)}
+        self.attrs = {'dtype': paddle.int32}
         self.attrs = {'keep_dims': True}
         if self.op_type == "arg_min":
             self.outputs = {
@@ -272,7 +278,7 @@ class BaseTestComplex2_2(OpTest):
         self.x = (np.random.random(self.dims)).astype(self.dtype)
         self.inputs = {'X': self.x}
         self.attrs = {'axis': self.axis}
-        self.attrs = {'dtype': int(core.VarDesc.VarType.INT32)}
+        self.attrs = {'dtype': paddle.int32}
         self.attrs = {'keep_dims': True}
         if self.op_type == "arg_min":
             self.outputs = {
@@ -295,9 +301,9 @@ class TestArgMaxTensorAxis(UnittestBase):
         self.save_path = os.path.join(self.temp_dir.name, self.path_prefix())
 
     def test_static(self):
-        main_prog = Program()
-        starup_prog = Program()
-        with program_guard(main_prog, starup_prog):
+        main_prog = paddle.static.Program()
+        startup_prog = paddle.static.Program()
+        with paddle.static.program_guard(main_prog, startup_prog):
             fc = paddle.nn.Linear(4, 10)
             x = paddle.randn([2, 3, 4])
             x.stop_gradient = False
@@ -307,10 +313,11 @@ class TestArgMaxTensorAxis(UnittestBase):
 
             sgd = paddle.optimizer.SGD()
             sgd.minimize(paddle.mean(paddle.cast(out, 'float32')))
-            self.assertTrue(self.var_prefix() in str(main_prog))
+            if not in_pir_mode():
+                self.assertTrue(self.var_prefix() in str(main_prog))
 
             exe = paddle.static.Executor()
-            exe.run(starup_prog)
+            exe.run(startup_prog)
             res = exe.run(fetch_list=[feat, out])
             paddle.static.save_inference_model(
                 self.save_path, [x], [feat, out], exe
@@ -336,10 +343,11 @@ class TestArgMaxTensorAxis(UnittestBase):
 
 
 class TestArgMinTensorAxis(TestArgMaxTensorAxis):
+
     def test_static(self):
-        main_prog = Program()
-        starup_prog = Program()
-        with program_guard(main_prog, starup_prog):
+        main_prog = paddle.base.Program()
+        startup_prog = paddle.base.Program()
+        with paddle.base.program_guard(main_prog, startup_prog):
             fc = paddle.nn.Linear(4, 10)
             x = paddle.randn([2, 3, 4])
             x.stop_gradient = False
@@ -349,10 +357,11 @@ class TestArgMinTensorAxis(TestArgMaxTensorAxis):
 
             sgd = paddle.optimizer.SGD()
             sgd.minimize(paddle.mean(paddle.cast(out, 'float32')))
-            self.assertTrue(self.var_prefix() in str(main_prog))
+            if not paddle.framework.use_pir_api():
+                self.assertTrue(self.var_prefix() in str(main_prog))
 
             exe = paddle.static.Executor()
-            exe.run(starup_prog)
+            exe.run(startup_prog)
             res = exe.run(fetch_list=[feat, out])
             paddle.static.save_inference_model(
                 self.save_path, [x], [feat, out], exe

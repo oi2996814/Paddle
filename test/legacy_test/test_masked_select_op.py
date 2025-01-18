@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 
 def np_masked_select(x, mask):
@@ -34,7 +34,9 @@ class TestMaskedSelectOp(OpTest):
     def setUp(self):
         self.init()
         self.op_type = "masked_select"
+        self.prim_op_type = "prim"
         self.python_api = paddle.masked_select
+        self.public_python_api = paddle.masked_select
         x = np.random.random(self.shape).astype("float64")
         mask = np.array(np.random.randint(2, size=self.mask_shape, dtype=bool))
         out = np_masked_select(x, mask)
@@ -42,10 +44,10 @@ class TestMaskedSelectOp(OpTest):
         self.outputs = {'Y': out}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Y')
+        self.check_grad(['X'], 'Y', check_pir=True, check_prim_pir=True)
 
     def init(self):
         self.shape = (50, 3)
@@ -68,8 +70,10 @@ class TestMaskedSelectFP16Op(OpTest):
     def setUp(self):
         self.init()
         self.op_type = "masked_select"
+        self.prim_op_type = "prim"
         self.dtype = np.float16
         self.python_api = paddle.masked_select
+        self.public_python_api = paddle.masked_select
         x = np.random.random(self.shape).astype("float16")
         mask = np.array(np.random.randint(2, size=self.shape, dtype=bool))
         out = np_masked_select(x, mask)
@@ -77,10 +81,10 @@ class TestMaskedSelectFP16Op(OpTest):
         self.outputs = {'Y': out}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Y')
+        self.check_grad(['X'], 'Y', check_pir=True, check_prim_pir=True)
 
     def init(self):
         self.shape = (50, 3)
@@ -105,8 +109,10 @@ class TestMaskedSelectBF16Op(OpTest):
     def setUp(self):
         self.init()
         self.op_type = "masked_select"
+        self.prim_op_type = "prim"
         self.dtype = np.uint16
         self.python_api = paddle.masked_select
+        self.public_python_api = paddle.masked_select
         x = np.random.random(self.shape).astype("float32")
         mask = np.array(np.random.randint(2, size=self.shape, dtype=bool))
         out = np_masked_select(x, mask)
@@ -114,10 +120,14 @@ class TestMaskedSelectBF16Op(OpTest):
         self.outputs = {'Y': convert_float_to_uint16(out)}
 
     def test_check_output(self):
-        self.check_output_with_place(core.CUDAPlace(0))
+        self.check_output_with_place(
+            core.CUDAPlace(0), check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
-        self.check_grad_with_place(core.CUDAPlace(0), ['X'], 'Y')
+        self.check_grad_with_place(
+            core.CUDAPlace(0), ['X'], 'Y', check_pir=True, check_prim_pir=True
+        )
 
     def init(self):
         self.shape = (50, 3)

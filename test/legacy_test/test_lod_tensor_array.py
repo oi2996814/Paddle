@@ -17,20 +17,19 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 
-class TestLoDTensorArray(unittest.TestCase):
+class TestDenseTensorArray(unittest.TestCase):
     def test_get_set(self):
         scope = core.Scope()
         arr = scope.var('tmp_lod_tensor_array')
-        tensor_array = arr.get_lod_tensor_array()
+        tensor_array = arr.get_dense_tensor_array()
         self.assertEqual(0, len(tensor_array))
         cpu = core.CPUPlace()
         for i in range(10):
-            t = core.LoDTensor()
+            t = core.DenseTensor()
             t.set(np.array([i], dtype='float32'), cpu)
-            t.set_recursive_sequence_lengths([[1]])
             tensor_array.append(t)
 
         self.assertEqual(10, len(tensor_array))
@@ -38,15 +37,12 @@ class TestLoDTensorArray(unittest.TestCase):
         for i in range(10):
             t = tensor_array[i]
             self.assertEqual(np.array(t), np.array([i], dtype='float32'))
-            self.assertEqual([[1]], t.recursive_sequence_lengths())
 
-            t = core.LoDTensor()
+            t = core.DenseTensor()
             t.set(np.array([i + 10], dtype='float32'), cpu)
-            t.set_recursive_sequence_lengths([[1]])
             tensor_array[i] = t
             t = tensor_array[i]
             self.assertEqual(np.array(t), np.array([i + 10], dtype='float32'))
-            self.assertEqual([[1]], t.recursive_sequence_lengths())
 
 
 class TestCreateArray(unittest.TestCase):
@@ -76,7 +72,9 @@ class TestCreateArray(unittest.TestCase):
 
     def test_static(self):
         paddle.enable_static()
-        init_data = [paddle.ones(shape, dtype='int32') for shape in self.shapes]
+        init_data = [
+            paddle.ones(shape, dtype='float32') for shape in self.shapes
+        ]
         array = paddle.tensor.create_array('float32', init_data)
         for res, gt in zip(array, init_data):
             self.assertTrue(res.shape, gt.shape)

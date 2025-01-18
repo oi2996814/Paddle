@@ -23,7 +23,7 @@
 #include <typeinfo>
 #include <vector>
 
-#include "paddle/phi/api/ext/exception.h"
+#include "paddle/common/exception.h"
 #include "paddle/phi/capi/include/c_device_context.h"
 #include "paddle/phi/capi/include/c_infer_meta_context.h"
 #include "paddle/phi/capi/include/c_int_array.h"
@@ -43,7 +43,8 @@ namespace phi {
 
 namespace capi {
 
-using LoD = std::vector<std::vector<size_t>>;
+using LegacyLoD = std::vector<std::vector<size_t>>;
+using LoD = LegacyLoD;
 
 template <typename T>
 static inline PD_List PDListFromVector(std::vector<T>* vec) {
@@ -72,6 +73,19 @@ inline std::vector<int64_t> PD_TensorGetDims(PD_Tensor* tensor,
   return std::vector<int64_t>();
 }
 
+inline std::vector<int64_t> PD_TensorGetStrides(PD_Tensor* tensor,
+                                                PD_Status* status) {
+  int64_t nstrides = PD_TensorGetNumStrides(tensor, status);
+  if (nstrides > 0) {
+    std::vector<int64_t> shape(nstrides);
+    for (int64_t i = 0; i < nstrides; ++i) {
+      shape[i] = PD_TensorGetStride(tensor, i, status);
+    }
+    return shape;
+  }
+  return std::vector<int64_t>();
+}
+
 inline std::vector<int64_t> PD_MetaTensorGetDims(PD_MetaTensor* tensor,
                                                  PD_Status* status) {
   int64_t ndims = PD_MetaTensorGetNumDims(tensor, status);
@@ -79,6 +93,19 @@ inline std::vector<int64_t> PD_MetaTensorGetDims(PD_MetaTensor* tensor,
     std::vector<int64_t> shape(ndims);
     for (int64_t i = 0; i < ndims; ++i) {
       shape[i] = PD_MetaTensorGetDim(tensor, i, status);
+    }
+    return shape;
+  }
+  return std::vector<int64_t>();
+}
+
+inline std::vector<int64_t> PD_MetaTensorGetStrides(PD_MetaTensor* tensor,
+                                                    PD_Status* status) {
+  int64_t nstrides = PD_MetaTensorGetNumStrides(tensor, status);
+  if (nstrides > 0) {
+    std::vector<int64_t> shape(nstrides);
+    for (int64_t i = 0; i < nstrides; ++i) {
+      shape[i] = PD_MetaTensorGetStride(tensor, i, status);
     }
     return shape;
   }
@@ -134,11 +161,25 @@ class DenseTensor : public WrapperBase<PD_Tensor> {
     return holder;
   }
 
+  size_t offset() const {
+    C_Status status;
+    auto offset = PD_TensorGetOffset(raw_data(), &status);
+    PD_CHECK_STATUS(status);
+    return offset;
+  }
+
   std::vector<int64_t> dims() const {
     C_Status status;
     auto dimension = PD_TensorGetDims(raw_data(), &status);
     PD_CHECK_STATUS(status);
     return dimension;
+  }
+
+  std::vector<int64_t> strides() const {
+    C_Status status;
+    auto strides = PD_TensorGetStrides(raw_data(), &status);
+    PD_CHECK_STATUS(status);
+    return strides;
   }
 
   PD_DataType dtype() const {
@@ -169,12 +210,12 @@ class DenseTensor : public WrapperBase<PD_Tensor> {
     return byte_size;
   }
 
-  LoD lod() const {
+  LegacyLoD lod() const {
     PD_List data, offset;
     C_Status status;
     PD_TensorGetLoD(raw_data(), &data, &offset, &status);
     PD_CHECK_STATUS(status);
-    LoD lod_;
+    LegacyLoD lod_;
     auto ptr = static_cast<size_t*>(data.data);
     auto offset_ptr = static_cast<size_t*>(offset.data);
     for (size_t i = 0; i < offset.size - 1; ++i) {
@@ -185,7 +226,7 @@ class DenseTensor : public WrapperBase<PD_Tensor> {
     return lod_;
   }
 
-  void ResetLoD(const LoD& lod) {
+  void ResetLoD(const LegacyLoD& lod) {
     std::vector<size_t> data, offset;
     offset.push_back(0);
     for (const auto& item : lod) {
@@ -204,6 +245,18 @@ class DenseTensor : public WrapperBase<PD_Tensor> {
   void Resize(const std::vector<int64_t>& dims) {
     C_Status status;
     PD_TensorSetDims(raw_data(), dims.size(), dims.data(), &status);
+    PD_CHECK_STATUS(status);
+  }
+
+  void set_offset(const int64_t& offset) {
+    C_Status status;
+    PD_TensorSetOffset(raw_data(), offset, &status);
+    PD_CHECK_STATUS(status);
+  }
+
+  void set_strides(const std::vector<int64_t>& strides) {
+    C_Status status;
+    PD_TensorSetStrides(raw_data(), strides.size(), strides.data(), &status);
     PD_CHECK_STATUS(status);
   }
 
@@ -513,6 +566,13 @@ class MetaTensor : WrapperBase<PD_MetaTensor> {
     return dimension;
   }
 
+  std::vector<int64_t> strides() const {
+    C_Status status;
+    auto strides = PD_MetaTensorGetStrides(raw_data(), &status);
+    PD_CHECK_STATUS(status);
+    return strides;
+  }
+
   PD_DataType dtype() const {
     C_Status status;
     auto data_type = PD_MetaTensorGetPDDataType(raw_data(), &status);
@@ -537,6 +597,13 @@ class MetaTensor : WrapperBase<PD_MetaTensor> {
   void set_dims(const std::vector<int64_t>& dims) {
     C_Status status;
     PD_MetaTensorSetDims(raw_data(), dims.size(), dims.data(), &status);
+    PD_CHECK_STATUS(status);
+  }
+
+  void set_strides(const std::vector<int64_t>& strides) {
+    C_Status status;
+    PD_MetaTensorSetStrides(
+        raw_data(), strides.size(), strides.data(), &status);
     PD_CHECK_STATUS(status);
   }
 

@@ -15,20 +15,17 @@ limitations under the License. */
 #include "paddle/fluid/operators/controlflow/conditional_block_op.h"
 #include <array>
 
+#include "paddle/common/flags.h"
 #include "paddle/fluid/framework/new_executor/standalone_executor.h"
-#include "paddle/fluid/operators/assign_op.h"
 #include "paddle/fluid/operators/controlflow/control_flow_op_helper.h"
-#include "paddle/phi/core/flags.h"
-#include "paddle/phi/kernels/funcs/math_function.h"
 
 #ifdef PADDLE_WITH_DNNL
-#include "paddle/fluid/platform/mkldnn_helper.h"
+#include "paddle/fluid/platform/onednn_helper.h"
 #endif
 
-PHI_DECLARE_bool(use_mkldnn);
+COMMON_DECLARE_bool(use_mkldnn);
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 const char ConditionalOp::kInputs[] = "Input";        // NOLINT
 const char ConditionalOp::kOutputs[] = "Out";         // NOLINT
@@ -52,8 +49,8 @@ class ConditionalBlockOp : public ConditionalOp {
 
  private:
   void RunImpl(const framework::Scope &scope,
-               const platform::Place &dev_place) const override {
-    bool need_run;
+               const phi::Place &dev_place) const override {
+    bool need_run = false;
     if (Attr<bool>("is_scalar_condition")) {
       // When is_scalar_condition is True, the conditional variable is a scalar,
       // whether need to execute the operators in sub-block depends on the
@@ -75,7 +72,7 @@ class ConditionalBlockOp : public ConditionalOp {
       auto *scope_var = scope.FindVar(Output(ConditionalOp::kScope));
       PADDLE_ENFORCE_NOT_NULL(
           scope_var,
-          platform::errors::PreconditionNotMet(
+          common::errors::PreconditionNotMet(
               "Expect Scope variable to be set in conditional_block_op, but "
               "got a null Scope variable. Please set the Scope variable."));
 
@@ -99,19 +96,27 @@ class ConditionalBlockOp : public ConditionalOp {
 
       LOG_FIRST_N(INFO, 1)
           << "[ControlFlow][ConditionalBlock] New Executor is Running.";
-      if (!core_ || !platform::is_same_place(core_->GetPlace(), dev_place)) {
+      if (!core_ || !phi::is_same_place(core_->GetPlace(), dev_place)) {
         VLOG(10) << "[interpreterCore cache]" << core_.get();
-        VLOG_IF(10, core_) << platform::is_same_place(core_->GetPlace(),
-                                                      dev_place);
+        VLOG_IF(10, core_) << phi::is_same_place(core_->GetPlace(), dev_place);
 
         framework::interpreter::ExecutionConfig execution_config;
+        if (HasAttr("used_for_inference") && Attr<bool>("used_for_inference")) {
+          execution_config.used_for_inference = true;
+        }
         execution_config.create_local_scope = false;
         execution_config.used_for_control_flow_op = true;
         execution_config.skip_gc_vars =
             std::set<std::string>(skip_vars.begin(), skip_vars.end());
-
+        // add for performance in gpugraph transformer mode
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_HETERPS) && \
+    defined(PADDLE_WITH_PSCORE)
+        execution_config.used_for_inference = true;
+#endif
         core_.reset(new InterpreterCore(
             dev_place, *block, &cur_scope, execution_config));
+        core_->SetOutputHooks(output_hookfuncs_);
+        core_->SetInputHooks(input_hookfuncs_);
         VLOG(10) << "[interpreterCore] created:" << core_;
       } else {
         BuildScopeForControlFlowOp(*core_, *block, &cur_scope);
@@ -133,7 +138,7 @@ class ConditionalBlockInferShape : public framework::InferShapeBase {
   void operator()(framework::InferShapeContext *context) const override {
     PADDLE_ENFORCE_EQ(context->HasInputs(ConditionalOp::kCondition),
                       true,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "conditional_block_op must have condition input."));
   }
 };
@@ -148,8 +153,8 @@ class ConditionalBlockGradOp : public ConditionalOp {
 
  private:
   void RunImpl(const framework::Scope &scope,
-               const platform::Place &dev_place) const override {
-    bool need_run;
+               const phi::Place &dev_place) const override {
+    bool need_run = false;
     if (Attr<bool>("is_scalar_condition")) {
       auto xs = this->InputTensors(scope, ConditionalOp::kCondition);
       need_run = ScalarCondition(xs);
@@ -174,14 +179,14 @@ class ConditionalBlockGradOp : public ConditionalOp {
       auto *scope_var = scope.FindVar(Input(ConditionalOp::kScope));
       PADDLE_ENFORCE_NOT_NULL(
           scope_var,
-          platform::errors::PreconditionNotMet(
+          common::errors::PreconditionNotMet(
               "Expect Scope variable to be set in conditional_block_op, but "
               "got a null Scope variable. Please set the Scope variable."));
       auto &scopes = scope_var->Get<std::vector<framework::Scope *>>();
       PADDLE_ENFORCE_GT(
           scopes.size(),
           0,
-          platform::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Expect Scope variable contains at least 1 scope, but got: %d",
               scopes.size()));
       framework::Scope &cur_scope = *(scopes[0]);
@@ -192,10 +197,9 @@ class ConditionalBlockGradOp : public ConditionalOp {
 
       LOG_FIRST_N(INFO, 1)
           << "[ControlFlow][ConditionalGradBlock] New Executor is Running.";
-      if (!core_ || !platform::is_same_place(core_->GetPlace(), dev_place)) {
+      if (!core_ || !phi::is_same_place(core_->GetPlace(), dev_place)) {
         VLOG(10) << "[interpreterCore cache]" << core_.get();
-        VLOG_IF(10, core_) << platform::is_same_place(core_->GetPlace(),
-                                                      dev_place);
+        VLOG_IF(10, core_) << phi::is_same_place(core_->GetPlace(), dev_place);
 
         framework::interpreter::ExecutionConfig execution_config;
         execution_config.create_local_scope = false;
@@ -226,129 +230,6 @@ class ConditionalBlockGradOp : public ConditionalOp {
   mutable std::shared_ptr<Executor> exec_{nullptr};
   mutable std::unique_ptr<ExecutorPrepareContext> ctx_{nullptr};
   mutable std::shared_ptr<InterpreterCore> core_{nullptr};
-
- private:
-  void AssignLocalGradientToParentScope(
-      const platform::Place &place,
-      const framework::Scope &cur_scope,
-      const framework::Scope &parent_scope,
-      const std::vector<std::string> &inside_grads,
-      const std::vector<std::string> &outside_grads,
-      const std::vector<std::string> &inputs) const {
-    std::vector<std::string> assign_zero_outside_grads;
-    std::vector<std::string> assign_zero_inputs;
-    for (size_t i = 0; i < outside_grads.size(); ++i) {
-      const std::string &outside_grad_name = outside_grads[i];
-      const std::string &inside_grad_name = inside_grads[i];
-      VLOG(4) << "[assign local]"
-              << "inside_grad_name = " << inside_grad_name
-              << ", outside_grad_name = " << outside_grad_name;
-      framework::Variable *outside_var =
-          parent_scope.FindVar(outside_grad_name);
-      if (outside_var == nullptr) {
-        continue;
-      }
-      framework::Variable *inside_var =
-          cur_scope.FindLocalVar(inside_grad_name);
-      if (inside_var == nullptr) {
-        assign_zero_outside_grads.emplace_back(outside_grad_name);
-        assign_zero_inputs.emplace_back(inputs[i]);
-        continue;
-      }
-      platform::DeviceContext *dev_ctx =
-          platform::DeviceContextPool::Instance().Get(place);
-      framework::VisitVarType(*inside_var,
-                              AssignFunctor(outside_var, *dev_ctx));
-    }
-    // Assign zero to the grad_vars that are in outside_grads but not in
-    // inside_grads
-    AssignZeroToParentScope(
-        place, parent_scope, assign_zero_inputs, assign_zero_outside_grads);
-  }
-
-  void AssignZeroToParentScope(
-      const platform::Place &place,
-      const framework::Scope &scope,
-      const std::vector<std::string> &inputs,
-      const std::vector<std::string> &outside_grads) const {
-    for (size_t i = 0; i < outside_grads.size(); ++i) {
-      const std::string &outside_grad_name = outside_grads[i];
-      const std::string &input_name = inputs[i];
-      VLOG(4) << "[assign zero]"
-              << "input_name = " << input_name
-              << ", outside_grad_name = " << outside_grad_name;
-      framework::Variable *input_var = scope.FindVar(input_name);
-      if (input_var == nullptr) {
-        continue;
-      }
-      framework::Variable *outside_var = scope.FindVar(outside_grad_name);
-      if (outside_var == nullptr) {
-        continue;
-      }
-
-      if (input_var->IsType<phi::DenseTensor>()) {
-        PADDLE_ENFORCE_EQ(
-            outside_var->IsType<phi::DenseTensor>(),
-            true,
-            platform::errors::InvalidArgument(
-                "Type of outside_var %s is NOT phi::DenseTensor, which "
-                "doesn't match input_var %s.",
-                outside_grad_name,
-                input_name));
-        AssignZeroToOutsideTensor(place,
-                                  scope,
-                                  input_var->Get<phi::DenseTensor>(),
-                                  outside_var->GetMutable<phi::DenseTensor>());
-      } else if (input_var->IsType<framework::LoDTensorArray>()) {
-        PADDLE_ENFORCE_EQ(outside_var->IsType<framework::LoDTensorArray>(),
-                          true,
-                          platform::errors::InvalidArgument(
-                              "Type of outside_var %s is NOT LoDTensorArray, "
-                              "which doesn't match input_var %s.",
-                              outside_grad_name,
-                              input_name));
-        const auto &input_tensors = input_var->Get<framework::LoDTensorArray>();
-        auto *outside_tensors =
-            outside_var->GetMutable<framework::LoDTensorArray>();
-        if (outside_tensors->empty()) {
-          outside_tensors->resize(input_tensors.size());
-        }
-        PADDLE_ENFORCE_EQ(input_tensors.size(),
-                          outside_tensors->size(),
-                          platform::errors::InvalidArgument(
-                              "LoDTensorArray outside_var %s doen't have same "
-                              "size as input_var %s.",
-                              outside_grad_name,
-                              input_name));
-        for (size_t j = 0; j < input_tensors.size(); ++j) {
-          AssignZeroToOutsideTensor(
-              place, scope, input_tensors[j], &((*outside_tensors)[j]));
-        }
-      } else {
-        // TODO(huihuangzheng): add support for SelectedRows
-        PADDLE_THROW(platform::errors::InvalidArgument(
-            "Conditional block grad op doesn't support non-phi::DenseTensor "
-            "output "
-            "now."));
-      }
-    }
-  }
-
-  void AssignZeroToOutsideTensor(const platform::Place &place,
-                                 const framework::Scope &cur_scope,
-                                 const phi::DenseTensor &input_tensor,
-                                 phi::DenseTensor *outside_tensor) const {
-    if (!input_tensor.IsInitialized() || input_tensor.numel() == 0) {
-      return;
-    }
-    VLOG(4) << "Assigning zero to " << outside_tensor;
-    outside_tensor->Resize(input_tensor.dims());
-    outside_tensor->mutable_data(place, input_tensor.dtype());
-    const platform::DeviceContext *dev_ctx =
-        platform::DeviceContextPool::Instance().Get(place);
-    phi::funcs::set_constant(*dev_ctx, outside_tensor, 0.0f);
-    outside_tensor->set_lod(input_tensor.lod());
-  }
 };
 
 template <class T>
@@ -389,7 +270,7 @@ class ConditionalBlockGradInferShape : public framework::InferShapeBase {
     PADDLE_ENFORCE_EQ(
         context->HasInputs(ConditionalOp::kCondition),
         true,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Condition must be set in conditional_block_grad_op."));
     if (context->HasInputs(ConditionalOp::kInputs) &&
         context->HasOutputs(framework::GradVarName(ConditionalOp::kInputs))) {
@@ -403,7 +284,7 @@ class ConditionalBlockGradInferVarType : public framework::VarTypeInference {
  public:
   void operator()(framework::InferVarTypeContext *ctx) const override {
     // NOTE(Aurelius84): VarType of Output is phi::DenseTensor by default. In
-    // case of Input is {Tensor, LoDTensorArray}, we need synchronous the
+    // case of Input is {Tensor, DenseTensorArray}, we need synchronous the
     // Input's VarType into Input@GRAD to avoid generating {Tensor, Tensor} as
     // Input@GRAD.
     auto input_size = ctx->InputSize(ConditionalOp::kInputs);
@@ -411,13 +292,13 @@ class ConditionalBlockGradInferVarType : public framework::VarTypeInference {
         ctx->OutputSize(framework::GradVarName(ConditionalOp::kInputs));
     PADDLE_ENFORCE_EQ(input_size,
                       output_size,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "input_size and output_size should be equal for "
                           "conditional_block_grad_op."));
     for (size_t i = 0; i < output_size; ++i) {
       ctx->SyncTypeAndDataType(ConditionalOp::kInputs,
                                framework::GradVarName(ConditionalOp::kInputs),
-                               i);
+                               static_cast<int>(i));
     }
   }
 };
@@ -451,8 +332,7 @@ class ConditionalBlockGradMaker : public framework::SingleGradOpMaker<T> {
   }
 };
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
 REGISTER_OPERATOR(conditional_block,

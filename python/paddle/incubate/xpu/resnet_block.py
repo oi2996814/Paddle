@@ -15,11 +15,13 @@
 import numpy as np
 
 import paddle
-from paddle import _legacy_C_ops, fluid
-from paddle.fluid.layer_helper import LayerHelper
-from paddle.fluid.param_attr import ParamAttr
-from paddle.nn import Layer
-from paddle.nn import initializer as I
+from paddle import _legacy_C_ops, base
+from paddle.base.layer_helper import LayerHelper
+from paddle.base.param_attr import ParamAttr
+from paddle.nn import (
+    Layer,
+    initializer as I,
+)
 
 __all__ = ['resnet_basic_block', 'ResNetBasicBlock']
 
@@ -60,7 +62,7 @@ def resnet_basic_block(
     trainable_statistics=False,
     find_conv_max=True,
 ):
-    if fluid.framework.in_dygraph_mode():
+    if base.framework.in_dygraph_mode():
         attrs = (
             'stride1',
             stride1,
@@ -149,12 +151,12 @@ def resnet_basic_block(
             var2,
             mean3,
             var3,
-            *attrs
+            *attrs,
         )
         return out
     helper = LayerHelper('resnet_basic_block', **locals())
-    bn_param_dtype = fluid.core.VarDesc.VarType.FP32
-    max_dtype = fluid.core.VarDesc.VarType.FP32
+    bn_param_dtype = base.core.VarDesc.VarType.FP32
+    max_dtype = base.core.VarDesc.VarType.FP32
 
     out = helper.create_variable_for_type_inference(
         dtype=x.dtype, stop_gradient=True
@@ -325,7 +327,7 @@ def resnet_basic_block(
 class ResNetBasicBlock(Layer):
     r"""
 
-    ResNetBasicBlock is designed for optimize the performence of the basic unit of ssd resnet block.
+    ResNetBasicBlock is designed for optimize the performance of the basic unit of ssd resnet block.
     If has_shortcut = True, it can calculate 3 Conv2D, 3 BatchNorm and 2 ReLU in one time.
     If has_shortcut = False, it can calculate 2 Conv2D, 2 BatchNorm and 2 ReLU in one time. In this
     case the shape of output is same with input.
@@ -344,8 +346,8 @@ class ResNetBasicBlock(Layer):
         act (str, optional): Activation type, if it is set to None, activation is not appended.
             Default: None
         momentum (float, optional): The value used for the moving_mean and
-            moving_var computation. This should be a float number or a Tensor with
-            shape [1] and data type as float32. The updated formula is:
+            moving_var computation. This should be a float number or a 0-D Tensor with
+            shape [] and data type as float32. The updated formula is:
             :math:`moving\_mean = moving\_mean * momentum + new\_mean * (1. - momentum)`
             :math:`moving\_var = moving\_var * momentum + new\_var * (1. - momentum)`
             Default is 0.9.
@@ -380,10 +382,10 @@ class ResNetBasicBlock(Layer):
         moving_var_name (str, optional): The name of the moving_variance which store the global Variance.
             If it is set to None, batch_norm will save global variance with a random name, otherwise, batch_norm
             will save global variance with the string. Default: None.
-        padding (int, optional): The padding size. It is only spupport padding_height = padding_width = padding.
+        padding (int, optional): The padding size. It is only support padding_height = padding_width = padding.
             Default: padding = 0.
         dilation (int, optional): The dilation size. It means the spacing between the kernel
-            points. It is only spupport dilation_height = dilation_width = dilation.
+            points. It is only support dilation_height = dilation_width = dilation.
             Default: dilation = 1.
         trainable_statistics (bool, optional): Whether to calculate mean and var in eval mode. In eval mode, when
             setting trainable_statistics True, mean and variance will be calculated by current batch statistics.
@@ -398,33 +400,34 @@ class ResNetBasicBlock(Layer):
     Examples:
         .. code-block:: python
 
-            # required: xpu
-            import paddle
-            from paddle.incubate.xpu.resnet_block import ResNetBasicBlock
+            >>> # doctest: +REQUIRES(env: XPU)
+            >>> import paddle
+            >>> from paddle.incubate.xpu.resnet_block import ResNetBasicBlock
 
-            ch_in = 4
-            ch_out = 8
-            x = paddle.uniform((2, ch_in, 16, 16), dtype='float32', min=-1., max=1.)
-            resnet_basic_block = ResNetBasicBlock(num_channels1=ch_in,
-                                                num_filter1=ch_out,
-                                                filter1_size=3,
-                                                num_channels2=ch_out,
-                                                num_filter2=ch_out,
-                                                filter2_size=3,
-                                                num_channels3=ch_in,
-                                                num_filter3=ch_out,
-                                                filter3_size=1,
-                                                stride1=1,
-                                                stride2=1,
-                                                stride3=1,
-                                                act='relu',
-                                                padding1=1,
-                                                padding2=1,
-                                                padding3=0,
-                                                has_shortcut=True)
-            out = resnet_basic_block.forward(x)
+            >>> ch_in = 4
+            >>> ch_out = 8
+            >>> x = paddle.uniform((2, ch_in, 16, 16), dtype='float32', min=-1., max=1.)
+            >>> resnet_basic_block = ResNetBasicBlock(num_channels1=ch_in,
+            ...                                     num_filter1=ch_out,
+            ...                                     filter1_size=3,
+            ...                                     num_channels2=ch_out,
+            ...                                     num_filter2=ch_out,
+            ...                                     filter2_size=3,
+            ...                                     num_channels3=ch_in,
+            ...                                     num_filter3=ch_out,
+            ...                                     filter3_size=1,
+            ...                                     stride1=1,
+            ...                                     stride2=1,
+            ...                                     stride3=1,
+            ...                                     act='relu',
+            ...                                     padding1=1,
+            ...                                     padding2=1,
+            ...                                     padding3=0,
+            ...                                     has_shortcut=True)
+            >>> out = resnet_basic_block.forward(x)
 
-            print(out.shape) # [2, 8, 16, 16]
+            >>> print(out.shape)
+            [2, 8, 16, 16]
 
     """
 
@@ -514,9 +517,7 @@ class ResNetBasicBlock(Layer):
         valid_format = {'NCHW'}
         if data_format not in valid_format:
             raise ValueError(
-                "conv_format must be one of {}, but got conv_format={}".format(
-                    valid_format, data_format
-                )
+                f"conv_format must be one of {valid_format}, but got conv_format={data_format}"
             )
 
         def _get_default_param_initializer(channels, kernel_size):
@@ -525,7 +526,7 @@ class ResNetBasicBlock(Layer):
             return I.Normal(0.0, std)
 
         # init filter
-        bn_param_dtype = fluid.core.VarDesc.VarType.FP32
+        bn_param_dtype = base.core.VarDesc.VarType.FP32
         bn1_param_shape = [1, 1, num_filter1]
         bn2_param_shape = [1, 1, num_filter2]
         filter1_shape = [num_filter1, num_channels1, filter1_size, filter1_size]

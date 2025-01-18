@@ -11,16 +11,27 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+from __future__ import annotations
 
 from collections import defaultdict
 from functools import reduce
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 import paddle
 from paddle.optimizer import Optimizer
 from paddle.utils import deprecated
 
 from .line_search_dygraph import _strong_wolfe
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+    from paddle import Tensor
+    from paddle.nn.clip import GradientClipBase
+    from paddle.optimizer.optimizer import _ParameterConfig
+    from paddle.regularizer import WeightDecayRegularizer
+
+    _T_co = TypeVar('_T_co', covariant=True)
 
 
 @deprecated(since="2.5.0", update_to="paddle.optimizer.LBFGS", level=1)
@@ -57,15 +68,15 @@ class LBFGS(Optimizer):
             This parameter is required in dygraph mode. The default value is None.
         weight_decay (float|WeightDecayRegularizer, optional): The strategy of regularization. \
             It canbe a float value as coeff of L2 regularization or \
-            :ref:`api_fluid_regularizer_L1Decay`, :ref:`api_fluid_regularizer_L2Decay`.
-            If a parameter has set regularizer using :ref:`api_fluid_ParamAttr` already, \
+            :ref:`api_paddle_regularizer_L1Decay`, :ref:`api_paddle_regularizer_L2Decay`.
+            If a parameter has set regularizer using :ref:`api_paddle_ParamAttr` already, \
             the regularization setting here in optimizer will be ignored for this parameter. \
             Otherwise, the regularization setting here in optimizer will take effect. \
             Default None, meaning there is no regularization.
-        grad_clip (GradientClipBase, optional): Gradient cliping strategy, it's an instance of \
-            some derived class of ``GradientClipBase`` . There are three cliping strategies \
-            ( :ref:`api_fluid_clip_GradientClipByGlobalNorm` , :ref:`api_fluid_clip_GradientClipByNorm` , \
-            :ref:`api_fluid_clip_GradientClipByValue` ). Default None, meaning there is no gradient clipping.
+        grad_clip (GradientClipBase, optional): Gradient clipping strategy, it's an instance of \
+            some derived class of ``GradientClipBase`` . There are three clipping strategies \
+            ( :ref:`api_paddle_nn_ClipGradByGlobalNorm` , :ref:`api_paddle_nn_ClipGradByNorm` , \
+            :ref:`api_paddle_nn_ClipGradByValue` ). Default None, meaning there is no gradient clipping.
         name (str, optional): Normally there is no need for user to set this property.
             For more information, please refer to :ref:`api_guide_Name`.
             The default value is None.
@@ -76,62 +87,69 @@ class LBFGS(Optimizer):
     Examples:
         .. code-block:: python
 
-            import paddle
-            import numpy as np
-            from paddle.incubate.optimizer import LBFGS
+            >>> import paddle
+            >>> import numpy as np
+            >>> from paddle.incubate.optimizer import LBFGS
 
-            paddle.disable_static()
-            np.random.seed(0)
-            np_w = np.random.rand(1).astype(np.float32)
-            np_x = np.random.rand(1).astype(np.float32)
+            >>> paddle.disable_static()
+            >>> np.random.seed(0)
+            >>> np_w = np.random.rand(1).astype(np.float32) # type: ignore[var-annotated]
+            >>> np_x = np.random.rand(1).astype(np.float32) # type: ignore[var-annotated]
 
-            inputs = [np.random.rand(1).astype(np.float32) for i in range(10)]
-            # y = 2x
-            targets = [2 * x for x in inputs]
+            >>> inputs = [np.random.rand(1).astype(np.float32) for i in range(10)] # type: ignore[var-annotated]
+            >>> # y = 2x
+            >>> targets = [2 * x for x in inputs]
 
-            class Net(paddle.nn.Layer):
-                def __init__(self):
-                    super().__init__()
-                    w = paddle.to_tensor(np_w)
-                    self.w = paddle.create_parameter(shape=w.shape, dtype=w.dtype, default_initializer=paddle.nn.initializer.Assign(w))
+            >>> class Net(paddle.nn.Layer):
+            ...     def __init__(self):
+            ...         super().__init__()
+            ...         w = paddle.to_tensor(np_w)
+            ...         self.w = paddle.create_parameter(shape=w.shape, dtype=w.dtype, default_initializer=paddle.nn.initializer.Assign(w))
+            ...     def forward(self, x):
+            ...         return self.w * x
 
-                def forward(self, x):
-                    return self.w * x
+            >>> net = Net()
+            >>> opt = LBFGS(learning_rate=1, max_iter=1, max_eval=None, tolerance_grad=1e-07, tolerance_change=1e-09, history_size=100, line_search_fn='strong_wolfe', parameters=net.parameters())
+            >>> def train_step(inputs, targets):
+            ...     def closure():
+            ...         outputs = net(inputs)
+            ...         loss = paddle.nn.functional.mse_loss(outputs, targets)
+            ...         print('loss: ', loss.item())
+            ...         opt.clear_grad()
+            ...         loss.backward()
+            ...         return loss
+            ...     opt.step(closure)
 
-            net = Net()
-            opt = LBFGS(learning_rate=1, max_iter=1, max_eval=None, tolerance_grad=1e-07, tolerance_change=1e-09, history_size=100, line_search_fn='strong_wolfe', parameters=net.parameters())
-            def train_step(inputs, targets):
-                def closure():
-                    outputs = net(inputs)
-                    loss = paddle.nn.functional.mse_loss(outputs, targets)
-                    print('loss: ', loss.item())
-                    opt.clear_grad()
-                    loss.backward()
-                    return loss
-                opt.step(closure)
-
-
-            for input, target in zip(inputs, targets):
-                input = paddle.to_tensor(input)
-                target = paddle.to_tensor(target)
-                train_step(input, target)
+            >>> for input, target in zip(inputs, targets):
+            ...     input_tensor = paddle.to_tensor(input)
+            ...     target_tensor = paddle.to_tensor(target)
+            ...     train_step(input_tensor, target_tensor)
 
     """
 
+    learning_rate: float
+    max_iter: int
+    max_eval: int
+    tolerance_grad: float
+    tolerance_change: float
+    history_size: int
+    line_search_fn: Literal['strong_wolfe'] | None
+    state: dict[str, dict[str, Any]]
+
     def __init__(
         self,
-        learning_rate=1.0,
-        max_iter=20,
-        max_eval=None,
-        tolerance_grad=1e-7,
-        tolerance_change=1e-9,
-        history_size=100,
-        line_search_fn=None,
-        parameters=None,
-        weight_decay=None,
-        grad_clip=None,
-        name=None,
-    ):
+        learning_rate: float = 1.0,
+        max_iter: int = 20,
+        max_eval: int | None = None,
+        tolerance_grad: float = 1e-7,
+        tolerance_change: float = 1e-9,
+        history_size: int = 100,
+        line_search_fn: Literal['strong_wolfe'] | None = None,
+        parameters: Sequence[Tensor] | Sequence[_ParameterConfig] | None = None,
+        weight_decay: float | WeightDecayRegularizer | None = None,
+        grad_clip: GradientClipBase | None = None,
+        name: str | None = None,
+    ) -> Tensor:
         if max_eval is None:
             max_eval = max_iter * 5 // 4
 
@@ -167,7 +185,7 @@ class LBFGS(Optimizer):
 
         self._numel_cache = None
 
-    def state_dict(self):
+    def state_dict(self) -> dict[str, dict[str, Any]]:
         r"""Returns the state of the optimizer as a :class:`dict`.
 
         Return:
@@ -228,11 +246,14 @@ class LBFGS(Optimizer):
         self._set_param(x)
         return loss, flat_grad
 
-    def step(self, closure):
-        """Performs a single optimization step.
+    def step(self, closure: Callable[[], _T_co]) -> _T_co:
+        """
+        Performs a single optimization step.
+
         Args:
             closure (callable): A closure that reevaluates the model
                 and returns the loss.
+
         """
 
         with paddle.no_grad():

@@ -11,8 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 __all__ = []
 
@@ -38,21 +43,20 @@ class DataGenerator:
 
             .. code-block:: python
 
-                import paddle.distributed.fleet.data_generator as dg
-                class MyData(dg.DataGenerator):
-
-                    def generate_sample(self, line):
-                        def local_iter():
-                            int_words = [int(x) for x in line.split()]
-                            yield ("words", int_words)
-                        return local_iter
-
-                    def generate_batch(self, samples):
-                        def local_iter():
-                            for s in samples:
-                                yield ("words", s[1].extend([s[1][0]]))
-                mydata = MyData()
-                mydata.set_batch(128)
+                >>> import paddle.distributed.fleet.data_generator as dg
+                >>> class MyData(dg.DataGenerator):
+                ...     def generate_sample(self, line):
+                ...         def local_iter():
+                ...             int_words = [int(x) for x in line.split()]
+                ...             yield ("words", int_words)
+                ...         return local_iter
+                ...
+                ...     def generate_batch(self, samples):
+                ...         def local_iter():
+                ...             for s in samples:
+                ...                 yield ("words", s[1].extend([s[1][0]]))
+                >>> mydata = MyData()
+                >>> mydata.set_batch(128)
 
         '''
         self.batch_size_ = batch_size
@@ -65,16 +69,15 @@ class DataGenerator:
         Example:
             .. code-block:: python
 
-                import paddle.distributed.fleet.data_generator as dg
-                class MyData(dg.DataGenerator):
-
-                    def generate_sample(self, line):
-                        def local_iter():
-                            yield ("words", [1, 2, 3, 4])
-                        return local_iter
-
-                mydata = MyData()
-                mydata.run_from_memory()
+                >>> # doctest: +SKIP('raise NotImplementedError')
+                >>> import paddle.distributed.fleet.data_generator as dg
+                >>> class MyData(dg.DataGenerator):
+                ...     def generate_sample(self, line):
+                ...         def local_iter():
+                ...             yield ("words", [1, 2, 3, 4])
+                ...         return local_iter
+                >>> mydata = MyData()
+                >>> mydata.run_from_memory()
         '''
         batch_samples = []
         line_iter = self.generate_sample(None)
@@ -104,17 +107,15 @@ class DataGenerator:
 
             .. code-block:: python
 
-                import paddle.distributed.fleet.data_generator as dg
-                class MyData(dg.DataGenerator):
-
-                    def generate_sample(self, line):
-                        def local_iter():
-                            int_words = [int(x) for x in line.split()]
-                            yield ("words", [int_words])
-                        return local_iter
-
-                mydata = MyData()
-                mydata.run_from_stdin()
+                >>> import paddle.distributed.fleet.data_generator as dg
+                >>> class MyData(dg.DataGenerator):
+                ...     def generate_sample(self, line):
+                ...         def local_iter():
+                ...             int_words = [int(x) for x in line.split()]
+                ...             yield ("words", [int_words])
+                ...         return local_iter
+                >>> mydata = MyData()
+                >>> mydata.run_from_stdin()
 
         '''
         batch_samples = []
@@ -160,13 +161,13 @@ class DataGenerator:
 
         Returns:
             Returns the data processed by the user.
-              The data format is list or tuple:
+            The data format is list or tuple:
             [(name, [feasign, ...]), ...]
-              or ((name, [feasign, ...]), ...)
+            or ((name, [feasign, ...]), ...)
 
             For example:
             [("words", [1926, 08, 17]), ("label", [1])]
-              or (("words", [1926, 08, 17]), ("label", [1]))
+            or (("words", [1926, 08, 17]), ("label", [1]))
 
         Note:
             The type of feasigns must be in int or float. Once the float
@@ -177,15 +178,13 @@ class DataGenerator:
 
             .. code-block:: python
 
-                import paddle.distributed.fleet.data_generator as dg
-                class MyData(dg.DataGenerator):
-
-                    def generate_sample(self, line):
-                        def local_iter():
-                            int_words = [int(x) for x in line.split()]
-                            yield ("words", [int_words])
-                        return local_iter
-
+                >>> import paddle.distributed.fleet.data_generator as dg
+                >>> class MyData(dg.DataGenerator):
+                ...     def generate_sample(self, line):
+                ...         def local_iter():
+                ...             int_words = [int(x) for x in line.split()]
+                ...             yield ("words", [int_words])
+                ...         return local_iter
         '''
         raise NotImplementedError(
             "Please rewrite this function to return a list or tuple: "
@@ -210,21 +209,20 @@ class DataGenerator:
 
             .. code-block:: python
 
-                import paddle.distributed.fleet.data_generator as dg
-                class MyData(dg.DataGenerator):
-
-                    def generate_sample(self, line):
-                        def local_iter():
-                            int_words = [int(x) for x in line.split()]
-                            yield ("words", int_words)
-                        return local_iter
-
-                    def generate_batch(self, samples):
-                        def local_iter():
-                            for s in samples:
-                                yield ("words", s[1].extend([s[1][0]]))
-                mydata = MyData()
-                mydata.set_batch(128)
+                >>> import paddle.distributed.fleet.data_generator as dg
+                >>> class MyData(dg.DataGenerator):
+                ...     def generate_sample(self, line):
+                ...         def local_iter():
+                ...             int_words = [int(x) for x in line.split()]
+                ...             yield ("words", int_words)
+                ...         return local_iter
+                ...
+                ...     def generate_batch(self, samples):
+                ...         def local_iter():
+                ...             for s in samples:
+                ...                 yield ("words", s[1].extend([s[1][0]]))
+                >>> mydata = MyData()
+                >>> mydata.set_batch(128)
         '''
 
         def local_iter():
@@ -237,7 +235,10 @@ class DataGenerator:
 # add more generalized DataGenerator that can adapt user-defined slot
 # for example, [(name, float_list), (name, str_list), (name, int_list)]
 class MultiSlotStringDataGenerator(DataGenerator):
-    def _gen_str(self, line):
+    def _gen_str(
+        self,
+        line: Sequence[tuple[str, list[str]]],
+    ) -> str:
         '''
         Further processing the output of the process() function rewritten by
         user, outputting data that can be directly read by the MultiSlotDataFeed,
@@ -282,7 +283,10 @@ class MultiSlotStringDataGenerator(DataGenerator):
 
 
 class MultiSlotDataGenerator(DataGenerator):
-    def _gen_str(self, line):
+    def _gen_str(
+        self,
+        line: Sequence[tuple[str, list[float]]],
+    ) -> str:
         '''
         Further processing the output of the process() function rewritten by
         user, outputting data that can be directly read by the MultiSlotDataFeed,
@@ -325,10 +329,10 @@ class MultiSlotDataGenerator(DataGenerator):
             for item in line:
                 name, elements = item
                 if not isinstance(name, str):
-                    raise ValueError("name%s must be in str type" % type(name))
+                    raise ValueError(f"name{type(name)} must be in str type")
                 if not isinstance(elements, list):
                     raise ValueError(
-                        "elements%s must be in list type" % type(elements)
+                        f"elements{type(elements)} must be in list type"
                     )
                 if not elements:
                     raise ValueError(
@@ -343,8 +347,7 @@ class MultiSlotDataGenerator(DataGenerator):
                         self._proto_info[-1] = (name, "float")
                     elif not isinstance(elem, int):
                         raise ValueError(
-                            "the type of element%s must be in int or float"
-                            % type(elem)
+                            f"the type of element{type(elem)} must be in int or float"
                         )
                     output += " " + str(elem)
         else:
@@ -355,10 +358,10 @@ class MultiSlotDataGenerator(DataGenerator):
             for index, item in enumerate(line):
                 name, elements = item
                 if not isinstance(name, str):
-                    raise ValueError("name%s must be in str type" % type(name))
+                    raise ValueError(f"name{type(name)} must be in str type")
                 if not isinstance(elements, list):
                     raise ValueError(
-                        "elements%s must be in list type" % type(elements)
+                        f"elements{type(elements)} must be in list type"
                     )
                 if not elements:
                     raise ValueError(
@@ -377,8 +380,7 @@ class MultiSlotDataGenerator(DataGenerator):
                             self._proto_info[index] = (name, "float")
                         elif not isinstance(elem, int):
                             raise ValueError(
-                                "the type of element%s must be in int or float"
-                                % type(elem)
+                                f"the type of element{type(elem)} must be in int or float"
                             )
                     output += " " + str(elem)
         return output + "\n"

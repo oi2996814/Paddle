@@ -41,31 +41,34 @@ class EpiloguePassActivationCache {
   void operator=(const EpiloguePassActivationCache &) = delete;
 
   bool HasFusedActivation(const std::string &key) const {
-    return fused_activation_space_map_.count(key);
+    mtx_.lock();
+    bool has = fused_activation_space_map_.count(key);
+    mtx_.unlock();
+    return has;
   }
 
   ir::Node *GetFusedActivationSpace(const std::string &key) {
     if (HasFusedActivation(key)) {
       return fused_activation_space_map_.find(key)->second;
     }
-    PADDLE_THROW(platform::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "The key (%d) of EpiloguePassActivationCache does not exist.", key));
   }
 
   void InsertFusedActivation(const std::string &key, ir::Node *const value) {
     if (!HasFusedActivation(key)) {
-      mtx.lock();
+      mtx_.lock();
       fused_activation_space_map_.insert({key, value});
-      mtx.unlock();
+      mtx_.unlock();
     } else {
-      PADDLE_THROW(platform::errors::AlreadyExists(
+      PADDLE_THROW(common::errors::AlreadyExists(
           "The key (%d) of EpiloguePassActivationCache already exist.", key));
     }
   }
 
  private:
   std::unordered_map<std::string, ir::Node *> fused_activation_space_map_;
-  std::mutex mtx;
+  mutable std::mutex mtx_;
 };
 
 class FuseGemmEpiloguePass : public FusePassBase {

@@ -21,6 +21,7 @@ limitations under the License. */
 
 #include "glog/logging.h"
 #include "paddle/phi/core/dense_tensor.h"
+#include "paddle/phi/core/distributed/auto_parallel/dist_tensor.h"
 #include "paddle/phi/core/enforce.h"
 
 namespace paddle {
@@ -42,7 +43,7 @@ std::vector<std::string> ParseAttrStr(const std::string& attr) {
   auto split_pos = attr.find_first_of(':');
   PADDLE_ENFORCE_NE(split_pos,
                     std::string::npos,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Invalid attribute string format. Attribute string "
                         "format is `<name>:<type>`."));
 
@@ -58,32 +59,50 @@ std::vector<std::string> ParseAttrStr(const std::string& attr) {
 }
 
 PADDLE_API void AssignTensorImpl(const Tensor& src, Tensor* dst) {
-  if (!src.initialized() || !dst->defined()) {
+  if (!src.has_allocation() || !dst->defined()) {
     VLOG(3) << "Custom operator assigns non-initialized tensor, this only "
                "happens when handling inplace optional inputs & outputs.";
     return;
   }
-  PADDLE_ENFORCE_EQ(src.is_dense_tensor() && dst->is_dense_tensor(),
-                    true,
-                    phi::errors::Unavailable(
-                        "Now only supported DenseTensor in Custom Operator."));
   PADDLE_ENFORCE_EQ(
-      src.initialized(),
+      ((src.is_dense_tensor() && dst->is_dense_tensor()) ||
+       (src.is_dist_tensor() && dst->is_dist_tensor())),
       true,
-      phi::errors::Unavailable(
+      common::errors::Unavailable(
+          "Now only supported DenseTensor and DistTensor in Custom Operator."));
+  PADDLE_ENFORCE_EQ(
+      src.has_allocation(),
+      true,
+      common::errors::Unavailable(
           "The Custom OpKernel calculate output is not initialized."));
   PADDLE_ENFORCE_EQ(dst->defined(),
                     true,
-                    phi::errors::Unavailable(
+                    common::errors::Unavailable(
                         "The Custom OpKernel origin output is not defined."));
-  auto& dense_src = static_cast<const phi::DenseTensor&>(*src.impl());
-  auto* dense_dst = static_cast<phi::DenseTensor*>(dst->impl().get());
-  *dense_dst = dense_src;
+  if (src.is_dense_tensor()) {
+    auto& dense_src = static_cast<const phi::DenseTensor&>(*src.impl());
+    auto* dense_dst = static_cast<phi::DenseTensor*>(dst->impl().get());
+    *dense_dst = dense_src;
+  } else {
+    auto* dense_src =
+        static_cast<phi::distributed::DistTensor*>(src.impl().get())
+            ->unsafe_mutable_value();
+    auto* dense_dst =
+        static_cast<phi::distributed::DistTensor*>(dst->impl().get())
+            ->unsafe_mutable_value();
+    *dense_dst = *dense_src;
+  }
 }
 
 ////////////////////// Kernel Context //////////////////////
 
 void CustomOpKernelContext::EmplaceBackInput(Tensor&& input) {
+  size_t index = inputs_.size();
+  inputs_.emplace_back(input);
+  input_range_.emplace_back(index, index + 1);
+}
+
+void CustomOpKernelContext::EmplaceBackInput(const Tensor& input) {
   size_t index = inputs_.size();
   inputs_.emplace_back(input);
   input_range_.emplace_back(index, index + 1);
@@ -121,7 +140,7 @@ void CustomOpKernelContext::EmplaceBackAttr(paddle::any attr) {
 
 void CustomOpKernelContext::EmplaceBackAttrs(
     const std::vector<paddle::any>& attrs) {
-  attrs_ = std::move(attrs);
+  attrs_ = attrs;
 }
 
 const Tensor& CustomOpKernelContext::InputAt(size_t idx) const {
@@ -149,18 +168,19 @@ std::vector<Tensor>* CustomOpKernelContext::AllMutableInput() {
   return &inputs_;
 }
 
-paddle::optional<Tensor> CustomOpKernelContext::OptionalInputAt(size_t idx) {
-  if (!inputs_.at(idx).is_initialized()) {
+paddle::optional<Tensor> CustomOpKernelContext::OptionalInputAt(
+    size_t idx) const {
+  if (!inputs_.at(idx).initialized()) {
     return paddle::none;
   }
   return paddle::make_optional<paddle::Tensor>(inputs_.at(idx));
 }
 
 paddle::optional<std::vector<Tensor>>
-CustomOpKernelContext::OptionalInputsBetween(size_t start, size_t end) {
+CustomOpKernelContext::OptionalInputsBetween(size_t start, size_t end) const {
   std::vector<Tensor> rlt;
   for (size_t i = start; i < end; ++i) {
-    if (!inputs_.at(i).is_initialized()) {
+    if (!inputs_.at(i).initialized()) {
       return paddle::none;
     }
     rlt.emplace_back(inputs_.at(i));
@@ -181,7 +201,7 @@ std::vector<Tensor*> CustomOpKernelContext::MutableOutputBetween(size_t start,
 }
 
 std::vector<Tensor> CustomOpKernelContext::OutputsBetween(size_t start,
-                                                          size_t end) {
+                                                          size_t end) const {
   std::vector<Tensor> rlt;
   for (size_t i = start; i < end; ++i) {
     rlt.emplace_back(outputs_.at(i));
@@ -203,12 +223,12 @@ const std::pair<size_t, size_t>& CustomOpKernelContext::OutputRangeAt(
 }
 
 const std::vector<std::pair<size_t, size_t>>&
-CustomOpKernelContext::InputRange() {
+CustomOpKernelContext::InputRange() const {
   return input_range_;
 }
 
 const std::vector<std::pair<size_t, size_t>>&
-CustomOpKernelContext::OutputRange() {
+CustomOpKernelContext::OutputRange() const {
   return output_range_;
 }
 
@@ -218,7 +238,7 @@ void CustomOpKernelContext::ConstructInplaceIndex(
     const std::unordered_map<std::string, std::string>& inplace_map) {
   // Cache inplace indices.
   if (inplace_map.empty() || !inplace_idx_map_.empty()) {
-    VLOG(4) << "Custom opertor ConstructInplaceIndex no need to recompute.";
+    VLOG(4) << "Custom operator ConstructInplaceIndex no need to recompute.";
     return;
   }
   for (size_t in_idx = 0; in_idx < inputs.size(); ++in_idx) {
@@ -227,18 +247,18 @@ void CustomOpKernelContext::ConstructInplaceIndex(
       continue;
     }
     auto out_iter = find(outputs.begin(), outputs.end(), inplace_map.at(input));
-    PADDLE_ENFORCE_NE(
-        out_iter,
-        outputs.end(),
-        phi::errors::NotFound("Can't find the mapped value of %s, please check "
-                              "the input of `Inplace` again and make "
-                              "sure you registered your op accurately. ",
-                              input));
+    PADDLE_ENFORCE_NE(out_iter,
+                      outputs.end(),
+                      common::errors::NotFound(
+                          "Can't find the mapped value of %s, please check "
+                          "the input of `Inplace` again and make "
+                          "sure you registered your op accurately. ",
+                          input));
     size_t out_idx = distance(outputs.begin(), out_iter);
     inplace_idx_map_[in_idx] = out_idx;
     inplace_reverse_idx_map_[out_idx] = in_idx;
   }
-  VLOG(4) << "Custom opertor update inplace input-output map successfully.";
+  VLOG(4) << "Custom operator update inplace input-output map successfully.";
 }
 
 // Find out non-inplace output tensors.
@@ -248,7 +268,7 @@ void CustomOpKernelContext::UpdatePlainOutputs(
     const std::unordered_map<std::string, std::string>& inplace_map) {
   // Cache plain outputs vector.
   if (!plain_outputs_.empty()) {
-    VLOG(4) << "Custom opertor UpdatePlainOutputs no need to recompute.";
+    VLOG(4) << "Custom operator UpdatePlainOutputs no need to recompute.";
     return;
   }
   ConstructInplaceIndex(inputs, outputs, inplace_map);
@@ -262,7 +282,7 @@ void CustomOpKernelContext::UpdatePlainOutputs(
       plain_outputs_.push_back(&outputs_[idx]);
     }
   }
-  VLOG(4) << "Custom opertor update plain outputs map successfully.";
+  VLOG(4) << "Custom operator update plain outputs map successfully.";
 }
 
 // Assign input tensor to inplace output tensors.
@@ -273,17 +293,17 @@ void CustomOpKernelContext::AssignInplaceOutputs() {
     size_t out_start_idx = output_range_[pair.second].first;
     size_t out_end_idx = output_range_[pair.second].second;
     size_t assign_tensor_size = in_end_idx - in_start_idx;
-    PADDLE_ENFORCE_EQ(
-        assign_tensor_size,
-        out_end_idx - out_start_idx,
-        phi::errors::OutOfRange("When assigning inplaced tensor, Input vector "
-                                "size %d mismatch output vector size %d",
-                                in_end_idx - in_start_idx,
-                                out_end_idx - out_start_idx));
+    PADDLE_ENFORCE_EQ(assign_tensor_size,
+                      out_end_idx - out_start_idx,
+                      common::errors::OutOfRange(
+                          "When assigning inplaced tensor, Input vector "
+                          "size %d mismatch output vector size %d",
+                          in_end_idx - in_start_idx,
+                          out_end_idx - out_start_idx));
     for (size_t i = 0; i < assign_tensor_size; ++i) {
       AssignTensorImpl(inputs_[in_start_idx + i], &outputs_[out_start_idx + i]);
     }
-    VLOG(4) << "Custom opertor update inplace input-output tensor "
+    VLOG(4) << "Custom operator update inplace input-output tensor "
                "successfully. Update map size = "
             << inplace_idx_map_.size();
   }
@@ -293,12 +313,13 @@ std::vector<Tensor*>* CustomOpKernelContext::AllMutablePlainOutput() {
   return &plain_outputs_;
 }
 
-std::unordered_map<size_t, size_t> CustomOpKernelContext::GetInplaceIndexMap() {
+std::unordered_map<size_t, size_t> CustomOpKernelContext::GetInplaceIndexMap()
+    const {
   return inplace_idx_map_;
 }
 
 std::unordered_map<size_t, size_t>
-CustomOpKernelContext::GetInplaceReverseIndexMap() {
+CustomOpKernelContext::GetInplaceReverseIndexMap() const {
   return inplace_reverse_idx_map_;
 }
 ////////////////////// Op Meta Info //////////////////////
@@ -337,6 +358,37 @@ OpMetaInfo& OpMetaInfo::SetInferDtypeFn(InferDtypeFunc&& func) {
   return *this;
 }
 
+OpMetaInfo& OpMetaInfo::SetInferSpmdFn(InferSpmdFunc&& func) {
+  infer_spmd_fn_ = std::forward<InferSpmdFunc>(func);
+  return *this;
+}
+
+bool OpMetaInfo::IsDoubleGradOp() const {
+  if (name_.find("_grad_grad") != name_.npos) {
+    return true;
+  }
+  return false;
+}
+
+bool OpMetaInfo::IsGradOp() const {
+  if (!IsDoubleGradOp() && name_.find("_grad") != name_.npos) {
+    return true;
+  }
+  return false;
+}
+
+#ifdef PADDLE_WITH_TENSORRT
+OpMetaInfo& OpMetaInfo::SetTrtInferShapeFn(TrtGetOutputDimsFunc&& func) {
+  trt_infer_shape_fn_ = std::forward<TrtGetOutputDimsFunc>(func);
+  return *this;
+}
+OpMetaInfo& OpMetaInfo::SetTrtSupportsFormatConfig(
+    std::vector<std::string>&& config) {
+  trt_supports_format_config_ = std::forward<std::vector<std::string>>(config);
+  return *this;
+}
+#endif
+
 //////////////// Op Meta Info Helper /////////////////
 const std::string& OpMetaInfoHelper::GetOpName(const paddle::OpMetaInfo& info) {
   return info.name_;
@@ -374,7 +426,28 @@ const InferDtypeFunc& OpMetaInfoHelper::GetInferDtypeFn(
   return info.infer_dtype_fn_;
 }
 
+const InferSpmdFunc& OpMetaInfoHelper::GetInferSpmdFn(
+    const paddle::OpMetaInfo& info) {
+  return info.infer_spmd_fn_;
+}
+
+#ifdef PADDLE_WITH_TENSORRT
+const TrtGetOutputDimsFunc& OpMetaInfoHelper::GetTrtInferShapeFn(
+    const paddle::OpMetaInfo& info) {
+  return info.trt_infer_shape_fn_;
+}
+const std::vector<std::string>& OpMetaInfoHelper::GetTrtSupportsFormatConfig(
+    const paddle::OpMetaInfo& info) {
+  return info.trt_supports_format_config_;
+}
+#endif
+
 //////////////// Op Meta Info Map /////////////////
+
+OpMetaInfoMap& OpMetaInfoMap::Instance() {
+  static OpMetaInfoMap g_custom_op_meta_info_map;
+  return g_custom_op_meta_info_map;
+}
 
 std::vector<OpMetaInfo>& OpMetaInfoMap::operator[](const std::string& name) {
   return map_[name];
@@ -398,7 +471,7 @@ OpMetaInfoBuilder::OpMetaInfoBuilder(std::string&& name, size_t index) {
   PADDLE_ENFORCE_EQ(
       info_vector.size(),
       index_,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "The operator %s's meta info register failed. "
           "Please make sure you call marcos as order `PD_BUILD_OP`, "
           "`PD_BUILD_GRAD_OP`, `PD_BUILD_DOUBLE_GRAD_OP`.",
@@ -413,7 +486,7 @@ OpMetaInfoBuilder::OpMetaInfoBuilder(std::string&& name, size_t index) {
       name_ = name_ + "_grad_grad";
       break;
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "Not support index `%d` when construct OpMetaInfoBuilder, "
           "now only support `0, 1, 2`.",
           index_));
@@ -441,6 +514,7 @@ OpMetaInfoBuilder& OpMetaInfoBuilder::Attrs(std::vector<std::string>&& attrs) {
       {"bool",
        "int",
        "float",
+       "double",
        "int64_t",
        "std::string",
        "std::vector<int>",
@@ -450,9 +524,9 @@ OpMetaInfoBuilder& OpMetaInfoBuilder::Attrs(std::vector<std::string>&& attrs) {
   for (const auto& attr : attrs) {
     auto attr_type_str = ParseAttrStr(attr)[1];
     if (custom_attrs_type.find(attr_type_str) == custom_attrs_type.end()) {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Unsupported `%s` type value as custom attribute now. "
-          "Supported data types include `bool`, `int`, `float`, "
+          "Supported data types include `bool`, `int`, `float`, `double`,  "
           "`int64_t`, `std::string`, `std::vector<int>`, "
           "`std::vector<float>`, `std::vector<int64_t>`, "
           "`std::vector<std::string>`, "
@@ -475,7 +549,7 @@ OpMetaInfoBuilder& OpMetaInfoBuilder::SetInplaceMap(
     PADDLE_ENFORCE_NE(
         std::find(inputs.begin(), inputs.end(), pair.first),
         inputs.cend(),
-        phi::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "The register of operator %s's `SetInplaceMap` failed. "
             "Please make sure: 1. Call `Inputs` and `Outputs` before "
             "`SetInplaceMap`; 2. The keys of inplace_map are inside `Inputs`",
@@ -483,7 +557,7 @@ OpMetaInfoBuilder& OpMetaInfoBuilder::SetInplaceMap(
     PADDLE_ENFORCE_NE(
         std::find(outputs.begin(), outputs.end(), pair.second),
         outputs.cend(),
-        phi::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "The register of operator %s's `SetInplaceMap` failed. "
             "Please make sure: 1. Call `Inputs` and `Outputs` "
             "before `SetInplaceMap`; 2. The values of inplace_map "
@@ -509,6 +583,26 @@ OpMetaInfoBuilder& OpMetaInfoBuilder::SetInferDtypeFn(InferDtypeFunc func) {
   info_ptr_->SetInferDtypeFn(std::forward<InferDtypeFunc>(func));
   return *this;
 }
+
+OpMetaInfoBuilder& OpMetaInfoBuilder::SetInferSpmdFn(InferSpmdFunc func) {
+  info_ptr_->SetInferSpmdFn(std::forward<InferSpmdFunc>(func));
+  return *this;
+}
+
+#ifdef PADDLE_WITH_TENSORRT
+OpMetaInfoBuilder& OpMetaInfoBuilder::SetTrtInferShapeFn(
+    TrtGetOutputDimsFunc func) {
+  info_ptr_->SetTrtInferShapeFn(std::forward<TrtGetOutputDimsFunc>(func));
+  return *this;
+}
+
+OpMetaInfoBuilder& OpMetaInfoBuilder::SetTrtSupportsFormatConfig(
+    std::vector<std::string>&& config) {
+  info_ptr_->SetTrtSupportsFormatConfig(
+      std::forward<std::vector<std::string>>(config));
+  return *this;
+}
+#endif
 }  // namespace paddle
 
 #ifdef __cplusplus
@@ -517,8 +611,8 @@ extern "C" {
 
 #ifndef _WIN32
 // C-API to get global OpMetaInfoMap.
-paddle::OpMetaInfoMap& PD_GetOpMetaInfoMap() {
-  return paddle::OpMetaInfoMap::Instance();
+paddle::OpMetaInfoMap* PD_GetOpMetaInfoMap() {
+  return &paddle::OpMetaInfoMap::Instance();
 }
 #endif
 

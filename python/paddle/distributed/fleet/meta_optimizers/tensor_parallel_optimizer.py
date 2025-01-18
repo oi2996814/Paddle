@@ -78,9 +78,9 @@ class TensorParallelOptimizer(MetaOptimizerBase):
                 continue
 
             block.append_op(
-                type='c_broadcast',
-                inputs={'X': param},
-                outputs={'Out': param},
+                type='broadcast',
+                inputs={'x': param},
+                outputs={'out': param},
                 attrs={
                     'ring_id': ring_id,
                     'root': 0,

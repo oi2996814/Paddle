@@ -18,7 +18,7 @@ import subprocess
 import time
 import unittest
 
-from paddle import fluid
+from paddle import base
 from paddle.distributed.utils.launch_utils import (
     TrainerProc,
     find_free_ports,
@@ -27,7 +27,7 @@ from paddle.distributed.utils.launch_utils import (
 )
 
 
-def get_cluster_from_args(selected_gpus):
+def get_cluster_from_args(selected_devices):
     cluster_node_ips = '127.0.0.1'
     node_ip = '127.0.0.1'
 
@@ -37,19 +37,19 @@ def get_cluster_from_args(selected_gpus):
 
     free_ports = None
 
-    free_ports = find_free_ports(len(selected_gpus))
+    free_ports = find_free_ports(len(selected_devices))
     if free_ports is not None:
         free_ports = list(free_ports)
 
     trainer_endpoints = []
     for ip in node_ips:
-        trainer_endpoints.append(["%s:%d" % (ip, port) for port in free_ports])
-    return get_cluster(node_ips, node_ip, trainer_endpoints, selected_gpus)
+        trainer_endpoints.append([f"{ip}:{port}" for port in free_ports])
+    return get_cluster(node_ips, node_ip, trainer_endpoints, selected_devices)
 
 
-def get_gpus(selected_gpus):
-    selected_gpus = [x.strip() for x in selected_gpus.split(',')]
-    return selected_gpus
+def get_devices(selected_devices):
+    selected_devices = [x.strip() for x in selected_devices.split(',')]
+    return selected_devices
 
 
 def start_local_trainers_cpu(
@@ -65,9 +65,9 @@ def start_local_trainers_cpu(
     for rank_id, endpoint in enumerate(trainer_endpoints):
         proc_env = {
             "PADDLE_DISTRI_BACKEND": "gloo",
-            "PADDLE_TRAINER_ID": "%d" % rank_id,
-            "PADDLE_CURRENT_ENDPOINT": "%s" % endpoint,
-            "PADDLE_TRAINERS_NUM": "%d" % n_rank,
+            "PADDLE_TRAINER_ID": str(rank_id),
+            "PADDLE_CURRENT_ENDPOINT": str(endpoint),
+            "PADDLE_TRAINERS_NUM": str(n_rank),
             "PADDLE_TRAINER_ENDPOINTS": ",".join(trainer_endpoints),
         }
 
@@ -104,6 +104,8 @@ def start_local_trainers(
     training_script_args,
     allocator_strategy="auto_growth",
     log_dir=None,
+    need_envs={},
+    accelerator_type="gpu",
 ):
     current_env = copy.copy(os.environ.copy())
     # paddle broadcast ncclUniqueId use socket, and
@@ -116,10 +118,12 @@ def start_local_trainers(
     procs = []
     for t in pod.trainers:
         proc_env = {
-            "FLAGS_selected_gpus": "%s" % ",".join([str(g) for g in t.gpus]),
-            "PADDLE_TRAINER_ID": "%d" % t.rank,
-            "PADDLE_CURRENT_ENDPOINT": "%s" % t.endpoint,
-            "PADDLE_TRAINERS_NUM": "%d" % cluster.trainers_nranks(),
+            f"FLAGS_selected_{accelerator_type}s": "{}".format(
+                ",".join([str(g) for g in t.gpus])
+            ),
+            "PADDLE_TRAINER_ID": str(t.rank),
+            "PADDLE_CURRENT_ENDPOINT": str(t.endpoint),
+            "PADDLE_TRAINERS_NUM": str(cluster.trainers_nranks()),
             "PADDLE_TRAINER_ENDPOINTS": ",".join(cluster.trainers_endpoints()),
         }
 
@@ -128,6 +132,7 @@ def start_local_trainers(
             proc_env["FLAGS_fraction_of_gpu_memory_to_use"] = "0.1"
 
         current_env.update(proc_env)
+        current_env.update(need_envs)
 
         print(f"trainer proc env:{current_env}")
 
@@ -153,23 +158,38 @@ def start_local_trainers(
     return procs
 
 
-class TestMultipleGpus(unittest.TestCase):
-    def run_mnist_2gpu(
+class TestMultipleAccelerators(unittest.TestCase):
+    def run_mnist_2accelerators(
         self,
         target_file_name,
         allocator_strategy="auto_growth",
+        need_envs={},
+        accelerator_type="xpu" if base.core.is_compiled_with_xpu() else "gpu",
     ):
-        if (
-            not fluid.core.is_compiled_with_cuda()
-            or fluid.core.get_cuda_device_count() == 0
-        ):
-            return
+        if accelerator_type == "gpu":
+            if (
+                not base.core.is_compiled_with_cuda()
+                or base.core.get_cuda_device_count() == 0
+            ):
+                return
+        elif accelerator_type == "xpu":
+            if (
+                not base.core.is_compiled_with_xpu()
+                or base.core.get_xpu_device_count() == 0
+            ):
+                return
+        else:
+            if (
+                not base.core.is_compiled_with_custom_device(accelerator_type)
+                or base.core.get_custom_device_count(accelerator_type) == 0
+            ):
+                return
 
-        selected_gpus = get_gpus('0,1')
+        selected_devices = get_devices('0,1')
         cluster = None
         pod = None
 
-        cluster, pod = get_cluster_from_args(selected_gpus)
+        cluster, pod = get_cluster_from_args(selected_devices)
 
         procs = start_local_trainers(
             cluster,
@@ -177,6 +197,8 @@ class TestMultipleGpus(unittest.TestCase):
             allocator_strategy=allocator_strategy,
             training_script=target_file_name,
             training_script_args=[],
+            need_envs=need_envs,
+            accelerator_type=accelerator_type,
         )
 
         while True:
@@ -209,18 +231,22 @@ class TestMultipleWithGloo(unittest.TestCase):
             time.sleep(3)
 
 
-class TestDataParallelWithPyLayer(TestMultipleGpus):
+class TestDataParallelWithPyLayer(TestMultipleAccelerators):
     def test_parallel_dygraph_dataparallel_with_pylayer(self):
-        self.run_mnist_2gpu('parallel_dygraph_dataparallel_with_pylayer.py')
-        self.run_mnist_2gpu(
+        self.run_mnist_2accelerators(
+            'parallel_dygraph_dataparallel_with_pylayer.py'
+        )
+        self.run_mnist_2accelerators(
             'parallel_dygraph_dataparallel_with_pylayer.py',
             allocator_strategy="naive_best_fit",
         )
 
 
-class TestGradientCheckInEagerMode(TestMultipleGpus):
+class TestGradientCheckInEagerMode(TestMultipleAccelerators):
     def test_multiple_gpus_dynamic(self):
-        self.run_mnist_2gpu('parallel_dygraph_gradient_check_in_eager_mode.py')
+        self.run_mnist_2accelerators(
+            'parallel_dygraph_gradient_check_in_eager_mode.py'
+        )
 
 
 if __name__ == "__main__":

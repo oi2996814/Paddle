@@ -16,8 +16,7 @@ limitations under the License. */
 #include "paddle/phi/common/float16.h"
 #include "paddle/phi/kernels/funcs/eigen/eigen_function.h"
 
-namespace phi {
-namespace funcs {
+namespace phi::funcs {
 
 template <typename T, int Rank>
 struct EigenBroadcast<Eigen::DefaultDevice, T, Rank> {
@@ -73,7 +72,9 @@ struct EigenBroadcastGrad<Eigen::DefaultDevice, T, Rank> {
   template struct FUNCTOR<Eigen::DefaultDevice, T, 3>; \
   template struct FUNCTOR<Eigen::DefaultDevice, T, 4>; \
   template struct FUNCTOR<Eigen::DefaultDevice, T, 5>; \
-  template struct FUNCTOR<Eigen::DefaultDevice, T, 6>
+  template struct FUNCTOR<Eigen::DefaultDevice, T, 6>; \
+  template struct FUNCTOR<Eigen::DefaultDevice, T, 7>; \
+  template struct FUNCTOR<Eigen::DefaultDevice, T, 8>
 INSTANTIATION(EigenBroadcast, bool);
 INSTANTIATION(EigenBroadcast, dtype::float16);
 INSTANTIATION(EigenBroadcast, dtype::bfloat16);
@@ -82,14 +83,21 @@ INSTANTIATION(EigenBroadcast, dtype::complex<double>);
 INSTANTIATION(EigenBroadcast, float);
 INSTANTIATION(EigenBroadcast, double);
 INSTANTIATION(EigenBroadcast, int);
+INSTANTIATION(EigenBroadcast, int8_t);
+INSTANTIATION(EigenBroadcast, uint8_t);
+INSTANTIATION(EigenBroadcast, int16_t);
 INSTANTIATION(EigenBroadcast, int64_t);
 INSTANTIATION(EigenBroadcastGrad, bool);
 INSTANTIATION(EigenBroadcastGrad, float);
 INSTANTIATION(EigenBroadcastGrad, dtype::float16);
+INSTANTIATION(EigenBroadcastGrad, dtype::bfloat16);
 INSTANTIATION(EigenBroadcastGrad, dtype::complex<float>);
 INSTANTIATION(EigenBroadcastGrad, dtype::complex<double>);
 INSTANTIATION(EigenBroadcastGrad, double);
 INSTANTIATION(EigenBroadcastGrad, int);
+INSTANTIATION(EigenBroadcastGrad, int8_t);
+INSTANTIATION(EigenBroadcastGrad, uint8_t);
+INSTANTIATION(EigenBroadcastGrad, int16_t);
 INSTANTIATION(EigenBroadcastGrad, int64_t);
 template struct EigenBroadcastGrad<Eigen::DefaultDevice, float, 0>;
 template struct EigenBroadcastGrad<Eigen::DefaultDevice, double, 0>;
@@ -97,5 +105,4 @@ template struct EigenBroadcastGrad<Eigen::DefaultDevice, int, 0>;
 template struct EigenBroadcastGrad<Eigen::DefaultDevice, int64_t, 0>;
 #undef INSTANTIATION
 
-}  // namespace funcs
-}  // namespace phi
+}  // namespace phi::funcs

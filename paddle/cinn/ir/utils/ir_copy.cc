@@ -21,27 +21,115 @@
 
 #include "paddle/cinn/common/common.h"
 #include "paddle/cinn/common/ir_util.h"
+#include "paddle/cinn/ir/ir_mutator.h"
+#include "paddle/cinn/ir/ir_printer.h"
 #include "paddle/cinn/ir/module.h"
 #include "paddle/cinn/ir/schedule/ir_schedule.h"
-#include "paddle/cinn/ir/utils/ir_mutator.h"
-#include "paddle/cinn/ir/utils/ir_printer.h"
 
 namespace cinn {
-namespace optim {
-using namespace ir;  // NOLINT
-
+namespace ir {
+namespace ir_utils {
+namespace {
 struct IRCopyVisitor : public ir::IRVisitorRequireReImpl<Expr> {
+ public:
+  explicit IRCopyVisitor(bool copy_buffer_node)
+      : copy_buffer_node(copy_buffer_node) {}
+
   // Use maps to unify all the copied tensors and buffers.
   std::map<std::string, ir::_Tensor_*> tensor_map;
   std::map<std::string, ir::_Buffer_*> buffer_map;
+  // whether to deep copy Buffer node.
+  bool copy_buffer_node;
 
   Expr Visit(const Expr* op) override {
-    return IRVisitorRequireReImpl::Visit(op);
+    bool is_index = op->is_index();
+    auto copy = IRVisitorRequireReImpl::Visit(op);
+    return copy.set_index(is_index);
+  }
+
+  Expr Visit(const IndexExpr* op) override {
+    Expr e = *op;
+    auto copy = Visit(&e);
+    return copy.set_index(true);
+  }
+
+  Module Visit(const ir::_Module_* op) {
+    std::vector<Expr> buffers;
+    std::vector<LoweredFunc> functions;
+    std::vector<Module> submodules;
+    std::vector<Expr> predicates;
+    std::vector<int> priorities;
+    LoweredFunc infer_shape_func;
+    for (auto& expr : op->buffers) {
+      buffers.push_back(Visit(&expr));
+    }
+
+    for (auto& expr : op->functions) {
+      functions.push_back(Visit(expr.As<_LoweredFunc_>()));
+    }
+
+    for (auto& expr : op->submodules) {
+      submodules.push_back(Visit(expr.As<ir::_Module_>()));
+    }
+
+    for (auto& expr : op->predicates) {
+      predicates.push_back(Visit(&expr));
+    }
+
+    for (int priority : op->priorities) {
+      priorities.push_back(priority);
+    }
+
+    if (op->infer_shape_func.defined()) {
+      infer_shape_func = Visit(op->infer_shape_func.As<_LoweredFunc_>());
+    }
+
+    auto res = ir::_Module_::Make(op->name, op->target);
+    res->buffers = buffers;
+    res->functions = functions;
+    res->submodules = submodules;
+    res->predicates = predicates;
+    res->priorities = priorities;
+    res->infer_shape_func = infer_shape_func;
+
+    return res;
+  }
+
+  LoweredFunc Visit(const _LoweredFunc_* op) {
+    auto func = make_shared<_LoweredFunc_>();
+
+    func->name = op->name;
+    func->args = op->args;
+    func->body = Visit(&op->body);
+    func->temp_bufs = op->temp_bufs;
+    func->temp_spaces = op->temp_spaces;
+    func->num_output_tensors = op->num_output_tensors;
+
+    func->device_api = op->device_api;
+
+    func->cuda_axis_info = op->cuda_axis_info;
+
+    std::vector<Expr> alloc_output_buffer_exprs;
+    std::vector<Expr> dealloc_output_buffer_exprs;
+    std::vector<Expr> buffer_data_cast_exprs;
+    std::vector<Expr> argument_prepare_exprs;
+
+#define COPY_ADD_FIELD(field__)      \
+  for (auto& expr : op->field__) {   \
+    field__.push_back(Visit(&expr)); \
+  }                                  \
+  func->field__ = std::move(field__);
+
+    COPY_ADD_FIELD(alloc_output_buffer_exprs);
+    COPY_ADD_FIELD(dealloc_output_buffer_exprs);
+    COPY_ADD_FIELD(buffer_data_cast_exprs);
+    COPY_ADD_FIELD(argument_prepare_exprs);
+
+    return LoweredFunc(func);
   }
 
  protected:
   // The methods of ir nodes follows the order defined in node.h
-
   Expr Visit(const ir::IntImm* op) override {
     return Expr(make_shared<IntImm>(op->type(), op->value));
   }
@@ -52,7 +140,7 @@ struct IRCopyVisitor : public ir::IRVisitorRequireReImpl<Expr> {
     return Expr(make_shared<FloatImm>(op->type(), op->value));
   }
   Expr Visit(const ir::StringImm* op) override {
-    return Expr(common::make_shared<StringImm>(op->value));
+    return Expr(cinn::common::make_shared<StringImm>(op->value));
   }
 
   Expr Visit(const ir::Cast* op) override {
@@ -101,6 +189,7 @@ struct IRCopyVisitor : public ir::IRVisitorRequireReImpl<Expr> {
 
     n->name = op->name;
     n->is_reduce_axis = op->is_reduce_axis;
+    n->is_symbolic_constant = op->is_symbolic_constant;
     n->set_type(op->type());
 
     if (op->lower_bound.defined()) {
@@ -184,18 +273,23 @@ struct IRCopyVisitor : public ir::IRVisitorRequireReImpl<Expr> {
     auto domain = Visit(op->domain);
     auto buffer_expr = Expr(op->buffer);
     // TODO(Superjomn) copy the operation.
-    auto operaion = op->operation;
+    auto operation = op->operation;
     auto name = op->name;
     auto tensor = make_shared<_Tensor_>();
 
+    // tensor->buffer = op->buffer;
     if (buffer_expr.defined()) {
-      auto buffer = Visit(&buffer_expr);
-      tensor->buffer = buffer.as_buffer_ref();
+      if (copy_buffer_node) {
+        auto buffer = Visit(&buffer_expr);
+        tensor->buffer = buffer.as_buffer_ref();
+      } else {
+        tensor->buffer = op->buffer;
+      }
     }
     tensor->domain = domain;
     tensor->shape = shape;
     tensor->reduce_axis = op->reduce_axis;
-    tensor->operation = operaion;
+    tensor->operation = operation;
     tensor->name = name;
     tensor->set_type(op->type());
     tensor->axis_ = op->axis_;
@@ -237,62 +331,6 @@ struct IRCopyVisitor : public ir::IRVisitorRequireReImpl<Expr> {
     return expr;
   }
 
-  Expr Visit(const ir::_Module_* op) override {
-    std::vector<Expr> buffers;
-    std::vector<Expr> functions;
-    std::vector<Expr> submodules;
-
-    for (auto& expr : op->buffers) {
-      buffers.push_back(Visit(&expr));
-    }
-
-    for (auto& expr : op->functions) {
-      functions.push_back(Visit(&expr));
-    }
-
-    for (auto& expr : op->submodules) {
-      submodules.push_back(Visit(&expr));
-    }
-
-    auto res = ir::_Module_::Make(op->name, op->target);
-    res->buffers = buffers;
-    res->functions = functions;
-    res->submodules = submodules;
-
-    return Expr(res);
-  }
-
-  Expr Visit(const _LoweredFunc_* op) override {
-    auto func = make_shared<_LoweredFunc_>();
-
-    func->name = op->name;
-    func->args = op->args;
-    func->body = Visit(&op->body);
-    func->temp_bufs = op->temp_bufs;
-
-    func->device_api = op->device_api;
-
-    func->cuda_axis_info = op->cuda_axis_info;
-
-    std::vector<Expr> alloc_output_buffer_exprs;
-    std::vector<Expr> dealloc_output_buffer_exprs;
-    std::vector<Expr> buffer_data_cast_exprs;
-    std::vector<Expr> argument_prepare_exprs;
-
-#define COPY_ADD_FIELD(field__)      \
-  for (auto& expr : op->field__) {   \
-    field__.push_back(Visit(&expr)); \
-  }                                  \
-  func->field__ = std::move(field__);
-
-    COPY_ADD_FIELD(alloc_output_buffer_exprs);
-    COPY_ADD_FIELD(dealloc_output_buffer_exprs);
-    COPY_ADD_FIELD(buffer_data_cast_exprs);
-    COPY_ADD_FIELD(argument_prepare_exprs);
-
-    return func;
-  }
-
   Expr Visit(const Let* op) override {
     auto value = Visit(&op->symbol);
     auto body = Visit(&op->body);
@@ -318,8 +356,16 @@ struct IRCopyVisitor : public ir::IRVisitorRequireReImpl<Expr> {
   Expr Visit(const Broadcast* op) override {
     auto value = Visit(&op->value);
     int lanes = op->lanes;
-    CHECK(value.defined());
-    CHECK(value.type().valid());
+    PADDLE_ENFORCE_EQ(value.defined(),
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "Broadcasting value is not defined."));
+    PADDLE_ENFORCE_EQ(
+        value.type().valid(),
+        true,
+        ::common::errors::InvalidArgument("Broadcasting value type is invalid. "
+                                          "Expected a valid type, but got: %s",
+                                          value.type()));
 
     auto* n = make_shared<Broadcast>();
     n->value = value;
@@ -330,8 +376,14 @@ struct IRCopyVisitor : public ir::IRVisitorRequireReImpl<Expr> {
   Expr Visit(const FracOp* op) override {
     auto a = Visit(&op->a());
     auto b = Visit(&op->b());
-    CHECK(a.defined());
-    CHECK(b.defined());
+    PADDLE_ENFORCE_EQ(a.defined(),
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "The first operand of FracOp is not defined."));
+    PADDLE_ENFORCE_EQ(b.defined(),
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "The second operand of FracOp is not defined."));
 
     auto* n = make_shared<FracOp>();
     n->a() = a;
@@ -361,7 +413,7 @@ struct IRCopyVisitor : public ir::IRVisitorRequireReImpl<Expr> {
       arguments.push_back(Visit(args));
     }
 
-    auto n = common::make_shared<ir::PrimitiveNode>();
+    auto n = cinn::common::make_shared<ir::PrimitiveNode>();
     n->name = op->name;
     n->attrs = op->attrs;  // attrs are PODs
     n->arguments = arguments;
@@ -381,7 +433,11 @@ struct IRCopyVisitor : public ir::IRVisitorRequireReImpl<Expr> {
     std::vector<Var> iter_vars;
     for (auto iter_var : op->iter_vars) {
       auto* var = iter_var.As<_Var_>();
-      CHECK(var);
+      PADDLE_ENFORCE_NE(
+          var,
+          nullptr,
+          ::common::errors::InvalidArgument(
+              "ScheduleBlock iter_var is not a valid _Var_ type."));
       iter_vars.push_back(Visit(var));
     }
     std::vector<Expr> read_buffers;
@@ -395,6 +451,7 @@ struct IRCopyVisitor : public ir::IRVisitorRequireReImpl<Expr> {
     Expr res = ir::ScheduleBlock::Make(
         iter_vars, read_buffers, write_buffers, op->name, Visit(&op->body));
     res.As<ScheduleBlock>()->attrs = op->attrs;
+    res.As<ScheduleBlock>()->reduce_method = op->reduce_method;
     return res;
   }
 
@@ -405,6 +462,32 @@ struct IRCopyVisitor : public ir::IRVisitorRequireReImpl<Expr> {
     }
     return ir::ScheduleBlockRealize::Make(iter_values,
                                           Visit(&op->schedule_block));
+  }
+
+  Expr Visit(const ir::_Dim_* op) override {
+    return ir::_Dim_::Make(op->name, op->sym_dim);
+  }
+  Expr Visit(const ir::IterMark* op) override {
+    Expr source = Visit(&(op->source));
+    Expr extent = Visit(&(op->extent));
+
+    return IterMark::Make(source, extent);
+  }
+  Expr Visit(const ir::IterSplit* op) override {
+    Expr source = Visit(&(op->source));
+    Expr lower_factor = Visit(&(op->lower_factor));
+    Expr extent = Visit(&(op->extent));
+    Expr scale = Visit(&(op->scale));
+
+    return IterSplit::Make(source, lower_factor, extent, scale);
+  }
+  Expr Visit(const ir::IterSum* op) override {
+    std::vector<Expr> args;
+    for (const auto& v : op->args) {
+      args.push_back(Visit(&v));
+    }
+    Expr base = Visit(&(op->base));
+    return IterSum::Make(args, base);
   }
 
 #define __(x__) Expr Visit(const ir::intrinsics::x__* op);
@@ -474,39 +557,45 @@ Expr IRCopyVisitor::Visit(const ir::intrinsics::BuiltinIntrin* op) {
   return intrinsics::BuiltinIntrin::Make(
       op->name, op->args, op->id, op->arg_nums, op->type());
 }
-
-Expr IRCopy(Expr x) {
-  IRCopyVisitor visitor;
+}  // namespace
+Expr IRCopy(const Expr& x, bool copy_buffer_node) {
+  IRCopyVisitor visitor(copy_buffer_node);
   auto copied = visitor.Visit(&x);
   return copied;
 }
 
-std::vector<Expr> IRCopy(const std::vector<Expr>& x) {
+std::vector<Expr> IRCopy(const std::vector<Expr>& x, bool copy_buffer_node) {
   std::vector<Expr> res;
   for (auto& i : x) {
-    res.emplace_back(IRCopy(i));
+    res.emplace_back(IRCopy(i, copy_buffer_node));
   }
   return res;
 }
 
-ir::ModuleExpr IRCopy(const ir::ModuleExpr& x) {
-  return ir::ModuleExpr(IRCopy(x.GetExprs()));
+ir::ModuleExpr IRCopy(const ir::ModuleExpr& x, bool copy_buffer_node) {
+  return ir::ModuleExpr(IRCopy(x.GetExprs(), copy_buffer_node));
 }
 
-ir::LoweredFunc IRCopy(const ir::LoweredFunc& x) {
-  ir::Expr copy_func_expr = IRCopy(static_cast<ir::Expr>(x));
-  ir::_LoweredFunc_* copy_func_ptr = copy_func_expr.As<ir::_LoweredFunc_>();
-  return ir::LoweredFunc(copy_func_ptr);
+ir::Module IRCopy(const Module& m, bool copy_buffer_node) {
+  IRCopyVisitor visitor(copy_buffer_node);
+  return visitor.Visit(m.As<ir::_Module_>());
+}
+
+ir::LoweredFunc IRCopy(const ir::LoweredFunc& x, bool copy_buffer_node) {
+  IRCopyVisitor visitor(copy_buffer_node);
+  auto copied = visitor.Visit(x.As<ir::_LoweredFunc_>());
+  return copied;
 }
 
 // TODO(zhhsplendid): make IRCopy of std::vector a template function
-std::vector<ir::LoweredFunc> IRCopy(const std::vector<ir::LoweredFunc>& x) {
+std::vector<ir::LoweredFunc> IRCopy(const std::vector<ir::LoweredFunc>& x,
+                                    bool copy_buffer_node) {
   std::vector<ir::LoweredFunc> res;
   for (const auto& i : x) {
-    res.emplace_back(IRCopy(i));
+    res.emplace_back(IRCopy(i, copy_buffer_node));
   }
   return res;
 }
-
-}  // namespace optim
+}  // namespace ir_utils
+}  // namespace ir
 }  // namespace cinn

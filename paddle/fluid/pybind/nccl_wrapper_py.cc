@@ -26,21 +26,18 @@ limitations under the License. */
 
 #include "google/protobuf/io/zero_copy_stream_impl.h"
 #include "google/protobuf/text_format.h"
-#include "paddle/fluid/framework/async_executor.h"
 #include "paddle/fluid/framework/data_feed.h"
-#include "paddle/fluid/framework/data_feed.pb.h"
 #include "paddle/fluid/framework/fleet/nccl_wrapper.h"
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/inference/io.h"
-#include "paddle/fluid/platform/place.h"
+#include "paddle/phi/common/place.h"
+#include "paddle/phi/core/framework/data_feed.pb.h"
 
 #include "paddle/fluid/pybind/nccl_wrapper_py.h"
 
 namespace py = pybind11;
-namespace pd = paddle::framework;
 
-namespace paddle {
-namespace pybind {
+namespace paddle::pybind {
 void BindNCCLWrapper(py::module* m) {
   py::class_<framework::NCCLWrapper>(*m, "Nccl")
       .def(py::init())
@@ -49,5 +46,4 @@ void BindNCCLWrapper(py::module* m) {
       .def("set_rank_info", &framework::NCCLWrapper::SetRankInfo)
       .def("sync_var", &framework::NCCLWrapper::SyncVar);
 }  // end NCCLWrapper
-}  // end namespace pybind
-}  // end namespace paddle
+}  // namespace paddle::pybind

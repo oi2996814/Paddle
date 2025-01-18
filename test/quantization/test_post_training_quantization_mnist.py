@@ -61,11 +61,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
             os.system("mkdir -p " + self.int8_model_path)
             os.system("mkdir -p " + self.cache_folder)
         except Exception as e:
-            print(
-                "Failed to create {} due to {}".format(
-                    self.int8_model_path, str(e)
-                )
-            )
+            print(f"Failed to create {self.int8_model_path} due to {e}")
             sys.exit(-1)
 
     def tearDown(self):
@@ -73,8 +69,8 @@ class TestPostTrainingQuantization(unittest.TestCase):
 
     def cache_unzipping(self, target_folder, zip_path):
         if not os.path.exists(target_folder):
-            cmd = 'mkdir {0} && tar xf {1} -C {0}'.format(
-                target_folder, zip_path
+            cmd = (
+                f'mkdir {target_folder} && tar xf {zip_path} -C {target_folder}'
             )
             os.system(cmd)
 
@@ -99,9 +95,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
                 retry += 1
             else:
                 raise RuntimeError(
-                    "Cannot download {} within retry limit {}".format(
-                        url, retry_limit
-                    )
+                    f"Cannot download {url} within retry limit {retry_limit}"
                 )
             sys.stderr.write(
                 f"Cache file {filename} not found, downloading {url} \n"
@@ -146,9 +140,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
         file_name = data_url.split('/')[-1]
         zip_path = os.path.join(self.cache_folder, file_name)
         print(
-            'Data is downloaded at {}. File exists: {}'.format(
-                zip_path, os.path.exists(zip_path)
-            )
+            f'Data is downloaded at {zip_path}. File exists: {os.path.exists(zip_path)}'
         )
 
         data_cache_folder = os.path.join(self.cache_folder, folder_name)
@@ -164,9 +156,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
         infer_iterations,
     ):
         print(
-            "test model path: {}. File exists: {}".format(
-                model_path, os.path.exists(model_path)
-            )
+            f"test model path: {model_path}. File exists: {os.path.exists(model_path)}"
         )
         place = paddle.CPUPlace()
         exe = paddle.static.Executor(place)
@@ -295,9 +285,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
         origin_model_path = os.path.join(origin_model_path, model_name)
 
         print(
-            "Start FP32 inference for {} on {} images ...".format(
-                model_name, infer_iterations * batch_size
-            )
+            f"Start FP32 inference for {model_name} on {infer_iterations * batch_size} images ..."
         )
 
         (fp32_throughput, fp32_latency, fp32_acc1) = self.run_program(
@@ -309,9 +297,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
         )
 
         print(
-            "Start INT8 post training quantization for {} on {} images ...".format(
-                model_name, quant_iterations * batch_size
-            )
+            f"Start INT8 post training quantization for {model_name} on {quant_iterations * batch_size} images ..."
         )
         self.generate_quantized_model(
             origin_model_path,
@@ -331,9 +317,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
         )
 
         print(
-            "Start INT8 inference for {} on {} images ...".format(
-                model_name, infer_iterations * batch_size
-            )
+            f"Start INT8 inference for {model_name} on {infer_iterations * batch_size} images ..."
         )
         (int8_throughput, int8_latency, int8_acc1) = self.run_program(
             self.int8_model_path,
@@ -345,14 +329,10 @@ class TestPostTrainingQuantization(unittest.TestCase):
 
         print(f"---Post training quantization of {algo} method---")
         print(
-            "FP32 {}: batch_size {}, throughput {} img/s, latency {} s, acc1 {}.".format(
-                model_name, batch_size, fp32_throughput, fp32_latency, fp32_acc1
-            )
+            f"FP32 {model_name}: batch_size {batch_size}, throughput {fp32_throughput} img/s, latency {fp32_latency} s, acc1 {fp32_acc1}."
         )
         print(
-            "INT8 {}: batch_size {}, throughput {} img/s, latency {} s, acc1 {}.\n".format(
-                model_name, batch_size, int8_throughput, int8_latency, int8_acc1
-            )
+            f"INT8 {model_name}: batch_size {batch_size}, throughput {int8_throughput} img/s, latency {int8_latency} s, acc1 {int8_acc1}.\n"
         )
         sys.stdout.flush()
 

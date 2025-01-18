@@ -13,24 +13,26 @@
 # limitations under the License.
 
 import unittest
+from random import random
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 
-def output_hist(out):
+def output_hist(out, p=0.5):
     hist, _ = np.histogram(out, bins=2)
     hist = hist.astype("float32")
     hist /= float(out.size)
-    prob = 0.5 * np.ones(2)
+    prob = np.array([1 - p, p])
     return hist, prob
 
 
 class TestBernoulliOp(OpTest):
     def setUp(self):
+        self.python_api = paddle.bernoulli
         self.op_type = "bernoulli"
         self.init_dtype()
         self.init_test_case()
@@ -46,7 +48,7 @@ class TestBernoulliOp(OpTest):
         self.out = np.zeros((1000, 784)).astype(self.dtype)
 
     def test_check_output(self):
-        self.check_output_customized(self.verify_output)
+        self.check_output_customized(self.verify_output, check_pir=True)
 
     def verify_output(self, outs):
         hist, prob = output_hist(np.array(outs[0]))
@@ -66,10 +68,28 @@ class TestBernoulliApi(unittest.TestCase):
         x = paddle.rand([1024, 1024])
         out = paddle.bernoulli(x)
         exe = paddle.static.Executor(paddle.CPUPlace())
-        out = exe.run(
-            paddle.static.default_main_program(), fetch_list=[out.name]
-        )
+        out = exe.run(paddle.static.default_main_program(), fetch_list=[out])
         hist, prob = output_hist(out[0])
+        np.testing.assert_allclose(hist, prob, rtol=0, atol=0.01)
+
+
+class TestBernoulliApi2(unittest.TestCase):
+    def test_dygraph(self):
+        paddle.disable_static()
+        x = paddle.rand([1024, 1024])
+        p = random()
+        out = paddle.bernoulli(x, p=p)
+        paddle.enable_static()
+        hist, prob = output_hist(out.numpy(), p=p)
+        np.testing.assert_allclose(hist, prob, rtol=0, atol=0.01)
+
+    def test_static(self):
+        x = paddle.rand([1024, 1024])
+        p = random()
+        out = paddle.bernoulli(x, p=p)
+        exe = paddle.static.Executor(paddle.CPUPlace())
+        out = exe.run(paddle.static.default_main_program(), fetch_list=[out])
+        hist, prob = output_hist(out[0], p=p)
         np.testing.assert_allclose(hist, prob, rtol=0, atol=0.01)
 
 
@@ -116,7 +136,7 @@ class TestBernoulliFP16Op(TestBernoulliOp):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestBernoulliBF16Op(TestBernoulliOp):
     def init_dtype(self):
@@ -124,7 +144,9 @@ class TestBernoulliBF16Op(TestBernoulliOp):
 
     def test_check_output(self):
         place = core.CUDAPlace(0)
-        self.check_output_with_place_customized(self.verify_output, place)
+        self.check_output_with_place_customized(
+            self.verify_output, place, check_pir=True
+        )
 
     def init_test_case(self):
         self.x = convert_float_to_uint16(

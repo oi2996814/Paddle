@@ -16,6 +16,7 @@
 
 #include "glog/logging.h"
 
+#include "paddle/phi/backends/xpu/enforce_xpu.h"
 #include "paddle/phi/backends/xpu/xpu_context.h"
 #include "paddle/phi/backends/xpu/xpu_header.h"
 #include "paddle/phi/core/kernel_registry.h"
@@ -32,19 +33,13 @@ void ClipKernel(const Context& dev_ctx,
   using XPUDataType = typename XPUTypeTrait<T>::Type;
   auto x_data = reinterpret_cast<const XPUDataType*>(x.data<T>());
   auto out_data = reinterpret_cast<XPUDataType*>(out->data<T>());
-  int r = xpu::clip_v2(dev_ctx.x_context(),
-                       x_data,
-                       out_data,
-                       x.numel(),
-                       static_cast<XPUDataType>(min.to<T>()),
-                       static_cast<XPUDataType>(max.to<T>()));
-
-  PADDLE_ENFORCE_EQ(r,
-                    XPU_SUCCESS,
-                    phi::errors::External("XPU API(clip_v2) return wrong "
-                                          "value[%d %s]",
-                                          r,
-                                          XPUAPIErrorMsg[r]));
+  int r = xpu::clamp(dev_ctx.x_context(),
+                     x_data,
+                     out_data,
+                     x.numel(),
+                     static_cast<XPUDataType>(min.to<T>()),
+                     static_cast<XPUDataType>(max.to<T>()));
+  PADDLE_ENFORCE_XDNN_SUCCESS(r, "clamp");
 }
 
 }  // namespace phi
@@ -55,5 +50,6 @@ PD_REGISTER_KERNEL(clip,
                    phi::ClipKernel,
                    float,
                    phi::dtype::float16,
+                   phi::dtype::bfloat16,
                    int64_t,
                    int) {}

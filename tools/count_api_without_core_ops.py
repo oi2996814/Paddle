@@ -24,9 +24,10 @@ __all__ = [
 
 # APIs that should not be printed into API.spec
 omitted_list = [
-    "paddle.fluid.LoDTensor.set",  # Do not know why it should be omitted
-    "paddle.fluid.io.ComposeNotAligned",
-    "paddle.fluid.io.ComposeNotAligned.__init__",
+    "paddle.base.LoDTensor.set",  # Do not know why it should be omitted
+    "paddle.base.io.ComposeNotAligned",
+    "paddle.base.io.ComposeNotAligned.__init__",
+    "paddle.distributed.passes.pass_utils.shadow_var_between_sub_programs",  # append shadow_output and data op in this function
 ]
 
 
@@ -38,9 +39,7 @@ def md5(doc):
     except UnicodeDecodeError as e:
         md5sum = None
         print(
-            "Error({}) occurred when `md5({})`, discard it.".format(
-                str(e), doc
-            ),
+            f"Error({e}) occurred when `md5({doc})`, discard it.",
             file=sys.stderr,
         )
     return md5sum
@@ -111,15 +110,13 @@ def visit_member(parent_name, member, func):
         return
     else:
         raise RuntimeError(
-            "Unsupported generate signature of member, type {}".format(
-                str(type(member))
-            )
+            f"Unsupported generate signature of member, type {type(member)}"
         )
 
 
 def is_primitive(instance):
     int_types = (int,)
-    pritimitive_types = int_types + (float, str)
+    pritimitive_types = (*int_types, float, str)
     if isinstance(instance, pritimitive_types):
         return True
     elif isinstance(instance, (list, tuple, set)):
@@ -134,7 +131,6 @@ def is_primitive(instance):
 
 ErrorSet = set()
 IdSet = set()
-skiplist = []
 visited_modules = set()
 
 
@@ -143,7 +139,7 @@ def visit_all_module(mod, func):
     if mod_name != 'paddle' and not mod_name.startswith('paddle.'):
         return
 
-    if mod_name.startswith('paddle.fluid.core'):
+    if mod_name.startswith('paddle.base.core'):
         return
 
     if mod in visited_modules:
@@ -157,8 +153,6 @@ def visit_all_module(mod, func):
         if member_name.startswith('_'):
             continue
         cur_name = mod_name + '.' + member_name
-        if cur_name in skiplist:
-            continue
         try:
             instance = getattr(mod, member_name)
             if inspect.ismodule(instance):
@@ -170,7 +164,7 @@ def visit_all_module(mod, func):
                 IdSet.add(instance_id)
                 visit_member(mod.__name__, instance, func)
         except:
-            if cur_name not in ErrorSet and cur_name not in skiplist:
+            if cur_name not in ErrorSet:
                 ErrorSet.add(cur_name)
 
 

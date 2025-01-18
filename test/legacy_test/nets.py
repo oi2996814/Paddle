@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import paddle
-from paddle.fluid.data_feeder import check_variable_and_dtype, convert_dtype
+from paddle.base.data_feeder import check_variable_and_dtype, convert_dtype
 from paddle.utils import deprecated
 
 __all__ = [
@@ -46,7 +46,7 @@ def simple_img_conv_pool(
     r"""
         :api_attr: Static Graph
 
-    The simple_img_conv_pool api is composed of :ref:`api_fluid_layers_conv2d` and :ref:`api_fluid_layers_pool2d` .
+    The simple_img_conv_pool api is composed of :ref:`api_paddle_nn_functional_conv2d` :ref:`api_paddle_nn_functional_avg_pool2d` and :ref:`api_paddle_nn_functional_max_pool2d` .
 
     Args:
         input (Variable): 4-D Tensor, shape is [N, C, H, W], data type can be float32 or float64.
@@ -106,11 +106,11 @@ def simple_img_conv_pool(
     Examples:
         .. code-block:: python
 
-            import paddle.fluid as fluid
+            import paddle.base as base
             import paddle
             paddle.enable_static()
             img = paddle.static.data(name='img', shape=[100, 1, 28, 28], dtype='float32')
-            conv_pool = fluid.nets.simple_img_conv_pool(input=img,
+            conv_pool = base.nets.simple_img_conv_pool(input=img,
                                                         filter_size=5,
                                                         num_filters=20,
                                                         pool_size=2,
@@ -208,12 +208,12 @@ def img_conv_group(
     Examples:
         .. code-block:: python
 
-            import paddle.fluid as fluid
+            import paddle.base as base
             import paddle
             paddle.enable_static()
 
             img = paddle.static.data(name='img', shape=[None, 1, 28, 28], dtype='float32')
-            conv_pool = fluid.nets.img_conv_group(input=img,
+            conv_pool = base.nets.img_conv_group(input=img,
                                                   conv_padding=1,
                                                   conv_num_filter=[3, 3],
                                                   conv_filter_size=3,
@@ -222,9 +222,7 @@ def img_conv_group(
                                                   pool_stride=2)
     """
     tmp = input
-    assert isinstance(conv_num_filter, list) or isinstance(
-        conv_num_filter, tuple
-    )
+    assert isinstance(conv_num_filter, (list, tuple))
 
     def __extend_list__(obj):
         if not hasattr(obj, '__len__'):
@@ -240,22 +238,21 @@ def img_conv_group(
     conv_batchnorm_drop_rate = __extend_list__(conv_batchnorm_drop_rate)
 
     for i in range(len(conv_num_filter)):
-        local_conv_act = conv_act
-        if conv_with_batchnorm[i]:
-            local_conv_act = None
-
-        tmp = paddle.static.nn.conv2d(
-            input=tmp,
-            num_filters=conv_num_filter[i],
-            filter_size=conv_filter_size[i],
+        conv_layer = paddle.nn.Conv2D(
+            in_channels=tmp.shape[1],
+            out_channels=conv_num_filter[i],
+            kernel_size=conv_filter_size[i],
             padding=conv_padding[i],
-            param_attr=param_attr[i],
-            act=local_conv_act,
-            use_cudnn=use_cudnn,
+            weight_attr=param_attr[i],
         )
+        tmp = conv_layer(tmp)
 
         if conv_with_batchnorm[i]:
-            tmp = paddle.static.nn.batch_norm(input=tmp, act=conv_act)
+            bn_layer = paddle.nn.BatchNorm(
+                num_channels=conv_num_filter[i], act=conv_act
+            )
+            tmp = bn_layer(tmp)
+
             drop_rate = conv_batchnorm_drop_rate[i]
             if abs(drop_rate) > 1e-5:
                 tmp = paddle.nn.functional.dropout(x=tmp, p=drop_rate)
@@ -287,14 +284,14 @@ def sequence_conv_pool(
     """
         :api_attr: Static Graph
 
-    **This api takes input as an LoDTensor. If input is a Tensor, please use**
-    :ref:`api_fluid_nets_simple_img_conv_pool` **instead**
+    **This api takes input as an DenseTensor. If input is a Tensor, please use**
+    :ref:`api_base_nets_simple_img_conv_pool` **instead**
 
-    The sequence_conv_pool is composed of :ref:`api_fluid_layers_sequence_conv`
-    and :ref:`api_fluid_layers_sequence_pool` .
+    The sequence_conv_pool is composed of :ref:`api_base_layers_sequence_conv`
+    and :ref:`api_base_layers_sequence_pool` .
 
     Args:
-        input (Tensor): 2-D LoDTensor, the input of sequence_conv,
+        input (Tensor): 2-D DenseTensor, the input of sequence_conv,
             which supports variable-time length input sequence.
             The underlying of input is a matrix with shape
             (T, N), where T is the total time steps in this mini-batch and N is
@@ -323,15 +320,15 @@ def sequence_conv_pool(
     Examples:
         .. code-block:: python
 
-            import paddle.fluid as fluid
+            import paddle.base as base
             import paddle
             paddle.enable_static()
             input_dim = 100 #len(word_dict)
             emb_dim = 128
             hid_dim = 512
-            data = paddle.static.data(name="words", shape=[None, 1], dtype="int64", lod_level=1)
+            data = paddle.static.data(name="words", shape=[None, 1], dtype="int64")
             emb = paddle.static.nn.embedding(input=data, size=[input_dim, emb_dim], is_sparse=True)
-            seq_conv = fluid.nets.sequence_conv_pool(input=emb,
+            seq_conv = base.nets.sequence_conv_pool(input=emb,
                                                      num_filters=hid_dim,
                                                      filter_size=3,
                                                      act="tanh",
@@ -359,8 +356,8 @@ def glu(input, dim=-1):
     r"""
         :api_attr: Static Graph
 
-    The Gated Linear Units(GLU) composed by :ref:`api_fluid_layers_split` ,
-    :ref:`api_fluid_layers_sigmoid`  and :ref:`api_fluid_layers_elementwise_mul` .
+    The Gated Linear Units(GLU) composed by :ref:`api_base_layers_split` ,
+    :ref:`api_base_layers_sigmoid`  and :ref:`api_base_layers_elementwise_mul` .
     Specifically, GLU will plit the input into two equal-sized parts,
     :math:`a` and :math:`b`, along the given dimension and then compute as
     following:
@@ -373,7 +370,7 @@ def glu(input, dim=-1):
     <https://arxiv.org/pdf/1612.08083.pdf>`_.
 
     Args:
-        input (Variable): The input variable which is a Tensor or LoDTensor.
+        input (Variable): The input variable which is a Tensor.
                           The supported data types include float32, float64
                           and float16 (only for GPU).
         dim (int, optional): The dimension along which to split. If :math:`dim < 0`, the
@@ -385,14 +382,14 @@ def glu(input, dim=-1):
     Examples:
         .. code-block:: python
 
-            import paddle.fluid as fluid
+            import paddle.base as base
             import paddle
             paddle.enable_static()
 
             data = paddle.static.data(
                 name="words", shape=[-1, 6, 3, 9], dtype="float32")
             # shape of output: [-1, 3, 3, 9]
-            output = fluid.nets.glu(input=data, dim=1)
+            output = base.nets.glu(input=data, dim=1)
     """
     check_variable_and_dtype(
         input, 'input', ['float16', 'float32', 'float64'], "glu"
@@ -428,7 +425,7 @@ def scaled_dot_product_attention(
 
     Note that the implementation is adapted to batch, and all matrix multiplication
     in :math:`Attention(Q, K, V)` is batched matrix multiplication. Refer to
-    :ref:`api_fluid_layers_matmul` .
+    :ref:`api_base_layers_matmul` .
 
     Args:
         queries (Variable): A 3-D Tensor with shape :math:`[N, L_q, d_k \\times h]` ,
@@ -466,14 +463,14 @@ def scaled_dot_product_attention(
     Examples:
         .. code-block:: python
 
-            import paddle.fluid as fluid
+            import paddle.base as base
             import paddle
             paddle.enable_static()
 
             queries = paddle.static.data(name="queries", shape=[3, 5, 9], dtype="float32")
             keys = paddle.static.data(name="keys", shape=[3, 6, 9], dtype="float32")
             values = paddle.static.data(name="values", shape=[3, 6, 10], dtype="float32")
-            contexts = fluid.nets.scaled_dot_product_attention(queries, keys, values)
+            contexts = base.nets.scaled_dot_product_attention(queries, keys, values)
             contexts.shape  # [3, 5, 10]
     """
     check_variable_and_dtype(
@@ -492,45 +489,37 @@ def scaled_dot_product_attention(
     if not (queries.dtype == keys.dtype == values.dtype):
         raise TypeError(
             "The dtype of keys, values and queries should be the same."
-            "But received queries.dtype = {}, "
-            " keys.dtype = {}, values.dtype) = {}.".format(
-                convert_dtype(queries.dtype),
-                convert_dtype(keys.dtype),
-                convert_dtype(values.dtype),
-            )
+            f"But received queries.dtype = {convert_dtype(queries.dtype)}, "
+            f" keys.dtype = {convert_dtype(keys.dtype)}, values.dtype) = {convert_dtype(values.dtype)}."
         )
 
     if not (len(queries.shape) == len(keys.shape) == len(values.shape) == 3):
         raise ValueError(
             "Inputs queries, keys and values should all be 3-D tensors."
-            "But received len(queries.shape) = %d, "
-            "len(keys.shape) = %d, len(values.shape) = %d."
-            % (len(queries.shape), len(keys.shape), len(values.shape))
+            f"But received len(queries.shape) = {len(queries.shape)}, "
+            f"len(keys.shape) = {len(keys.shape)}, len(values.shape) = {len(values.shape)}."
         )
 
     if queries.shape[-1] != keys.shape[-1]:
         raise ValueError(
             "The hidden size of queries and keys should be the same."
-            "But received queries' hidden size = %d and keys' hidden size = %d."
-            % (queries.shape[-1], keys.shape[-1])
+            f"But received queries' hidden size = {queries.shape[-1]} and keys' hidden size = {keys.shape[-1]}."
         )
     if keys.shape[-2] != values.shape[-2]:
         raise ValueError(
             "The max sequence length in value batch and in key batch "
             "should be the same. But received max sequence length in value batch "
-            "= %d, in key batch = %d." % (values.shape[-2], keys.shape[-2])
+            f"= {values.shape[-2]}, in key batch = {keys.shape[-2]}."
         )
     if keys.shape[-1] % num_heads != 0:
         raise ValueError(
-            "The hidden size of keys (%d) must be divisible "
-            "by the number of attention heads (%d)."
-            % (keys.shape[-1], num_heads)
+            f"The hidden size of keys ({keys.shape[-1]}) must be divisible "
+            f"by the number of attention heads ({num_heads})."
         )
     if values.shape[-1] % num_heads != 0:
         raise ValueError(
-            "The hidden size of values (%d) must be divisible "
-            "by the number of attention heads (%d)."
-            % (values.shape[-1], num_heads)
+            f"The hidden size of values ({values.shape[-1]}) must be divisible "
+            f"by the number of attention heads ({num_heads})."
         )
 
     def __compute_qkv(queries, keys, values, num_heads):
@@ -584,7 +573,7 @@ def scaled_dot_product_attention(
         # [batch_size, max_sequence_length, num_heads, hidden_size_per_head].
         reshaped = paddle.reshape(
             x=x,
-            shape=list(x.shape[:-1]) + [num_heads, hidden_size // num_heads],
+            shape=[*x.shape[:-1], num_heads, hidden_size // num_heads],
         )
 
         # permute the dimensions into:

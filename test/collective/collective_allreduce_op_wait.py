@@ -18,8 +18,8 @@ from legacy_test.test_collective_base import (
 )
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 paddle.enable_static()
 
@@ -28,9 +28,9 @@ class TestCollectiveAllreduce(TestCollectiveRunnerBase):
     def __init__(self):
         self.global_ring_id = 0
 
-    def get_model(self, main_prog, startup_program):
+    def get_model(self, main_prog, startup_program, dtype="float32"):
         ring_id = 0
-        with fluid.program_guard(main_prog, startup_program):
+        with base.program_guard(main_prog, startup_program):
             tindata = paddle.static.data(
                 name="tindata", shape=[-1, 10, 1000], dtype='float32'
             )
@@ -38,7 +38,7 @@ class TestCollectiveAllreduce(TestCollectiveRunnerBase):
             toutdata = main_prog.current_block().create_var(
                 name="outofallreduce",
                 dtype='float32',
-                type=core.VarDesc.VarType.LOD_TENSOR,
+                type=core.VarDesc.VarType.DENSE_TENSOR,
                 persistable=False,
                 stop_gradient=False,
             )
@@ -70,11 +70,13 @@ class TestCollectiveAllreduce(TestCollectiveRunnerBase):
             )
 
             main_prog.global_block().append_op(
-                type="c_allreduce_sum",
-                inputs={'X': toutdata},
-                attrs={'ring_id': ring_id},
-                outputs={'Out': toutdata},
-                attr={'use_calc_stream': False},
+                type="all_reduce",
+                inputs={'x': toutdata},
+                attrs={
+                    'ring_id': ring_id,
+                    'reduce_type': paddle.distributed.ReduceOp.SUM,
+                },
+                outputs={'out': toutdata},
             )
 
             main_prog.global_block().append_op(

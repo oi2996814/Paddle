@@ -12,16 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import datetime
 import os
 import pickle
 import time
 from collections import namedtuple
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
+from paddle.base import core
 from paddle.distributed.launch.context import Node
 from paddle.distributed.rpc.internal import PythonFunc, _serialize
 from paddle.distributed.utils.launch_utils import logger
-from paddle.fluid import core
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    _RetT = TypeVar("_RetT", covariant=True)
+
+    class _FutureWrapper(Protocol[_RetT]):
+        def wait(self) -> _RetT: ...
+
 
 WorkerInfo = namedtuple("WorkerInfo", ["name", "rank", "ip", "port"])
 
@@ -70,7 +82,12 @@ def _gen_endpoint():
     return f"{ip}:{free_port}"
 
 
-def init_rpc(name, rank=None, world_size=None, master_endpoint=None):
+def init_rpc(
+    name: str,
+    rank: int | None = None,
+    world_size: int | None = None,
+    master_endpoint: str | None = None,
+) -> None:
     """
     init rpc.
 
@@ -87,11 +104,13 @@ def init_rpc(name, rank=None, world_size=None, master_endpoint=None):
     Examples:
         .. code-block:: python
 
-            import paddle.distributed.rpc as rpc
+            >>> # doctest: +REQUIRES(env:DISTRIBUTED)
+            >>> import paddle.distributed.rpc as rpc
 
-            rpc.init_rpc("worker0", rank=0, world_size=1,
-                        master_endpoint="127.0.0.1:8001")
-            rpc.shutdown()
+            >>> rpc.init_rpc("worker0", rank=0, world_size=1,
+            ...             master_endpoint="127.0.0.1:8001")
+
+            >>> rpc.shutdown()
 
     """
     rank = int(os.environ["PADDLE_TRAINER_ID"]) if rank is None else rank
@@ -138,9 +157,15 @@ def init_rpc(name, rank=None, world_size=None, master_endpoint=None):
     logger.info(f"Trainer {rank}: Init RPC done!")
 
 
-def rpc_sync(to, fn, args=None, kwargs=None, timeout=_DEFAULT_RPC_TIMEOUT):
+def rpc_sync(
+    to: str,
+    fn: Callable[..., _RetT],
+    args: tuple[Any, ...] | None = None,
+    kwargs: dict[str, Any] | None = None,
+    timeout: int = _DEFAULT_RPC_TIMEOUT,
+) -> _RetT:
     """
-    Make a blocking RPC call to run function ``fn`` on worker ``to``.
+    Make a blocking RPC call to run function ``fn`` on worker ``to``. Attention: Users must use this API in a secure network environment.
 
     Args:
         to (str): name of the destination worker.
@@ -161,24 +186,32 @@ def rpc_sync(to, fn, args=None, kwargs=None, timeout=_DEFAULT_RPC_TIMEOUT):
     Examples:
         .. code-block:: python
 
-            import paddle.distributed.rpc as rpc
+            >>> # doctest: +REQUIRES(env:DISTRIBUTED)
+            >>> import paddle.distributed.rpc as rpc
 
-            def add(a, b):
-                return a + b
+            >>> def add(a, b):
+            ...     return a + b
 
-            rpc.init_rpc("worker0", rank=0, world_size=1,
-                    master_endpoint="127.0.0.1:8002")
-            ret = rpc.rpc_sync("worker0", add, args=(2, 3))
-            rpc.shutdown()
+            >>> rpc.init_rpc("worker0", rank=0, world_size=1,
+            ...         master_endpoint="127.0.0.1:8002")
+
+            >>> ret = rpc.rpc_sync("worker0", add, args=(2, 3))
+            >>> rpc.shutdown()
 
     """
     fut = _invoke_rpc(to, fn, args, kwargs, timeout)
     return fut.wait()
 
 
-def rpc_async(to, fn, args=None, kwargs=None, timeout=_DEFAULT_RPC_TIMEOUT):
+def rpc_async(
+    to: str,
+    fn: Callable[..., _RetT],
+    args: tuple[Any, ...] | None = None,
+    kwargs: dict[str, Any] | None = None,
+    timeout: int = _DEFAULT_RPC_TIMEOUT,
+) -> _FutureWrapper[_RetT]:
     """
-    Make a non-blocking RPC call to run function ``fn`` on worker ``to``.
+    Make a non-blocking RPC call to run function ``fn`` on worker ``to``. Attention: Users must use this API in a secure network environment.
 
     Args:
         to (str): name of the destination worker.
@@ -201,16 +234,20 @@ def rpc_async(to, fn, args=None, kwargs=None, timeout=_DEFAULT_RPC_TIMEOUT):
     Examples:
         .. code-block:: python
 
-            import paddle.distributed.rpc as rpc
+            >>> # doctest: +REQUIRES(env:DISTRIBUTED)
+            >>> import paddle.distributed.rpc as rpc
 
-            def add(a, b):
-                return a + b
+            >>> def add(a, b):
+            ...     return a + b
 
-            rpc.init_rpc("worker0", rank=0, world_size=1,
-                    master_endpoint="127.0.0.1:8003")
-            fut = rpc.rpc_async("worker0", add, args=(2, 3))
-            print(fut.wait())
-            rpc.shutdown()
+            >>> rpc.init_rpc("worker0", rank=0, world_size=1,
+            ...         master_endpoint="127.0.0.1:8003")
+
+            >>> fut = rpc.rpc_async("worker0", add, args=(2, 3))
+            >>> print(fut.wait())
+            5
+
+            >>> rpc.shutdown()
 
     """
     return _invoke_rpc(to, fn, args, kwargs, timeout)
@@ -245,9 +282,7 @@ def _barrier_never_timeout(global_rank, global_world_size):
             elapse_time = time.time() - start_time
             if datetime.timedelta(seconds=elapse_time) > timeout:
                 raise RuntimeError(
-                    "Keys {} are not ready sinck rank {} is waiting them.".format(
-                        wait_keys, global_rank
-                    )
+                    f"Keys {wait_keys} are not ready sinck rank {global_rank} is waiting them."
                 )
             wait_keys = list(
                 filter(lambda key: int(_barrier_store.get(key)) != 1, wait_keys)
@@ -267,7 +302,7 @@ def _barrier_never_timeout(global_rank, global_world_size):
         _barrier_store.add(barrier_prefix + str(global_rank), 1)
 
 
-def shutdown():
+def shutdown() -> None:
     """
     Perform a shutdown of the RPC agent, stop the worker and destroy the agent.
     This will block until all local and remote RPC processes reach this method
@@ -279,11 +314,13 @@ def shutdown():
     Examples:
         .. code-block:: python
 
-            import paddle.distributed.rpc as rpc
+            >>> # doctest: +REQUIRES(env:DISTRIBUTED)
+            >>> import paddle.distributed.rpc as rpc
 
-            rpc.init_rpc("worker0", rank=0, world_size=1,
-                        master_endpoint="127.0.0.1:8004")
-            rpc.shutdown()
+            >>> rpc.init_rpc("worker0", rank=0, world_size=1,
+            ...             master_endpoint="127.0.0.1:8004")
+
+            >>> rpc.shutdown()
 
     """
     info = get_current_worker_info()
@@ -296,7 +333,7 @@ def shutdown():
     logger.info(f"Trainer {rank}: rpc shutdown!")
 
 
-def get_worker_info(name):
+def get_worker_info(name: str) -> WorkerInfo:
     """
     Get worker information by worker name.
 
@@ -309,25 +346,26 @@ def get_worker_info(name):
     Examples:
         .. code-block:: python
 
-            import paddle.distributed.rpc as rpc
-            import os
+            >>> # doctest: +REQUIRES(env:DISTRIBUTED)
+            >>> import paddle.distributed.rpc as rpc
+            >>> import os
 
-            os.environ["PADDLE_WORKER_ENDPOINT"] = "127.0.0.1:9002"
-            rpc.init_rpc("worker0", rank=0, world_size=1,
-                        master_endpoint="127.0.0.1:8005")
+            >>> os.environ["PADDLE_WORKER_ENDPOINT"] = "127.0.0.1:9002"
+            >>> rpc.init_rpc("worker0", rank=0, world_size=1,
+            ...             master_endpoint="127.0.0.1:8005")
 
-            print(rpc.get_worker_info("worker0"))
-            # {name: worker0, rank: 0, ip: 127.0.0.1, port: 9002}
+            >>> print(rpc.get_worker_info("worker0"))
+            {name: worker0, rank: 0, ip: 127.0.0.1, port: 9002}
 
-            rpc.shutdown()
+            >>> rpc.shutdown()
 
     """
     return core.rpc_get_worker_info(name)
 
 
-def get_all_worker_infos():
+def get_all_worker_infos() -> list[WorkerInfo]:
     """
-    Get all worker informations.
+    Get all worker information.
 
     Returns:
         List[WorkerInfo].
@@ -335,23 +373,24 @@ def get_all_worker_infos():
     Examples:
         .. code-block:: python
 
-            import paddle.distributed.rpc as rpc
-            import os
+            >>> # doctest: +REQUIRES(env:DISTRIBUTED)
+            >>> import paddle.distributed.rpc as rpc
+            >>> import os
 
-            os.environ["PADDLE_WORKER_ENDPOINT"] = "127.0.0.1:9003"
-            rpc.init_rpc("worker0", rank=0, world_size=1,
-                    master_endpoint="127.0.0.1:8006")
+            >>> os.environ["PADDLE_WORKER_ENDPOINT"] = "127.0.0.1:9003"
+            >>> rpc.init_rpc("worker0", rank=0, world_size=1,
+            ...         master_endpoint="127.0.0.1:8006")
 
-            print(rpc.get_all_worker_infos())
-            # [{name: worker0, rank: 0, ip: 127.0.0.1, port: 9003}]
+            >>> print(rpc.get_all_worker_infos())
+            [{name: worker0, rank: 0, ip: 127.0.0.1, port: 9003}]
 
-            rpc.shutdown()
+            >>> rpc.shutdown()
 
     """
     return core.rpc_get_all_worker_infos()
 
 
-def get_current_worker_info():
+def get_current_worker_info() -> WorkerInfo:
     """
     Get current worker information.
 
@@ -361,17 +400,18 @@ def get_current_worker_info():
     Examples:
         .. code-block:: python
 
-            import paddle.distributed.rpc as rpc
-            import os
+            >>> # doctest: +REQUIRES(env:DISTRIBUTED)
+            >>> import paddle.distributed.rpc as rpc
+            >>> import os
 
-            os.environ["PADDLE_WORKER_ENDPOINT"] = "127.0.0.1:9004"
-            rpc.init_rpc("worker0", rank=0, world_size=1,
-                        master_endpoint="127.0.0.1:8007")
+            >>> os.environ["PADDLE_WORKER_ENDPOINT"] = "127.0.0.1:9004"
+            >>> rpc.init_rpc("worker0", rank=0, world_size=1,
+            ...             master_endpoint="127.0.0.1:8007")
 
-            print(rpc.get_current_worker_info())
-            # {name: worker0, rank: 0, ip: 127.0.0.1, port: 9004}
+            >>> print(rpc.get_current_worker_info())
+            {name: worker0, rank: 0, ip: 127.0.0.1, port: 9004}
 
-            rpc.shutdown()
+            >>> rpc.shutdown()
 
     """
     return core.rpc_get_current_worker_info()

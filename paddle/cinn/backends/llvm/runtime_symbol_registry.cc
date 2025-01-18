@@ -19,10 +19,10 @@
 
 #include <iostream>
 
-#include "gflags/gflags_declare.h"
 #include "paddle/cinn/runtime/flags.h"
-
-DECLARE_bool(verbose_function_register);
+#include "paddle/common/enforce.h"
+#include "paddle/common/flags.h"
+PD_DECLARE_bool(verbose_function_register);
 
 namespace cinn {
 namespace backends {
@@ -51,8 +51,10 @@ void RuntimeSymbols::Register(const std::string &name, void *address) {
   std::lock_guard<std::mutex> lock(mu_);
   auto it = symbols_.find(name);
   if (it != symbols_.end()) {
-    CHECK_EQ(it->second, address)
-        << "Duplicate register symbol [" << name << "]";
+    PADDLE_ENFORCE_EQ(
+        it->second,
+        address,
+        ::common::errors::InvalidArgument("Duplicate register symbol"));
     return;
   }
 

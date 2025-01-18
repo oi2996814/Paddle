@@ -14,13 +14,12 @@
 
 #include "paddle/phi/kernels/autotune/switch_autotune.h"
 
-#include "gflags/gflags.h"
 #include "glog/logging.h"
+#include "paddle/common/flags.h"
 
-DECLARE_bool(use_autotune);
+COMMON_DECLARE_bool(use_autotune);
 
-namespace phi {
-namespace autotune {
+namespace phi::autotune {
 
 void AutoTuneStatus::EnableAutoTune() {
   FLAGS_use_autotune = true;
@@ -39,7 +38,7 @@ void AutoTuneStatus::Update() {
     return;
   }
 
-  // This fuction is called when each iter finished.
+  // This function is called when each iter finished.
   if (current_steps_id_ + 1 < start_step_id_) {
     use_autotune_ = false;
   } else if (current_steps_id_ + 1 >= start_step_id_ &&
@@ -58,7 +57,7 @@ void AutoTuneStatus::Update() {
     // Set a small tolerance to avoid performance degradation
     // due to large cache size under dynamic shape.
     // TODO(limingshu): Currently works for conv op only, this
-    // method shall be opimized when more ops involved in.
+    // method shall be optimized when more ops involved in.
     // float miss_rate = static_cast<float>(1) - RecentHitRate();
     // if (current_steps_id_ == stop_step_id_) {
     //   AutoTuneCache::Instance().Clean(miss_rate);
@@ -71,5 +70,4 @@ void AutoTuneStatus::Update() {
   }
 }
 
-}  // namespace autotune
-}  // namespace phi
+}  // namespace phi::autotune

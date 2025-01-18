@@ -30,7 +30,8 @@ static void FullSort(Type input_height,
                      const DenseTensor* input,
                      T* t_out,
                      Type* t_indices,
-                     bool descending) {
+                     bool descending,
+                     bool stable) {
 #ifdef PADDLE_WITH_MKLML
 #pragma omp parallel for
 #endif
@@ -48,18 +49,34 @@ static void FullSort(Type input_height,
         col_vec.push_back(std::pair<T, Type>(e_input(i, j), j));
       }
     }
-    std::sort(col_vec.begin(),
-              col_vec.end(),
-              [&](const std::pair<T, Type>& l, const std::pair<T, Type>& r) {
-                if (descending)
-                  return (std::isnan(static_cast<double>(l.first)) &&
-                          !std::isnan(static_cast<double>(r.first))) ||
-                         (l.first > r.first);
-                else
-                  return (!std::isnan(static_cast<double>(l.first)) &&
-                          std::isnan(static_cast<double>(r.first))) ||
-                         (l.first < r.first);
-              });
+    if (stable) {
+      std::stable_sort(
+          col_vec.begin(),
+          col_vec.end(),
+          [&](const std::pair<T, Type>& l, const std::pair<T, Type>& r) {
+            if (descending)
+              return (std::isnan(static_cast<double>(l.first)) &&
+                      !std::isnan(static_cast<double>(r.first))) ||
+                     (l.first > r.first);
+            else
+              return (!std::isnan(static_cast<double>(l.first)) &&
+                      std::isnan(static_cast<double>(r.first))) ||
+                     (l.first < r.first);
+          });
+    } else {
+      std::sort(col_vec.begin(),
+                col_vec.end(),
+                [&](const std::pair<T, Type>& l, const std::pair<T, Type>& r) {
+                  if (descending)
+                    return (std::isnan(static_cast<double>(l.first)) &&
+                            !std::isnan(static_cast<double>(r.first))) ||
+                           (l.first > r.first);
+                  else
+                    return (!std::isnan(static_cast<double>(l.first)) &&
+                            std::isnan(static_cast<double>(r.first))) ||
+                           (l.first < r.first);
+                });
+    }
 
     for (Type j = 0; j < input_width; ++j) {
       t_out[i * input_width + j] = col_vec[j].first;
@@ -73,6 +90,7 @@ void ArgsortKernel(const Context& dev_ctx,
                    const DenseTensor& input,
                    int axis,
                    bool descending,
+                   bool stable,
                    DenseTensor* output,
                    DenseTensor* indices) {
   auto in_dims = input.dims();
@@ -84,14 +102,14 @@ void ArgsortKernel(const Context& dev_ctx,
   if (rank == 0) {
     phi::Copy<Context>(dev_ctx, input, dev_ctx.GetPlace(), false, output);
     dev_ctx.template Alloc<int64_t>(indices);
-    phi::funcs::set_constant(dev_ctx, indices, 0);
+    phi::funcs::set_constant(dev_ctx, indices, static_cast<int64_t>(0));
     return;
   }
 
   // Do full sort
   if (axis == -1 || axis + 1 == in_dims.size()) {
     const int64_t input_height =
-        phi::product(phi::slice_ddim(in_dims, 0, in_dims.size() - 1));
+        common::product(common::slice_ddim(in_dims, 0, in_dims.size() - 1));
     const int64_t input_width = in_dims[in_dims.size() - 1];
     int64_t* ids_data = dev_ctx.template Alloc<int64_t>(indices);
     FullSort<T, int64_t>(input_height,
@@ -100,7 +118,8 @@ void ArgsortKernel(const Context& dev_ctx,
                          &input,
                          out_data,
                          ids_data,
-                         descending);
+                         descending,
+                         stable);
   } else {
     // If not full sort do transpose
     std::vector<int> trans;
@@ -114,7 +133,7 @@ void ArgsortKernel(const Context& dev_ctx,
     trans.push_back(axis);
     phi::DDim trans_dims(in_dims);
     for (size_t i = 0; i < trans.size(); i++) {
-      trans_dims[i] = in_dims[trans[i]];
+      trans_dims[static_cast<int>(i)] = in_dims[trans[i]];
     }
 
     DenseTensor trans_inp;
@@ -123,8 +142,8 @@ void ArgsortKernel(const Context& dev_ctx,
     // Do transpose
     TransposeKernel<T, Context>(dev_ctx, input, trans, &trans_inp);
 
-    const int64_t input_height =
-        phi::product(phi::slice_ddim(trans_dims, 0, trans_dims.size() - 1));
+    const int64_t input_height = common::product(
+        common::slice_ddim(trans_dims, 0, trans_dims.size() - 1));
     const int64_t input_width = trans_dims[trans_dims.size() - 1];
 
     DenseTensor tmp_out;
@@ -141,7 +160,8 @@ void ArgsortKernel(const Context& dev_ctx,
                          &trans_inp,
                          t_out,
                          t_ind,
-                         descending);
+                         descending,
+                         stable);
 
     dev_ctx.template Alloc<int64_t>(indices);
     TransposeKernel<int64_t, Context>(dev_ctx, tmp_indices, trans, indices);

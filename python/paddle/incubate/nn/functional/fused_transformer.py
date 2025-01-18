@@ -12,12 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from paddle import _legacy_C_ops
-from paddle.fluid import core
-from paddle.fluid.data_feeder import check_dtype, check_variable_and_dtype
-from paddle.fluid.framework import default_main_program
-from paddle.fluid.layer_helper import LayerHelper
-from paddle.framework import in_dynamic_mode
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Literal, overload
+
+import paddle
+from paddle import _C_ops, _legacy_C_ops
+from paddle.base import core
+from paddle.base.data_feeder import check_dtype, check_variable_and_dtype
+from paddle.base.framework import default_main_program
+from paddle.base.layer_helper import LayerHelper
+from paddle.framework import (
+    in_dynamic_mode,
+    in_dynamic_or_pir_mode,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from paddle import Tensor
+
+    _Mode = Literal["upscale_in_train", "downscale_in_infer"]
 
 __all__ = []
 
@@ -30,46 +45,46 @@ def _verify_dropout_rate(dropout_rate):
 
 
 def fused_feedforward(
-    x,
-    linear1_weight,
-    linear2_weight,
-    linear1_bias=None,
-    linear2_bias=None,
-    ln1_scale=None,
-    ln1_bias=None,
-    ln2_scale=None,
-    ln2_bias=None,
-    dropout1_rate=0.5,
-    dropout2_rate=0.5,
-    activation="relu",
-    ln1_epsilon=1e-5,
-    ln2_epsilon=1e-5,
-    pre_layer_norm=False,
-    training=True,
-    mode='upscale_in_train',
-    ring_id=-1,
-    add_residual=True,
-    name=None,
-):
+    x: Tensor,
+    linear1_weight: Tensor,
+    linear2_weight: Tensor,
+    linear1_bias: Tensor | None = None,
+    linear2_bias: Tensor | None = None,
+    ln1_scale: Tensor | None = None,
+    ln1_bias: Tensor | None = None,
+    ln2_scale: Tensor | None = None,
+    ln2_bias: Tensor | None = None,
+    dropout1_rate: float = 0.5,
+    dropout2_rate: float = 0.5,
+    activation: str = "relu",
+    ln1_epsilon: float = 1e-5,
+    ln2_epsilon: float = 1e-5,
+    pre_layer_norm: bool = False,
+    training: bool = True,
+    mode: _Mode = 'upscale_in_train',
+    ring_id: int = -1,
+    add_residual: bool = True,
+    name: str | None = None,
+) -> Tensor:
     r"""
     This is a fusion operator to compute feed forward layer in transformer model architecture.
     This operator only supports running on GPU. The function of the operator is consistent with
     the following pseudo code:
 
-    .. code-block:: python
+    .. code-block:: text
 
-        residual = x
-        if pre_layer_norm:
-            out = layer_norm1(x)
-        else:
-            out = x
-        out = linear2(dropout1(activation(linear1(src))))
-        if add_residual:
-            out = residual + dropout2(out)
-        else:
-            out = dropout2(out)
-        if not pre_layer_norm:
-            out = layer_norm2(out)
+        >>> residual = x
+        >>> if pre_layer_norm:
+        ...     out = layer_norm1(x)
+        ...  else:
+        ...     out = x
+        >>> out = linear2(dropout1(activation(linear1(src))))
+        >>> if add_residual:
+        ...     out = residual + dropout2(out)
+        ... else:
+        ...     out = dropout2(out)
+        >>> if not pre_layer_norm:
+        ...     out = layer_norm2(out)
 
 
     Args:
@@ -110,16 +125,17 @@ def fused_feedforward(
     Examples:
         .. code-block:: python
 
-            # required: gpu
-            import paddle
-            import paddle.incubate.nn.functional as F
+            >>> # doctest: +REQUIRES(env:GPU)
+            >>> import paddle
+            >>> paddle.device.set_device('gpu')
+            >>> import paddle.incubate.nn.functional as F
 
-            x = paddle.randn(shape=(1, 8, 8), dtype="float32")
-            linear1_weight = paddle.randn(shape=(8, 8), dtype="float32")
-            linear2_weight = paddle.randn(shape=(8, 8), dtype="float32")
-            out = F.fused_feedforward(x, linear1_weight, linear2_weight)
-            print(out.shape)
-            # (1, 8, 8)
+            >>> x = paddle.randn(shape=(1, 8, 8), dtype="float32")
+            >>> linear1_weight = paddle.randn(shape=(8, 8), dtype="float32")
+            >>> linear2_weight = paddle.randn(shape=(8, 8), dtype="float32")
+            >>> out = F.fused_feedforward(x, linear1_weight, linear2_weight)
+            >>> print(out.shape)
+            [1, 8, 8]
     """
     _verify_dropout_rate(dropout1_rate)
     _verify_dropout_rate(dropout2_rate)
@@ -133,52 +149,95 @@ def fused_feedforward(
         'downgrade_in_infer' if mode == 'downscale_in_infer' else mode
     )  # semantic transfer
 
-    if in_dynamic_mode():
-        if default_main_program().random_seed != 0:
-            seed = default_main_program().random_seed
-        out, _, _, _, _, _, _, _, _, _, _ = _legacy_C_ops.fused_feedforward(
-            x,
-            None,
-            None,
-            linear1_weight,
-            linear1_bias,
-            linear2_weight,
-            linear2_bias,
-            ln1_scale,
-            ln1_bias,
-            ln2_scale,
-            ln2_bias,
-            'pre_layer_norm',
-            pre_layer_norm,
-            'ln1_epsilon',
-            ln1_epsilon,
-            'ln2_epsilon',
-            ln2_epsilon,
-            'act_method',
-            activation,
-            'dropout1_rate',
-            dropout1_rate,
-            'dropout2_rate',
-            dropout2_rate,
-            "is_test",
-            not training,
-            "dropout1_fix_seed",
-            seed is not None,
-            "dropout2_fix_seed",
-            seed is not None,
-            "dropout1_seed",
-            seed if seed is not None else 0,
-            "dropout2_seed",
-            seed if seed is not None else 0,
-            'dropout1_implementation',
-            mode,
-            'dropout2_implementation',
-            mode,
-            'add_residual',
-            add_residual,
-            'ring_id',
-            ring_id,
-        )
+    if in_dynamic_or_pir_mode():
+        if paddle.static.default_main_program().random_seed != 0:
+            seed = paddle.static.default_main_program().random_seed
+
+        if in_dynamic_mode():
+            out, _, _, _, _, _, _, _, _, _, _ = _legacy_C_ops.fused_feedforward(
+                x,
+                None,
+                None,
+                linear1_weight,
+                linear1_bias,
+                linear2_weight,
+                linear2_bias,
+                ln1_scale,
+                ln1_bias,
+                ln2_scale,
+                ln2_bias,
+                'pre_layer_norm',
+                pre_layer_norm,
+                'ln1_epsilon',
+                ln1_epsilon,
+                'ln2_epsilon',
+                ln2_epsilon,
+                'act_method',
+                activation,
+                'dropout1_rate',
+                dropout1_rate,
+                'dropout2_rate',
+                dropout2_rate,
+                "is_test",
+                not training,
+                "dropout1_fix_seed",
+                seed is not None,
+                "dropout2_fix_seed",
+                seed is not None,
+                "dropout1_seed",
+                seed if seed is not None else 0,
+                "dropout2_seed",
+                seed if seed is not None else 0,
+                'dropout1_implementation',
+                mode,
+                'dropout2_implementation',
+                mode,
+                'add_residual',
+                add_residual,
+                'ring_id',
+                ring_id,
+            )
+        else:
+            dtype = x.dtype
+            check_variable_and_dtype(
+                x, 'x', ['float16', 'float32', 'float64'], 'fused_feedforward'
+            )
+            check_dtype(
+                dtype,
+                'dtype',
+                ['float16', 'float32', 'float64'],
+                'fused_feedforward',
+            )
+
+            out, _, _, _, _, _, _, _, _, _, _ = _C_ops.fused_feedforward(
+                x,
+                None,
+                None,
+                linear1_weight,
+                linear1_bias,
+                linear2_weight,
+                linear2_bias,
+                ln1_scale,
+                ln1_bias,
+                ln2_scale,
+                ln2_bias,
+                pre_layer_norm,
+                ln1_epsilon,
+                ln2_epsilon,
+                activation,
+                dropout1_rate,
+                dropout2_rate,
+                mode,
+                mode,
+                not training,
+                seed is not None,
+                seed is not None,
+                seed if seed is not None else 0,
+                seed if seed is not None else 0,
+                add_residual,
+                ring_id,
+            )
+
         return out
 
     helper = LayerHelper("fused_feedforward")
@@ -273,24 +332,24 @@ def fused_feedforward(
 
 
 def fused_bias_dropout_residual_layer_norm(
-    x,
-    residual,
-    bias=None,
-    ln_scale=None,
-    ln_bias=None,
-    dropout_rate=0.5,
-    ln_epsilon=1e-5,
-    training=True,
-    mode='upscale_in_train',
-    name=None,
-):
+    x: Tensor,
+    residual: Tensor,
+    bias: Tensor | None = None,
+    ln_scale: Tensor | None = None,
+    ln_bias: Tensor | None = None,
+    dropout_rate: float = 0.5,
+    ln_epsilon: float = 1e-5,
+    training: bool = True,
+    mode: _Mode = 'upscale_in_train',
+    name: str | None = None,
+) -> Tensor:
     r"""
 
     The fused_bias_dropout_residual_layer_norm operator. The pseudo code is as follows:
 
-    .. code-block:: python
+    .. code-block:: text
 
-        y = layer_norm(residual + dropout(bias + x))
+        >>> y = layer_norm(residual + dropout(bias + x))
 
     Parameters:
         x (Tensor): The input tensor. The shape is `[*, embed\_dim]`.
@@ -323,21 +382,22 @@ def fused_bias_dropout_residual_layer_norm(
     Examples:
         .. code-block:: python
 
-            # required: gpu
-            import paddle
-            import paddle.incubate.nn.functional as F
+            >>> # doctest: +REQUIRES(env:GPU)
+            >>> import paddle
+            >>> paddle.device.set_device('gpu')
+            >>> import paddle.incubate.nn.functional as F
 
-            # input: [batch_size, seq_len, embed_dim]
-            x = paddle.rand(shape=(2, 4, 128), dtype="float32")
-            # residual: [batch_size, seq_len, embed_dim]
-            residual = paddle.rand(shape=(2, 4, 128), dtype="float32")
-            # linear bias: [embed_dim]
-            bias = paddle.rand(shape=[128], dtype="float32")
-            # output: [batch_size, seq_len, embed_dim]
-            output = F.fused_bias_dropout_residual_layer_norm(
-                x, residual, bias)
-            # [2, 4, 128]
-            print(output.shape)
+            >>> # input: [batch_size, seq_len, embed_dim]
+            >>> x = paddle.rand(shape=(2, 4, 128), dtype="float32")
+            >>> # residual: [batch_size, seq_len, embed_dim]
+            >>> residual = paddle.rand(shape=(2, 4, 128), dtype="float32")
+            >>> # linear bias: [embed_dim]
+            >>> bias = paddle.rand(shape=[128], dtype="float32")
+            >>> # output: [batch_size, seq_len, embed_dim]
+            >>> output = F.fused_bias_dropout_residual_layer_norm(
+            ...     x, residual, bias)
+            >>> print(output.shape)
+            [2, 4, 128]
 
     """
     seed = None
@@ -364,33 +424,21 @@ def fused_bias_dropout_residual_layer_norm(
             x.shape[len(x.shape) - 1] == ln_bias.shape[0]
         ), "The dim of ln_bias must equal to the last dim of x."
 
-    if in_dynamic_mode():
+    if in_dynamic_or_pir_mode():
         if default_main_program().random_seed != 0:
             seed = default_main_program().random_seed
-        (
-            _,
-            _,
-            _,
-            _,
-            final_out,
-        ) = _legacy_C_ops.fused_bias_dropout_residual_layer_norm(
+        final_out = _C_ops.fused_bias_dropout_residual_layer_norm(
             x,
             residual,
             bias,
             ln_scale,
             ln_bias,
-            'dropout_rate',
             dropout_rate,
-            'ln_epsilon',
-            ln_epsilon,
-            'is_test',
             not training,
-            'dropout_fix_seed',
             seed is not None,
-            'dropout_seed',
             seed if seed is not None else 0,
-            'dropout_implementation',
             mode,
+            ln_epsilon,
         )
         return final_out
     else:
@@ -463,65 +511,65 @@ def fused_bias_dropout_residual_layer_norm(
 
 
 def fused_multi_head_attention(
-    x,
-    qkv_weight,
-    linear_weight,
-    pre_layer_norm=False,
-    pre_ln_scale=None,
-    pre_ln_bias=None,
-    ln_scale=None,
-    ln_bias=None,
-    pre_ln_epsilon=1e-05,
-    qkv_bias=None,
-    linear_bias=None,
-    cache_kv=None,
-    attn_mask=None,
-    dropout_rate=0.5,
-    attn_dropout_rate=0.5,
-    ln_epsilon=1e-05,
-    training=True,
-    mode='upscale_in_train',
-    ring_id=-1,
-    add_residual=True,
-    num_heads=-1,
-    transpose_qkv_wb=False,
-    name=None,
-):
+    x: Tensor,
+    qkv_weight: Tensor,
+    linear_weight: Tensor,
+    pre_layer_norm: bool = False,
+    pre_ln_scale: Tensor | None = None,
+    pre_ln_bias: Tensor | None = None,
+    ln_scale: Tensor | None = None,
+    ln_bias: Tensor | None = None,
+    pre_ln_epsilon: float = 1e-05,
+    qkv_bias: Tensor | None = None,
+    linear_bias: Tensor | None = None,
+    cache_kv: Tensor | None = None,
+    attn_mask: Tensor | None = None,
+    dropout_rate: float = 0.5,
+    attn_dropout_rate: float = 0.5,
+    ln_epsilon: float = 1e-05,
+    training: bool = True,
+    mode: _Mode = 'upscale_in_train',
+    ring_id: int = -1,
+    add_residual: bool = True,
+    num_heads: int = -1,
+    transpose_qkv_wb: bool = False,
+    name: str | None = None,
+) -> Tensor:
     r"""
-    Attention mapps queries and a set of key-value pairs to outputs, and
+    Attention maps queries and a set of key-value pairs to outputs, and
     Multi-Head Attention performs multiple parallel attention to jointly attending
     to information from different representation subspaces. This API only
     support self_attention. The pseudo code is as follows:
 
-    .. code-block:: python
+    .. code-block:: text
 
-        residual = x
-        if pre_layer_norm:
-            out = layer_norm(x)
-        else:
-            out = x
-        # compute q, k, v
-        out = matmul(out, qkv_weight) + qkv_bias
-        out = transpose(out, perm=[2, 0, 3, 1, 4])
-        # extract q, k and v from out
-        q = out[0:1,::] * (head_dim ** -0.5)
-        k = out[1:2,::]
-        v = out[2:3,::]
-        out = matmul(q, k, transpose_y=True)
-        out = out + attn_mask
-        out = softmax(out)
-        out = dropout(out)
-        out = matmul(out, v)
-        # combine heads
-        out = transpose(out, perm=[0, 2, 1, 3])
-        # project to output
-        out = linear(out)
-        if add_residual:
-            out = residual + dropout(out)
-        else:
-            out = dropout(out)
-        if not pre_layer_norm:
-            out = layer_norm(out)
+        >>> residual = x
+        >>> if pre_layer_norm:
+        ...     out = layer_norm(x)
+        ... else:
+        ...     out = x
+        >>> # compute q, k, v
+        >>> out = matmul(out, qkv_weight) + qkv_bias
+        >>> out = transpose(out, perm=[2, 0, 3, 1, 4])
+        >>> # extract q, k and v from out
+        >>> q = out[0:1,::] * (head_dim ** -0.5)
+        >>> k = out[1:2,::]
+        >>> v = out[2:3,::]
+        >>> out = matmul(q, k, transpose_y=True)
+        >>> out = out + attn_mask
+        >>> out = softmax(out)
+        >>> out = dropout(out)
+        >>> out = matmul(out, v)
+        >>> # combine heads
+        >>> out = transpose(out, perm=[0, 2, 1, 3])
+        >>> # project to output
+        >>> out = linear(out)
+        >>> if add_residual:
+        ...     out = residual + dropout(out)
+        ... else:
+        ...     out = dropout(out)
+        >>> if not pre_layer_norm:
+        ...     out = layer_norm(out)
 
 
     Parameters:
@@ -581,30 +629,31 @@ def fused_multi_head_attention(
 
         .. code-block:: python
 
-            # required: gpu
-            import paddle
-            import paddle.incubate.nn.functional as F
+            >>> # doctest: +REQUIRES(env:GPU)
+            >>> import paddle
+            >>> paddle.device.set_device('gpu')
+            >>> import paddle.incubate.nn.functional as F
 
-            # input: [batch_size, seq_len, embed_dim]
-            x = paddle.rand(shape=(2, 4, 128), dtype="float32")
-            # qkv_weight: [3, num_head, head_dim, embed_dim]
-            qkv_weight = paddle.rand(shape=(3, 4, 32, 128), dtype="float32")
-            # qkv_bias: [3, num_head, head_dim]
-            qkv_bias = paddle.rand(shape=(3, 4, 32), dtype="float32")
-            # linear_weight: [embed_dim, embed_dim]
-            linear_weight = paddle.rand(shape=(128, 128), dtype="float32")
-            # linear_bias: [embed_dim]
-            linear_bias = paddle.rand(shape=[128], dtype="float32")
-            # self attention mask: [batch_size, num_heads, seq_len, seq_len]
-            attn_mask = paddle.rand(shape=(2, 4, 4, 4), dtype="float32")
+            >>> # input: [batch_size, seq_len, embed_dim]
+            >>> x = paddle.rand(shape=(2, 4, 128), dtype="float32")
+            >>> # qkv_weight: [3, num_head, head_dim, embed_dim]
+            >>> qkv_weight = paddle.rand(shape=(3, 4, 32, 128), dtype="float32")
+            >>> # qkv_bias: [3, num_head, head_dim]
+            >>> qkv_bias = paddle.rand(shape=(3, 4, 32), dtype="float32")
+            >>> # linear_weight: [embed_dim, embed_dim]
+            >>> linear_weight = paddle.rand(shape=(128, 128), dtype="float32")
+            >>> # linear_bias: [embed_dim]
+            >>> linear_bias = paddle.rand(shape=[128], dtype="float32")
+            >>> # self attention mask: [batch_size, num_heads, seq_len, seq_len]
+            >>> attn_mask = paddle.rand(shape=(2, 4, 4, 4), dtype="float32")
 
-            # output: [batch_size, seq_len, embed_dim]
-            output = F.fused_multi_head_attention(
-                x, qkv_weight, linear_weight, False,
-                None, None, None, None, 1e-5, qkv_bias,
-                linear_bias, None, attn_mask)
-            # [2, 4, 128]
-            print(output.shape)
+            >>> # output: [batch_size, seq_len, embed_dim]
+            >>> output = F.fused_multi_head_attention(
+            ...     x, qkv_weight, linear_weight, False,
+            ...     None, None, None, None, 1e-5, qkv_bias,
+            ...     linear_bias, None, attn_mask)
+            >>> print(output.shape)
+            [2, 4, 128]
     """
 
     seed = None
@@ -621,9 +670,9 @@ def fused_multi_head_attention(
             f"The rank of the x should be 3, but received {x.ndim}."
         )
 
-    if in_dynamic_mode():
-        if default_main_program().random_seed != 0:
-            seed = default_main_program().random_seed
+    if in_dynamic_or_pir_mode():
+        if paddle.static.default_main_program().random_seed != 0:
+            seed = paddle.static.default_main_program().random_seed
         # pre_ln_mean, pre_ln_variance, pre_ln_out, qkv_out, qkv_bias_out, transpose_out, qk_out,
         # qktv_out, softmax_out, attn_dropout_mask_out, attn_dropout_out, attn_mask_out, fmha_out,
         # linear_out, dropout_mask_out, ln_mean_out, ln_var_out, bias_dropout_residual_out, final_out
@@ -669,72 +718,125 @@ def fused_multi_head_attention(
                     "When enable transpose_qkv_wb, the 1st dim of qkv_bias and 2nd dim of "
                     "qkv_weight should be the same, i.e., embed_dim."
                 )
-        (
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            cache_kv_out,
-            final_out,
-        ) = _legacy_C_ops.fused_attention(
-            x,
-            pre_ln_scale,
-            pre_ln_bias,
-            qkv_weight,
-            qkv_bias,
-            cache_kv,
-            attn_mask,
-            linear_weight,
-            linear_bias,
-            ln_scale,
-            ln_bias,
-            'num_heads',
-            num_heads,
-            'transpose_qkv_wb',
-            transpose_qkv_wb,
-            'pre_layer_norm',
-            pre_layer_norm,
-            'epsilon',
-            pre_ln_epsilon,
-            'dropout_rate',
-            dropout_rate,
-            'attn_dropout_rate',
-            attn_dropout_rate,
-            'ln_epsilon',
-            ln_epsilon,
-            'is_test',
-            not training,
-            'attn_dropout_fix_seed',
-            seed is not None,
-            'dropout_fix_seed',
-            seed is not None,
-            'attn_dropout_seed',
-            seed if seed is not None else 0,
-            'dropout_seed',
-            seed if seed is not None else 0,
-            'attn_dropout_implementation',
-            mode,
-            'dropout_implementation',
-            mode,
-            'add_residual',
-            add_residual,
-            'ring_id',
-            ring_id,
-        )
+        if in_dynamic_mode():
+            (
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                cache_kv_out,
+                final_out,
+            ) = _legacy_C_ops.fused_attention(
+                x,
+                pre_ln_scale,
+                pre_ln_bias,
+                qkv_weight,
+                qkv_bias,
+                cache_kv,
+                attn_mask,
+                linear_weight,
+                linear_bias,
+                ln_scale,
+                ln_bias,
+                'num_heads',
+                num_heads,
+                'transpose_qkv_wb',
+                transpose_qkv_wb,
+                'pre_layer_norm',
+                pre_layer_norm,
+                'epsilon',
+                pre_ln_epsilon,
+                'dropout_rate',
+                dropout_rate,
+                'attn_dropout_rate',
+                attn_dropout_rate,
+                'ln_epsilon',
+                ln_epsilon,
+                'is_test',
+                not training,
+                'attn_dropout_fix_seed',
+                seed is not None,
+                'dropout_fix_seed',
+                seed is not None,
+                'attn_dropout_seed',
+                seed if seed is not None else 0,
+                'dropout_seed',
+                seed if seed is not None else 0,
+                'attn_dropout_implementation',
+                mode,
+                'dropout_implementation',
+                mode,
+                'add_residual',
+                add_residual,
+                'ring_id',
+                ring_id,
+            )
+        else:
+            (
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                cache_kv_out,
+                final_out,
+            ) = _C_ops.fused_attention(
+                x,
+                pre_ln_scale,
+                pre_ln_bias,
+                qkv_weight,
+                qkv_bias,
+                cache_kv,
+                attn_mask,
+                linear_weight,
+                linear_bias,
+                ln_scale,
+                ln_bias,
+                num_heads,
+                transpose_qkv_wb,
+                pre_layer_norm,
+                pre_ln_epsilon,
+                attn_dropout_rate,
+                not training,
+                seed is not None,
+                seed if seed is not None else 0,
+                mode,
+                dropout_rate,
+                seed is not None,
+                seed if seed is not None else 0,
+                mode,
+                ln_epsilon,
+                add_residual,
+                ring_id,
+            )
+
         if cache_kv is not None:
             return final_out, cache_kv_out
         return final_out
@@ -870,6 +972,84 @@ def fused_multi_head_attention(
         return (final_out, cache_kv_out) if cache_kv else final_out
 
 
+@overload
+def fused_multi_transformer(
+    x: Tensor,
+    ln_scales: Sequence[Tensor],
+    ln_biases: Sequence[Tensor],
+    qkv_weights: Sequence[Tensor],
+    qkv_biases: Sequence[Tensor],
+    linear_weights: Sequence[Tensor],
+    linear_biases: Sequence[Tensor],
+    ffn_ln_scales: Sequence[Tensor],
+    ffn_ln_biases: Sequence[Tensor],
+    ffn1_weights: Sequence[Tensor],
+    ffn1_biases: Sequence[Tensor],
+    ffn2_weights: Sequence[Tensor],
+    ffn2_biases: Sequence[Tensor],
+    pre_layer_norm: bool = ...,
+    epsilon: float = ...,
+    residual_alpha: float = ...,
+    cache_kvs: None = ...,
+    beam_offset: Sequence[Tensor] | None = ...,
+    pre_caches: Sequence[Tensor] | None = ...,
+    seq_lens: Tensor | None = ...,
+    rotary_embs: Tensor | None = ...,
+    time_step: Tensor | None = ...,
+    attn_mask: Tensor | None = ...,
+    dropout_rate: float = ...,
+    rotary_emb_dims: int = ...,
+    activation: str = ...,
+    training: bool = ...,
+    mode: _Mode = ...,
+    trans_qkvw: bool = ...,
+    ring_id: int = ...,
+    norm_type: str = ...,
+    use_neox_rotary_style: bool = ...,
+    gqa_group_size: int = ...,
+    name: str | None = ...,
+) -> Tensor: ...
+
+
+@overload
+def fused_multi_transformer(
+    x: Tensor,
+    ln_scales: Sequence[Tensor],
+    ln_biases: Sequence[Tensor],
+    qkv_weights: Sequence[Tensor],
+    qkv_biases: Sequence[Tensor],
+    linear_weights: Sequence[Tensor],
+    linear_biases: Sequence[Tensor],
+    ffn_ln_scales: Sequence[Tensor],
+    ffn_ln_biases: Sequence[Tensor],
+    ffn1_weights: Sequence[Tensor],
+    ffn1_biases: Sequence[Tensor],
+    ffn2_weights: Sequence[Tensor],
+    ffn2_biases: Sequence[Tensor],
+    pre_layer_norm: bool = ...,
+    epsilon: float = ...,
+    residual_alpha: float = ...,
+    cache_kvs: Sequence[Tensor] = ...,
+    beam_offset: Sequence[Tensor] | None = ...,
+    pre_caches: Sequence[Tensor] | None = ...,
+    seq_lens: Tensor | None = ...,
+    rotary_embs: Tensor | None = ...,
+    time_step: Tensor | None = ...,
+    attn_mask: Tensor | None = ...,
+    dropout_rate: float = ...,
+    rotary_emb_dims: int = ...,
+    activation: str = ...,
+    training: bool = ...,
+    mode: _Mode = ...,
+    trans_qkvw: bool = ...,
+    ring_id: int = ...,
+    norm_type: str = ...,
+    use_neox_rotary_style: bool = ...,
+    gqa_group_size: int = ...,
+    name: str | None = ...,
+) -> tuple[Tensor, Sequence[Tensor]]: ...
+
+
 def fused_multi_transformer(
     x,
     ln_scales,
@@ -886,7 +1066,9 @@ def fused_multi_transformer(
     ffn2_biases,
     pre_layer_norm=True,
     epsilon=1e-05,
+    residual_alpha=1.0,
     cache_kvs=None,
+    beam_offset=None,
     pre_caches=None,
     seq_lens=None,
     rotary_embs=None,
@@ -899,6 +1081,9 @@ def fused_multi_transformer(
     mode='upscale_in_train',
     trans_qkvw=True,
     ring_id=-1,
+    norm_type="layernorm",
+    use_neox_rotary_style=False,
+    gqa_group_size=-1,
     name=None,
 ):
     r"""
@@ -906,67 +1091,90 @@ def fused_multi_transformer(
     This operator only supports running on GPU. The function of the transformer layer is consistent
     with the following pseudo code:
 
-    .. code-block:: python
+    .. code-block:: text
 
-        if pre_layer_norm:
-            out = layer_norm(x)
-            out = qkv_linear(out) + qkv_bias
-        else:
-            out = qkv_linear(x) + qkv_bias
-        out = transpose(out, perm=[2, 0, 3, 1, 4])
-        # extract q, k and v from out.
-        q = out[0:1, ::]
-        k = out[1:2, ::]
-        v = out[2:3, ::]
-        out = q * k^t
-        out = attn_mask + out
-        out = softmax(out)
-        out = dropout(out)
-        out = out * v
-        out = transpose(out, perm=[0, 2, 1, 3])
-        out = linear(out)
-        if pre_layer_norm:
-            out = x + dropout(out + bias)
-        else:
-            out = layer_norm(x + dropout(out + bias))
+        >>> if pre_layer_norm:
+        ...     out = layer_norm(x)
+        ...     out = qkv_linear(out) + qkv_bias
+        ... else:
+        ...     out = qkv_linear(x) + qkv_bias
+        >>> out = transpose(out, perm=[2, 0, 3, 1, 4])
+        >>> # extract q, k and v from out.
+        >>> q = out[0:1, ::]
+        >>> k = out[1:2, ::]
+        >>> v = out[2:3, ::]
+        >>> out = q * k^t
+        >>> out = attn_mask + out
+        >>> out = softmax(out)
+        >>> out = dropout(out)
+        >>> out = out * v
+        >>> out = transpose(out, perm=[0, 2, 1, 3])
+        >>> out = linear(out)
+        >>> if pre_layer_norm:
+        ...     out = x + dropout(out + bias)
+        ... else:
+        ...     out = layer_norm(x + dropout(out + bias))
 
-        residual = out;
-        if pre_layer_norm:
-            out = ffn_layer_norm(out)
-        out = ffn1_linear(out)
-        out = dropout(activation(out + ffn1_bias))
-        out = ffn2_linear(out)
-        out = residual + dropout(out + ffn2_bias)
-        if not pre_layer_norm:
-            out = ffn_layer_norm(out)
+        >>> residual = out;
+        >>> if pre_layer_norm:
+        ...     out = ffn_layer_norm(out)
+        >>> out = ffn1_linear(out)
+        >>> out = dropout(activation(out + ffn1_bias))
+        >>> out = ffn2_linear(out)
+        >>> out = residual + dropout(out + ffn2_bias)
+        >>> if not pre_layer_norm:
+        ...     out = ffn_layer_norm(out)
 
     Args:
-        x (Tensor): the input tensor could be 3-D tensor, the input data type could be float16 or float32, the shape is `[batch\_size, sequence\_length, d\_model]`.
-        ln_scales (list(Tensor)|tuple(Tensor)): The weight tensors of attention layer_norm, the shape is `[d\_model]`.
-        ln_biases (list(Tensor)|tuple(Tensor)): The bias tensors of attention layer_norm. the shape is `[d\_model]`.
-        qkv_weights (list(Tensor)|tuple(Tensor)): The weight tensors of attention qkv computation. The shape is `[3, num\_head, dim\_head, d\_model]`.
-        qkv_biases (list(Tensor)|tuple(Tensor)|None): The bias tensors of attention qkv computation. The shape is `[3, num\_head, dim\_head]`.
-        linear_weights (list(Tensor)|tuple(Tensor)): The weight tensors of attention linear. The shape is `[num\_head * dim\_head, d\_model]`.
-        linear_biases (list(Tensor)|tuple(Tensor)|None): The bias tensors of attention linear. The shape is `[d\_model]`.
-        ffn_ln_scales (list(Tensor)|tuple(Tensor)): The weight tensors of feedforward layer_norm, the shape is `[d\_model]`
-        ffn_ln_biases (list(Tensor)|tuple(Tensor)): The bias tensors of feedforward layer_norm, the shape is `[d\_model]`
-        ffn1_weights (list(Tensor)|tuple(Tensor)): The weight tensors of feedforward first linear, the shape is `[d\_model, dim\_feedforward]`.
-        ffn1_biases (list(Tensor)|tuple(Tensor)|None): The bias tensors of feedforward first linear, the shape is `[dim\_feedforward]`.
-        ffn2_weights (list(Tensor)|tuple(Tensor)): The weight tensors of feedforward second linear, the shape is `[dim\_feedforward, d\_model]`.
-        ffn2_biases (list(Tensor)|tuple(Tensor)|None): The bias tensors of feedforward second linear, the shape is `[d_model]`.
-        pre_layer_norm (bool, optional): whether it is pre_layer_norm(True) or post_layer_norm(False). Default True.
-        epsilon (float, optional): Small float value added to denominator of the layer_norm to avoid dividing by zero. Default is 1e-5.
-        cache_kvs (list(Tensor)|tuple(Tensor), optional): The cache structure tensors for the generation model. The shape is `[2, bsz, num\_head, max\_seq\_len, head\_dim]`. Default None.
-        pre_caches (list(Tensor)|tuple(Tensor), optional): The prefix caches for the generation model. The shape is `[2, bsz, num\_head, cache\_len, head\_dim]`. Default None.
+        x (Tensor): the input tensor could be 3-D tensor, the input data type could be float16,
+            the shape is `[batch\_size, sequence\_length, d\_model]`.
+        ln_scales (list(Tensor)|tuple(Tensor)): The weight tensors of attention layer_norm,
+            the shape is `[d\_model]`.
+        ln_biases (list(Tensor)|tuple(Tensor)): The bias tensors of attention layer_norm.
+            the shape is `[d\_model]`.
+        qkv_weights (list(Tensor)|tuple(Tensor)): The weight tensors of attention qkv computation.
+            The shape is `[3, num\_head, dim\_head, d\_model]`.
+        qkv_biases (list(Tensor)|tuple(Tensor)|None): The bias tensors of attention qkv computation.
+            The shape is `[3, num\_head, dim\_head]`.
+        linear_weights (list(Tensor)|tuple(Tensor)): The weight tensors of attention linear.
+            The shape is `[num\_head * dim\_head, d\_model]`.
+        linear_biases (list(Tensor)|tuple(Tensor)|None): The bias tensors of attention linear.
+            The shape is `[d\_model]`.
+        ffn_ln_scales (list(Tensor)|tuple(Tensor)): The weight tensors of feedforward layer_norm,
+            the shape is `[d\_model]`
+        ffn_ln_biases (list(Tensor)|tuple(Tensor)): The bias tensors of feedforward layer_norm,
+            the shape is `[d\_model]`
+        ffn1_weights (list(Tensor)|tuple(Tensor)): The weight tensors of feedforward first linear,
+            the shape is `[d\_model, dim\_feedforward]`.
+        ffn1_biases (list(Tensor)|tuple(Tensor)|None): The bias tensors of feedforward first linear,
+            the shape is `[dim\_feedforward]`.
+        ffn2_weights (list(Tensor)|tuple(Tensor)): The weight tensors of feedforward second linear,
+            the shape is `[dim\_feedforward, d\_model]`.
+        ffn2_biases (list(Tensor)|tuple(Tensor)|None): The bias tensors of feedforward second linear,
+            the shape is `[d_model]`.
+        pre_layer_norm (bool, optional): whether it is pre_layer_norm(True) or post_layer_norm(False).
+            Default True.
+        epsilon (float, optional): Small float value added to denominator of the layer_norm
+            to avoid dividing by zero. Default is 1e-5.
+        cache_kvs (list(Tensor)|tuple(Tensor), optional):
+            The cache structure tensors for the generation model.
+            The shape is `[2, bsz, num\_head, max\_seq\_len, head\_dim]`. Default None.
+        pre_caches (list(Tensor)|tuple(Tensor), optional): The prefix caches for the generation model.
+            The shape is `[2, bsz, num\_head, cache\_len, head\_dim]`. Default None.
         seq_lens (Tensor optional): The sequence lengths of this batch. The shape is `[bsz]`. Default None.
-        rotary_embs (Tensor optional): The RoPE embs for rotary computation. The shape is `[2, bsz, 1, seq\_len, head\_dim]`. Default None.
-        time_step (Tensor, optional): The time step tensor for the generation model. Which used in decode stage, to represent the time step, that is, the real seq_len of CacheKV. The shape is `[1]`, must be in CPUPlace. Default None.
+        rotary_embs (Tensor optional): The RoPE embs for rotary computation.
+            The shape is `[2, bsz, 1, seq\_len, head\_dim]`. Default None.
+        time_step (Tensor, optional): The time step tensor for the generation model.
+            Which used in decode stage, to represent the time step, that is, the real seq_len of CacheKV.
+            The shape is `[1]`, must be in CPUPlace. Default None.
         attn_mask (Tensor, optional):  A tensor used in multi-head attention to prevents attention to
             some unwanted positions, usually the paddings or the subsequent positions. It is a tensor
             with shape `[batch_size, 1, sequence_length, sequence_length]`. Default None.
         dropout_rate (float, optional): The dropout probability of setting units to zero. Default 0.0.
-        rotary_emb_dims (int, optional): The rotary_emb_dims of rotary computation, and it is 0 when rotary_embs is None,
-            1 when rotary_embs is not None and pos_extra_ids is None, 2 when rotary_embs and pos_extra_ids are both not None. Default 0.
+        rotary_emb_dims (int, optional): The rotary_emb_dims of rotary computation,
+            and it is 0 when rotary_embs is None,
+            1 when rotary_embs is not None and pos_extra_ids is None,
+            2 when rotary_embs and pos_extra_ids are both not None. Default 0.
         activation (str, optional): The activation. Default "gelu".
         training (bool, optional): A flag indicating whether it is in train phrase or not. Default False.
         mode (str, optional): ['upscale_in_train'(default) | 'downscale_in_infer']
@@ -983,8 +1191,10 @@ def fused_multi_transformer(
         trans_qkvw (bool, optional): Whether to transpose for weights of qkv.
             If true, the shape eights of qkv should be [3, num_head, dim_head, dim_embed].
             Otherwise the shape of weights of qkv should be [dim_embed, 3, num_head, dim_head]. Default True.
-        ring_id (int, optional): For distributed forward in tensor model parallel, only support NCCL. Default is -1, means not using mp.
-        name (str, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
+        ring_id (int, optional): For distributed forward in tensor model parallel, only support NCCL.
+            Default is -1, means not using mp.
+        name (str, optional): Name for the operation (optional, default is None).
+            For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
         Tensor|tuple: If `cache_kvs` is None, return a tensor that has
@@ -996,48 +1206,50 @@ def fused_multi_transformer(
     Examples:
         .. code-block:: python
 
-            # required: gpu
-            import paddle
-            import paddle.incubate.nn.functional as F
+            >>> # doctest: +SKIP('Depends on Flash Attention 2.')
+            >>> import re
+            >>> import paddle
+            >>> paddle.device.set_device('gpu')
+            >>> import paddle.incubate.nn.functional as F
 
-            # input: [batch_size, seq_len, embed_dim]
-            x = paddle.rand(shape=(2, 4, 128), dtype="float32")
+            >>> # input: [batch_size, seq_len, embed_dim]
+            >>> x = paddle.rand(shape=(2, 4, 128), dtype="float16")
 
-            # ln_scale: [embed_dim], ln_bias: [embed_dim]
-            ln_scale = paddle.rand(shape=(128,), dtype="float32")
-            ln_bias = paddle.rand(shape=(128,), dtype="float32")
+            >>> # ln_scale: [embed_dim], ln_bias: [embed_dim]
+            >>> ln_scale = paddle.rand(shape=(128,), dtype="float32")
+            >>> ln_bias = paddle.rand(shape=(128,), dtype="float32")
 
-            # qkv_weight: [3, num_head, head_dim, embed_dim], qkv_bias: [3, num_head, head_dim]
-            qkv_weight = paddle.rand(shape=(3, 4, 32, 128), dtype="float32")
-            qkv_bias = paddle.rand(shape=(3, 4, 32), dtype="float32")
+            >>> # qkv_weight: [3, num_head, head_dim, embed_dim], qkv_bias: [3, num_head, head_dim]
+            >>> qkv_weight = paddle.rand(shape=(3, 4, 32, 128), dtype="float16")
+            >>> qkv_bias = paddle.rand(shape=(3, 4, 32), dtype="float16")
 
-            # linear_weight: [embed_dim, embed_dim], linear_bias: [embed_dim]
-            linear_weight = paddle.rand(shape=(128, 128), dtype="float32")
-            linear_bias = paddle.rand(shape=(128,), dtype="float32")
+            >>> # linear_weight: [embed_dim, embed_dim], linear_bias: [embed_dim]
+            >>> linear_weight = paddle.rand(shape=(128, 128), dtype="float16")
+            >>> linear_bias = paddle.rand(shape=(128,), dtype="float16")
 
-            # ffn_ln_scale: [embed_dim], ffn_ln_bias: [embed_dim]
-            ffn_ln_scale = paddle.rand(shape=(128,), dtype="float32")
-            ffn_ln_bias = paddle.rand(shape=(128,), dtype="float32")
+            >>> # ffn_ln_scale: [embed_dim], ffn_ln_bias: [embed_dim]
+            >>> ffn_ln_scale = paddle.rand(shape=(128,), dtype="float32")
+            >>> ffn_ln_bias = paddle.rand(shape=(128,), dtype="float32")
 
-            # ffn1_weight: [embed_dim, 4*embed_dim], ffn1_bias: [4*embed_dim]
-            ffn1_weight = paddle.rand(shape=(128, 4*128), dtype="float32")
-            ffn1_bias = paddle.rand(shape=(4*128,), dtype="float32")
+            >>> # ffn1_weight: [embed_dim, 4*embed_dim], ffn1_bias: [4*embed_dim]
+            >>> ffn1_weight = paddle.rand(shape=(128, 4*128), dtype="float16")
+            >>> ffn1_bias = paddle.rand(shape=(4*128,), dtype="float16")
 
-            # ffn2_weight: [4*embed_dim, embed_dim], ffn2_bias: [embed_dim]
-            ffn2_weight = paddle.rand(shape=(4*128, 128), dtype="float32")
-            ffn2_bias = paddle.rand(shape=(128,), dtype="float32")
+            >>> # ffn2_weight: [4*embed_dim, embed_dim], ffn2_bias: [embed_dim]
+            >>> ffn2_weight = paddle.rand(shape=(4*128, 128), dtype="float16")
+            >>> ffn2_bias = paddle.rand(shape=(128,), dtype="float16")
 
-            # self attention mask: [batch_size, 1, seq_len, seq_len]
-            attn_mask = paddle.rand(shape=(2, 1, 4, 4), dtype="float32")
+            >>> # self attention mask: [batch_size, 1, seq_len, seq_len]
+            >>> attn_mask = paddle.rand(shape=(2, 1, 4, 4), dtype="float32")
 
-            # output: [batch_size, seq_len, embed_dim]
-            output = F.fused_multi_transformer(
-                x, [ln_scale], [ln_bias], [qkv_weight], [qkv_bias],
-                [linear_weight], [linear_bias], [ffn_ln_scale], [ffn_ln_bias],
-                [ffn1_weight], [ffn1_bias], [ffn2_weight], [ffn2_bias],
-                attn_mask=attn_mask)
-            # [2, 4, 128]
-            print(output.shape)
+            >>> # output: [batch_size, seq_len, embed_dim]
+            >>> output = F.fused_multi_transformer(
+            ...     x, [ln_scale], [ln_bias], [qkv_weight], [qkv_bias],
+            ...     [linear_weight], [linear_bias], [ffn_ln_scale], [ffn_ln_bias],
+            ...     [ffn1_weight], [ffn1_bias], [ffn2_weight], [ffn2_bias],
+            ...     attn_mask=attn_mask)
+            >>> print(output.shape)
+            [2, 4, 128]
     """
     if mode not in ('downscale_in_infer', 'upscale_in_train'):
         raise ValueError(
@@ -1047,8 +1259,8 @@ def fused_multi_transformer(
         'downgrade_in_infer' if mode == 'downscale_in_infer' else mode
     )  # semantic transfer
 
-    if in_dynamic_mode():
-        cache_kv_out, final_out = _legacy_C_ops.fused_multi_transformer(
+    if in_dynamic_or_pir_mode():
+        cache_kv_out, final_out = _C_ops.fused_multi_transformer_(
             x,
             ln_scales,
             ln_biases,
@@ -1057,6 +1269,7 @@ def fused_multi_transformer(
             cache_kvs,
             pre_caches,
             rotary_embs,
+            beam_offset,
             time_step,
             seq_lens,
             attn_mask,
@@ -1068,25 +1281,19 @@ def fused_multi_transformer(
             ffn1_biases,
             ffn2_weights,
             ffn2_biases,
-            cache_kvs,
-            'pre_layer_norm',
             pre_layer_norm,
-            'epsilon',
             epsilon,
-            'dropout_rate',
+            residual_alpha,
             dropout_rate,
-            'rotary_emb_dims',
             rotary_emb_dims,
-            'is_test',
             not training,
-            'dropout_implementation',
             mode,
-            'act_method',
             activation,
-            'trans_qkvw',
             trans_qkvw,
-            'ring_id',
             ring_id,
+            norm_type,
+            use_neox_rotary_style,
+            gqa_group_size,
         )
         if cache_kvs is not None:
             return final_out, cache_kv_out
@@ -1096,48 +1303,57 @@ def fused_multi_transformer(
         dtype = x.dtype
         # check dtypes
         check_variable_and_dtype(
-            x, 'x', ['float16', 'float32'], 'fused_multi_transformer'
+            x, 'x', ['uint16', 'float16'], 'fused_multi_transformer'
         )
         check_dtype(
-            dtype, 'dtype', ['float16', 'float32'], 'fused_multi_transformer'
+            dtype,
+            'dtype',
+            ['uint16', 'float16'],
+            'fused_multi_transformer',
         )
 
         # set inputs
         inputs = {}
-        inputs['X'] = [x]
-        inputs['LnScale'] = ln_scales
-        inputs['LnBias'] = ln_biases
-        inputs['QKVW'] = qkv_weights
+        inputs['x'] = [x]
+        inputs['ln_scales'] = ln_scales
+        inputs['qkv_weights'] = qkv_weights
+
+        if ln_biases is not None:
+            inputs['ln_biases'] = ln_biases
         if qkv_biases is not None:
-            inputs['QKVBias'] = qkv_biases
+            inputs['qkv_biases'] = qkv_biases
         if cache_kvs is not None:
             assert len(cache_kvs) == len(qkv_weights)
-            inputs['CacheKV'] = cache_kvs
+            inputs['cache_kvs'] = cache_kvs
             if time_step is not None:
-                inputs['TimeStep'] = time_step
+                inputs['time_step'] = time_step
         if pre_caches is not None:
-            inputs['PreCaches'] = pre_caches
+            inputs['pre_caches'] = pre_caches
+        if beam_offset is not None:
+            inputs['beam_offset'] = beam_offset
         if rotary_emb_dims > 0:
-            inputs['RotaryPosEmb'] = rotary_embs
-        inputs['SeqLengths'] = seq_lens
-        inputs['SrcMask'] = attn_mask
-        inputs['OutLinearW'] = linear_weights
+            inputs['rotary_embs'] = rotary_embs
+        inputs['seq_lengths'] = seq_lens
+        inputs['src_mask'] = attn_mask
+        inputs['out_linear_weights'] = linear_weights
         if linear_biases is not None:
-            inputs['OutLinearBias'] = linear_biases
+            inputs['out_linear_biases'] = linear_biases
 
-        inputs['FFNLnScale'] = ffn_ln_scales
-        inputs['FFNLnBias'] = ffn_ln_biases
-        inputs['FFN1Weight'] = ffn1_weights
+        inputs['ffn_ln_scales'] = ffn_ln_scales
+        if ffn_ln_biases is not None:
+            inputs['ffn_ln_biases'] = ffn_ln_biases
+        inputs['ffn1_weights'] = ffn1_weights
         if ffn1_biases is not None:
-            inputs['FFN1Bias'] = ffn1_biases
-        inputs['FFN2Weight'] = ffn2_weights
+            inputs['ffn1_biases'] = ffn1_biases
+        inputs['ffn2_weights'] = ffn2_weights
         if ffn2_biases is not None:
-            inputs['FFN2Bias'] = ffn2_biases
+            inputs['ffn2_biases'] = ffn2_biases
 
         # set attrs
         attrs = {
             'pre_layer_norm': pre_layer_norm,
             'epsilon': epsilon,
+            'residual_alpha': residual_alpha,
             'dropout_rate': dropout_rate,
             'rotary_emb_dims': rotary_emb_dims,
             'is_test': not training,
@@ -1145,14 +1361,17 @@ def fused_multi_transformer(
             'act_method': activation,
             'trans_qkvw': trans_qkvw,
             'ring_id': ring_id,
+            'norm_type': norm_type,
+            'use_neox_rotary_style': use_neox_rotary_style,
+            'gqa_group_size': gqa_group_size,
         }
 
         outputs = {}
         final_out = helper.create_variable_for_type_inference(dtype=dtype)
-        outputs['Out'] = final_out
+        outputs['out'] = final_out
         if cache_kvs:
             # NOTE: inplace
-            outputs['CacheKVOut'] = cache_kvs
+            outputs['cache_kv_outs'] = cache_kvs
 
         helper.append_op(
             type='fused_multi_transformer',

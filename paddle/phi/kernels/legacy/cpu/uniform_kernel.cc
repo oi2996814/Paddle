@@ -28,7 +28,7 @@ void UniformRawKernel(const Context &dev_ctx,
                       int diag_step,
                       float diag_val,
                       DenseTensor *out) {
-  out->Resize(phi::make_ddim(shape.GetData()));
+  out->Resize(common::make_ddim(shape.GetData()));
   T *data = dev_ctx.template Alloc<T>(out);
   auto size = out->numel();
   std::shared_ptr<std::mt19937_64> engine;
@@ -44,7 +44,7 @@ void UniformRawKernel(const Context &dev_ctx,
     PADDLE_ENFORCE_GT(
         size,
         (diag_num - 1) * (diag_step + 1),
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "ShapeInvalid: the diagonal's elements is equal (num-1) "
             "* (step-1) with num %d, step %d,"
             "It should be smaller than %d, but received %d",

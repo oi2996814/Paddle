@@ -97,13 +97,13 @@ class Im2ColFunctor<phi::funcs::ColFormat::kCFO, DeviceContext, T> {
                   const DataLayout data_layout) {
     PADDLE_ENFORCE_EQ(im.dims().size(),
                       3,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimension of tensor 'im' should be 3. But got "
                           "the dims of tensor 'im' is [%s].",
                           im.dims()));
     PADDLE_ENFORCE_EQ(col->dims().size(),
                       5,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimension of tensor 'col' should be 5. But got "
                           "the dims of tensor 'col' is [%s].",
                           col->dims()));
@@ -232,13 +232,13 @@ class Col2ImFunctor<phi::funcs::ColFormat::kCFO, DeviceContext, T> {
                   const DataLayout data_layout) {
     PADDLE_ENFORCE_EQ(im->dims().size(),
                       3,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimension of tensor 'im' should be 3. But got "
                           "the dims of tensor 'im' is [%s].",
                           im->dims()));
     PADDLE_ENFORCE_EQ(col.dims().size(),
                       5,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimension of tensor 'col' should be 5. But got "
                           "the dims of tensor 'col' is [%s].",
                           col.dims()));
@@ -260,16 +260,16 @@ class Col2ImFunctor<phi::funcs::ColFormat::kCFO, DeviceContext, T> {
                 stride[0] +
             1,
         col_height,
-        phi::errors::InvalidArgument("Output_height and padding(padding_up, "
-                                     "padding_down) are inconsistent."));
+        common::errors::InvalidArgument("Output_height and padding(padding_up, "
+                                        "padding_down) are inconsistent."));
     PADDLE_ENFORCE_EQ(
         (im_width + padding[1] + padding[3] -
          (dilation[1] * (filter_width - 1) + 1)) /
                 stride[1] +
             1,
         col_width,
-        phi::errors::InvalidArgument("col_width and padding(padding_left, "
-                                     "padding_right) are inconsistent."));
+        common::errors::InvalidArgument("col_width and padding(padding_left, "
+                                        "padding_right) are inconsistent."));
 
     size_t num_kernels = im_channels * im_height * im_width;
 
@@ -312,6 +312,12 @@ template class Im2ColFunctor<phi::funcs::ColFormat::kCFO,
                              double>;
 template class Im2ColFunctor<phi::funcs::ColFormat::kCFO,
                              phi::GPUContext,
+                             phi::dtype::complex<float>>;
+template class Im2ColFunctor<phi::funcs::ColFormat::kCFO,
+                             phi::GPUContext,
+                             phi::dtype::complex<double>>;
+template class Im2ColFunctor<phi::funcs::ColFormat::kCFO,
+                             phi::GPUContext,
                              phi::dtype::float16>;
 template class Im2ColFunctor<phi::funcs::ColFormat::kCFO,
                              phi::GPUContext,
@@ -322,6 +328,12 @@ template class Col2ImFunctor<phi::funcs::ColFormat::kCFO,
 template class Col2ImFunctor<phi::funcs::ColFormat::kCFO,
                              phi::GPUContext,
                              double>;
+template class Col2ImFunctor<phi::funcs::ColFormat::kCFO,
+                             phi::GPUContext,
+                             phi::dtype::complex<float>>;
+template class Col2ImFunctor<phi::funcs::ColFormat::kCFO,
+                             phi::GPUContext,
+                             phi::dtype::complex<double>>;
 template class Col2ImFunctor<phi::funcs::ColFormat::kCFO,
                              phi::GPUContext,
                              phi::dtype::float16>;
@@ -386,13 +398,13 @@ class Im2ColFunctor<phi::funcs::ColFormat::kOCF, DeviceContext, T> {
                   const DataLayout data_layout) {
     PADDLE_ENFORCE_EQ(im.dims().size(),
                       3,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimension of tensor 'im' should be 3. But got "
                           "the dims of tensor 'im' is [%s].",
                           im.dims()));
     PADDLE_ENFORCE_EQ(col->dims().size(),
                       5,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimension of tensor 'col' should be 5. But got "
                           "the dims of tensor 'col' is [%s].",
                           col->dims()));
@@ -496,13 +508,13 @@ class Col2ImFunctor<phi::funcs::ColFormat::kOCF, DeviceContext, T> {
                   const DataLayout data_layout) {
     PADDLE_ENFORCE_EQ(im->dims().size(),
                       3,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimension of tensor 'im' should be 3. But got "
                           "the dims of tensor 'im' is [%s].",
                           im->dims()));
     PADDLE_ENFORCE_EQ(col.dims().size(),
                       5,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimension of tensor 'col' should be 5. But got "
                           "the dims of tensor 'col' is [%s].",
                           col.dims()));
@@ -521,16 +533,16 @@ class Col2ImFunctor<phi::funcs::ColFormat::kOCF, DeviceContext, T> {
                 stride[0] +
             1,
         col_height,
-        phi::errors::InvalidArgument("Output_height and padding(padding_up, "
-                                     "padding_down) are inconsistent."));
+        common::errors::InvalidArgument("Output_height and padding(padding_up, "
+                                        "padding_down) are inconsistent."));
     PADDLE_ENFORCE_EQ(
         (im_width + padding[1] + padding[3] -
          (dilation[1] * (filter_width - 1) + 1)) /
                 stride[1] +
             1,
         col_width,
-        phi::errors::InvalidArgument("col_width and padding(padding_left, "
-                                     "padding_right) are inconsistent."));
+        common::errors::InvalidArgument("col_width and padding(padding_left, "
+                                        "padding_right) are inconsistent."));
 
     int block_dim_x = 0;
     int block_dim_y = 0;
@@ -575,6 +587,12 @@ template class Im2ColFunctor<phi::funcs::ColFormat::kOCF,
                              double>;
 template class Im2ColFunctor<phi::funcs::ColFormat::kOCF,
                              phi::GPUContext,
+                             phi::dtype::complex<float>>;
+template class Im2ColFunctor<phi::funcs::ColFormat::kOCF,
+                             phi::GPUContext,
+                             phi::dtype::complex<double>>;
+template class Im2ColFunctor<phi::funcs::ColFormat::kOCF,
+                             phi::GPUContext,
                              phi::dtype::float16>;
 template class Im2ColFunctor<phi::funcs::ColFormat::kOCF,
                              phi::GPUContext,
@@ -585,6 +603,12 @@ template class Col2ImFunctor<phi::funcs::ColFormat::kOCF,
 template class Col2ImFunctor<phi::funcs::ColFormat::kOCF,
                              phi::GPUContext,
                              double>;
+template class Col2ImFunctor<phi::funcs::ColFormat::kOCF,
+                             phi::GPUContext,
+                             phi::dtype::complex<float>>;
+template class Col2ImFunctor<phi::funcs::ColFormat::kOCF,
+                             phi::GPUContext,
+                             phi::dtype::complex<double>>;
 template class Col2ImFunctor<phi::funcs::ColFormat::kOCF,
                              phi::GPUContext,
                              phi::dtype::float16>;

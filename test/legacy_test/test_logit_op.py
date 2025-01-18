@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 np.random.seed(10)
 
@@ -58,10 +58,12 @@ class TestLogitOp(OpTest):
         self.eps = 1e-8
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
-        self.check_grad(['X'], ['Out'], user_defined_grads=[self.x_grad])
+        self.check_grad(
+            ['X'], ['Out'], user_defined_grads=[self.x_grad], check_pir=True
+        )
 
 
 class TestLogitOpFp32(TestLogitOp):
@@ -71,10 +73,12 @@ class TestLogitOpFp32(TestLogitOp):
         self.eps = 1e-8
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X'], ['Out'], user_defined_grads=[self.x_grad])
+        self.check_grad(
+            ['X'], ['Out'], user_defined_grads=[self.x_grad], check_pir=True
+        )
 
 
 class TestLogitOpFp16(TestLogitOp):
@@ -84,10 +88,12 @@ class TestLogitOpFp16(TestLogitOp):
         self.eps = 1e-8
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X'], ['Out'], user_defined_grads=[self.x_grad])
+        self.check_grad(
+            ['X'], ['Out'], user_defined_grads=[self.x_grad], check_pir=True
+        )
 
 
 @unittest.skipIf(
@@ -115,7 +121,9 @@ class TestLogitOpBf16(OpTest):
     def test_check_output(self):
         if core.is_compiled_with_cuda():
             place = core.CUDAPlace(0)
-            self.check_output_with_place(place)
+            self.check_output_with_place(
+                place, check_pir=True, check_symbol_infer=False
+            )
 
     def test_check_grad(self):
         if core.is_compiled_with_cuda():
@@ -125,6 +133,7 @@ class TestLogitOpBf16(OpTest):
                 ['X'],
                 ['Out'],
                 user_defined_grads=[self.x_grad],
+                check_pir=True,
             )
 
 
@@ -148,7 +157,7 @@ class TestLogitAPI(unittest.TestCase):
         self.x = np.random.uniform(0.0, 1.0, self.x_shape).astype(np.float32)
         self.place = (
             paddle.CUDAPlace(0)
-            if paddle.fluid.core.is_compiled_with_cuda()
+            if paddle.base.core.is_compiled_with_cuda()
             else paddle.CPUPlace()
         )
 
@@ -176,7 +185,7 @@ class TestLogitAPI(unittest.TestCase):
     def test_errors(self):
         paddle.enable_static()
         with paddle.static.program_guard(paddle.static.Program()):
-            x = paddle.static.data(name='X1', shape=[100], dtype='int32')
+            x = paddle.static.data(name='X1', shape=[100], dtype='bool')
             self.assertRaises(TypeError, paddle.logit, x)
 
             x = paddle.static.data(name='X2', shape=[100], dtype='float32')

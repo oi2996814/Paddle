@@ -12,15 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
-from eager_op_test import check_out_dtype, paddle_static_guard
+from op_test import check_out_dtype, paddle_static_guard
 
 import paddle
 import paddle.nn.functional as F
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 
 def adaptive_start_index(index, input_size, output_size):
@@ -71,14 +72,20 @@ def max_pool1D_forward_naive(
 class TestPool1D_API(unittest.TestCase):
     def setUp(self):
         np.random.seed(123)
-        self.places = [fluid.CPUPlace()]
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            self.places.append(fluid.CUDAPlace(0))
+            self.places.append(base.CUDAPlace(0))
 
     def check_adaptive_max_dygraph_results(self, place):
-        with fluid.dygraph.guard(place):
+        with base.dygraph.guard(place):
             input_np = np.random.random([2, 3, 32]).astype("float32")
-            input = fluid.dygraph.to_variable(input_np)
+            input = paddle.to_tensor(input_np)
             result = F.adaptive_max_pool1d(input, output_size=16)
 
             result_np = max_pool1D_forward_naive(
@@ -94,7 +101,7 @@ class TestPool1D_API(unittest.TestCase):
 
     def check_adaptive_max_static_results(self, place):
         with paddle_static_guard():
-            with fluid.program_guard(fluid.Program(), fluid.Program()):
+            with base.program_guard(base.Program(), base.Program()):
                 input = paddle.static.data(
                     name="input", shape=[2, 3, 32], dtype="float32"
                 )
@@ -109,9 +116,9 @@ class TestPool1D_API(unittest.TestCase):
                     adaptive=True,
                 )
 
-                exe = fluid.Executor(place)
+                exe = base.Executor(place)
                 fetches = exe.run(
-                    fluid.default_main_program(),
+                    base.default_main_program(),
                     feed={"input": input_np},
                     fetch_list=[result],
                 )

@@ -14,6 +14,7 @@
 
 #pragma once
 #include <glog/logging.h>
+#include "paddle/fluid/platform/enforce.h"
 
 namespace paddle {
 namespace distributed {
@@ -23,7 +24,15 @@ template <class T>
 class ChunkAllocator {
  public:
   explicit ChunkAllocator(size_t chunk_size = 64) {
-    CHECK(sizeof(Node) == std::max(sizeof(void*), sizeof(T)));
+    PADDLE_ENFORCE_EQ(
+        sizeof(Node),
+        std::max(sizeof(void*), sizeof(T)),
+        common::errors::InvalidArgument(
+            "The size of Node is invalid. Expected sizeof(Node) == "
+            "max(sizeof(void*), sizeof(T)).\nBut received sizeof(Node) = %u "
+            "and max(sizeof(void*), sizeof(T)) = %u.",
+            sizeof(Node),
+            std::max(sizeof(void*), sizeof(T))));
     _chunk_size = chunk_size;
     _chunks = NULL;
     _free_nodes = NULL;
@@ -77,9 +86,16 @@ class ChunkAllocator {
 
   void create_new_chunk() {
     Chunk* chunk;
-    posix_memalign(reinterpret_cast<void**>(&chunk),
-                   std::max<size_t>(sizeof(void*), alignof(Chunk)),
-                   sizeof(Chunk) + sizeof(Node) * _chunk_size);
+    size_t alloc_size = sizeof(Chunk) + sizeof(Node) * _chunk_size;
+    int error = posix_memalign(reinterpret_cast<void**>(&chunk),
+                               std::max<size_t>(sizeof(void*), alignof(Chunk)),
+                               alloc_size);
+    PADDLE_ENFORCE_EQ(error,
+                      0,
+                      common::errors::ResourceExhausted(
+                          "Fail to alloc memory of %ld size, error code is %d.",
+                          alloc_size,
+                          error));
     chunk->next = _chunks;
     _chunks = chunk;
 

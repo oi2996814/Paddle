@@ -11,18 +11,64 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import math
 import numbers
 import random
 import traceback
 from collections.abc import Iterable, Sequence
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Generic,
+    Literal,
+    Protocol,
+    TypeVar,
+    overload,
+)
 
 import numpy as np
+from typing_extensions import TypeAlias
 
 import paddle
 
 from . import functional as F
+
+if TYPE_CHECKING:
+    import numpy.typing as npt
+    from PIL.Image import Image as PILImage
+
+    from paddle import Tensor
+    from paddle._typing import DataLayoutImage, Size2, Size3, Size4
+
+    _TransformInputKeys: TypeAlias = Sequence[
+        Literal["image", "coords", "boxes", "mask"]
+    ]
+    from .functional import (
+        _InterpolationCv2,
+        _InterpolationPil,
+        _PaddingMode,
+    )
+
+
+_InputT = TypeVar(
+    "_InputT", "Tensor", "PILImage", "npt.NDArray[Any]", contravariant=True
+)
+_RetT = TypeVar(
+    "_RetT", "Tensor", "PILImage", "npt.NDArray[Any]", covariant=True
+)
+
+
+class _Transform(Protocol, Generic[_InputT, _RetT]):
+    @overload
+    def __call__(self, data: _InputT) -> _RetT: ...
+
+    @overload
+    def __call__(self, data: tuple[_InputT, ...]) -> tuple[_RetT, ...]: ...
+
+    def __call__(self, data) -> Any: ...
+
 
 __all__ = []
 
@@ -39,9 +85,7 @@ def _get_image_size(img):
             return img.shape[2:][::-1]  # nchw -> wh
         else:
             raise ValueError(
-                "The dim for input Tensor should be 3-D or 4-D, but received {}".format(
-                    len(img.shape)
-                )
+                f"The dim for input Tensor should be 3-D or 4-D, but received {len(img.shape)}"
             )
     else:
         raise TypeError(f"Unexpected type {type(img)}")
@@ -53,9 +97,7 @@ def _check_input(
     if isinstance(value, numbers.Number):
         if value < 0:
             raise ValueError(
-                "If {} is a single number, it must be non negative.".format(
-                    name
-                )
+                f"If {name} is a single number, it must be non negative."
             )
         value = [center - value, center + value]
         if clip_first_on_zero:
@@ -65,9 +107,7 @@ def _check_input(
             raise ValueError(f"{name} values should be between {bound}")
     else:
         raise TypeError(
-            "{} should be a single number or a list/tuple with lenght 2.".format(
-                name
-            )
+            f"{name} should be a single number or a list/tuple with length 2."
         )
 
     if value[0] == value[1] == center:
@@ -75,7 +115,7 @@ def _check_input(
     return value
 
 
-class Compose:
+class Compose(_Transform[_InputT, _RetT]):
     """
     Composes several transforms together use for composing list of transforms
     together for a dataset transform.
@@ -85,41 +125,49 @@ class Compose:
 
     Returns:
         A compose object which is callable, __call__ for this Compose
-        object will call each given :attr:`transforms` sequencely.
+        object will call each given :attr:`transforms` sequently.
 
     Examples:
 
         .. code-block:: python
 
-            from paddle.vision.datasets import Flowers
-            from paddle.vision.transforms import Compose, ColorJitter, Resize
-
-            transform = Compose([ColorJitter(), Resize(size=608)])
-            flowers = Flowers(mode='test', transform=transform)
-
-            for i in range(10):
-                sample = flowers[i]
-                print(sample[0].size, sample[1])
-
+            >>> from paddle.vision.datasets import Flowers
+            >>> from paddle.vision.transforms import Compose, ColorJitter, Resize
+            >>> transform = Compose([ColorJitter(), Resize(size=608)])
+            >>> flowers = Flowers(mode='test', transform=transform)
+            >>> for i in range(3):
+            ...     sample = flowers[i]
+            ...     print(sample[0].size, sample[1])
+            (916, 608) [1]
+            (758, 608) [1]
+            (811, 608) [1]
     """
 
-    def __init__(self, transforms):
+    transforms: Sequence[_Transform[Any, Any]]
+
+    def __init__(self, transforms: Sequence[_Transform[Any, Any]]) -> None:
         self.transforms = transforms
 
-    def __call__(self, data):
+    @overload
+    def __call__(self, data: _InputT) -> _RetT: ...
+
+    @overload
+    def __call__(self, data: tuple[_InputT, ...]) -> tuple[_RetT, ...]: ...
+
+    def __call__(self, data) -> Any:
         for f in self.transforms:
             try:
                 data = f(data)
             except Exception as e:
                 stack_info = traceback.format_exc()
                 print(
-                    "fail to perform transform [{}] with error: "
-                    "{} and stack:\n{}".format(f, e, str(stack_info))
+                    f"fail to perform transform [{f}] with error: "
+                    f"{e} and stack:\n{stack_info}"
                 )
                 raise e
         return data
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         format_string = self.__class__.__name__ + '('
         for t in self.transforms:
             format_string += '\n'
@@ -128,7 +176,7 @@ class Compose:
         return format_string
 
 
-class BaseTransform:
+class BaseTransform(_Transform[_InputT, _RetT]):
     """
     Base class of all transforms used in computer vision.
 
@@ -166,76 +214,79 @@ class BaseTransform:
 
         .. code-block:: python
 
-            import numpy as np
-            from PIL import Image
-            import paddle.vision.transforms.functional as F
-            from paddle.vision.transforms import BaseTransform
+            >>> import numpy as np
+            >>> from PIL import Image
+            >>> import paddle.vision.transforms.functional as F
+            >>> from paddle.vision.transforms import BaseTransform
 
-            def _get_image_size(img):
-                if F._is_pil_image(img):
-                    return img.size
-                elif F._is_numpy_image(img):
-                    return img.shape[:2][::-1]
-                else:
-                    raise TypeError("Unexpected type {}".format(type(img)))
-
-            class CustomRandomFlip(BaseTransform):
-                def __init__(self, prob=0.5, keys=None):
-                    super().__init__(keys)
-                    self.prob = prob
-
-                def _get_params(self, inputs):
-                    image = inputs[self.keys.index('image')]
-                    params = {}
-                    params['flip'] = np.random.random() < self.prob
-                    params['size'] = _get_image_size(image)
-                    return params
-
-                def _apply_image(self, image):
-                    if self.params['flip']:
-                        return F.hflip(image)
-                    return image
-
-                # if you only want to transform image, do not need to rewrite this function
-                def _apply_coords(self, coords):
-                    if self.params['flip']:
-                        w = self.params['size'][0]
-                        coords[:, 0] = w - coords[:, 0]
-                    return coords
-
-                # if you only want to transform image, do not need to rewrite this function
-                def _apply_boxes(self, boxes):
-                    idxs = np.array([(0, 1), (2, 1), (0, 3), (2, 3)]).flatten()
-                    coords = np.asarray(boxes).reshape(-1, 4)[:, idxs].reshape(-1, 2)
-                    coords = self._apply_coords(coords).reshape((-1, 4, 2))
-                    minxy = coords.min(axis=1)
-                    maxxy = coords.max(axis=1)
-                    trans_boxes = np.concatenate((minxy, maxxy), axis=1)
-                    return trans_boxes
-
-                # if you only want to transform image, do not need to rewrite this function
-                def _apply_mask(self, mask):
-                    if self.params['flip']:
-                        return F.hflip(mask)
-                    return mask
-
-            # create fake inputs
-            fake_img = Image.fromarray((np.random.rand(400, 500, 3) * 255.).astype('uint8'))
-            fake_boxes = np.array([[2, 3, 200, 300], [50, 60, 80, 100]])
-            fake_mask = fake_img.convert('L')
-
-            # only transform for image:
-            flip_transform = CustomRandomFlip(1.0)
-            converted_img = flip_transform(fake_img)
-
-            # transform for image, boxes and mask
-            flip_transform = CustomRandomFlip(1.0, keys=('image', 'boxes', 'mask'))
-            (converted_img, converted_boxes, converted_mask) = flip_transform((fake_img, fake_boxes, fake_mask))
-            print('converted boxes', converted_boxes)
+            >>> def _get_image_size(img):
+            ...     if F._is_pil_image(img):
+            ...         return img.size
+            ...     elif F._is_numpy_image(img):
+            ...         return img.shape[:2][::-1]
+            ...     else:
+            ...         raise TypeError("Unexpected type {}".format(type(img)))
+            ...
+            >>> class CustomRandomFlip(BaseTransform): # type: ignore[type-arg]
+            ...     def __init__(self, prob=0.5, keys=None):
+            ...         super().__init__(keys)
+            ...         self.prob = prob
+            ...
+            ...     def _get_params(self, inputs):
+            ...         image = inputs[self.keys.index('image')]
+            ...         params = {}
+            ...         params['flip'] = np.random.random() < self.prob
+            ...         params['size'] = _get_image_size(image)
+            ...         return params
+            ...
+            ...     def _apply_image(self, image):
+            ...         if self.params['flip']:
+            ...             return F.hflip(image)
+            ...         return image
+            ...
+            ...     # if you only want to transform image, do not need to rewrite this function
+            ...     def _apply_coords(self, coords):
+            ...         if self.params['flip']:
+            ...             w = self.params['size'][0]
+            ...             coords[:, 0] = w - coords[:, 0]
+            ...         return coords
+            ...
+            ...     # if you only want to transform image, do not need to rewrite this function
+            ...     def _apply_boxes(self, boxes):
+            ...         idxs = np.array([(0, 1), (2, 1), (0, 3), (2, 3)]).flatten()
+            ...         coords = np.asarray(boxes).reshape(-1, 4)[:, idxs].reshape(-1, 2)
+            ...         coords = self._apply_coords(coords).reshape((-1, 4, 2))
+            ...         minxy = coords.min(axis=1)
+            ...         maxxy = coords.max(axis=1)
+            ...         trans_boxes = np.concatenate((minxy, maxxy), axis=1)
+            ...         return trans_boxes
+            ...
+            ...     # if you only want to transform image, do not need to rewrite this function
+            ...     def _apply_mask(self, mask):
+            ...         if self.params['flip']:
+            ...             return F.hflip(mask)
+            ...         return mask
+            ...
+            >>> # create fake inputs
+            >>> fake_img = Image.fromarray((np.random.rand(400, 500, 3) * 255.).astype('uint8'))
+            >>> fake_boxes = np.array([[2, 3, 200, 300], [50, 60, 80, 100]])
+            >>> fake_mask = fake_img.convert('L')
+            >>> # only transform for image:
+            >>> flip_transform = CustomRandomFlip(1.0)
+            >>> converted_img = flip_transform(fake_img)
+            >>> # transform for image, boxes and mask
+            >>> flip_transform = CustomRandomFlip(1.0, keys=('image', 'boxes', 'mask'))
+            >>> (converted_img, converted_boxes, converted_mask) = flip_transform((fake_img, fake_boxes, fake_mask))
+            >>> converted_boxes
+            array([[300,   3, 498, 300],
+                   [420,  60, 450, 100]])
 
     """
 
-    def __init__(self, keys=None):
+    keys: _TransformInputKeys
+    params: Any
+
+    def __init__(self, keys: _TransformInputKeys | None = None) -> None:
         if keys is None:
             keys = ("image",)
         elif not isinstance(keys, Sequence):
@@ -251,7 +302,13 @@ class BaseTransform:
     def _get_params(self, inputs):
         pass
 
-    def __call__(self, inputs):
+    @overload
+    def __call__(self, inputs: _InputT) -> _RetT: ...
+
+    @overload
+    def __call__(self, inputs: tuple[_InputT, ...]) -> tuple[_RetT, ...]: ...
+
+    def __call__(self, inputs) -> Any:
         """Apply transform on single input data"""
         if not isinstance(inputs, tuple):
             inputs = (inputs,)
@@ -286,8 +343,11 @@ class BaseTransform:
     def _apply_mask(self, mask):
         raise NotImplementedError
 
+    def _apply_coords(self, coords):
+        raise NotImplementedError
 
-class ToTensor(BaseTransform):
+
+class ToTensor(BaseTransform[_InputT, "Tensor"]):
     """Convert a ``PIL.Image`` or ``numpy.ndarray`` to ``paddle.Tensor``.
 
     Converts a PIL.Image or numpy.ndarray (H x W x C) to a paddle.Tensor of shape (C x H x W).
@@ -319,26 +379,28 @@ class ToTensor(BaseTransform):
 
         .. code-block:: python
 
-            import numpy as np
-            from PIL import Image
+            >>> from PIL import Image
+            >>> import paddle
+            >>> import paddle.vision.transforms as T
+            >>> import paddle.vision.transforms.functional as F
 
-            import paddle.vision.transforms as T
-            import paddle.vision.transforms.functional as F
-
-            fake_img = Image.fromarray((np.random.rand(4, 5, 3) * 255.).astype(np.uint8))
-
-            transform = T.ToTensor()
-
-            tensor = transform(fake_img)
-
-            print(tensor.shape)
-            # [3, 4, 5]
-
-            print(tensor.dtype)
-            # paddle.float32
+            >>> img_arr = ((paddle.rand((4, 5, 3)) * 255.).astype('uint8')).numpy()
+            >>> fake_img = Image.fromarray(img_arr)
+            >>> transform = T.ToTensor()
+            >>> tensor = transform(fake_img)  # type: ignore[call-overload]
+            >>> print(tensor.shape)
+            [3, 4, 5]
+            >>> print(tensor.dtype)
+            paddle.float32
     """
 
-    def __init__(self, data_format='CHW', keys=None):
+    data_format: DataLayoutImage
+
+    def __init__(
+        self,
+        data_format: DataLayoutImage = 'CHW',
+        keys: _TransformInputKeys | None = None,
+    ) -> None:
         super().__init__(keys)
         self.data_format = data_format
 
@@ -353,7 +415,7 @@ class ToTensor(BaseTransform):
         return F.to_tensor(img, self.data_format)
 
 
-class Resize(BaseTransform):
+class Resize(BaseTransform[_InputT, _RetT]):
     """Resize the input Image to the given size.
 
     Args:
@@ -389,24 +451,30 @@ class Resize(BaseTransform):
 
         .. code-block:: python
 
-            import numpy as np
-            from PIL import Image
-            from paddle.vision.transforms import Resize
+            >>> import numpy as np
+            >>> from PIL import Image
+            >>> from paddle.vision.transforms import Resize
 
-            fake_img = Image.fromarray((np.random.rand(256, 300, 3) * 255.).astype(np.uint8))
-
-            transform = Resize(size=224)
-            converted_img = transform(fake_img)
-            print(converted_img.size)
-            # (262, 224)
-
-            transform = Resize(size=(200,150))
-            converted_img = transform(fake_img)
-            print(converted_img.size)
-            # (150, 200)
+            >>> fake_img = Image.fromarray((np.random.rand(256, 300, 3) * 255.).astype(np.uint8))
+            >>> transform = Resize(size=224)
+            >>> converted_img = transform(fake_img) # type: ignore[call-overload]
+            >>> print(converted_img.size)
+            (262, 224)
+            >>> transform = Resize(size=(200,150))
+            >>> converted_img = transform(fake_img) # type: ignore[call-overload]
+            >>> print(converted_img.size)
+            (150, 200)
     """
 
-    def __init__(self, size, interpolation='bilinear', keys=None):
+    size: Size2
+    interpolation: _InterpolationPil | _InterpolationCv2
+
+    def __init__(
+        self,
+        size: Size2,
+        interpolation: _InterpolationPil | _InterpolationCv2 = 'bilinear',
+        keys: _TransformInputKeys | None = None,
+    ) -> None:
         super().__init__(keys)
         assert isinstance(size, int) or (
             isinstance(size, Iterable) and len(size) == 2
@@ -418,11 +486,11 @@ class Resize(BaseTransform):
         return F.resize(img, self.size, self.interpolation)
 
 
-class RandomResizedCrop(BaseTransform):
+class RandomResizedCrop(BaseTransform[_InputT, _RetT]):
     """Crop the input data to random size and aspect ratio.
     A crop of random size (default: of 0.08 to 1.0) of the original size and a random
     aspect ratio (default: of 3/4 to 1.33) of the original aspect ratio is made.
-    After applying crop transfrom, the input data will be resized to given size.
+    After applying crop transform, the input data will be resized to given size.
 
     Args:
         size (int|list|tuple): Target size of output image, with (height, width) shape.
@@ -456,27 +524,31 @@ class RandomResizedCrop(BaseTransform):
 
         .. code-block:: python
 
-            import numpy as np
-            from PIL import Image
-            from paddle.vision.transforms import RandomResizedCrop
+            >>> import numpy as np
+            >>> from PIL import Image
+            >>> from paddle.vision.transforms import RandomResizedCrop
 
-            transform = RandomResizedCrop(224)
-
-            fake_img = Image.fromarray((np.random.rand(300, 320, 3) * 255.).astype(np.uint8))
-
-            fake_img = transform(fake_img)
-            print(fake_img.size)
+            >>> transform = RandomResizedCrop(224)
+            >>> fake_img = Image.fromarray((np.random.rand(300, 320, 3) * 255.).astype(np.uint8))
+            >>> fake_img = transform(fake_img)  # type: ignore[call-overload]
+            >>> print(fake_img.size)
+            (224, 224)
 
     """
 
+    size: Size2
+    scale: Sequence[float]
+    ratio: Sequence[float]
+    interpolation: _InterpolationPil | _InterpolationCv2
+
     def __init__(
         self,
-        size,
-        scale=(0.08, 1.0),
-        ratio=(3.0 / 4, 4.0 / 3),
-        interpolation='bilinear',
-        keys=None,
-    ):
+        size: Size2,
+        scale: Sequence[float] = (0.08, 1.0),
+        ratio: Sequence[float] = (3.0 / 4, 4.0 / 3),
+        interpolation: _InterpolationPil | _InterpolationCv2 = 'bilinear',
+        keys: _TransformInputKeys | None = None,
+    ) -> None:
         super().__init__(keys)
         if isinstance(size, int):
             self.size = (size, size)
@@ -540,7 +612,13 @@ class RandomResizedCrop(BaseTransform):
         w = paddle.ones([1], dtype="int32") * (width + 1)
 
         def cond(counter, ten, i, j, h, w):
-            return (counter < ten) and (w > width or h > height)
+            return paddle.logical_and(
+                counter < ten,
+                paddle.logical_or(
+                    w > width,
+                    h > height,
+                ),
+            )
 
         def body(counter, ten, i, j, h, w):
             target_area = (
@@ -559,7 +637,10 @@ class RandomResizedCrop(BaseTransform):
             )
 
             i = paddle.static.nn.cond(
-                0 < w <= width and 0 < h <= height,
+                paddle.logical_and(
+                    paddle.logical_and(0 < h, h <= height),
+                    paddle.logical_and(0 < w, w <= width),
+                ),
                 lambda: paddle.uniform(shape=[1], min=0, max=height - h).astype(
                     "int32"
                 ),
@@ -567,7 +648,10 @@ class RandomResizedCrop(BaseTransform):
             )
 
             j = paddle.static.nn.cond(
-                0 < w <= width and 0 < h <= height,
+                paddle.logical_and(
+                    paddle.logical_and(0 < h, h <= height),
+                    paddle.logical_and(0 < w, w <= width),
+                ),
                 lambda: paddle.uniform(shape=[1], min=0, max=width - w).astype(
                     "int32"
                 ),
@@ -598,7 +682,7 @@ class RandomResizedCrop(BaseTransform):
                 lambda: paddle.static.nn.cond(
                     in_ratio > self.ratio[1],
                     lambda: [
-                        paddle.round(height * self.ratio[1]),
+                        paddle.round(height * self.ratio[1]).astype("int32"),
                         height.astype("int32"),
                     ],
                     lambda: [width.astype("int32"), height.astype("int32")],
@@ -610,7 +694,10 @@ class RandomResizedCrop(BaseTransform):
             return i, j, h, w, counter
 
         return paddle.static.nn.cond(
-            0 < w <= width and 0 < h <= height,
+            paddle.logical_and(
+                paddle.logical_and(0 < h, h <= height),
+                paddle.logical_and(0 < w, w <= width),
+            ),
             lambda: [i, j, h, w, counter],
             lambda: central_crop(width, height),
         )
@@ -625,7 +712,7 @@ class RandomResizedCrop(BaseTransform):
         return F.resize(cropped_img, self.size, self.interpolation)
 
 
-class CenterCrop(BaseTransform):
+class CenterCrop(BaseTransform[_InputT, _RetT]):
     """Crops the given the input data at the center.
 
     Args:
@@ -643,19 +730,23 @@ class CenterCrop(BaseTransform):
 
         .. code-block:: python
 
-            import numpy as np
-            from PIL import Image
-            from paddle.vision.transforms import CenterCrop
+            >>> import numpy as np
+            >>> from PIL import Image
+            >>> from paddle.vision.transforms import CenterCrop
 
-            transform = CenterCrop(224)
+            >>> transform = CenterCrop(224)
+            >>> fake_img = Image.fromarray((np.random.rand(300, 320, 3) * 255.).astype(np.uint8))
+            >>> fake_img = transform(fake_img)  # type: ignore[call-overload]
+            >>> print(fake_img.size)
+            (224, 224)
 
-            fake_img = Image.fromarray((np.random.rand(300, 320, 3) * 255.).astype(np.uint8))
-
-            fake_img = transform(fake_img)
-            print(fake_img.size)
     """
 
-    def __init__(self, size, keys=None):
+    size: Size2
+
+    def __init__(
+        self, size: Size2, keys: _TransformInputKeys | None = None
+    ) -> None:
         super().__init__(keys)
         if isinstance(size, numbers.Number):
             self.size = (int(size), int(size))
@@ -666,7 +757,7 @@ class CenterCrop(BaseTransform):
         return F.center_crop(img, self.size)
 
 
-class RandomHorizontalFlip(BaseTransform):
+class RandomHorizontalFlip(BaseTransform[_InputT, _RetT]):
     """Horizontally flip the input data randomly with a given probability.
 
     Args:
@@ -675,7 +766,7 @@ class RandomHorizontalFlip(BaseTransform):
 
     Shape:
         - img(PIL.Image|np.ndarray|Paddle.Tensor): The input image with shape (H x W x C).
-        - output(PIL.Image|np.ndarray|Paddle.Tensor): A horiziotal flipped image.
+        - output(PIL.Image|np.ndarray|Paddle.Tensor): A horizontal flipped image.
 
     Returns:
         A callable object of RandomHorizontalFlip.
@@ -684,19 +775,28 @@ class RandomHorizontalFlip(BaseTransform):
 
         .. code-block:: python
 
-            import numpy as np
-            from PIL import Image
-            from paddle.vision.transforms import RandomHorizontalFlip
+            >>> import paddle
+            >>> fake_img = paddle.to_tensor([[[0, 0, 1], [0, 0, 1], [1, 1, 1]]])
+            >>> print(fake_img)
+            Tensor(shape=[1, 3, 3], dtype=int64, place=Place(gpu:0), stop_gradient=True,
+                   [[[0, 0, 1],
+                     [0, 0, 1],
+                     [1, 1, 1]]])
+            >>> transform = paddle.vision.transforms.RandomHorizontalFlip(prob=1)
+            >>> result = transform(fake_img)
+            >>> print(result)
+            Tensor(shape=[1, 3, 3], dtype=int64, place=Place(gpu:0), stop_gradient=True,
+                   [[[1, 0, 0],
+                     [1, 0, 0],
+                     [1, 1, 1]]])
 
-            transform = RandomHorizontalFlip(0.5)
-
-            fake_img = Image.fromarray((np.random.rand(300, 320, 3) * 255.).astype(np.uint8))
-
-            fake_img = transform(fake_img)
-            print(fake_img.size)
     """
 
-    def __init__(self, prob=0.5, keys=None):
+    prob: float
+
+    def __init__(
+        self, prob: float = 0.5, keys: _TransformInputKeys | None = None
+    ) -> None:
         super().__init__(keys)
         assert 0 <= prob <= 1, "probability must be between 0 and 1"
         self.prob = prob
@@ -720,7 +820,7 @@ class RandomHorizontalFlip(BaseTransform):
         )
 
 
-class RandomVerticalFlip(BaseTransform):
+class RandomVerticalFlip(BaseTransform[_InputT, _RetT]):
     """Vertically flip the input data randomly with a given probability.
 
     Args:
@@ -738,20 +838,28 @@ class RandomVerticalFlip(BaseTransform):
 
         .. code-block:: python
 
-            import numpy as np
-            from PIL import Image
-            from paddle.vision.transforms import RandomVerticalFlip
-
-            transform = RandomVerticalFlip()
-
-            fake_img = Image.fromarray((np.random.rand(300, 320, 3) * 255.).astype(np.uint8))
-
-            fake_img = transform(fake_img)
-            print(fake_img.size)
+            >>> import paddle
+            >>> fake_img = paddle.to_tensor([[[0, 0, 1], [0, 0, 1], [1, 1, 1]]])
+            >>> print(fake_img)
+            Tensor(shape=[1, 3, 3], dtype=int64, place=Place(gpu:0), stop_gradient=True,
+                   [[[0, 0, 1],
+                     [0, 0, 1],
+                     [1, 1, 1]]])
+            >>> transform = paddle.vision.transforms.RandomVerticalFlip(prob=1)
+            >>> result = transform(fake_img)
+            >>> print(result)
+            Tensor(shape=[1, 3, 3], dtype=int64, place=Place(gpu:0), stop_gradient=True,
+                   [[[1, 1, 1],
+                     [0, 0, 1],
+                     [0, 0, 1]]])
 
     """
 
-    def __init__(self, prob=0.5, keys=None):
+    prob: float
+
+    def __init__(
+        self, prob: float = 0.5, keys: _TransformInputKeys | None = None
+    ) -> None:
         super().__init__(keys)
         assert 0 <= prob <= 1, "probability must be between 0 and 1"
         self.prob = prob
@@ -775,7 +883,7 @@ class RandomVerticalFlip(BaseTransform):
         )
 
 
-class Normalize(BaseTransform):
+class Normalize(BaseTransform[_InputT, _RetT]):
     """Normalize the input data with mean and standard deviation.
     Given mean: ``(M1,...,Mn)`` and std: ``(S1,..,Sn)`` for ``n`` channels,
     this transform will normalize each channel of the input data.
@@ -799,27 +907,38 @@ class Normalize(BaseTransform):
     Examples:
 
         .. code-block:: python
-          :name: code-example
-            import paddle
-            from paddle.vision.transforms import Normalize
+            :name: code-example
 
-            normalize = Normalize(mean=[127.5, 127.5, 127.5],
-                                  std=[127.5, 127.5, 127.5],
-                                  data_format='HWC')
+            >>> import paddle
+            >>> from paddle.vision.transforms import Normalize
+            >>> paddle.seed(2023)
 
-            fake_img = paddle.rand([300,320,3]).numpy() * 255.
-
-            fake_img = normalize(fake_img)
-            print(fake_img.shape)
-            # (300, 320, 3)
-            print(fake_img.max(), fake_img.min())
-            # 0.99999905 -0.999974
+            >>> normalize = Normalize(mean=[127.5, 127.5, 127.5],
+            ...                         std=[127.5, 127.5, 127.5],
+            ...                         data_format='HWC')
+            ...
+            >>> fake_img = paddle.rand([300,320,3]).numpy() * 255.
+            >>> fake_img = normalize(fake_img)  # type: ignore[call-overload]
+            >>> print(fake_img.shape)
+            (300, 320, 3)
+            >>> print(fake_img.max(), fake_img.min())
+            0.99999464 -0.9999929
 
     """
 
+    mean: Sequence[float]
+    std: Sequence[float]
+    data_format: DataLayoutImage
+    to_rgb: bool
+
     def __init__(
-        self, mean=0.0, std=1.0, data_format='CHW', to_rgb=False, keys=None
-    ):
+        self,
+        mean: float | Sequence[float] = 0.0,
+        std: float | Sequence[float] = 1.0,
+        data_format: DataLayoutImage = 'CHW',
+        to_rgb: bool = False,
+        keys: _TransformInputKeys | None = None,
+    ) -> None:
         super().__init__(keys)
         if isinstance(mean, numbers.Number):
             mean = [mean, mean, mean]
@@ -838,7 +957,7 @@ class Normalize(BaseTransform):
         )
 
 
-class Transpose(BaseTransform):
+class Transpose(BaseTransform[_InputT, _RetT]):
     """Transpose input data to a target format.
     For example, most transforms use HWC mode image,
     while the Neural Network might use CHW mode input tensor.
@@ -860,20 +979,25 @@ class Transpose(BaseTransform):
 
         .. code-block:: python
 
-            import numpy as np
-            from PIL import Image
-            from paddle.vision.transforms import Transpose
+            >>> import numpy as np
+            >>> from PIL import Image
+            >>> from paddle.vision.transforms import Transpose
 
-            transform = Transpose()
-
-            fake_img = Image.fromarray((np.random.rand(300, 320, 3) * 255.).astype(np.uint8))
-
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
+            >>> transform = Transpose()
+            >>> fake_img = Image.fromarray((np.random.rand(300, 320, 3) * 255.).astype(np.uint8))
+            >>> fake_img = transform(fake_img)  # type: ignore[call-overload]
+            >>> print(fake_img.shape)
+            (3, 300, 320)
 
     """
 
-    def __init__(self, order=(2, 0, 1), keys=None):
+    order: Sequence[int]
+
+    def __init__(
+        self,
+        order: Sequence[int] = (2, 0, 1),
+        keys: _TransformInputKeys | None = None,
+    ) -> None:
         super().__init__(keys)
         self.order = order
 
@@ -889,7 +1013,7 @@ class Transpose(BaseTransform):
         return img.transpose(self.order)
 
 
-class BrightnessTransform(BaseTransform):
+class BrightnessTransform(BaseTransform[_InputT, _RetT]):
     """Adjust brightness of the image.
 
     Args:
@@ -899,7 +1023,7 @@ class BrightnessTransform(BaseTransform):
 
     Shape:
         - img(PIL.Image|np.ndarray|Paddle.Tensor): The input image with shape (H x W x C).
-        - output(PIL.Image|np.ndarray|Paddle.Tensor): An image with a transform in brghtness.
+        - output(PIL.Image|np.ndarray|Paddle.Tensor): An image with a transform in brightness.
 
     Returns:
         A callable object of BrightnessTransform.
@@ -908,19 +1032,27 @@ class BrightnessTransform(BaseTransform):
 
         .. code-block:: python
 
-            import numpy as np
-            from PIL import Image
-            from paddle.vision.transforms import BrightnessTransform
+            >>> import numpy as np
+            >>> from PIL import Image
+            >>> from paddle.vision.transforms import BrightnessTransform
+            >>> np.random.seed(2023)
 
-            transform = BrightnessTransform(0.4)
-
-            fake_img = Image.fromarray((np.random.rand(224, 224, 3) * 255.).astype(np.uint8))
-
-            fake_img = transform(fake_img)
+            >>> transform = BrightnessTransform(0.4)
+            >>> fake_img = Image.fromarray((np.random.rand(224, 224, 3) * 255.).astype(np.uint8))
+            >>> print(fake_img.load()[1,1]) # type: ignore[index]
+            (60, 169, 34)
+            >>> # doctest: +SKIP('random sample in Brightness function')
+            >>> fake_img = transform(fake_img) # type: ignore[call-overload]
+            >>> print(fake_img.load()[1,1])
+            (68, 192, 38)
 
     """
 
-    def __init__(self, value, keys=None):
+    value: float
+
+    def __init__(
+        self, value: float, keys: _TransformInputKeys | None = None
+    ) -> None:
         super().__init__(keys)
         self.value = _check_input(value, 'brightness')
 
@@ -932,7 +1064,7 @@ class BrightnessTransform(BaseTransform):
         return F.adjust_brightness(img, brightness_factor)
 
 
-class ContrastTransform(BaseTransform):
+class ContrastTransform(BaseTransform[_InputT, _RetT]):
     """Adjust contrast of the image.
 
     Args:
@@ -951,19 +1083,23 @@ class ContrastTransform(BaseTransform):
 
         .. code-block:: python
 
-            import numpy as np
-            from PIL import Image
-            from paddle.vision.transforms import ContrastTransform
+            >>> import numpy as np
+            >>> from PIL import Image
+            >>> from paddle.vision.transforms import ContrastTransform
 
-            transform = ContrastTransform(0.4)
-
-            fake_img = Image.fromarray((np.random.rand(224, 224, 3) * 255.).astype(np.uint8))
-
-            fake_img = transform(fake_img)
+            >>> transform = ContrastTransform(0.4)
+            >>> fake_img = Image.fromarray((np.random.rand(224, 224, 3) * 255.).astype(np.uint8))
+            >>> fake_img = transform(fake_img)  # type: ignore[call-overload]
+            >>> print(fake_img.size)
+            (224, 224)
 
     """
 
-    def __init__(self, value, keys=None):
+    value: float
+
+    def __init__(
+        self, value: float, keys: _TransformInputKeys | None = None
+    ) -> None:
         super().__init__(keys)
         if value < 0:
             raise ValueError("contrast value should be non-negative")
@@ -977,7 +1113,7 @@ class ContrastTransform(BaseTransform):
         return F.adjust_contrast(img, contrast_factor)
 
 
-class SaturationTransform(BaseTransform):
+class SaturationTransform(BaseTransform[_InputT, _RetT]):
     """Adjust saturation of the image.
 
     Args:
@@ -996,19 +1132,22 @@ class SaturationTransform(BaseTransform):
 
         .. code-block:: python
 
-            import numpy as np
-            from PIL import Image
-            from paddle.vision.transforms import SaturationTransform
+            >>> import numpy as np
+            >>> from PIL import Image
+            >>> from paddle.vision.transforms import SaturationTransform
 
-            transform = SaturationTransform(0.4)
-
-            fake_img = Image.fromarray((np.random.rand(224, 224, 3) * 255.).astype(np.uint8))
-
-            fake_img = transform(fake_img)
-
+            >>> transform = SaturationTransform(0.4)
+            >>> fake_img = Image.fromarray((np.random.rand(224, 224, 3) * 255.).astype(np.uint8))
+            >>> fake_img = transform(fake_img)  # type: ignore[call-overload]
+            >>> print(fake_img.size)
+            (224, 224)
     """
 
-    def __init__(self, value, keys=None):
+    value: float
+
+    def __init__(
+        self, value: float, keys: _TransformInputKeys | None = None
+    ) -> None:
         super().__init__(keys)
         self.value = _check_input(value, 'saturation')
 
@@ -1020,7 +1159,7 @@ class SaturationTransform(BaseTransform):
         return F.adjust_saturation(img, saturation_factor)
 
 
-class HueTransform(BaseTransform):
+class HueTransform(BaseTransform[_InputT, _RetT]):
     """Adjust hue of the image.
 
     Args:
@@ -1039,19 +1178,23 @@ class HueTransform(BaseTransform):
 
         .. code-block:: python
 
-            import numpy as np
-            from PIL import Image
-            from paddle.vision.transforms import HueTransform
+            >>> import numpy as np
+            >>> from PIL import Image
+            >>> from paddle.vision.transforms import HueTransform
 
-            transform = HueTransform(0.4)
-
-            fake_img = Image.fromarray((np.random.rand(224, 224, 3) * 255.).astype(np.uint8))
-
-            fake_img = transform(fake_img)
+            >>> transform = HueTransform(0.4)
+            >>> fake_img = Image.fromarray((np.random.rand(224, 224, 3) * 255.).astype(np.uint8))
+            >>> fake_img = transform(fake_img)  # type: ignore[call-overload]
+            >>> print(fake_img.size)
+            (224, 224)
 
     """
 
-    def __init__(self, value, keys=None):
+    value: float
+
+    def __init__(
+        self, value: float, keys: _TransformInputKeys | None = None
+    ) -> None:
         super().__init__(keys)
         self.value = _check_input(
             value, 'hue', center=0, bound=(-0.5, 0.5), clip_first_on_zero=False
@@ -1065,7 +1208,7 @@ class HueTransform(BaseTransform):
         return F.adjust_hue(img, hue_factor)
 
 
-class ColorJitter(BaseTransform):
+class ColorJitter(BaseTransform[_InputT, _RetT]):
     """Randomly change the brightness, contrast, saturation and hue of an image.
 
     Args:
@@ -1090,21 +1233,31 @@ class ColorJitter(BaseTransform):
 
         .. code-block:: python
 
-            import numpy as np
-            from PIL import Image
-            from paddle.vision.transforms import ColorJitter
+            >>> import numpy as np
+            >>> from PIL import Image
+            >>> from paddle.vision.transforms import ColorJitter
 
-            transform = ColorJitter(0.4, 0.4, 0.4, 0.4)
-
-            fake_img = Image.fromarray((np.random.rand(224, 224, 3) * 255.).astype(np.uint8))
-
-            fake_img = transform(fake_img)
+            >>> transform = ColorJitter(0.4, 0.4, 0.4, 0.4)
+            >>> fake_img = Image.fromarray((np.random.rand(224, 224, 3) * 255.).astype(np.uint8))
+            >>> fake_img = transform(fake_img)  # type: ignore[call-overload]
+            >>> print(fake_img.size)
+            (224, 224)
 
     """
 
+    brightness: float
+    contrast: float
+    saturation: float
+    hue: float
+
     def __init__(
-        self, brightness=0, contrast=0, saturation=0, hue=0, keys=None
-    ):
+        self,
+        brightness: float = 0,
+        contrast: float = 0,
+        saturation: float = 0,
+        hue: float = 0,
+        keys: _TransformInputKeys | None = None,
+    ) -> None:
         super().__init__(keys)
         self.brightness = brightness
         self.contrast = contrast
@@ -1153,7 +1306,7 @@ class ColorJitter(BaseTransform):
         return transform(img)
 
 
-class RandomCrop(BaseTransform):
+class RandomCrop(BaseTransform[_InputT, _RetT]):
     """Crops the given CV Image at a random location.
 
     Args:
@@ -1195,28 +1348,36 @@ class RandomCrop(BaseTransform):
     Examples:
 
         .. code-block:: python
-          :name: code-example1
+            :name: code-example1
 
-            import paddle
-            from paddle.vision.transforms import RandomCrop
-            transform = RandomCrop(224)
+            >>> import paddle
+            >>> from paddle.vision.transforms import RandomCrop
+            >>> transform = RandomCrop(224)
 
-            fake_img = paddle.randint(0, 255, shape=(3, 324,300), dtype = 'int32')
-            print(fake_img.shape) # [3, 324, 300]
+            >>> fake_img = paddle.randint(0, 255, shape=(3, 324,300), dtype = 'int32')
+            >>> print(fake_img.shape)
+            [3, 324, 300]
 
-            crop_img = transform(fake_img)
-            print(crop_img.shape) # [3, 224, 224]
+            >>> crop_img = transform(fake_img)
+            >>> print(crop_img.shape)
+            [3, 224, 224]
     """
+
+    size: Size2
+    padding: Size2 | Size4 | None
+    pad_if_needed: bool
+    fill: Size3
+    padding_mode: _PaddingMode
 
     def __init__(
         self,
-        size,
-        padding=None,
-        pad_if_needed=False,
-        fill=0,
-        padding_mode='constant',
-        keys=None,
-    ):
+        size: Size2,
+        padding: Size2 | Size4 | None = None,
+        pad_if_needed: bool = False,
+        fill: Size3 = 0,
+        padding_mode: _PaddingMode = 'constant',
+        keys: _TransformInputKeys | None = None,
+    ) -> None:
         super().__init__(keys)
         if isinstance(size, numbers.Number):
             self.size = (int(size), int(size))
@@ -1279,7 +1440,7 @@ class RandomCrop(BaseTransform):
         return F.crop(img, i, j, h, w)
 
 
-class Pad(BaseTransform):
+class Pad(BaseTransform[_InputT, _RetT]):
     """Pads the given CV Image on all sides with the given "pad" value.
 
     Args:
@@ -1297,14 +1458,14 @@ class Pad(BaseTransform):
             ``reflect`` means pads with reflection of image (without repeating the last value on the edge)
             padding ``[1, 2, 3, 4]`` with 2 elements on both sides in reflect mode
             will result in ``[3, 2, 1, 2, 3, 4, 3, 2]``.
-            ``symmetric`` menas pads with reflection of image (repeating the last value on the edge)
+            ``symmetric`` means pads with reflection of image (repeating the last value on the edge)
             padding ``[1, 2, 3, 4]`` with 2 elements on both sides in symmetric mode
             will result in ``[2, 1, 1, 2, 3, 4, 4, 3]``.
         keys (list[str]|tuple[str], optional): Same as ``BaseTransform``. Default: None.
 
     Shape:
         - img(PIL.Image|np.ndarray|Paddle.Tensor): The input image with shape (H x W x C).
-        - output(PIL.Image|np.ndarray|Paddle.Tensor): A paded image.
+        - output(PIL.Image|np.ndarray|Paddle.Tensor): A padded image.
 
     Returns:
         A callable object of Pad.
@@ -1313,19 +1474,28 @@ class Pad(BaseTransform):
 
         .. code-block:: python
 
-            import numpy as np
-            from PIL import Image
-            from paddle.vision.transforms import Pad
+            >>> import numpy as np
+            >>> from PIL import Image
+            >>> from paddle.vision.transforms import Pad
 
-            transform = Pad(2)
-
-            fake_img = Image.fromarray((np.random.rand(224, 224, 3) * 255.).astype(np.uint8))
-
-            fake_img = transform(fake_img)
-            print(fake_img.size)
+            >>> transform = Pad(2)
+            >>> fake_img = Image.fromarray((np.random.rand(224, 224, 3) * 255.).astype(np.uint8))
+            >>> fake_img = transform(fake_img)  # type: ignore[call-overload]
+            >>> print(fake_img.size)
+            (228, 228)
     """
 
-    def __init__(self, padding, fill=0, padding_mode='constant', keys=None):
+    padding: Size2 | Size4
+    fill: Size3
+    padding_mode: _PaddingMode
+
+    def __init__(
+        self,
+        padding: Size2 | Size4,
+        fill: Size3 = 0,
+        padding_mode: _PaddingMode = 'constant',
+        keys: _TransformInputKeys | None = None,
+    ) -> None:
         assert isinstance(padding, (numbers.Number, list, tuple))
         assert isinstance(fill, (numbers.Number, str, list, tuple))
         assert padding_mode in ['constant', 'edge', 'reflect', 'symmetric']
@@ -1382,7 +1552,7 @@ def _setup_angle(x, name, req_sizes=(2,)):
     return [float(d) for d in x]
 
 
-class RandomAffine(BaseTransform):
+class RandomAffine(BaseTransform[_InputT, _RetT]):
     """Random affine transformation of the image.
 
     Args:
@@ -1413,10 +1583,10 @@ class RandomAffine(BaseTransform):
             - "bicubic": cv2.INTER_CUBIC
         fill (int|list|tuple, optional): Pixel fill value for the area outside the transformed
             image. If given a number, the value is used for all bands respectively.
-        center (2-tuple, optional): Optional center of rotation, (x, y).
+        center (tuple|None, optional): Optional center of rotation, (x, y).
             Origin is the upper left corner.
             Default is the center of the image.
-        keys (list[str]|tuple[str], optional): Same as ``BaseTransform``. Default: None.
+        keys (list[str]|tuple[str]|None, optional): Same as ``BaseTransform``. Default: None.
 
     Shape:
         - img(PIL.Image|np.ndarray|Paddle.Tensor): The input image with shape (H x W x C).
@@ -1429,28 +1599,47 @@ class RandomAffine(BaseTransform):
 
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.transforms import RandomAffine
+            >>> import paddle
+            >>> from paddle.vision.transforms import RandomAffine
 
-            transform = RandomAffine([-90, 90], translate=[0.2, 0.2], scale=[0.5, 0.5], shear=[-10, 10])
-
-            fake_img = paddle.randn((3, 256, 300)).astype(paddle.float32)
-
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
+            >>> transform = RandomAffine([-90, 90], translate=[0.2, 0.2], scale=[0.5, 0.5], shear=[-10, 10])
+            >>> fake_img = paddle.randn((3, 256, 300)).astype(paddle.float32)
+            >>> fake_img = transform(fake_img)
+            >>> print(fake_img.shape)
+            [3, 256, 300]
     """
+
+    degrees: float | list[float] | tuple[float, float]
+    translate: list[float] | tuple[float, float] | None
+    scale: list[float] | tuple[float, float] | None
+    shear: (
+        float
+        | list[float]
+        | tuple[float, float]
+        | tuple[float, float, float, float]
+        | None
+    )
+    interpolation: _InterpolationPil | _InterpolationCv2
+    fill: Size3
+    center: list[float] | tuple[float, float] | None
 
     def __init__(
         self,
-        degrees,
-        translate=None,
-        scale=None,
-        shear=None,
-        interpolation='nearest',
-        fill=0,
-        center=None,
-        keys=None,
-    ):
+        degrees: float | list[float] | tuple[float, float],
+        translate: list[float] | tuple[float, float] | None = None,
+        scale: list[float] | tuple[float, float] | None = None,
+        shear: (
+            float
+            | list[float]
+            | tuple[float, float]
+            | tuple[float, float, float, float]
+            | None
+        ) = None,
+        interpolation: _InterpolationPil | _InterpolationCv2 = 'nearest',
+        fill: Size3 = 0,
+        center: list[float] | tuple[float, float] | None = None,
+        keys: _TransformInputKeys | None = None,
+    ) -> None:
         self.degrees = _setup_angle(degrees, name="degrees", req_sizes=(2,))
 
         super().__init__(keys)
@@ -1546,7 +1735,7 @@ class RandomAffine(BaseTransform):
         )
 
 
-class RandomRotation(BaseTransform):
+class RandomRotation(BaseTransform[_InputT, _RetT]):
     """Rotates the image by angle.
 
     Args:
@@ -1583,27 +1772,32 @@ class RandomRotation(BaseTransform):
 
         .. code-block:: python
 
-            import numpy as np
-            from PIL import Image
-            from paddle.vision.transforms import RandomRotation
+            >>> import numpy as np
+            >>> from PIL import Image
+            >>> from paddle.vision.transforms import RandomRotation
 
-            transform = RandomRotation(90)
-
-            fake_img = Image.fromarray((np.random.rand(200, 150, 3) * 255.).astype(np.uint8))
-
-            fake_img = transform(fake_img)
-            print(fake_img.size)
+            >>> transform = RandomRotation(90)
+            >>> fake_img = Image.fromarray((np.random.rand(200, 150, 3) * 255.).astype(np.uint8))
+            >>> fake_img = transform(fake_img)  # type: ignore[call-overload]
+            >>> print(fake_img.size)
+            (150, 200)
     """
+
+    degrees: Sequence[float]
+    interpolation: _InterpolationPil | _InterpolationCv2
+    expand: bool
+    center: tuple[float, float]
+    fill: Size3
 
     def __init__(
         self,
-        degrees,
-        interpolation='nearest',
-        expand=False,
-        center=None,
-        fill=0,
-        keys=None,
-    ):
+        degrees: float | Sequence[float],
+        interpolation: _InterpolationPil | _InterpolationCv2 = 'nearest',
+        expand: bool = False,
+        center: tuple[float, float] | None = None,
+        fill: Size3 = 0,
+        keys: _TransformInputKeys | None = None,
+    ) -> None:
         if isinstance(degrees, numbers.Number):
             if degrees < 0:
                 raise ValueError(
@@ -1649,7 +1843,7 @@ class RandomRotation(BaseTransform):
         )
 
 
-class RandomPerspective(BaseTransform):
+class RandomPerspective(BaseTransform[_InputT, _RetT]):
     """Random perspective transformation with a given probability.
 
     Args:
@@ -1683,25 +1877,29 @@ class RandomPerspective(BaseTransform):
 
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.transforms import RandomPerspective
+            >>> import paddle
+            >>> from paddle.vision.transforms import RandomPerspective
 
-            transform = RandomPerspective(prob=1.0, distortion_scale=0.9)
-
-            fake_img = paddle.randn((3, 200, 150)).astype(paddle.float32)
-
-            fake_img = transform(fake_img)
-            print(fake_img.shape)
+            >>> transform = RandomPerspective(prob=1.0, distortion_scale=0.9)
+            >>> fake_img = paddle.randn((3, 200, 150)).astype(paddle.float32)
+            >>> fake_img = transform(fake_img)
+            >>> print(fake_img.shape)
+            [3, 200, 150]
     """
+
+    prob: float
+    distortion_scale: float
+    interpolation: _InterpolationPil | _InterpolationCv2
+    fill: Size3
 
     def __init__(
         self,
-        prob=0.5,
-        distortion_scale=0.5,
-        interpolation='nearest',
-        fill=0,
-        keys=None,
-    ):
+        prob: float = 0.5,
+        distortion_scale: float = 0.5,
+        interpolation: _InterpolationPil | _InterpolationCv2 = 'nearest',
+        fill: Size3 = 0,
+        keys: _TransformInputKeys | None = None,
+    ) -> None:
         super().__init__(keys)
         assert 0 <= prob <= 1, "probability must be between 0 and 1"
         assert (
@@ -1715,7 +1913,9 @@ class RandomPerspective(BaseTransform):
         self.interpolation = interpolation
         self.fill = fill
 
-    def get_params(self, width, height, distortion_scale):
+    def get_params(
+        self, width: int, height: int, distortion_scale: float
+    ) -> tuple[list[list[int]], list[list[int]]]:
         """
         Returns:
             startpoints (list[list[int]]): [top-left, top-right, bottom-right, bottom-left] of the original image,
@@ -1786,7 +1986,7 @@ class RandomPerspective(BaseTransform):
         return img
 
 
-class Grayscale(BaseTransform):
+class Grayscale(BaseTransform[_InputT, _RetT]):
     """Converts image to grayscale.
 
     Args:
@@ -1806,19 +2006,24 @@ class Grayscale(BaseTransform):
 
         .. code-block:: python
 
-            import numpy as np
-            from PIL import Image
-            from paddle.vision.transforms import Grayscale
+            >>> import numpy as np
+            >>> from PIL import Image
+            >>> from paddle.vision.transforms import Grayscale
 
-            transform = Grayscale()
-
-            fake_img = Image.fromarray((np.random.rand(224, 224, 3) * 255.).astype(np.uint8))
-
-            fake_img = transform(fake_img)
-            print(np.array(fake_img).shape)
+            >>> transform = Grayscale()
+            >>> fake_img = Image.fromarray((np.random.rand(224, 224, 3) * 255.).astype(np.uint8))
+            >>> fake_img = transform(fake_img)  # type: ignore[call-overload]
+            >>> print(np.array(fake_img).shape)
+            (224, 224)
     """
 
-    def __init__(self, num_output_channels=1, keys=None):
+    num_output_channels: int
+
+    def __init__(
+        self,
+        num_output_channels: int = 1,
+        keys: _TransformInputKeys | None = None,
+    ) -> None:
         super().__init__(keys)
         self.num_output_channels = num_output_channels
 
@@ -1833,7 +2038,7 @@ class Grayscale(BaseTransform):
         return F.to_grayscale(img, self.num_output_channels)
 
 
-class RandomErasing(BaseTransform):
+class RandomErasing(BaseTransform[_InputT, _RetT]):
     """Erase the pixels in a rectangle region selected randomly.
 
     Args:
@@ -1843,7 +2048,7 @@ class RandomErasing(BaseTransform):
         ratio (sequence, optional): Aspect ratio range of the erased area. Default: (0.3, 3.3).
         value (int|float|sequence|str, optional): The value each pixel in erased area will be replaced with.
                                If value is a single number, all pixels will be erased with this value.
-                               If value is a sequence with length 3, the R, G, B channels will be ereased
+                               If value is a sequence with length 3, the R, G, B channels will be erased
                                respectively. If value is set to "random", each pixel will be erased with
                                random values. Default: 0.
         inplace (bool, optional): Whether this transform is inplace. Default: False.
@@ -1861,24 +2066,37 @@ class RandomErasing(BaseTransform):
 
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            fake_img = paddle.randn((3, 10, 10)).astype(paddle.float32)
-            transform = paddle.vision.transforms.RandomErasing()
-            result = transform(fake_img)
+            >>> fake_img = paddle.randn((1, 5, 5)).astype(paddle.float32)
+            >>> transform = paddle.vision.transforms.RandomErasing()
+            >>> result = transform(fake_img)
+            >>> # doctest: +SKIP('random sample')
+            >>> print(result)
+            Tensor(shape=[1, 5, 5], dtype=float32, place=Place(gpu:0), stop_gradient=True,
+            [[[-0.22141267, -0.71004093,  1.71224928,  2.99622107, -0.82959402],
+              [ 0.36916021, -0.25601348,  0.86669374,  1.27504587, -0.56462914],
+              [-0.45704395, -0.87613666,  1.12195814, -0.87974882,  0.04902615],
+              [-0.91549885, -0.15066874,  1.26381516,  0.        ,  0.        ],
+              [ 0.87887472, -1.59914243, -0.73970413,  0.        ,  0.        ]]])
 
-            print(result)
     """
+
+    prob: float
+    scale: Sequence[float]
+    ratio: Sequence[float]
+    value: int | float | Sequence[float] | str
+    inplace: bool
 
     def __init__(
         self,
-        prob=0.5,
-        scale=(0.02, 0.33),
-        ratio=(0.3, 3.3),
-        value=0,
-        inplace=False,
-        keys=None,
-    ):
+        prob: float = 0.5,
+        scale: Sequence[float] = (0.02, 0.33),
+        ratio: Sequence[float] = (0.3, 3.3),
+        value: float | Sequence[float] | str = 0,
+        inplace: bool = False,
+        keys: _TransformInputKeys | None = None,
+    ) -> None:
         super().__init__(keys)
         assert isinstance(
             scale, (tuple, list)
@@ -1915,7 +2133,7 @@ class RandomErasing(BaseTransform):
             scale (sequence, optional): The proportional range of the erased area to the input image.
             ratio (sequence, optional): Aspect ratio range of the erased area.
             value (sequence | None): The value each pixel in erased area will be replaced with.
-                               If value is a sequence with length 3, the R, G, B channels will be ereased
+                               If value is a sequence with length 3, the R, G, B channels will be erased
                                respectively. If value is None, each pixel will be erased with random values.
 
         Returns:
@@ -1965,7 +2183,7 @@ class RandomErasing(BaseTransform):
             scale (sequence, optional): The proportional range of the erased area to the input image.
             ratio (sequence, optional): Aspect ratio range of the erased area.
             value (sequence | None): The value each pixel in erased area will be replaced with.
-                               If value is a sequence with length 3, the R, G, B channels will be ereased
+                               If value is a sequence with length 3, the R, G, B channels will be erased
                                respectively. If value is None, each pixel will be erased with random values.
 
         Returns:
@@ -1978,7 +2196,13 @@ class RandomErasing(BaseTransform):
         log_ratio = np.log(np.array(ratio))
 
         def cond(counter, ten, erase_h, erase_w):
-            return counter < ten and (erase_h >= h or erase_w >= w)
+            return paddle.logical_and(
+                counter < ten,
+                paddle.logical_or(
+                    erase_h >= h,
+                    erase_w > w,
+                ),
+            )
 
         def body(counter, ten, erase_h, erase_w):
             erase_area = (
@@ -2018,7 +2242,7 @@ class RandomErasing(BaseTransform):
 
         zero = paddle.zeros([1]).astype("int32")
         top = paddle.static.nn.cond(
-            erase_h < h and erase_w < w,
+            paddle.logical_and(erase_h < h, erase_w < w),
             lambda: paddle.uniform(
                 shape=[1], min=0, max=h - erase_h + 1
             ).astype("int32"),
@@ -2026,7 +2250,7 @@ class RandomErasing(BaseTransform):
         )
 
         left = paddle.static.nn.cond(
-            erase_h < h and erase_w < w,
+            paddle.logical_and(erase_h < h, erase_w < w),
             lambda: paddle.uniform(
                 shape=[1], min=0, max=w - erase_w + 1
             ).astype("int32"),
@@ -2034,15 +2258,19 @@ class RandomErasing(BaseTransform):
         )
 
         erase_h = paddle.static.nn.cond(
-            erase_h < h and erase_w < w, lambda: erase_h, lambda: h
+            paddle.logical_and(erase_h < h, erase_w < w),
+            lambda: erase_h,
+            lambda: h,
         )
 
         erase_w = paddle.static.nn.cond(
-            erase_h < h and erase_w < w, lambda: erase_w, lambda: w
+            paddle.logical_and(erase_h < h, erase_w < w),
+            lambda: erase_w,
+            lambda: w,
         )
 
         v = paddle.static.nn.cond(
-            erase_h < h and erase_w < w, lambda: v, lambda: img
+            paddle.logical_and(erase_h < h, erase_w < w), lambda: v, lambda: img
         )
 
         return top, left, erase_h, erase_w, v, counter

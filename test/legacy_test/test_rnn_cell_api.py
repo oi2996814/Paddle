@@ -15,18 +15,21 @@
 import sys
 import unittest
 
-import numpy
 import numpy as np
 
-sys.path.append("../../test/rnn")
-from rnn_numpy import LSTMCell
-from rnn_numpy import rnn as numpy_rnn
+from paddle.base.layer_helper_base import LayerHelperBase
+
+sys.path.append("../rnn")
+from rnn_numpy import (
+    LSTMCell,
+    rnn as numpy_rnn,
+)
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core, framework
-from paddle.fluid.executor import Executor
-from paddle.fluid.framework import Program, program_guard
+from paddle import base
+from paddle.base import core
+from paddle.base.executor import Executor
+from paddle.base.framework import Program, program_guard
 from paddle.nn.layer.rnn import rnn as dynamic_rnn
 
 paddle.enable_static()
@@ -145,6 +148,7 @@ class TestRnn(unittest.TestCase):
 
     def test_run(self):
         numpy_cell = LSTMCell(self.input_size, self.hidden_size)
+        LayerHelperBase.set_default_dtype("float64")
         dynamic_cell = paddle.nn.LSTMCell(self.input_size, self.hidden_size)
 
         if core.is_compiled_with_cuda():
@@ -152,7 +156,7 @@ class TestRnn(unittest.TestCase):
         else:
             place = core.CPUPlace()
         exe = Executor(place)
-        exe.run(framework.default_startup_program())
+        exe.run(paddle.static.default_startup_program())
 
         state = numpy_cell.parameters
         for k, v in dynamic_cell.named_parameters():
@@ -160,7 +164,7 @@ class TestRnn(unittest.TestCase):
                 'float64'
             )
             setattr(numpy_cell, k, param)
-            fluid.global_scope().find_var(v.name).get_tensor().set(param, place)
+            base.global_scope().find_var(v.name).get_tensor().set(param, place)
 
         sequence_length = paddle.static.data(
             name="sequence_length", shape=[None], dtype='int64'

@@ -15,12 +15,12 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
-from paddle import _C_ops, fluid
-from paddle.fluid import core
-from paddle.fluid.framework import in_dygraph_mode
+from paddle import _C_ops, base
+from paddle.base import core
+from paddle.base.framework import in_dygraph_mode
 
 
 # hack method for test p_norm final state
@@ -31,39 +31,79 @@ def p_norm_python_api(
         return _C_ops.p_norm(x, p, axis, epsilon, keepdim, as_vector)
 
 
-def p_norm(x, axis, porder, keepdims=False, reduce_all=False):
-    r = []
-    if axis is None or reduce_all:
-        x = x.flatten()
-        if porder == np.inf:
-            r = np.amax(np.abs(x), keepdims=keepdims)
-        elif porder == -np.inf:
-            r = np.amin(np.abs(x), keepdims=keepdims)
-        else:
-            r = np.linalg.norm(x, ord=porder, keepdims=keepdims)
-    elif isinstance(axis, list or tuple) and len(axis) == 2:
-        if porder == np.inf:
-            axis = tuple(axis)
-            r = np.amax(np.abs(x), axis=axis, keepdims=keepdims)
-        elif porder == -np.inf:
-            axis = tuple(axis)
-            r = np.amin(np.abs(x), axis=axis, keepdims=keepdims)
-        elif porder == 0:
-            axis = tuple(axis)
-            r = x.astype(bool)
-            r = np.sum(r, axis, keepdims=keepdims)
-        elif porder == 1:
-            axis = tuple(axis)
-            r = np.sum(np.abs(x), axis, keepdims=keepdims)
-        else:
-            axis = tuple(axis)
-            xp = np.power(np.abs(x), porder)
-            s = np.sum(xp, axis=axis, keepdims=keepdims)
-            r = np.power(s, 1.0 / porder)
+def norm_public_python_api(
+    x, p=2.0, axis=-1, epsilon=1e-12, keepdim=False, as_vector=False
+):
+    return paddle.linalg.norm(
+        x,
+        p,
+        axis,
+        keepdim,
+    )
+
+
+def np_linalg_vector_norm(x, axis, porder, keepdims=False):
+    x_shape = list(x.shape)
+
+    origin_axis = axis
+    if origin_axis is None:
+        pass
+    elif isinstance(origin_axis, int):
+        origin_axis = [origin_axis]
     else:
-        if isinstance(axis, list):
-            axis = tuple(axis)
-        r = np.linalg.norm(x, ord=porder, axis=axis, keepdims=keepdims)
+        origin_axis = list(origin_axis)
+
+    if axis is None:
+        x = x.ravel()
+        axis = -1
+
+    if not isinstance(axis, int) and len(axis) > 1:
+        for i in range(len(axis)):
+            if axis[i] < 0:
+                axis[i] += len(x.shape)
+        tmp_axis = []
+        for i in range(len(axis)):
+            tmp_axis.append(-1 - i)
+        x = np.moveaxis(x, axis, tmp_axis)
+
+        front_dim = x.shape[0 : len(x.shape) - len(axis)]
+        back_dim = 1
+        for i in range(len(x.shape) - len(axis), len(x.shape)):
+            back_dim = back_dim * x.shape[i]
+        front_dim = list(front_dim)
+        front_dim.append(back_dim)
+        x = x.reshape(front_dim)
+        axis = -1
+    if isinstance(axis, list):
+        axis = tuple(axis)
+
+    r = np.linalg.norm(x, ord=porder, axis=axis, keepdims=keepdims)
+
+    r_shape = r.shape
+
+    if keepdims:
+        if origin_axis is None:
+            r_shape = np.ones_like(x_shape)
+        elif len(origin_axis) > 1:
+            r_shape = x_shape
+            for i in origin_axis:
+                r_shape[i] = 1
+    r = r.reshape(r_shape)
+    return r
+
+
+def np_linalg_matrix_norm(x, axis, porder, keepdims=False):
+    axis = tuple(axis)
+    r = np.linalg.norm(x, ord=porder, axis=axis, keepdims=keepdims)
+    return r
+
+
+def np_linalg_norm(x, axis, porder, keepdims=False):
+    r = []
+    if axis is None or isinstance(axis, (int, float)):
+        r = np_linalg_vector_norm(x, axis, porder, keepdims)
+    elif isinstance(axis, list) and len(axis) == 2:
+        r = np_linalg_matrix_norm(x, axis, porder, keepdims)
     r = r.astype(x.dtype)
 
     return r
@@ -73,15 +113,28 @@ def numpy_frobenius_norm(x, axis=None, keepdims=False):
     if isinstance(axis, list):
         axis = tuple(axis)
     if axis is None:
-        x = x.reshape(1, x.size)
+        axis = (-2, -1)
     r = np.linalg.norm(x, ord='fro', axis=axis, keepdims=keepdims).astype(
         x.dtype
     )
     return r
 
 
-def frobenius_norm(x, dim, keep_dim, reduce_all):
+def numpy_nuclear_norm(x, axis=None, keepdims=False):
+    if isinstance(axis, list):
+        axis = tuple(axis)
+    r = np.linalg.norm(x, ord='nuc', axis=axis, keepdims=keepdims).astype(
+        x.dtype
+    )
+    return r
+
+
+def frobenius_norm(x, dim, keep_dim):
     return paddle.linalg.norm(x, p='fro', axis=dim, keepdim=keep_dim)
+
+
+def nuclear_norm(x, dim, keep_dim):
+    return paddle.linalg.norm(x, p='nuc', axis=dim, keepdim=keep_dim)
 
 
 class TestFrobeniusNormOp(OpTest):
@@ -92,7 +145,7 @@ class TestFrobeniusNormOp(OpTest):
         self.init_dtype()
         x = (np.random.random(self.shape) + 1.0).astype(self.dtype)
         norm = numpy_frobenius_norm(x, self.axis, self.keepdim)
-        self.reduce_all = len(self.axis) == len(self.shape)
+        self.reduce_all = False
         self.inputs = {'X': x}
         self.attrs = {
             'dim': list(self.axis),
@@ -102,10 +155,10 @@ class TestFrobeniusNormOp(OpTest):
         self.outputs = {'Out': norm}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Out')
+        self.check_grad(['X'], 'Out', check_pir=True)
 
     def init_test_case(self):
         self.shape = [2, 3, 4, 5]
@@ -126,17 +179,23 @@ class TestFrobeniusNormOp2(TestFrobeniusNormOp):
         self.dtype = "float32"
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Out')
+        self.check_grad(['X'], 'Out', check_pir=True)
 
 
 class TestPnormOp(OpTest):
     def setUp(self):
         self.op_type = "p_norm"
         self.python_api = p_norm_python_api
+        self.public_python_api = norm_public_python_api
+        self.prim_op_type = "comp"
         self.init_test_case()
         self.init_dtype()
+        self.fw_comp_atol = 1e-6
+        self.fw_comp_rtol = 1e-6
+        self.rev_comp_atol = 1e-6
+        self.rev_comp_rtol = 1e-6
         x = (np.random.random(self.shape) + 0.5).astype(self.dtype)
-        norm = p_norm(x, self.axis, self.porder, self.keepdim, self.asvector)
+        norm = np_linalg_norm(x, self.axis, self.porder, self.keepdim)
         self.inputs = {'X': x}
         self.attrs = {
             'epsilon': self.epsilon,
@@ -149,10 +208,10 @@ class TestPnormOp(OpTest):
         self.gradient = self.calc_gradient()
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_prim_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Out')
+        self.check_grad(['X'], 'Out', check_prim_pir=True)
 
     def init_test_case(self):
         self.shape = [2, 3, 4, 5]
@@ -182,16 +241,12 @@ class TestPnormOp(OpTest):
         if porder == 0:
             grad = np.zeros(x.shape).astype(x.dtype)
         elif porder in [float("inf"), float("-inf")]:
-            norm = p_norm(
-                x, axis=axis, porder=porder, keepdims=True, reduce_all=asvector
-            )
+            norm = np_linalg_norm(x, axis=axis, porder=porder, keepdims=True)
             x_abs = np.abs(x)
             grad = np.sign(x)
             grad[x_abs != norm] = 0.0
         else:
-            norm = p_norm(
-                x, axis=axis, porder=porder, keepdims=True, reduce_all=asvector
-            )
+            norm = np_linalg_norm(x, axis=axis, porder=porder, keepdims=True)
             grad = (
                 np.power(norm, 1 - porder)
                 * np.power(np.abs(x), porder - 1)
@@ -219,7 +274,7 @@ class TestPnormOp2(TestPnormOp):
         self.dtype = "float32"
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Out')
+        self.check_grad(['X'], 'Out', check_prim_pir=True)
 
 
 class TestPnormOp3(TestPnormOp):
@@ -235,7 +290,9 @@ class TestPnormOp3(TestPnormOp):
         self.dtype = "float32"
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Out', user_defined_grads=self.gradient)
+        self.check_grad(
+            ['X'], 'Out', user_defined_grads=self.gradient, check_prim_pir=True
+        )
 
 
 class TestPnormOp4(TestPnormOp):
@@ -251,7 +308,9 @@ class TestPnormOp4(TestPnormOp):
         self.dtype = "float32"
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Out', user_defined_grads=self.gradient)
+        self.check_grad(
+            ['X'], 'Out', user_defined_grads=self.gradient, check_prim_pir=True
+        )
 
 
 class TestPnormOp5(TestPnormOp):
@@ -277,13 +336,15 @@ class TestPnormOp6(TestPnormOp):
         self.epsilon = 1e-12
         self.porder = 2
         self.keepdim = False
-        self.asvector = True
+        self.asvector = False
 
     def init_dtype(self):
         self.dtype = "float32"
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Out', user_defined_grads=self.gradient)
+        self.check_grad(
+            ['X'], 'Out', user_defined_grads=self.gradient, check_prim_pir=True
+        )
 
 
 def create_test_fp16_class(parent, max_relative_error=2e-3):
@@ -329,12 +390,12 @@ create_test_fp16_class(TestPnormOp6)
 class TestPnormBF16Op(OpTest):
     def setUp(self):
         self.op_type = "p_norm"
+        self.prim_op_type = "comp"
         self.python_api = p_norm_python_api
+        self.public_python_api = norm_public_python_api
         self.init_test_case()
         self.x = (np.random.random(self.shape) + 0.5).astype(np.float32)
-        self.norm = p_norm(
-            self.x, self.axis, self.porder, self.keepdim, self.asvector
-        )
+        self.norm = np_linalg_norm(self.x, self.axis, self.porder, self.keepdim)
         self.gradient = self.calc_gradient()
         self.inputs = {'X': convert_float_to_uint16(self.x)}
         self.attrs = {
@@ -348,7 +409,7 @@ class TestPnormBF16Op(OpTest):
 
     def test_check_output(self):
         place = core.CUDAPlace(0)
-        self.check_output_with_place(place, atol=1e-3)
+        self.check_output_with_place(place, atol=1e-3, check_prim_pir=True)
 
     def test_check_grad(self):
         place = core.CUDAPlace(0)
@@ -357,6 +418,7 @@ class TestPnormBF16Op(OpTest):
             ['X'],
             'Out',
             user_defined_grads=self.gradient,
+            check_prim_pir=True,
         )
 
     def init_test_case(self):
@@ -387,16 +449,12 @@ class TestPnormBF16Op(OpTest):
         if porder == 0:
             grad = np.zeros(x.shape).astype(x.dtype)
         elif porder in [float("inf"), float("-inf")]:
-            norm = p_norm(
-                x, axis=axis, porder=porder, keepdims=True, reduce_all=asvector
-            )
+            norm = np_linalg_norm(x, axis=axis, porder=porder, keepdims=True)
             x_abs = np.abs(x)
             grad = np.sign(x)
             grad[x_abs != norm] = 0.0
         else:
-            norm = p_norm(
-                x, axis=axis, porder=porder, keepdims=True, reduce_all=asvector
-            )
+            norm = np_linalg_norm(x, axis=axis, porder=porder, keepdims=True)
             grad = (
                 np.power(norm, 1 - porder)
                 * np.power(np.abs(x), porder - 1)
@@ -411,95 +469,180 @@ class TestPnormBF16Op(OpTest):
         return [grad.astype(x_dtype) * 1 / numel]
 
 
-def run_fro(self, p, axis, shape_x, dtype, keep_dim, check_dim=False):
-    with fluid.program_guard(fluid.Program()):
+def check_fro_static(self, p, axis, shape_x, dtype, keep_dim, check_dim=False):
+    with base.program_guard(base.Program()):
         data = paddle.static.data(name="X", shape=shape_x, dtype=dtype)
         out = paddle.norm(x=data, p=p, axis=axis, keepdim=keep_dim)
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         np_input = (np.random.rand(*shape_x) + 1.0).astype(dtype)
         expected_result = numpy_frobenius_norm(
             np_input, axis=axis, keepdims=keep_dim
         )
         (result,) = exe.run(feed={"X": np_input}, fetch_list=[out])
-    self.assertEqual((np.abs(result - expected_result) < 1e-6).all(), True)
+    np.testing.assert_allclose(result, expected_result, rtol=1e-6, atol=1e-8)
     if keep_dim and check_dim:
-        self.assertEqual(
-            (
-                np.abs(np.array(result.shape) - np.array(expected_result.shape))
-                < 1e-6
-            ).all(),
-            True,
-        )
+        np.testing.assert_equal(result.shape, expected_result.shape)
 
 
-def run_pnorm(self, p, axis, shape_x, dtype, keep_dim, check_dim=False):
-    with fluid.program_guard(fluid.Program()):
+def check_fro_dygraph(self, p, axis, shape_x, dtype, keep_dim, check_dim=False):
+    x_numpy = (np.random.random(shape_x) + 1.0).astype(dtype)
+    expected_result = numpy_frobenius_norm(x_numpy, axis, keep_dim)
+    x_paddle = paddle.to_tensor(x_numpy)
+    result = paddle.norm(x=x_paddle, p=p, axis=axis, keepdim=keep_dim)
+    result = result.numpy()
+    np.testing.assert_allclose(result, expected_result, rtol=1e-6, atol=1e-8)
+    if keep_dim and check_dim:
+        np.testing.assert_equal(result.shape, expected_result.shape)
+
+
+def check_nuc_static(self, p, axis, shape_x, dtype, keep_dim, check_dim=False):
+    with base.program_guard(base.Program()):
         data = paddle.static.data(name="X", shape=shape_x, dtype=dtype)
         out = paddle.norm(x=data, p=p, axis=axis, keepdim=keep_dim)
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         np_input = (np.random.rand(*shape_x) + 1.0).astype(dtype)
-        expected_result = p_norm(
+        expected_result = numpy_nuclear_norm(
+            np_input, axis=axis, keepdims=keep_dim
+        )
+        (result,) = exe.run(feed={"X": np_input}, fetch_list=[out])
+    np.testing.assert_allclose(result, expected_result, rtol=1e-6, atol=1e-8)
+    if keep_dim and check_dim:
+        np.testing.assert_equal(result.shape, expected_result.shape)
+
+
+def check_nuc_dygraph(self, p, axis, shape_x, dtype, keep_dim, check_dim=False):
+    x_numpy = (np.random.random(shape_x) + 1.0).astype(dtype)
+    expected_result = numpy_nuclear_norm(x_numpy, axis, keep_dim)
+    x_paddle = paddle.to_tensor(x_numpy)
+    result = paddle.norm(x=x_paddle, p=p, axis=axis, keepdim=keep_dim)
+    result = result.numpy()
+    np.testing.assert_allclose(result, expected_result, rtol=1e-6, atol=1e-8)
+    if keep_dim and check_dim:
+        np.testing.assert_equal(result.shape, expected_result.shape)
+
+
+def check_linalg_norm_static(
+    self, p, axis, shape_x, dtype, keep_dim, check_dim=False
+):
+    with base.program_guard(base.Program()):
+        data = paddle.static.data(name="X", shape=shape_x, dtype=dtype)
+        out = paddle.norm(x=data, p=p, axis=axis, keepdim=keep_dim)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
+        np_input = (np.random.rand(*shape_x) + 1.0).astype(dtype)
+        expected_result = np_linalg_norm(
             np_input, porder=p, axis=axis, keepdims=keep_dim
         ).astype(dtype)
         (result,) = exe.run(feed={"X": np_input}, fetch_list=[out])
-    self.assertEqual((np.abs(result - expected_result) < 1e-6).all(), True)
+    np.testing.assert_allclose(result, expected_result, rtol=1e-6, atol=1e-8)
     if keep_dim and check_dim:
-        self.assertEqual(
-            (
-                np.abs(np.array(result.shape) - np.array(expected_result.shape))
-                < 1e-6
-            ).all(),
-            True,
+        np.testing.assert_equal(result.shape, expected_result.shape)
+
+
+def check_linalg_norm_dygraph(
+    self, p, axis, shape_x, dtype, keep_dim, check_dim=False
+):
+    x_numpy = (np.random.random(shape_x) + 1.0).astype(dtype)
+    expected_result = np_linalg_norm(
+        x_numpy, porder=p, axis=axis, keepdims=keep_dim
+    )
+    x_paddle = paddle.to_tensor(x_numpy)
+    result = paddle.linalg.norm(x=x_paddle, p=p, axis=axis, keepdim=keep_dim)
+    result = result.numpy()
+    np.testing.assert_allclose(result, expected_result, rtol=1e-6, atol=1e-8)
+    if keep_dim and check_dim:
+        np.testing.assert_equal(result.shape, expected_result.shape)
+
+
+def check_linalg_matrix_static(
+    self, p, axis, shape_x, dtype, keep_dim, check_dim=False
+):
+    with base.program_guard(base.Program()):
+        data = paddle.static.data(name="X", shape=shape_x, dtype=dtype)
+        out = paddle.linalg.matrix_norm(
+            x=data, p=p, axis=axis, keepdim=keep_dim
         )
+        place = base.CPUPlace()
+        exe = base.Executor(place)
+        np_input = (np.random.rand(*shape_x) + 1.0).astype(dtype)
+        expected_result = np_linalg_matrix_norm(
+            np_input, porder=p, axis=axis, keepdims=keep_dim
+        ).astype(dtype)
+        (result,) = exe.run(feed={"X": np_input}, fetch_list=[out])
+    np.testing.assert_allclose(result, expected_result, rtol=1e-6, atol=1e-8)
+    if keep_dim and check_dim:
+        np.testing.assert_equal(result.shape, expected_result.shape)
 
 
-def run_graph(self, p, axis, shape_x, dtype):
-    paddle.disable_static()
-    shape = [2, 3, 4]
-    np_input = np.arange(24).astype('float32') - 12
-    np_input = np_input.reshape(shape)
-    x = paddle.to_tensor(np_input)
-    # [[[-12. -11. -10.  -9.] [ -8.  -7.  -6.  -5.] [ -4.  -3.  -2.  -1.]]
-    # [[  0.   1.   2.   3.] [  4.   5.   6.   7.] [  8.   9.  10.  11.]]]
-    out_pnorm = paddle.norm(x, p=2, axis=-1)
+def check_linalg_matrix_dygraph(
+    self, p, axis, shape_x, dtype, keep_dim, check_dim=False
+):
+    x_numpy = (np.random.random(shape_x) + 1.0).astype(dtype)
+    expected_result = np_linalg_matrix_norm(
+        x_numpy, porder=p, axis=axis, keepdims=keep_dim
+    )
+    x_paddle = paddle.to_tensor(x_numpy)
+    result = paddle.linalg.matrix_norm(
+        x=x_paddle, p=p, axis=axis, keepdim=keep_dim
+    )
+    result = result.numpy()
+    np.testing.assert_allclose(result, expected_result, rtol=1e-6, atol=1e-8)
+    if keep_dim and check_dim:
+        np.testing.assert_equal(result.shape, expected_result.shape)
 
-    # compute frobenius norm along last two dimensions.
-    out_fro = paddle.norm(x, p='fro')
-    out_fro = paddle.norm(x, p='fro', axis=0)
-    out_fro = paddle.norm(x, p='fro', axis=[0, 1])
-    # compute 2-order  norm along [0,1] dimension.
-    out_pnorm = paddle.norm(x, p=2, axis=[0, 1])
-    out_pnorm = paddle.norm(x, p=2)
-    # out_pnorm = [17.43559577 16.91153453 16.73320053 16.91153453]
-    # compute inf-order  norm
-    out_pnorm = paddle.norm(x, p=np.inf)
-    # out_pnorm = [12.]
-    out_pnorm = paddle.norm(x, p=np.inf, axis=0)
-    # out_pnorm = [[0. 1. 2. 3.] [4. 5. 6. 5.] [4. 3. 2. 1.]]
 
-    # compute -inf-order  norm
-    out_pnorm = paddle.norm(x, p=-np.inf)
-    # out_pnorm = [0.]
-    out_pnorm = paddle.norm(x, p=-np.inf, axis=0)
-    # out_fro = [17.43559577 16.91153453 16.73320053 16.91153453]
-    paddle.enable_static()
+def check_linalg_vector_static(
+    self, p, axis, shape_x, dtype, keep_dim, check_dim=False
+):
+    with base.program_guard(base.Program()):
+        data = paddle.static.data(name="X", shape=shape_x, dtype=dtype)
+        out = paddle.linalg.vector_norm(
+            x=data, p=p, axis=axis, keepdim=keep_dim
+        )
+        place = base.CPUPlace()
+        exe = base.Executor(place)
+        np_input = np.array(np.random.rand(*shape_x) + 1.0).astype(dtype)
+        expected_result = np_linalg_vector_norm(
+            np_input, porder=p, axis=axis, keepdims=keep_dim
+        ).astype(dtype)
+        (result,) = exe.run(feed={"X": np_input}, fetch_list=[out])
+    np.testing.assert_allclose(result, expected_result, rtol=1e-6, atol=1e-8)
+    if keep_dim and check_dim:
+        np.testing.assert_equal(result.shape, expected_result.shape)
+
+
+def check_linalg_vector_dygraph(
+    self, p, axis, shape_x, dtype, keep_dim, check_dim=False
+):
+    x_numpy = np.array(np.random.random(shape_x) + 1.0).astype(dtype)
+    expected_result = np_linalg_vector_norm(
+        x_numpy, porder=p, axis=axis, keepdims=keep_dim
+    )
+    x_paddle = paddle.to_tensor(x_numpy)
+    result = paddle.linalg.vector_norm(
+        x=x_paddle, p=p, axis=axis, keepdim=keep_dim
+    )
+    result = result.numpy()
+    np.testing.assert_allclose(result, expected_result, rtol=1e-6, atol=1e-8)
+    if keep_dim and check_dim:
+        np.testing.assert_equal(result.shape, expected_result.shape)
 
 
 class API_NormTest(unittest.TestCase):
     def test_basic(self):
         keep_dims = {False, True}
         for keep in keep_dims:
-            run_fro(
+            check_fro_static(
                 self,
                 p='fro',
-                axis=None,
+                axis=[-2, -1],
                 shape_x=[2, 3, 4],
                 dtype="float32",
                 keep_dim=keep,
             )
-            run_fro(
+            check_fro_static(
                 self,
                 p='fro',
                 axis=[0, 1],
@@ -508,7 +651,16 @@ class API_NormTest(unittest.TestCase):
                 keep_dim=keep,
                 check_dim=True,
             )
-            run_pnorm(
+            check_nuc_static(
+                self,
+                p='nuc',
+                axis=[0, 1],
+                shape_x=[2, 3, 4],
+                dtype='float64',
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_norm_static(
                 self,
                 p=2,
                 axis=None,
@@ -516,7 +668,7 @@ class API_NormTest(unittest.TestCase):
                 dtype="float32",
                 keep_dim=keep,
             )
-            run_pnorm(
+            check_linalg_norm_static(
                 self,
                 p=2,
                 axis=1,
@@ -525,7 +677,7 @@ class API_NormTest(unittest.TestCase):
                 keep_dim=keep,
                 check_dim=True,
             )
-            run_pnorm(
+            check_linalg_norm_static(
                 self,
                 p=np.inf,
                 axis=0,
@@ -534,7 +686,7 @@ class API_NormTest(unittest.TestCase):
                 keep_dim=keep,
                 check_dim=True,
             )
-            run_pnorm(
+            check_linalg_norm_static(
                 self,
                 p=np.inf,
                 axis=None,
@@ -542,7 +694,7 @@ class API_NormTest(unittest.TestCase):
                 dtype="float32",
                 keep_dim=keep,
             )
-            run_pnorm(
+            check_linalg_norm_static(
                 self,
                 p=-np.inf,
                 axis=0,
@@ -551,7 +703,7 @@ class API_NormTest(unittest.TestCase):
                 keep_dim=keep,
                 check_dim=True,
             )
-            run_pnorm(
+            check_linalg_norm_static(
                 self,
                 p=-np.inf,
                 axis=None,
@@ -559,7 +711,7 @@ class API_NormTest(unittest.TestCase):
                 dtype="float64",
                 keep_dim=keep,
             )
-            run_pnorm(
+            check_linalg_norm_static(
                 self,
                 p=0,
                 axis=1,
@@ -569,7 +721,7 @@ class API_NormTest(unittest.TestCase):
                 check_dim=True,
             )
 
-            run_pnorm(
+            check_linalg_norm_static(
                 self,
                 p=1,
                 axis=1,
@@ -578,7 +730,7 @@ class API_NormTest(unittest.TestCase):
                 keep_dim=keep,
                 check_dim=True,
             )
-            run_pnorm(
+            check_linalg_norm_static(
                 self,
                 p=0,
                 axis=None,
@@ -587,7 +739,7 @@ class API_NormTest(unittest.TestCase):
                 keep_dim=keep,
                 check_dim=True,
             )
-            run_pnorm(
+            check_linalg_norm_static(
                 self,
                 p=2,
                 axis=[0, 1],
@@ -596,7 +748,7 @@ class API_NormTest(unittest.TestCase):
                 keep_dim=keep,
                 check_dim=True,
             )
-            run_pnorm(
+            check_linalg_norm_static(
                 self,
                 p=2,
                 axis=-1,
@@ -605,7 +757,7 @@ class API_NormTest(unittest.TestCase):
                 keep_dim=keep,
                 check_dim=True,
             )
-            run_pnorm(
+            check_linalg_norm_static(
                 self,
                 p=1,
                 axis=[0, 1],
@@ -614,7 +766,7 @@ class API_NormTest(unittest.TestCase):
                 keep_dim=keep,
                 check_dim=True,
             )
-            run_pnorm(
+            check_linalg_norm_static(
                 self,
                 p=np.inf,
                 axis=[0, 1],
@@ -623,7 +775,7 @@ class API_NormTest(unittest.TestCase):
                 keep_dim=keep,
                 check_dim=True,
             )
-            run_pnorm(
+            check_linalg_norm_static(
                 self,
                 p=-np.inf,
                 axis=[0, 1],
@@ -633,19 +785,610 @@ class API_NormTest(unittest.TestCase):
                 check_dim=True,
             )
 
+            check_linalg_vector_static(
+                self,
+                p=2,
+                axis=None,
+                shape_x=[3, 4],
+                dtype="float32",
+                keep_dim=keep,
+            )
+            check_linalg_vector_static(
+                self,
+                p=4,
+                axis=1,
+                shape_x=[3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_static(
+                self,
+                p=np.inf,
+                axis=0,
+                shape_x=[2, 3, 4],
+                dtype="float32",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_static(
+                self,
+                p=np.inf,
+                axis=None,
+                shape_x=[2, 3, 4],
+                dtype="float32",
+                keep_dim=keep,
+            )
+            check_linalg_vector_static(
+                self,
+                p=-np.inf,
+                axis=0,
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_static(
+                self,
+                p=-np.inf,
+                axis=None,
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+            )
+            check_linalg_vector_static(
+                self,
+                p=0,
+                axis=1,
+                shape_x=[3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+
+            check_linalg_vector_static(
+                self,
+                p=1,
+                axis=1,
+                shape_x=[3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_static(
+                self,
+                p=0,
+                axis=None,
+                shape_x=[3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_static(
+                self,
+                p=2,
+                axis=[0, 1],
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_static(
+                self,
+                p=2,
+                axis=-1,
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_static(
+                self,
+                p=1,
+                axis=[0, 1],
+                shape_x=[2, 3, 4, 5],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_static(
+                self,
+                p=np.inf,
+                axis=[0, 1],
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_static(
+                self,
+                p=-np.inf,
+                axis=[0, 1, 2],
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_static(
+                self,
+                p=2,
+                axis=None,
+                shape_x=[],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_static(
+                self,
+                p=np.inf,
+                axis=None,
+                shape_x=[],
+                dtype="complex64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_static(
+                self,
+                p=-np.inf,
+                axis=[0, 1, 2, 3],
+                shape_x=[1, 14, 5, 14],
+                dtype="complex128",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_static(
+                self,
+                p=np.inf,
+                axis=2,
+                shape_x=[1, 14, 5, 14],
+                dtype="complex128",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_static(
+                self,
+                p=0,
+                axis=[1, 3],
+                shape_x=[1, 14, 5, 14],
+                dtype="complex128",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_matrix_static(
+                self,
+                p=-np.inf,
+                axis=[0, 1],
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_matrix_static(
+                self,
+                p='fro',
+                axis=[0, 1],
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_matrix_static(
+                self,
+                p='nuc',
+                axis=[0, 1],
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_matrix_static(
+                self,
+                p=-2,
+                axis=[1, 2],
+                shape_x=[2, 3, 4, 5],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+
     def test_dygraph(self):
-        run_graph(self, p='fro', axis=None, shape_x=[2, 3, 4], dtype="float32")
+        paddle.disable_static()
+        keep_dims = {False, True}
+        for keep in keep_dims:
+            check_fro_dygraph(
+                self,
+                p='fro',
+                axis=[0, 1],
+                shape_x=[2, 3, 4],
+                dtype='float64',
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_fro_dygraph(
+                self,
+                p='fro',
+                axis=[1, 2],
+                shape_x=[2, 3, 4, 5],
+                dtype='float64',
+                keep_dim=keep,
+                check_dim=True,
+            )
+
+            check_nuc_dygraph(
+                self,
+                p='nuc',
+                axis=[0, 1],
+                shape_x=[2, 3, 4],
+                dtype='float64',
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_nuc_dygraph(
+                self,
+                p='nuc',
+                axis=[1, 2],
+                shape_x=[2, 3, 4, 5],
+                dtype='float64',
+                keep_dim=keep,
+                check_dim=True,
+            )
+
+            check_linalg_norm_dygraph(
+                self,
+                p=2,
+                axis=None,
+                shape_x=[3, 4],
+                dtype="float32",
+                keep_dim=keep,
+            )
+            check_linalg_norm_dygraph(
+                self,
+                p=2,
+                axis=1,
+                shape_x=[3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_norm_dygraph(
+                self,
+                p=np.inf,
+                axis=0,
+                shape_x=[2, 3, 4],
+                dtype="float32",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_norm_dygraph(
+                self,
+                p=np.inf,
+                axis=None,
+                shape_x=[2, 3, 4],
+                dtype="float32",
+                keep_dim=keep,
+            )
+            check_linalg_norm_dygraph(
+                self,
+                p=-np.inf,
+                axis=0,
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_norm_dygraph(
+                self,
+                p=-np.inf,
+                axis=None,
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+            )
+            check_linalg_norm_dygraph(
+                self,
+                p=0,
+                axis=1,
+                shape_x=[3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+
+            check_linalg_norm_dygraph(
+                self,
+                p=1,
+                axis=1,
+                shape_x=[3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_norm_dygraph(
+                self,
+                p=0,
+                axis=None,
+                shape_x=[3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_norm_dygraph(
+                self,
+                p=2,
+                axis=[0, 1],
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_norm_dygraph(
+                self,
+                p=2,
+                axis=-1,
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_norm_dygraph(
+                self,
+                p=1,
+                axis=[0, 1],
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_norm_dygraph(
+                self,
+                p=np.inf,
+                axis=[0, 1],
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_norm_dygraph(
+                self,
+                p=-np.inf,
+                axis=[0, 1],
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+
+            check_linalg_vector_dygraph(
+                self,
+                p=2,
+                axis=None,
+                shape_x=[3, 4],
+                dtype="float32",
+                keep_dim=keep,
+            )
+            check_linalg_vector_dygraph(
+                self,
+                p=2,
+                axis=1,
+                shape_x=[3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_dygraph(
+                self,
+                p=np.inf,
+                axis=0,
+                shape_x=[2, 3, 4],
+                dtype="float32",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_dygraph(
+                self,
+                p=np.inf,
+                axis=None,
+                shape_x=[2, 3, 4],
+                dtype="float32",
+                keep_dim=keep,
+            )
+            check_linalg_vector_dygraph(
+                self,
+                p=-np.inf,
+                axis=0,
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_dygraph(
+                self,
+                p=-np.inf,
+                axis=None,
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+            )
+            check_linalg_vector_dygraph(
+                self,
+                p=0,
+                axis=1,
+                shape_x=[3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+
+            check_linalg_vector_dygraph(
+                self,
+                p=1,
+                axis=1,
+                shape_x=[3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_dygraph(
+                self,
+                p=0,
+                axis=None,
+                shape_x=[3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_dygraph(
+                self,
+                p=2,
+                axis=[0, 1],
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_dygraph(
+                self,
+                p=2,
+                axis=-1,
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_dygraph(
+                self,
+                p=1,
+                axis=[0, 1],
+                shape_x=[2, 3, 4, 5],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_dygraph(
+                self,
+                p=np.inf,
+                axis=[0, 1],
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_dygraph(
+                self,
+                p=-np.inf,
+                axis=[0, 1, 2],
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_dygraph(
+                self,
+                p=2,
+                axis=None,
+                shape_x=(),
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_dygraph(
+                self,
+                p=np.inf,
+                axis=None,
+                shape_x=[],
+                dtype="complex64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_dygraph(
+                self,
+                p=-np.inf,
+                axis=[0, 1, 2, 3],
+                shape_x=[1, 14, 5, 14],
+                dtype="complex128",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_dygraph(
+                self,
+                p=np.inf,
+                axis=2,
+                shape_x=[1, 14, 5, 14],
+                dtype="complex128",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_vector_dygraph(
+                self,
+                p=0,
+                axis=[1, 3],
+                shape_x=[1, 14, 5, 14],
+                dtype="complex128",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_matrix_dygraph(
+                self,
+                p=-np.inf,
+                axis=[0, 1],
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_matrix_dygraph(
+                self,
+                p='fro',
+                axis=[0, 1],
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_matrix_dygraph(
+                self,
+                p='nuc',
+                axis=[0, 1],
+                shape_x=[2, 3, 4],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+            check_linalg_matrix_dygraph(
+                self,
+                p=-2,
+                axis=[1, 2],
+                shape_x=[2, 3, 4, 5],
+                dtype="float64",
+                keep_dim=keep,
+                check_dim=True,
+            )
+
+        paddle.enable_static()
 
     def test_name(self):
-        with fluid.program_guard(fluid.Program()):
-            x = paddle.static.data(name="x", shape=[10, 10], dtype="float32")
-            y_1 = paddle.norm(x, p='fro', name='frobenius_name')
-            y_2 = paddle.norm(x, p=2, name='pnorm_name')
-            self.assertEqual(('frobenius_name' in y_1.name), True)
-            self.assertEqual(('pnorm_name' in y_2.name), True)
+        if not paddle.framework.use_pir_api():
+            paddle.enable_static()
+            with base.program_guard(base.Program()):
+                x = paddle.static.data(
+                    name="x", shape=[10, 10], dtype="float32"
+                )
+                y_1 = paddle.norm(
+                    x, p='fro', axis=[-2, -1], name='frobenius_name'
+                )
+                y_2 = paddle.norm(x, p=2, name='pnorm_name')
+                y_3 = paddle.norm(x, p='nuc', axis=[0, 1], name='nuclear_name')
+                y_4 = paddle.norm(
+                    x, p=2, axis=[0, 1], name='p_matrix_norm_name'
+                )
+                self.assertEqual(('frobenius_name' in y_1.name), True)
+                self.assertEqual(('pnorm_name' in y_2.name), True)
+                self.assertEqual(('nuclear_name' in y_3.name), True)
+                self.assertEqual(('p_matrix_norm_name' in y_4.name), True)
 
     def test_errors(self):
-        with fluid.program_guard(fluid.Program(), fluid.Program()):
+        paddle.enable_static()
+        with base.program_guard(base.Program(), base.Program()):
 
             def err_dtype(p, shape_x, xdtype, out=None):
                 data = paddle.static.data(shape=shape_x, dtype=xdtype)
@@ -674,7 +1417,7 @@ class API_NormTest(unittest.TestCase):
                 ValueError, paddle.norm, data, p='unspport', axis=[-3, -2, -1]
             )
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             # The size of input in Norm should not be 0.
             def test_0_size():
                 array = np.array([], dtype=np.float32)

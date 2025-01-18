@@ -14,8 +14,11 @@
 #include "paddle/phi/kernels/reduce_sum_grad_kernel.h"
 
 #include <set>
+
 #include "paddle/phi/backends/xpu/enforce_xpu.h"
 #include "paddle/phi/core/kernel_registry.h"
+#include "paddle/phi/kernels/cast_kernel.h"
+#include "paddle/phi/kernels/empty_kernel.h"
 
 namespace phi {
 
@@ -30,9 +33,9 @@ void ReduceSumGradKernel(const Context& dev_ctx,
   using XPUType = typename XPUTypeTrait<T>::Type;
   reduce_all = recompute_reduce_all(x, dims_arr, reduce_all);
   auto dims = dims_arr.GetData();
-  dev_ctx.template Alloc<XPUType>(x_grad);
-  const auto* out_data = out_grad.data<XPUType>();
-  auto* x_grad_data = x_grad->data<XPUType>();
+  dev_ctx.template Alloc(x_grad, x.dtype());
+  auto* out_data = reinterpret_cast<const XPUType*>(out_grad.data());
+  auto* x_grad_data = reinterpret_cast<XPUType*>(x_grad->data());
   const auto& input_dim_size = x.dims().size();
   std::vector<int> true_dims;
   for (size_t i = 0; i < dims.size(); ++i) {
@@ -63,13 +66,36 @@ void ReduceSumGradKernel(const Context& dev_ctx,
     ydims = std::vector<int>({1});
   }
 
-  int r = xpu::broadcast<XPUType>(
-      dev_ctx.x_context(), out_data, x_grad_data, ydims, xdims);
-  PADDLE_ENFORCE_XDNN_SUCCESS(r, "broadcast");
+  if (x.dtype() != out_grad.dtype()) {
+    DenseTensorMeta x_grad_meta(
+        out_grad.dtype(), x_grad->dims(), x_grad->layout());
+    DenseTensor x_grad_tmp =
+        phi::Empty<Context>(dev_ctx, std::move(x_grad_meta));
+    auto* x_grad_tmp_data = reinterpret_cast<XPUType*>(x_grad_tmp.data());
+
+    int r = xpu::broadcast<XPUType>(
+        dev_ctx.x_context(), out_data, x_grad_tmp_data, ydims, xdims);
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "broadcast");
+
+    phi::CastKernel<T>(dev_ctx, x_grad_tmp, x.dtype(), x_grad);
+  } else {
+    int r = xpu::broadcast<XPUType>(
+        dev_ctx.x_context(), out_data, x_grad_data, ydims, xdims);
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "broadcast");
+  }
 }
 
 }  // namespace phi
 
-PD_REGISTER_KERNEL(sum_grad, XPU, ALL_LAYOUT, phi::ReduceSumGradKernel, float) {
+PD_REGISTER_KERNEL(sum_grad,
+                   XPU,
+                   ALL_LAYOUT,
+                   phi::ReduceSumGradKernel,
+                   float,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16,
+                   int64_t,
+                   int,
+                   bool) {
   kernel->OutputAt(0).SetDataType(phi::DataType::UNDEFINED);
 }

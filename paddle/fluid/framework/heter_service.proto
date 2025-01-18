@@ -17,15 +17,15 @@ option cc_generic_services = true;
 
 // It can be: phi::DenseTensor、SelectedRows or NCCL_ID
 enum VarType {
-  LOD_TENSOR = 0;
+  DENSE_TENSOR = 0;
   SELECTED_ROWS = 1;
   NCCL_ID = 2;
 }
 
 // VariableMessage is serialized paddle variable message.
 // NOTICE(gongwb):don't modify this proto if you are not
-//   not familar with how we serialize in sendrecvop_utils.h
-//   and deserilize it in  variable_response.h.
+//   not familiar with how we serialize in sendrecvop_utils.h
+//   and deserialize it in  variable_response.h.
 message VariableMessage {
   enum Type {
     // Pod Types

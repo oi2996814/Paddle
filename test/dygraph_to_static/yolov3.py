@@ -18,9 +18,7 @@ import sys
 from darknet import ConvBNLayer, DarkNet53_conv_body
 
 import paddle
-from paddle import _legacy_C_ops, fluid
-from paddle.fluid.param_attr import ParamAttr
-from paddle.jit.api import to_static
+from paddle import ParamAttr, _legacy_C_ops
 from paddle.regularizer import L2Decay
 
 
@@ -107,11 +105,11 @@ cfg.batch_size = 1 if sys.platform == 'darwin' or os.name == 'nt' else 4
 # derived learning rate the to get the final learning rate.
 cfg.learning_rate = 0.001
 # maximum number of iterations
-cfg.max_iter = 20 if fluid.is_compiled_with_cuda() else 1
+cfg.max_iter = 20 if paddle.is_compiled_with_cuda() else 1
 # Disable mixup in last N iter
-cfg.no_mixup_iter = 10 if fluid.is_compiled_with_cuda() else 1
+cfg.no_mixup_iter = 10 if paddle.is_compiled_with_cuda() else 1
 # warm up to learning rate
-cfg.warm_up_iter = 10 if fluid.is_compiled_with_cuda() else 1
+cfg.warm_up_iter = 10 if paddle.is_compiled_with_cuda() else 1
 cfg.warm_up_factor = 0.0
 # lr steps_with_decay
 cfg.lr_steps = [400000, 450000]
@@ -124,7 +122,7 @@ cfg.momentum = 0.9
 # ENV options
 #
 # support both CPU and GPU
-cfg.use_gpu = fluid.is_compiled_with_cuda()
+cfg.use_gpu = paddle.is_compiled_with_cuda()
 # Class number
 cfg.class_num = 80
 
@@ -133,9 +131,7 @@ class YoloDetectionBlock(paddle.nn.Layer):
     def __init__(self, ch_in, channel, is_test=True):
         super().__init__()
 
-        assert channel % 2 == 0, "channel {} cannot be divided by 2".format(
-            channel
-        )
+        assert channel % 2 == 0, f"channel {channel} cannot be divided by 2"
 
         self.conv0 = ConvBNLayer(
             ch_in=ch_in,
@@ -232,7 +228,7 @@ class YOLOv3(paddle.nn.Layer):
         ch_in_list = [1024, 768, 384]
         for i in range(3):
             yolo_block = self.add_sublayer(
-                "yolo_detecton_block_%d" % (i),
+                f"yolo_detecton_block_{i}",
                 YoloDetectionBlock(
                     ch_in_list[i],
                     channel=512 // (2**i),
@@ -244,7 +240,7 @@ class YOLOv3(paddle.nn.Layer):
             num_filters = len(cfg.anchor_masks[i]) * (cfg.class_num + 5)
 
             block_out = self.add_sublayer(
-                "block_out_%d" % (i),
+                f"block_out_{i}",
                 paddle.nn.Conv2D(
                     in_channels=1024 // (2**i),
                     out_channels=num_filters,
@@ -263,7 +259,7 @@ class YOLOv3(paddle.nn.Layer):
             self.block_outputs.append(block_out)
             if i < 2:
                 route = self.add_sublayer(
-                    "route2_%d" % i,
+                    f"route2_{i}",
                     ConvBNLayer(
                         ch_in=512 // (2**i),
                         ch_out=256 // (2**i),
@@ -276,7 +272,6 @@ class YOLOv3(paddle.nn.Layer):
                 self.route_blocks_2.append(route)
             self.upsample = Upsample()
 
-    @to_static
     def forward(
         self,
         inputs,

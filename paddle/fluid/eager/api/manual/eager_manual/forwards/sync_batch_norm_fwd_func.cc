@@ -12,20 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "paddle/fluid/eager/amp_utils.h"
+#include "paddle/common/flags.h"
 #include "paddle/fluid/eager/api/manual/eager_manual/dygraph_forward_api.h"
 #include "paddle/fluid/eager/api/manual/eager_manual/nodes/nodes.h"
 #include "paddle/fluid/eager/api/utils/global_utils.h"
-#include "paddle/fluid/eager/eager_amp_auto_cast.h"
 #include "paddle/fluid/eager/eager_layout_auto_tune.h"
 #include "paddle/fluid/eager/nan_inf_utils.h"
-#include "paddle/fluid/platform/profiler/event_tracing.h"
 #include "paddle/phi/api/include/sparse_api.h"
-#include "paddle/phi/core/flags.h"
+#include "paddle/phi/core/platform/profiler/event_tracing.h"
 
 #pragma GCC diagnostic ignored "-Wunused-variable"
-PHI_DECLARE_bool(check_nan_inf);
-PHI_DECLARE_string(tensor_operants_mode);
+COMMON_DECLARE_bool(check_nan_inf);
+COMMON_DECLARE_string(tensor_operants_mode);
 
 std::tuple<paddle::Tensor,
            paddle::Tensor&,
@@ -48,10 +46,8 @@ sync_batch_norm__ad_func(const paddle::Tensor& x,
   VLOG(3) << "Running AD API: "
           << "sync_batch_norm_";
   // Dygraph Record Event
-  paddle::platform::RecordEvent dygraph_entrance_record_event(
-      "sync_batch_norm_ dygraph",
-      paddle::platform::TracerEventType::Operator,
-      1);
+  phi::RecordEvent dygraph_entrance_record_event(
+      "sync_batch_norm_ dygraph", phi::TracerEventType::Operator, 1);
 
   // AMP Logic
 
@@ -211,9 +207,9 @@ sync_batch_norm__ad_func(const paddle::Tensor& x,
 
   // Node Creation
   if (require_any_grad) {
-    paddle::platform::RecordEvent node_creation_record_event(
+    phi::RecordEvent node_creation_record_event(
         "sync_batch_norm_ node_creation",
-        paddle::platform::TracerEventType::OperatorInner,
+        phi::TracerEventType::OperatorInner,
         1);
 
     egr::EagerUtils::PassStopGradient(false,
@@ -225,8 +221,8 @@ sync_batch_norm__ad_func(const paddle::Tensor& x,
                                       reserve_space_autograd_meta);
 
     // Node Construction
-    auto grad_node =
-        std::shared_ptr<SyncBatchNormGradNode>(new SyncBatchNormGradNode(6, 5));
+    auto grad_node = std::shared_ptr<SyncBatchNormGradNode>(  // NOLINT
+        new SyncBatchNormGradNode(6, 5));
 
     // Set forward's stack
     if (FLAGS_check_nan_inf) {
@@ -235,16 +231,16 @@ sync_batch_norm__ad_func(const paddle::Tensor& x,
 
     egr::Controller::Instance().PushBackForceSequentialNodes(grad_node.get());
     // SetAttributes if needed
-    grad_node->SetAttributemomentum(momentum);
-    grad_node->SetAttributeepsilon(epsilon);
-    grad_node->SetAttributedata_layout(data_layout);
-    grad_node->SetAttributeis_test(is_test);
-    grad_node->SetAttributeuse_global_stats(use_global_stats);
-    grad_node->SetAttributetrainable_statistics(trainable_statistics);
+    grad_node->SetAttribute_momentum(momentum);
+    grad_node->SetAttribute_epsilon(epsilon);
+    grad_node->SetAttribute_data_layout(data_layout);
+    grad_node->SetAttribute_is_test(is_test);
+    grad_node->SetAttribute_use_global_stats(use_global_stats);
+    grad_node->SetAttribute_trainable_statistics(trainable_statistics);
     // Set TensorWrappers for Forward Inputs if needed
-    grad_node->SetTensorWrapperx(x);
-    grad_node->SetTensorWrapperscale(scale);
-    grad_node->SetTensorWrapperbias(bias);
+    grad_node->SetTensorWrapper_x(x);
+    grad_node->SetTensorWrapper_scale(scale);
+    grad_node->SetTensorWrapper_bias(bias);
     // SetGradOutMeta & SetEdges
     grad_node->SetGradOutMeta(x, 0);
     grad_node->SetGradOutMeta(scale, 3);
@@ -293,9 +289,9 @@ sync_batch_norm__ad_func(const paddle::Tensor& x,
     grad_node->SetGradInMeta(saved_variance, 4);
     grad_node->SetGradInMeta(reserve_space, 5);
     // Set TensorWrappers for Forward Outputs if needed
-    grad_node->SetTensorWrappersaved_mean(saved_mean);
-    grad_node->SetTensorWrappersaved_variance(saved_variance);
-    grad_node->SetTensorWrapperreserve_space(reserve_space);
+    grad_node->SetTensorWrapper_saved_mean(saved_mean);
+    grad_node->SetTensorWrapper_saved_variance(saved_variance);
+    grad_node->SetTensorWrapper_reserve_space(reserve_space);
   }
 
   VLOG(4) << "Finish AD API: sync_batch_norm_";
@@ -390,10 +386,8 @@ sync_batch_norm__ad_func(const paddle::Tensor& x,
   VLOG(3) << "Running AD API: "
           << "sync_batch_norm_";
   // Dygraph Record Event
-  paddle::platform::RecordEvent dygraph_entrance_record_event(
-      "sync_batch_norm_ dygraph",
-      paddle::platform::TracerEventType::Operator,
-      1);
+  phi::RecordEvent dygraph_entrance_record_event(
+      "sync_batch_norm_ dygraph", phi::TracerEventType::Operator, 1);
 
   // AMP Logic
 
@@ -553,9 +547,9 @@ sync_batch_norm__ad_func(const paddle::Tensor& x,
 
   // Node Creation
   if (require_any_grad) {
-    paddle::platform::RecordEvent node_creation_record_event(
+    phi::RecordEvent node_creation_record_event(
         "sync_batch_norm_ node_creation",
-        paddle::platform::TracerEventType::OperatorInner,
+        phi::TracerEventType::OperatorInner,
         1);
 
     egr::EagerUtils::PassStopGradient(false,
@@ -567,20 +561,20 @@ sync_batch_norm__ad_func(const paddle::Tensor& x,
                                       reserve_space_autograd_meta);
 
     // Node Construction
-    auto grad_node =
-        std::shared_ptr<SyncBatchNormGradNode>(new SyncBatchNormGradNode(6, 5));
+    auto grad_node = std::shared_ptr<SyncBatchNormGradNode>(  // NOLINT
+        new SyncBatchNormGradNode(6, 5));
     egr::Controller::Instance().PushBackForceSequentialNodes(grad_node.get());
     // SetAttributes if needed
-    grad_node->SetAttributemomentum(momentum);
-    grad_node->SetAttributeepsilon(epsilon);
-    grad_node->SetAttributedata_layout(data_layout);
-    grad_node->SetAttributeis_test(is_test);
-    grad_node->SetAttributeuse_global_stats(use_global_stats);
-    grad_node->SetAttributetrainable_statistics(trainable_statistics);
+    grad_node->SetAttribute_momentum(momentum);
+    grad_node->SetAttribute_epsilon(epsilon);
+    grad_node->SetAttribute_data_layout(data_layout);
+    grad_node->SetAttribute_is_test(is_test);
+    grad_node->SetAttribute_use_global_stats(use_global_stats);
+    grad_node->SetAttribute_trainable_statistics(trainable_statistics);
     // Set TensorWrappers for Forward Inputs if needed
-    grad_node->SetTensorWrapperx(x);
-    grad_node->SetTensorWrapperscale(scale);
-    grad_node->SetTensorWrapperbias(bias);
+    grad_node->SetTensorWrapper_x(x);
+    grad_node->SetTensorWrapper_scale(scale);
+    grad_node->SetTensorWrapper_bias(bias);
     // SetGradOutMeta & SetEdges
     grad_node->SetGradOutMeta(x, 0);
     grad_node->SetGradOutMeta(scale, 3);
@@ -629,9 +623,9 @@ sync_batch_norm__ad_func(const paddle::Tensor& x,
     grad_node->SetGradInMeta(saved_variance, 4);
     grad_node->SetGradInMeta(reserve_space, 5);
     // Set TensorWrappers for Forward Outputs if needed
-    grad_node->SetTensorWrappersaved_mean(saved_mean);
-    grad_node->SetTensorWrappersaved_variance(saved_variance);
-    grad_node->SetTensorWrapperreserve_space(reserve_space);
+    grad_node->SetTensorWrapper_saved_mean(saved_mean);
+    grad_node->SetTensorWrapper_saved_variance(saved_variance);
+    grad_node->SetTensorWrapper_reserve_space(reserve_space);
   }
 
   VLOG(4) << "Finish AD API: sync_batch_norm_";

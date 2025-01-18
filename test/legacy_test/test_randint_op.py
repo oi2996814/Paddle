@@ -15,12 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
-from paddle.static import Program, program_guard
+from paddle.base import core
 
 paddle.enable_static()
 
@@ -36,6 +34,7 @@ def output_hist(out):
 class TestRandintOp(OpTest):
     def setUp(self):
         self.op_type = "randint"
+        self.python_api = paddle.randint
         self.inputs = {}
         self.init_attrs()
         self.outputs = {"Out": np.zeros((10000, 784)).astype("float32")}
@@ -45,7 +44,7 @@ class TestRandintOp(OpTest):
         self.output_hist = output_hist
 
     def test_check_output(self):
-        self.check_output_customized(self.verify_output)
+        self.check_output_customized(self.verify_output, check_pir=True)
 
     def verify_output(self, outs):
         hist, prob = self.output_hist(np.array(outs[0]))
@@ -53,8 +52,11 @@ class TestRandintOp(OpTest):
 
 
 class TestRandintOpError(unittest.TestCase):
+
     def test_errors(self):
-        with program_guard(Program(), Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             self.assertRaises(TypeError, paddle.randint, 5, shape=np.array([2]))
             self.assertRaises(TypeError, paddle.randint, 5, dtype='float32')
             self.assertRaises(ValueError, paddle.randint, 5, 5)
@@ -70,6 +72,7 @@ class TestRandintOpError(unittest.TestCase):
 class TestRandintOp_attr_tensorlist(OpTest):
     def setUp(self):
         self.op_type = "randint"
+        self.python_api = paddle.randint
         self.new_shape = (10000, 784)
         shape_tensor = []
         for index, ele in enumerate(self.new_shape):
@@ -85,7 +88,7 @@ class TestRandintOp_attr_tensorlist(OpTest):
         self.output_hist = output_hist
 
     def test_check_output(self):
-        self.check_output_customized(self.verify_output)
+        self.check_output_customized(self.verify_output, check_pir=True)
 
     def verify_output(self, outs):
         hist, prob = self.output_hist(np.array(outs[0]))
@@ -95,6 +98,7 @@ class TestRandintOp_attr_tensorlist(OpTest):
 class TestRandint_attr_tensor(OpTest):
     def setUp(self):
         self.op_type = "randint"
+        self.python_api = paddle.randint
         self.inputs = {"ShapeTensor": np.array([10000, 784]).astype("int64")}
         self.init_attrs()
         self.outputs = {"Out": np.zeros((10000, 784)).astype("int64")}
@@ -104,7 +108,7 @@ class TestRandint_attr_tensor(OpTest):
         self.output_hist = output_hist
 
     def test_check_output(self):
-        self.check_output_customized(self.verify_output)
+        self.check_output_customized(self.verify_output, check_pir=True)
 
     def verify_output(self, outs):
         hist, prob = self.output_hist(np.array(outs[0]))
@@ -114,7 +118,9 @@ class TestRandint_attr_tensor(OpTest):
 # Test python API
 class TestRandintAPI(unittest.TestCase):
     def test_api(self):
-        with program_guard(Program(), Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             # results are from [0, 5).
             out1 = paddle.randint(5)
             # shape is a list and dtype is 'int32'
@@ -219,16 +225,18 @@ class TestRandintAPI_ZeroDim(unittest.TestCase):
         paddle.enable_static()
 
     def test_static(self):
-        with fluid.program_guard(fluid.Program(), fluid.Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             x = paddle.randint(-10, 10, [])
 
             # Test compile shape
-            self.assertEqual(x.shape, ())
+            self.assertEqual(tuple(x.shape), ())
 
             # Test runtime shape
-            exe = fluid.Executor()
+            exe = paddle.static.Executor()
             result = exe.run(fetch_list=[x])
-            self.assertEqual(result[0].shape, ())
+            self.assertEqual(tuple(result[0].shape), ())
 
         paddle.enable_static()
 

@@ -98,18 +98,18 @@ class CommOpCostNode(CostNode):
         # should get from `cluster`
         BANDWIDTH = 32 * 1024 / 1000  # MB/ms, V100 PCIe
         num_ranks = len(self.ranks)
-        comm_volumn = np.prod(self.input_shape) * 4
+        comm_volume = np.prod(self.input_shape) * 4
 
         if 'allreduce' in self.comm_type:
-            self._cost = comm_volumn / (
+            self._cost = comm_volume / (
                 BANDWIDTH * num_ranks / (2 * (num_ranks - 1))
             )
         elif 'gather' in self.comm_type:
-            self._cost = comm_volumn / (BANDWIDTH * num_ranks / (num_ranks - 1))
+            self._cost = comm_volume / (BANDWIDTH * num_ranks / (num_ranks - 1))
         elif 'broadcast' in self.comm_type:
-            self._cost = comm_volumn / BANDWIDTH
+            self._cost = comm_volume / BANDWIDTH
         elif 'send' in self.comm_type or 'recv' in self.comm_type:
-            self._cost = comm_volumn / BANDWIDTH
+            self._cost = comm_volume / BANDWIDTH
         else:
             self._cost = 0
 
@@ -164,7 +164,7 @@ class CompOpCostNode(CostNode):
         self.is_optim = is_optim
 
     def init_comp_cost(self, cost_data):
-        # TODO: improve fluid.CostModel for more specific cost_data
+        # TODO: improve base.CostModel for more specific cost_data
         op_id = self.node.desc.id()
         if op_id in cost_data.keys():
             self.cost = cost_data[op_id]
@@ -232,7 +232,7 @@ class CostModel:
         new_var = program.global_block().create_var(
             name=var_id,
             dtype=paddle.float32,
-            type=core.VarDesc.VarType.LOD_TENSOR,
+            type=core.VarDesc.VarType.DENSE_TENSOR,
         )
         nodes[var_id] = TensorCostNode(
             new_var, CostNodeType.VARIABLE, "lod_tensor_blocking_queue_0"
@@ -435,9 +435,7 @@ class CostModel:
                 node_cost = max(node_cost, node.cost)
             else:
                 raise NotImplementedError(
-                    'This type of merging is not supported:{}'.format(
-                        merge_type
-                    )
+                    f'This type of merging is not supported:{merge_type}'
                 )
         merged_node_id = 'merged_' + str(len(nodes))
         is_bwd = to_merge_node_list[0].is_bwd
@@ -796,9 +794,7 @@ class CostModel:
                 global_time[stid] = e.e_time
             else:
                 raise NotImplementedError(
-                    'This type of pipe event is not supported yet.{}'.format(
-                        e.name
-                    )
+                    f'This type of pipe event is not supported yet.{e.name}'
                 )
 
         for t in global_time:

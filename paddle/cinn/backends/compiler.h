@@ -24,10 +24,13 @@
 #include "paddle/cinn/backends/llvm/codegen_llvm.h"
 #include "paddle/cinn/backends/llvm/execution_engine.h"
 #include "paddle/cinn/backends/llvm/simple_jit.h"
-#include "paddle/cinn/hlir/framework/parallel_compiler.h"
+#include "paddle/cinn/hlir/framework/graph_compiler_util.h"
 #include "paddle/cinn/lang/packed_func.h"
 #ifdef CINN_WITH_CUDA
 #include "paddle/cinn/runtime/cuda/cuda_module.h"
+#endif
+#ifdef CINN_WITH_HIP
+#include "paddle/cinn/runtime/hip/hip_module.h"
 #endif
 
 namespace cinn {
@@ -43,26 +46,38 @@ namespace backends {
  */
 class CompilationInfoDumper {
  public:
-  explicit CompilationInfoDumper(
-      const hlir::framework::ParallelCompiler::CompilationResult& info)
-      : info_(info) {
+  explicit CompilationInfoDumper(const hlir::framework::CompilationResult& info,
+                                 const int device_id)
+      : info_(info), device_id_(device_id) {
     DumpLoweredFunc();
     DumpSourceCode();
     DumpPtxCode();
     DumpInstruction();
   }
 
+  static void DumpLoweredFuncByGroupIndex(const ir::LoweredFunc& lowered_func,
+                                          const int gidx,
+                                          const int device_id);
+  static void DumpSourceCodeByGroupIndex(const std::string& source_code,
+                                         const int gidx,
+                                         const int device_id);
+  static void DumpPtxCodeByGroupIndex(const std::string& source_ptx,
+                                      const int gidx,
+                                      const int device_id);
+
  private:
   void DumpLoweredFunc();
   void DumpSourceCode();
   void DumpPtxCode();
   void DumpInstruction();
-  void Dump(const std::string& base_path,
-            const int idx,
-            const std::string& file_name,
-            const std::string& content);
+  static void Dump(const std::string& base_path,
+                   const int idx,
+                   const int device_id,
+                   const std::string& file_name,
+                   const std::string& content);
 
-  const hlir::framework::ParallelCompiler::CompilationResult& info_;
+  const hlir::framework::CompilationResult& info_;
+  const int device_id_;
 };
 
 class SourceCodePrint {
@@ -93,6 +108,12 @@ class Compiler final {
    */
   void Build(const ir::Module& module, const std::string& code = "");
 
+  void AppendCX86(const ir::Module& module);
+
+  void AppendBroadcastSwitchModule(const ir::Module& module);
+
+  void EndCompile();
+
   void ExportObject(const std::string& path);
 
   std::string GetSourceCode(const ir::Module& module);
@@ -105,8 +126,24 @@ class Compiler final {
    */
   void* Lookup(absl::string_view fn_name);
 
+  std::vector<void*> GetFnPtr() const { return fn_ptr_; }
+
  private:
+  // do not register device symbol until end=true for build function
+  void RegisterDeviceModuleSymbol();
+
+  void RegisterCudaModuleSymbol();
+
+  void RegisterHipModuleSymbol();
+
+  void RegisterSyclModuleSymbol();
+
   void CompileCudaModule(const ir::Module& module,
+                         const std::string& code = "");
+
+  void CompileHipModule(const ir::Module& module, const std::string& code = "");
+
+  void CompileSyclModule(const ir::Module& module,
                          const std::string& code = "");
 
   void CompileX86Module(const ir::Module& module);
@@ -120,8 +157,15 @@ class Compiler final {
   Target target_;
   std::unique_ptr<ExecutionEngine> engine_;
 
+  std::vector<void*> fn_ptr_;
+  // only heterogeneous systems need to record device func and module
+  std::vector<std::string> device_fn_name_;
+  std::string device_fn_code_;
 #ifdef CINN_WITH_CUDA
   std::unique_ptr<runtime::cuda::CUDAModule> cuda_module_;
+#endif
+#ifdef CINN_WITH_HIP
+  std::unique_ptr<runtime::hip::HIPModule> hip_module_;
 #endif
 };
 

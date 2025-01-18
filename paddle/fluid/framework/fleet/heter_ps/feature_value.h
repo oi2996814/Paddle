@@ -20,8 +20,10 @@ limitations under the License. */
 #include <sstream>
 #include <unordered_map>
 
-#include "paddle/fluid/platform/device_context.h"
-#include "paddle/fluid/platform/place.h"
+#include "paddle/common/flags.h"
+#include "paddle/phi/common/place.h"
+#include "paddle/phi/core/platform/device_context.h"
+
 #ifdef PADDLE_WITH_PSCORE
 #include "paddle/fluid/distributed/ps/table/accessor.h"
 #include "paddle/fluid/distributed/ps/table/ctr_dymf_accessor.h"
@@ -73,7 +75,7 @@ class CommonFeatureValueAccessor {
     __host__ __device__ int EmbedDim() const { return embed_sgd_dim; }
     __host__ __device__ int EmbedXDim() const { return embedx_sgd_dim; }
     __host__ __device__ int EmbedWDim() const { return embedx_dim; }
-    __host__ __device__ int CpuPtrIndex() const { return 0; }  // cpuprt uint64
+    __host__ __device__ int CpuPtrIndex() const { return 0; }  // cpu_ptr uint64
     __host__ __device__ int DeltaScoreIndex() const {
       return CpuPtrIndex() + 2;
     }
@@ -122,7 +124,7 @@ class CommonFeatureValueAccessor {
         tmp_embedx_sgd_dim = mf_dim * 2 + 2;
       } else if (optimizer_type_ == 4) {  // shared_adam
         tmp_embedx_sgd_dim = 4;
-      } else if (optimizer_type_ = 2) {  // std adagrad
+      } else if (optimizer_type_ == 2) {  // std adagrad
         tmp_embedx_sgd_dim = mf_dim;
       }
       return (tmp_embedx_sgd_dim + mf_dim) * sizeof(float);
@@ -684,7 +686,7 @@ class CommonFeatureValueAccessor {
         std::vector<float> embedx_w;
     */
     std::stringstream os;
-    os << "cpuptr: " << common_feature_value.CpuPtr(const_cast<float*>(v))
+    os << "cpu_ptr: " << common_feature_value.CpuPtr(const_cast<float*>(v))
        << " delta_score: " << v[2] << " show: " << v[3] << " click: " << v[4]
        << " embed_w:" << v[5] << " embed_g2sum:";
     for (int i = common_feature_value.EmbedG2SumIndex();
@@ -730,7 +732,7 @@ struct FeatureValue {
   friend std::ostream& operator<<(std::ostream& out, FeatureValue& val) {
     out << "show: " << val.show << " clk: " << val.clk << " slot: " << val.slot
         << " lr: " << val.lr << " mf_dim: " << val.mf_dim
-        << "cpuptr: " << val.cpu_ptr << " mf_size: " << val.mf_size << " mf:";
+        << "cpu_ptr: " << val.cpu_ptr << " mf_size: " << val.mf_size << " mf:";
     for (int i = 0; i < val.mf_dim + 1; ++i) {
       out << " " << val.mf[i];
     }
@@ -825,7 +827,7 @@ class VirtualAccessor {
       const std::string& accessor_type = "DownpourCtrDymfAccessor") = 0;
 #endif
 
-  virtual void CopyForPull(const paddle::platform::Place& place,
+  virtual void CopyForPull(const phi::Place& place,
                            uint64_t** gpu_keys,
                            const std::vector<float*>& values,
                            const float* total_values_gpu,
@@ -836,7 +838,7 @@ class VirtualAccessor {
                            int* gpu_dim,
                            int feature_value_size) = 0;
   // dedup
-  virtual void CopyForPull(const paddle::platform::Place& place,
+  virtual void CopyForPull(const phi::Place& place,
                            const uint64_t* total_keys,
                            float** gpu_values,
                            const float* total_values_gpu,
@@ -848,7 +850,7 @@ class VirtualAccessor {
                            const uint32_t* gpu_restore_idx,
                            int pull_value_size) = 0;
 
-  virtual void CopyForPush(const paddle::platform::Place& place,
+  virtual void CopyForPush(const phi::Place& place,
                            const std::vector<const float*>& grad_values,
                            float* total_grad_values_gpu,
                            const std::vector<int64_t>& slot_lengths,
@@ -859,7 +861,7 @@ class VirtualAccessor {
                            std::vector<int>& slot_mf_dim_vector) = 0;  // NOLINT
 
   // dedup
-  virtual void CopyForPush(const paddle::platform::Place& place,
+  virtual void CopyForPush(const phi::Place& place,
                            const uint64_t* total_keys,
                            float** grad_values,
                            float* total_grad_values_gpu,
@@ -874,7 +876,7 @@ class VirtualAccessor {
                            const uint32_t* d_restore_idx,
                            const size_t grad_value_size) = 0;
 
-  virtual void CopyForPush(const paddle::platform::Place& place,
+  virtual void CopyForPush(const phi::Place& place,
                            const uint64_t* total_keys,
                            float** grad_values,
                            float* total_grad_values_gpu,
@@ -965,7 +967,7 @@ class AccessorWrapper : public VirtualAccessor {
   }
 #endif
 
-  virtual void CopyForPull(const paddle::platform::Place& place,
+  virtual void CopyForPull(const phi::Place& place,
                            uint64_t** gpu_keys,
                            const std::vector<float*>& values,
                            const float* total_values_gpu,
@@ -987,7 +989,7 @@ class AccessorWrapper : public VirtualAccessor {
                     feature_value_size);
   }
 
-  virtual void CopyForPull(const paddle::platform::Place& place,
+  virtual void CopyForPull(const phi::Place& place,
                            const uint64_t* total_keys,
                            float** gpu_values,
                            const float* total_values_gpu,
@@ -1011,7 +1013,7 @@ class AccessorWrapper : public VirtualAccessor {
                          pull_value_size);
   }
 
-  virtual void CopyForPush(const paddle::platform::Place& place,
+  virtual void CopyForPush(const phi::Place& place,
                            const std::vector<const float*>& grad_values,
                            float* total_grad_values_gpu,
                            const std::vector<int64_t>& slot_lengths,
@@ -1031,7 +1033,7 @@ class AccessorWrapper : public VirtualAccessor {
                     slot_mf_dim_vector);
   }
 
-  virtual void CopyForPush(const paddle::platform::Place& place,
+  virtual void CopyForPush(const phi::Place& place,
                            const uint64_t* total_keys,
                            float** grad_values,
                            float* total_grad_values_gpu,
@@ -1061,7 +1063,7 @@ class AccessorWrapper : public VirtualAccessor {
                          grad_value_size);
   }
 
-  virtual void CopyForPush(const paddle::platform::Place& place,
+  virtual void CopyForPush(const phi::Place& place,
                            const uint64_t* total_keys,
                            float** grad_values,
                            float* total_grad_values_gpu,
@@ -1095,7 +1097,7 @@ class AccessorWrapper : public VirtualAccessor {
                          grad_value_size);
   }
 
-  void CopyForPullImpl(const paddle::platform::Place& place,
+  void CopyForPullImpl(const phi::Place& place,
                        uint64_t** gpu_keys,
                        const std::vector<float*>& values,
                        const float* total_values_gpu,
@@ -1106,7 +1108,7 @@ class AccessorWrapper : public VirtualAccessor {
                        int* gpu_dim,
                        int feature_value_size);
 
-  void CopyForPushImpl(const paddle::platform::Place& place,
+  void CopyForPushImpl(const phi::Place& place,
                        const std::vector<const float*>& grad_values,
                        float* total_grad_values_gpu,
                        const std::vector<int64_t>& slot_lengths,
@@ -1116,7 +1118,7 @@ class AccessorWrapper : public VirtualAccessor {
                        std::vector<int>& slot_vector,          // NOLINT
                        std::vector<int>& slot_mf_dim_vector);  // NOLINT
 
-  void CopyForPullDedupImpl(const paddle::platform::Place& place,
+  void CopyForPullDedupImpl(const phi::Place& place,
                             const uint64_t* total_keys,
                             float** gpu_values,
                             const float* total_values_gpu,
@@ -1128,7 +1130,7 @@ class AccessorWrapper : public VirtualAccessor {
                             const uint32_t* gpu_restore_idx,
                             int pull_value_size);
 
-  void CopyForPushDedupImpl(const paddle::platform::Place& place,
+  void CopyForPushDedupImpl(const phi::Place& place,
                             const uint64_t* total_keys,
                             float** grad_values,
                             float* total_grad_values_gpu,
@@ -1143,7 +1145,7 @@ class AccessorWrapper : public VirtualAccessor {
                             const uint32_t* d_restore_idx,
                             const size_t grad_value_size);
 
-  void CopyForPushDedupImpl(const paddle::platform::Place& place,
+  void CopyForPushDedupImpl(const phi::Place& place,
                             const uint64_t* total_keys,
                             float** grad_values,
                             float* total_grad_values_gpu,
@@ -1190,7 +1192,7 @@ class GlobalAccessorFactory {
   VirtualAccessor* accessor_wrapper_ptr_ = nullptr;
 };
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace framework
+}  // namespace paddle
 
 #endif

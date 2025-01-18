@@ -18,10 +18,10 @@ limitations under the License. */
 #include <string>
 
 #include "paddle/fluid/operators/elementwise/elementwise_op.h"
-#include "paddle/fluid/platform/complex.h"
 #include "paddle/fluid/prim/api/composite_backward/composite_backward_api.h"
 #include "paddle/fluid/prim/utils/static/composite_grad_desc_maker.h"
 #include "paddle/fluid/prim/utils/static/desc_tensor.h"
+#include "paddle/phi/common/complex.h"
 
 namespace paddle {
 namespace operators {
@@ -85,12 +85,12 @@ class ElementwiseMulCompositeGradOpMaker
     PADDLE_ENFORCE_EQ(
         axis,
         -1,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "We only support axis = -1 in composite mul_grad but we got: ",
             axis));
     prim::multiply_grad<prim::DescTensor>(
         x, y, out_grad, axis, x_grad_p, y_grad_p);
-    VLOG(6) << "Runing mul_grad composite func";
+    VLOG(6) << "Running mul_grad composite func";
     this->RecoverOutputName(x_grad, x_grad_name);
     this->RecoverOutputName(y_grad, y_grad_name);
   }
@@ -135,12 +135,12 @@ class ElementwiseMulCompositeDoubleGradOpMaker
 
     // get attr
     int axis = static_cast<int>(this->Attr<int>("axis"));
-    PADDLE_ENFORCE_EQ(
-        axis,
-        -1,
-        phi::errors::InvalidArgument("We only support axis = -1 in composite "
-                                     "add_doubel_grad but we got: ",
-                                     axis));
+    PADDLE_ENFORCE_EQ(axis,
+                      -1,
+                      common::errors::InvalidArgument(
+                          "We only support axis = -1 in composite "
+                          "add_double_grad but we got: ",
+                          axis));
 
     // get output
     paddle::Tensor x_grad_t = this->GetSingleInputGrad("X");
@@ -152,12 +152,12 @@ class ElementwiseMulCompositeDoubleGradOpMaker
     paddle::Tensor* x_grad = this->GetOutputPtr(&x_grad_t);
     paddle::Tensor* y_grad = this->GetOutputPtr(&y_grad_t);
     paddle::Tensor* grad_out_grad = this->GetOutputPtr(&grad_out_grad_t);
-    // get output orginal name
+    // get output original name
     std::string x_grad_name = this->GetOutputName(x_grad_t);
     std::string y_grad_name = this->GetOutputName(y_grad_t);
     std::string grad_out_grad_name = this->GetOutputName(grad_out_grad_t);
 
-    VLOG(6) << "Runing multiply_double_grad composite func";
+    VLOG(6) << "Running multiply_double_grad composite func";
     prim::multiply_double_grad<prim::DescTensor>(
         x, y, out_grad, ddx, ddy, axis, x_grad, y_grad, grad_out_grad);
 

@@ -44,22 +44,22 @@ class SimpleNet(paddle.nn.Layer):
 
 class LayoutAutoTune(unittest.TestCase):
     def test_config(self):
-        paddle.fluid.core.enable_layout_autotune()
-        if self.use_autoune():
-            self.assertEqual(paddle.fluid.core.use_layout_autotune(), True)
-            paddle.fluid.core.disable_layout_autotune()
-        self.assertEqual(paddle.fluid.core.use_layout_autotune(), False)
-        self.use_autoune()
+        paddle.base.core.enable_layout_autotune()
+        if self.use_autotune():
+            self.assertEqual(paddle.base.core.use_layout_autotune(), True)
+            paddle.base.core.disable_layout_autotune()
+        self.assertEqual(paddle.base.core.use_layout_autotune(), False)
+        self.use_autotune()
 
     def setUp(self):
-        self.use_autoune()
+        self.use_autotune()
 
-    def use_autoune(self):
+    def use_autotune(self):
         if paddle.is_compiled_with_cuda():
             paddle.incubate.autotune.set_config(
                 config={"layout": {"enable": True}}
             )
-            return paddle.fluid.core.use_layout_autotune()
+            return paddle.base.core.use_layout_autotune()
         else:
             config = {"layout": {"enable": False}}
             tfile = tempfile.NamedTemporaryFile(mode="w+", delete=False)
@@ -67,7 +67,7 @@ class LayoutAutoTune(unittest.TestCase):
             tfile.close()
             paddle.incubate.autotune.set_config(tfile.name)
             os.remove(tfile.name)
-            return paddle.fluid.core.use_layout_autotune()
+            return paddle.base.core.use_layout_autotune()
 
     def train(self, data_format):
         model = SimpleNet(data_format="NCHW", class_num=2)
@@ -167,7 +167,7 @@ class LayoutAutoTune(unittest.TestCase):
         self.assertEqual(conv_out1.shape, [1, 8, 14, 12])
         self.assertEqual(out.shape, [2, 8, 14, 12])
 
-    def test_padding_tranpose(self):
+    def test_padding_transpose(self):
         conv = paddle.nn.Conv2D(3, 8, (3, 3))
         data = paddle.rand([1, 3, 16, 14])
         mode = "constant"

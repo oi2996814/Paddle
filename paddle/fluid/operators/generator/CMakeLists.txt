@@ -1,21 +1,18 @@
 # phi auto cmake utils
-include(phi)
+include(operators)
 
 # set yaml file path
-set(op_yaml_file ${CMAKE_SOURCE_DIR}/paddle/phi/api/yaml/ops.yaml)
-set(legacy_op_yaml_file ${CMAKE_SOURCE_DIR}/paddle/phi/api/yaml/legacy_ops.yaml)
-set(bw_op_yaml_file ${CMAKE_SOURCE_DIR}/paddle/phi/api/yaml/backward.yaml)
-set(static_op_yaml_file ${CMAKE_SOURCE_DIR}/paddle/phi/api/yaml/static_ops.yaml)
-set(fused_op_yaml_file ${CMAKE_SOURCE_DIR}/paddle/phi/api/yaml/fused_ops.yaml)
-set(legacy_bw_op_yaml_file
-    ${CMAKE_SOURCE_DIR}/paddle/phi/api/yaml/legacy_backward.yaml)
-set(sparse_op_yaml_file ${CMAKE_SOURCE_DIR}/paddle/phi/api/yaml/sparse_ops.yaml)
-set(sparse_bw_op_yaml_file
-    ${CMAKE_SOURCE_DIR}/paddle/phi/api/yaml/sparse_backward.yaml)
-set(static_bw_op_yaml_file
-    ${CMAKE_SOURCE_DIR}/paddle/phi/api/yaml/static_backward.yaml)
-set(fused_bw_op_yaml_file
-    ${CMAKE_SOURCE_DIR}/paddle/phi/api/yaml/fused_backward.yaml)
+set(ops_yaml_dir ${CMAKE_SOURCE_DIR}/paddle/phi/ops/yaml)
+set(op_yaml_file ${ops_yaml_dir}/ops.yaml)
+set(legacy_op_yaml_file ${ops_yaml_dir}/inconsistent/dygraph_ops.yaml)
+set(bw_op_yaml_file ${ops_yaml_dir}/backward.yaml)
+set(static_op_yaml_file ${ops_yaml_dir}/legacy/static_ops.yaml)
+set(fused_op_yaml_file ${ops_yaml_dir}/fused_ops.yaml)
+set(legacy_bw_op_yaml_file ${ops_yaml_dir}/inconsistent/dygraph_backward.yaml)
+set(sparse_op_yaml_file ${ops_yaml_dir}/sparse_ops.yaml)
+set(sparse_bw_op_yaml_file ${ops_yaml_dir}/sparse_backward.yaml)
+set(static_bw_op_yaml_file ${ops_yaml_dir}/legacy/static_backward.yaml)
+set(fused_bw_op_yaml_file ${ops_yaml_dir}/fused_backward.yaml)
 
 if(NOT PYTHONINTERP_FOUND)
   find_package(PythonInterp REQUIRED)
@@ -25,7 +22,7 @@ function(install_py_pyyaml)
   execute_process(
     COMMAND
       ${PYTHON_EXECUTABLE} "-c"
-      "import re, pyyaml; print(re.compile('/__init__.py.*').sub('',pyyaml.__file__))"
+      "import re, yaml; print(re.compile('/__init__.py.*').sub('',yaml.__file__))"
     RESULT_VARIABLE _pyyaml_status
     ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
 
@@ -52,54 +49,19 @@ function(install_py_jinja2)
       OUTPUT_VARIABLE _jinja2_version
       ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
 
-    if(${PYTHON_VERSION_STRING} VERSION_LESS "3.6.2")
-      if(NOT _jinja2_version VERSION_LESS "2.11.3")
-        execute_process(COMMAND ${PYTHON_EXECUTABLE} -m pip install -U
-                                jinja2==2.11.3)
-      endif()
-      return()
-    endif()
-
     if(_jinja2_version)
       return()
     endif()
   endif()
 
-  if(${PYTHON_VERSION_STRING} VERSION_LESS "3.6.2")
-    execute_process(COMMAND ${PYTHON_EXECUTABLE} -m pip install -U
-                            jinja2==2.11.3)
-  else()
-    execute_process(COMMAND ${PYTHON_EXECUTABLE} -m pip install -U jinja2)
-  endif()
-endfunction()
-
-function(install_py_typing_extensions)
-  if(${PYTHON_VERSION_STRING} VERSION_LESS "3.6.2")
-    execute_process(COMMAND ${PYTHON_EXECUTABLE} -m pip install -U
-                            typing-extensions>=4.1.1)
-    return()
-  endif()
-
-  execute_process(
-    COMMAND
-      ${PYTHON_EXECUTABLE} "-c"
-      "import re, typing_extensions; print(re.compile('/__init__.py.*').sub('',typing_extensions.__file__))"
-    RESULT_VARIABLE _te_status
-    ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
-
-  if(NOT _te_status EQUAL 0)
-    execute_process(COMMAND ${PYTHON_EXECUTABLE} -m pip install -U
-                            typing-extensions)
-  endif()
+  execute_process(COMMAND ${PYTHON_EXECUTABLE} -m pip install -U jinja2)
 endfunction()
 
 install_py_pyyaml()
 install_py_jinja2()
-install_py_typing_extensions()
 
 # parse ops
-set(parsed_op_dir
-    ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/generator/parsed_ops)
+set(parsed_op_dir ${CMAKE_BINARY_DIR}/paddle/phi/ops/yaml)
 set(generated_op_path_1
     ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/generated_op1.cc)
 set(generated_op_path_2
@@ -115,14 +77,16 @@ set(generated_fused_op_path
 set(generated_sparse_ops_path
     ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/generated_sparse_op.cc)
 set(generated_argument_mapping_path
-    ${CMAKE_SOURCE_DIR}/paddle/phi/ops/compat/generated_sig.cc)
+    ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/ops_signature/generated_sig.cc)
 set(generated_fused_argument_mapping_path
-    ${CMAKE_SOURCE_DIR}/paddle/phi/ops/compat/generated_fused_sig.cc)
+    ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/ops_signature/generated_fused_sig.cc
+)
 set(generated_static_argument_mapping_path
-    ${CMAKE_SOURCE_DIR}/paddle/phi/ops/compat/generated_static_sig.cc)
+    ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/ops_signature/generated_static_sig.cc
+)
 set(generated_sparse_argument_mapping_path
-    ${CMAKE_SOURCE_DIR}/paddle/phi/ops/compat/generated_sparse_sig.cc)
-
+    ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/ops_signature/generated_sparse_sig.cc
+)
 execute_process(
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/generator
   COMMAND ${CMAKE_COMMAND} -E make_directory ${parsed_op_dir} RESULTS_VARIABLE
@@ -139,32 +103,37 @@ message(
 - ${legacy_bw_op_yaml_file}
 - ${fused_op_yaml_file}
 - ${static_op_yaml_file}")
+
 execute_process(
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/generator
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${parsed_op_dir}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${parsed_op_dir}/inconsistent
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${parsed_op_dir}/legacy
   COMMAND ${PYTHON_EXECUTABLE} parse_op.py --op_yaml_path ${op_yaml_file}
-          --output_path ./parsed_ops/ops.parsed.yaml
+          --output_path ${parsed_op_dir}/ops.parsed.yaml
   COMMAND ${PYTHON_EXECUTABLE} parse_op.py --op_yaml_path ${legacy_op_yaml_file}
-          --output_path ./parsed_ops/legacy_ops.parsed.yaml
+          --output_path ${parsed_op_dir}/inconsistent/dygraph_ops.parsed.yaml
   COMMAND ${PYTHON_EXECUTABLE} parse_op.py --op_yaml_path ${bw_op_yaml_file}
-          --output_path ./parsed_ops/backward_ops.parsed.yaml --backward
+          --output_path ${parsed_op_dir}/backward.parsed.yaml --backward
   COMMAND
     ${PYTHON_EXECUTABLE} parse_op.py --op_yaml_path ${legacy_bw_op_yaml_file}
-    --output_path ./parsed_ops/legacy_backward_ops.parsed.yaml --backward
+    --output_path ${parsed_op_dir}/inconsistent/dygraph_backward.parsed.yaml
+    --backward
   COMMAND ${PYTHON_EXECUTABLE} parse_op.py --op_yaml_path ${static_op_yaml_file}
-          --output_path ./parsed_ops/static_ops.parsed.yaml
+          --output_path ${parsed_op_dir}/legacy/static_ops.parsed.yaml
   COMMAND ${PYTHON_EXECUTABLE} parse_op.py --op_yaml_path ${fused_op_yaml_file}
-          --output_path ./parsed_ops/fused_ops.parsed.yaml
+          --output_path ${parsed_op_dir}/fused_ops.parsed.yaml
   COMMAND ${PYTHON_EXECUTABLE} parse_op.py --op_yaml_path ${sparse_op_yaml_file}
-          --output_path ./parsed_ops/sparse_ops.parsed.yaml
+          --output_path ${parsed_op_dir}/sparse_ops.parsed.yaml
   COMMAND
     ${PYTHON_EXECUTABLE} parse_op.py --op_yaml_path ${sparse_bw_op_yaml_file}
-    --output_path ./parsed_ops/sparse_backward.parsed.yaml --backward
+    --output_path ${parsed_op_dir}/sparse_backward.parsed.yaml --backward
   COMMAND
     ${PYTHON_EXECUTABLE} parse_op.py --op_yaml_path ${static_bw_op_yaml_file}
-    --output_path ./parsed_ops/static_backward.parsed.yaml --backward
+    --output_path ${parsed_op_dir}/legacy/static_backward.parsed.yaml --backward
   COMMAND
     ${PYTHON_EXECUTABLE} parse_op.py --op_yaml_path ${fused_bw_op_yaml_file}
-    --output_path ./parsed_ops/fused_backward.parsed.yaml --backward
+    --output_path ${parsed_op_dir}/fused_backward.parsed.yaml --backward
     RESULTS_VARIABLE _results)
 foreach(_result in ${_results})
   if(${_result})
@@ -175,14 +144,15 @@ endforeach()
 # validation of op yamls
 message("validate op yaml:
 - ${parsed_op_dir}/ops.parsed.yaml
-- ${parsed_op_dir}/backward_ops.parsed.yaml")
+- ${parsed_op_dir}/backward.parsed.yaml")
 execute_process(
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/generator
   COMMAND
     ${PYTHON_EXECUTABLE} cross_validate.py --forward_yaml_paths
-    ./parsed_ops/ops.parsed.yaml ./parsed_ops/legacy_ops.parsed.yaml
-    --backward_yaml_paths ./parsed_ops/backward_ops.parsed.yaml
-    ./parsed_ops/legacy_backward_ops.parsed.yaml
+    ${parsed_op_dir}/ops.parsed.yaml
+    ${parsed_op_dir}/inconsistent/dygraph_ops.parsed.yaml --backward_yaml_paths
+    ${parsed_op_dir}/backward.parsed.yaml
+    ${parsed_op_dir}/inconsistent/dygraph_backward.parsed.yaml
   RESULT_VARIABLE _result)
 if(${_result})
   message(FATAL_ERROR "ops validation failed, exiting.")
@@ -192,8 +162,8 @@ execute_process(
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/generator
   COMMAND
     ${PYTHON_EXECUTABLE} cross_validate.py --forward_yaml_paths
-    ./parsed_ops/static_ops.parsed.yaml --backward_yaml_paths
-    ./parsed_ops/static_backward.parsed.yaml
+    ${parsed_op_dir}/legacy/static_ops.parsed.yaml --backward_yaml_paths
+    ${parsed_op_dir}/legacy/static_backward.parsed.yaml
   RESULT_VARIABLE _result)
 if(${_result})
   message(FATAL_ERROR "static ops validation failed, exiting.")
@@ -203,8 +173,8 @@ execute_process(
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/generator
   COMMAND
     ${PYTHON_EXECUTABLE} cross_validate.py --forward_yaml_paths
-    ./parsed_ops/fused_ops.parsed.yaml --backward_yaml_paths
-    ./parsed_ops/fused_backward.parsed.yaml
+    ${parsed_op_dir}/fused_ops.parsed.yaml --backward_yaml_paths
+    ${parsed_op_dir}/fused_backward.parsed.yaml
   RESULT_VARIABLE _result)
 if(${_result})
   message(FATAL_ERROR "fused ops validation failed, exiting.")
@@ -214,8 +184,8 @@ execute_process(
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/generator
   COMMAND
     ${PYTHON_EXECUTABLE} cross_validate.py --forward_yaml_paths
-    ./parsed_ops/sparse_ops.parsed.yaml --backward_yaml_paths
-    ./parsed_ops/sparse_backward.parsed.yaml
+    ${parsed_op_dir}/sparse_ops.parsed.yaml --backward_yaml_paths
+    ${parsed_op_dir}/sparse_backward.parsed.yaml
   RESULT_VARIABLE _result)
 if(${_result})
   message(FATAL_ERROR "sparse ops validation failed, exiting.")
@@ -223,20 +193,22 @@ endif()
 
 # code generation for op, op makers, and argument mapping functions
 message(
-  "create or remove auto-geneated operators: generated_op(1-4).cc.tmp
-create or remove auto-geneated argument mappings: ${generated_argument_mapping_path}.tmp"
+  "create or remove auto-generated operators: generated_op(1-4).cc.tmp
+create or remove auto-generated argument mappings: ${generated_argument_mapping_path}.tmp"
 )
 execute_process(
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/generator
   COMMAND
     ${PYTHON_EXECUTABLE} generate_op.py --ops_yaml_path
-    ./parsed_ops/ops.parsed.yaml --backward_yaml_path
-    ./parsed_ops/backward_ops.parsed.yaml --op_version_yaml_path
-    ${CMAKE_SOURCE_DIR}/paddle/phi/api/yaml/op_version.yaml
-    --op_compat_yaml_path ${CMAKE_SOURCE_DIR}/paddle/phi/api/yaml/op_compat.yaml
-    --output_op_path "${generated_op_path_1}.tmp" "${generated_op_path_2}.tmp"
-    "${generated_op_path_3}.tmp" "${generated_op_path_4}.tmp"
-    --output_arg_map_path "${generated_argument_mapping_path}.tmp"
+    ${parsed_op_dir}/ops.parsed.yaml --backward_yaml_path
+    ${parsed_op_dir}/backward.parsed.yaml --op_version_yaml_path
+    ${ops_yaml_dir}/op_version.yaml --op_compat_yaml_path
+    ${ops_yaml_dir}/op_compat.yaml --output_op_path "${generated_op_path_1}.tmp"
+    "${generated_op_path_2}.tmp" "${generated_op_path_3}.tmp"
+    "${generated_op_path_4}.tmp" --output_arg_map_path
+    "${generated_argument_mapping_path}.tmp" --ops_exclude_yaml_path
+    ${ops_yaml_dir}/legacy/ops_exclude.yaml --backward_exclude_yaml_path
+    ${ops_yaml_dir}/legacy/backward_exclude.yaml
   RESULT_VARIABLE _result)
 if(${_result})
   message(FATAL_ERROR "operator codegen failed, exiting.")
@@ -246,11 +218,11 @@ execute_process(
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/generator
   COMMAND
     ${PYTHON_EXECUTABLE} generate_op.py --ops_yaml_path
-    ./parsed_ops/static_ops.parsed.yaml --backward_yaml_path
-    ./parsed_ops/static_backward.parsed.yaml --op_version_yaml_path
-    ${CMAKE_SOURCE_DIR}/paddle/phi/api/yaml/op_version.yaml
-    --op_compat_yaml_path ${CMAKE_SOURCE_DIR}/paddle/phi/api/yaml/op_compat.yaml
-    --output_op_path "${generated_static_op_path}.tmp" --output_arg_map_path
+    ${parsed_op_dir}/legacy/static_ops.parsed.yaml --backward_yaml_path
+    ${parsed_op_dir}/legacy/static_backward.parsed.yaml --op_version_yaml_path
+    ${ops_yaml_dir}/op_version.yaml --op_compat_yaml_path
+    ${ops_yaml_dir}/op_compat.yaml --output_op_path
+    "${generated_static_op_path}.tmp" --output_arg_map_path
     "${generated_static_argument_mapping_path}.tmp"
   RESULT_VARIABLE _result)
 if(${_result})
@@ -261,11 +233,11 @@ execute_process(
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/generator
   COMMAND
     ${PYTHON_EXECUTABLE} generate_op.py --ops_yaml_path
-    ./parsed_ops/fused_ops.parsed.yaml --backward_yaml_path
-    ./parsed_ops/fused_backward.parsed.yaml --op_version_yaml_path
-    ${CMAKE_SOURCE_DIR}/paddle/phi/api/yaml/op_version.yaml
-    --op_compat_yaml_path ${CMAKE_SOURCE_DIR}/paddle/phi/api/yaml/op_compat.yaml
-    --output_op_path "${generated_fused_op_path}.tmp" --output_arg_map_path
+    ${parsed_op_dir}/fused_ops.parsed.yaml --backward_yaml_path
+    ${parsed_op_dir}/fused_backward.parsed.yaml --op_version_yaml_path
+    ${ops_yaml_dir}/op_version.yaml --op_compat_yaml_path
+    ${ops_yaml_dir}/op_compat.yaml --output_op_path
+    "${generated_fused_op_path}.tmp" --output_arg_map_path
     "${generated_fused_argument_mapping_path}.tmp"
   RESULT_VARIABLE _result)
 if(${_result})
@@ -276,8 +248,8 @@ execute_process(
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/generator
   COMMAND
     ${PYTHON_EXECUTABLE} generate_sparse_op.py --ops_yaml_path
-    ./parsed_ops/sparse_ops.parsed.yaml --backward_ops_yaml_path
-    ./parsed_ops/sparse_backward.parsed.yaml --output_op_path
+    ${parsed_op_dir}/sparse_ops.parsed.yaml --backward_ops_yaml_path
+    ${parsed_op_dir}/sparse_backward.parsed.yaml --output_op_path
     "${generated_sparse_ops_path}.tmp" --output_arg_map_path
     "${generated_sparse_argument_mapping_path}.tmp"
   RESULT_VARIABLE _result)
@@ -331,7 +303,7 @@ endif()
 # op extra info file
 set(ops_extra_info_gen_file
     ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/generator/ops_extra_info_gen.py)
-set(op_compat_yaml_file ${CMAKE_SOURCE_DIR}/paddle/phi/api/yaml/op_compat.yaml)
+set(op_compat_yaml_file ${ops_yaml_dir}/op_compat.yaml)
 set(ops_extra_info_file
     ${CMAKE_SOURCE_DIR}/paddle/fluid/operators/ops_extra_info.cc)
 
@@ -342,10 +314,10 @@ execute_process(
 message("generate ${ops_extra_info_file}")
 
 set(op_utils_header
-    ${PADDLE_BINARY_DIR}/paddle/phi/ops/compat/signatures.h.tmp
+    ${PADDLE_BINARY_DIR}/paddle/fluid/operators/ops_signature/signatures.h.tmp
     CACHE INTERNAL "op_args_fns.cc file")
 set(op_utils_header_final
-    ${PADDLE_BINARY_DIR}/paddle/phi/ops/compat/signatures.h)
+    ${PADDLE_BINARY_DIR}/paddle/fluid/operators/ops_signature/signatures.h)
 file(
   WRITE ${op_utils_header}
   "// Generated by the paddle/fluid/operators/generator/CMakeLists.txt.  DO NOT EDIT!\n\n"
@@ -356,7 +328,7 @@ file(APPEND ${op_utils_header}
 # Automatically generate the registration code of all arg map functions
 # and compile the corresponding target to avoid frequent code conflicts
 # when writing to same file
-register_op_utils(op_compat_infos DEPS phi)
+register_op_utils(op_compat_infos DEPS phi common)
 
 copy_if_different(${op_utils_header} ${op_utils_header_final})
 

@@ -38,13 +38,13 @@ void YoloBoxKernel(const Context& dev_ctx,
   auto* input = &x;
   auto* imgsize = &img_size;
   float scale = scale_x_y;
-  float bias = -0.5 * (scale - 1.);
+  float bias = -0.5f * (scale - 1.f);
 
-  const int n = input->dims()[0];
-  const int h = input->dims()[2];
-  const int w = input->dims()[3];
-  const int box_num = boxes->dims()[1];
-  const int an_num = anchors.size() / 2;
+  const int n = static_cast<int>(input->dims()[0]);
+  const int h = static_cast<int>(input->dims()[2]);
+  const int w = static_cast<int>(input->dims()[3]);
+  const int box_num = static_cast<int>(boxes->dims()[1]);
+  const int an_num = static_cast<int>(anchors.size() / 2);
   int input_size_h = downsample_ratio * h;
   int input_size_w = downsample_ratio * w;
 
@@ -67,7 +67,7 @@ void YoloBoxKernel(const Context& dev_ctx,
 
   memset(scores_data, 0, scores->numel() * sizeof(T));
 
-  std::array<T, 4> box;
+  std::array<T, 4> box = {};
   for (int i = 0; i < n; i++) {
     int img_height = imgsize_data[2 * i];
     int img_width = imgsize_data[2 * i + 1];

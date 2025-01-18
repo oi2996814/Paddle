@@ -50,7 +50,7 @@ def to_tensor(pic, data_format='CHW'):
     else:
         img = paddle.to_tensor(pic)
 
-    if paddle.fluid.data_feeder.convert_dtype(img.dtype) == 'uint8':
+    if paddle.base.data_feeder.convert_dtype(img.dtype) == 'uint8':
         return paddle.cast(img, np.float32) / 255.0
     else:
         return img
@@ -245,7 +245,7 @@ def center_crop(img, output_size):
         img (np.array): Image to be cropped. (0,0) denotes the top left corner of the image.
         output_size (sequence or int): (height, width) of the crop box. If int,
             it is used for both directions
-        backend (str, optional): The image proccess backend type. Options are `pil`, `cv2`. Default: 'pil'.
+        backend (str, optional): The image process backend type. Options are `pil`, `cv2`. Default: 'pil'.
 
     Returns:
         np.array: Cropped image.
@@ -269,7 +269,7 @@ def hflip(img):
         img (np.array): Image to be flipped.
 
     Returns:
-        np.array:  Horizontall flipped image.
+        np.array:  Horizontally flipped image.
 
     """
     cv2 = try_import('cv2')
@@ -405,12 +405,11 @@ def adjust_hue(img, hue_factor):
     img = img.astype(np.uint8)
     hsv_img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV_FULL)
     h, s, v = cv2.split(hsv_img)
-
-    alpha = np.random.uniform(hue_factor, hue_factor)
-    h = h.astype(np.uint8)
-    # uint8 addition take cares of rotation across boundaries
-    with np.errstate(over="ignore"):
-        h += np.uint8(alpha * 255)
+    alpha = hue_factor
+    h = h.astype(np.int32)  # Convert to int32 to prevent overflow
+    # uint8 addition takes care of rotation across boundaries
+    h = (h + int(alpha * 255)) % 256  # Ensure values are within [0, 255]
+    h = h.astype(np.uint8)  # Convert back to uint8
     hsv_img = cv2.merge([h, s, v])
     return cv2.cvtColor(hsv_img, cv2.COLOR_HSV2BGR_FULL).astype(dtype)
 
@@ -681,7 +680,7 @@ def to_grayscale(img, num_output_channels=1):
 
 
 def normalize(img, mean, std, data_format='CHW', to_rgb=False):
-    """Normalizes a ndarray imge or image with mean and standard deviation.
+    """Normalizes a ndarray image or image with mean and standard deviation.
 
     Args:
         img (np.array): input data to be normalized.

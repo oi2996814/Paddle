@@ -28,24 +28,46 @@ void SplitKernel(const Context& dev_ctx,
   using XPUType = typename XPUTypeTrait<T>::Type;
   int axis = axis_scalar.to<int>();
   auto in_dims = x.dims();
-  auto input_shape = vectorize<int>(in_dims);
+  auto input_shape = common::vectorize<int>(in_dims);
   std::vector<XPUType*> out_ptrs;
   std::vector<int> split_lists;
+
+  // Vectors to keep track of zero-sized and non-zero-sized outputs
+  std::vector<XPUType*> non_zero_out_ptrs;
+  std::vector<int> non_zero_split_lists;
+
   for (size_t j = 0; j < outs.size(); ++j) {
     dev_ctx.template Alloc<T>(outs[j]);
     out_ptrs.push_back(reinterpret_cast<XPUType*>(outs[j]->data<T>()));
-    split_lists.push_back(outs[j]->dims()[axis]);
+    int section_size =
+        axis < outs[j]->dims().size() ? outs[j]->dims()[axis] : 1;
+    split_lists.push_back(section_size);
+
+    if (section_size > 0) {
+      non_zero_out_ptrs.push_back(
+          reinterpret_cast<XPUType*>(outs[j]->data<T>()));
+      non_zero_split_lists.push_back(section_size);
+    } else {
+      auto zero_dims = in_dims;
+      zero_dims[axis] = 0;
+      outs[j]->Resize(zero_dims);
+    }
   }
+
   if (x.numel() == 0) {
     return;
   }
-  int r = xpu::split<XPUType>(dev_ctx.x_context(),
-                              reinterpret_cast<const XPUType*>(x.data<T>()),
-                              out_ptrs,
-                              input_shape,
-                              split_lists,
-                              axis);
-  PADDLE_ENFORCE_XDNN_SUCCESS(r, "split");
+
+  // Perform the split operation only on non-zero sections
+  if (!non_zero_split_lists.empty()) {
+    int r = xpu::split<XPUType>(dev_ctx.x_context(),
+                                reinterpret_cast<const XPUType*>(x.data<T>()),
+                                non_zero_out_ptrs,
+                                input_shape,
+                                non_zero_split_lists,
+                                axis);
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "split");
+  }
 }
 
 template <typename T, typename Context>
@@ -73,7 +95,8 @@ PD_REGISTER_KERNEL(split,
                    float,
                    int64_t,
                    int,
-                   phi::dtype::float16) {}
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}
 PD_REGISTER_KERNEL(split_with_num,
                    XPU,
                    ALL_LAYOUT,
@@ -81,4 +104,5 @@ PD_REGISTER_KERNEL(split_with_num,
                    float,
                    int64_t,
                    int,
-                   phi::dtype::float16) {}
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}

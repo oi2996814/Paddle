@@ -16,16 +16,14 @@ limitations under the License. */
 #include "paddle/fluid/framework/ir/pass_tester_helper.h"
 #include "paddle/fluid/framework/op_version_registry.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 void AddVarToScope(Scope* param_scope,
                    const std::string& name,
                    const DDim& dims) {
   auto* tensor = param_scope->Var(name)->GetMutable<phi::DenseTensor>();
   tensor->Resize(dims);
-  tensor->mutable_data<float>(platform::CPUPlace());
+  tensor->mutable_data<float>(phi::CPUPlace());
 }
 
 Scope* CreateParamScope() {
@@ -121,18 +119,18 @@ TEST(DenseMultiHeadMatmulToSparsePass, basic) {
 
   if (fuse_pass.get() == nullptr || sparse_pass.get() == nullptr)
     LOG(INFO) << "asdfasdf";
-  int num_nodes_before = graph->Nodes().size();
+  int num_nodes_before = static_cast<int>(graph->Nodes().size());
   VLOG(3) << DebugString(graph);
 
   graph.reset(fuse_pass->Apply(graph.release()));
   graph.reset(sparse_pass->Apply(graph.release()));
-  int num_nodes_after = graph->Nodes().size();
+  int num_nodes_after = static_cast<int>(graph->Nodes().size());
   int num_fused_nodes_after = GetNumOpNodes(graph, "sparse_multihead_matmul");
   VLOG(3) << DebugString(graph);
 
   PADDLE_ENFORCE_EQ(num_nodes_before,
                     num_nodes_after + 39,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "After the multihead_matmul pass and sparse pass, The "
                         "node num in graph "
                         "should be %d, but the result is %d",
@@ -140,16 +138,14 @@ TEST(DenseMultiHeadMatmulToSparsePass, basic) {
                         num_nodes_after));
   PADDLE_ENFORCE_EQ(num_fused_nodes_after,
                     1,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "After the multihead_matmul pass and sparse pass, "
                         "there should be one "
                         "sparse_multihead_matmul op, but the result is %d",
                         num_fused_nodes_after));
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 USE_PASS(multihead_matmul_fuse_pass);
 USE_PASS(multihead_matmul_fuse_pass_v2);

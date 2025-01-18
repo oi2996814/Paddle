@@ -12,11 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from paddle import _C_ops
+from __future__ import annotations
 
-from ...fluid import core, framework, unique_name
-from ...fluid.data_feeder import check_variable_and_dtype
-from ...fluid.framework import _current_expected_place, in_dygraph_mode
+import paddle
+from paddle import _C_ops, pir
+
+from ...base import core, framework, unique_name
+from ...base.data_feeder import check_variable_and_dtype
+from ...base.framework import (
+    _current_expected_place,
+    in_dygraph_mode,
+    in_pir_mode,
+)
 from .initializer import Initializer
 
 __all__ = []
@@ -39,8 +46,14 @@ class UniformInitializer(Initializer):
     """
 
     def __init__(
-        self, low=-1.0, high=1.0, seed=0, diag_num=0, diag_step=0, diag_val=1.0
-    ):
+        self,
+        low: float = -1.0,
+        high: float = 1.0,
+        seed: int = 0,
+        diag_num: int = 0,
+        diag_step: int = 0,
+        diag_val: float = 1.0,
+    ) -> None:
         assert low is not None
         assert high is not None
         assert high >= low
@@ -58,20 +71,25 @@ class UniformInitializer(Initializer):
         self._diag_step = diag_step
         self._diag_val = diag_val
 
-    def forward(self, var, block=None):
+    def forward(
+        self, var: paddle.Tensor, block: pir.Block | None = None
+    ) -> paddle.Tensor | None:
         """Initialize the input tensor with Uniform distribution.
 
         Args:
             var(Tensor): Tensor that needs to be initialized.
-            block(Block, optional): The block in which initialization ops
+            block(Block|None, optional): The block in which initialization ops
                    should be added. Used in static graph only, default None.
 
         Returns:
             The initialization op
         """
+        assert not (
+            isinstance(var, framework.EagerParamBase) and var.is_dist()
+        ), "Currently, uniform initializer not support lazy init for dist param."
         block = self._check_block(block)
 
-        assert isinstance(block, framework.Block)
+        assert isinstance(block, (framework.Block, pir.Block))
         if not in_dygraph_mode():
             check_variable_and_dtype(
                 var,
@@ -92,7 +110,7 @@ class UniformInitializer(Initializer):
                 ),
                 shape=var.shape,
                 dtype=out_dtype,
-                type=core.VarDesc.VarType.LOD_TENSOR,
+                type=core.VarDesc.VarType.DENSE_TENSOR,
                 persistable=False,
             )
         else:
@@ -114,6 +132,25 @@ class UniformInitializer(Initializer):
             else:
                 out_var._share_underline_tensor_to(var)
             return None
+        elif in_pir_mode():
+            if var.dtype == core.DataType.FLOAT16:
+                out_dtype = core.DataType.FLOAT32
+            else:
+                out_dtype = var.dtype
+            out_var = _C_ops.uniform(
+                var.shape,
+                out_dtype,
+                self._low,
+                self._high,
+                self._seed,
+                _current_expected_place(),
+            )
+            if (
+                var.dtype == core.DataType.FLOAT16
+                and out_var.dtype != core.DataType.FLOAT16
+            ):
+                return _C_ops.cast(out_var, var.dtype)
+            return out_var
         else:
             op = block.append_op(
                 type="uniform_random",
@@ -150,7 +187,7 @@ class Uniform(UniformInitializer):
     Args:
         low (float, optional): Lower boundary of the uniform distribution. Default is :math:`-1.0`.
         high (float, optional): Upper boundary of the uniform distribution. Default is :math:`1.0`.
-        name (str, optional): For details, please refer to :ref:`api_guide_Name`. Generally, no setting is required. Default: None.
+        name (str|None, optional): For details, please refer to :ref:`api_guide_Name`. Generally, no setting is required. Default: None.
 
     Returns:
         A parameter initialized by uniform distribution.
@@ -158,27 +195,38 @@ class Uniform(UniformInitializer):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
+            >>> paddle.seed(1)
+            >>> data = paddle.ones(shape=[3, 1, 2], dtype='float32')
+            >>> weight_attr = paddle.framework.ParamAttr(
+            ...     name="linear_weight",
+            ...     initializer=paddle.nn.initializer.Uniform(low=-0.5, high=0.5))
+            >>> bias_attr = paddle.framework.ParamAttr(
+            ...     name="linear_bias",
+            ...     initializer=paddle.nn.initializer.Uniform(low=-0.5, high=0.5))
+            >>> linear = paddle.nn.Linear(2, 2, weight_attr=weight_attr, bias_attr=bias_attr)
+            >>> print(linear.weight)
+            Parameter containing:
+            Tensor(shape=[2, 2], dtype=float32, place=Place(cpu), stop_gradient=False,
+            [[-0.48212373,  0.26492310],
+             [ 0.17605734, -0.45379421]])
 
-            data = paddle.ones(shape=[3, 1, 2], dtype='float32')
-            weight_attr = paddle.framework.ParamAttr(
-                name="linear_weight",
-                initializer=paddle.nn.initializer.Uniform(low=-0.5, high=0.5))
-            bias_attr = paddle.framework.ParamAttr(
-                name="linear_bias",
-                initializer=paddle.nn.initializer.Uniform(low=-0.5, high=0.5))
-            linear = paddle.nn.Linear(2, 2, weight_attr=weight_attr, bias_attr=bias_attr)
-            # linear.weight:  [[-0.46245047  0.05260676]
-            #                  [ 0.38054508  0.29169726]]
-            # linear.bias:  [-0.2734719   0.23939109]
+            >>> print(linear.bias)
+            Parameter containing:
+            Tensor(shape=[2], dtype=float32, place=Place(cpu), stop_gradient=False,
+            [-0.11236754,  0.46462214])
 
-            res = linear(data)
-            # res:  [[[-0.3553773  0.5836951]]
-            #        [[-0.3553773  0.5836951]]
-            #        [[-0.3553773  0.5836951]]]
+            >>> res = linear(data)
+            >>> print(res)
+            Tensor(shape=[3, 1, 2], dtype=float32, place=Place(cpu), stop_gradient=False,
+            [[[-0.41843393,  0.27575102]],
+             [[-0.41843393,  0.27575102]],
+             [[-0.41843393,  0.27575102]]])
     """
 
-    def __init__(self, low=-1.0, high=1.0, name=None):
+    def __init__(
+        self, low: float = -1.0, high: float = 1.0, name: str | None = None
+    ) -> None:
         assert low is not None, 'low should not be None'
         assert high is not None, 'high should not be None'
         assert high >= low, 'high should greater or equal than low'

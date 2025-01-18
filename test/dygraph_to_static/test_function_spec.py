@@ -17,6 +17,7 @@ import unittest
 from test_declarative import foo_func
 
 import paddle
+from paddle.framework import in_pir_mode
 from paddle.jit.dy2static.function_spec import FunctionSpec
 from paddle.static import InputSpec
 
@@ -24,6 +25,7 @@ paddle.enable_static()
 
 
 class TestFunctionSpec(unittest.TestCase):
+
     def test_constructor(self):
         foo_spec = FunctionSpec(foo_func)
         args_name = foo_spec.args_name
@@ -75,7 +77,6 @@ class TestFunctionSpec(unittest.TestCase):
 
         a_tensor = paddle.static.data(name='a_var', shape=[4, 10])
         b_tensor = paddle.static.data(name='b_var', shape=[4, 10])
-        kwargs = {'c': 1, 'd': 2}
 
         # case 1
         foo_spec = FunctionSpec(foo_func, input_spec=[a_spec, b_spec])
@@ -97,7 +98,12 @@ class TestFunctionSpec(unittest.TestCase):
         )
         self.assertTrue(len(input_with_spec) == 2)
         self.assertTrue(input_with_spec[0] == a_spec)  # a
-        self.assertTupleEqual(input_with_spec[1].shape, (4, 10))  # b.shape
+
+        if in_pir_mode():
+            self.assertEqual(input_with_spec[1].shape, [4, 10])  # b.shape
+        else:
+            self.assertTupleEqual(input_with_spec[1].shape, (4, 10))  # b.shape
+
         self.assertEqual(input_with_spec[1].name, 'b_var')  # b.name
 
         # case 3

@@ -16,9 +16,10 @@ import random
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
-from paddle.fluid import core
+import paddle
+from paddle.base import core
 
 
 def gen_input_help(input, rank_offset, max_rank, max_size):
@@ -151,6 +152,13 @@ def gen_rank_offset(pv_nums, max_rank):
     return all_ins_num, rank_offset
 
 
+def api_wrapper(x, rank_offset, rank_param, max_rank=3, max_size=0):
+    ret = paddle._C_ops.rank_attention(
+        x, rank_offset, rank_param, max_rank, max_size
+    )
+    return ret[1]
+
+
 class TestRankAttentionOpComplex(OpTest):
     def config(self):
         self.pv_num = 100
@@ -161,6 +169,8 @@ class TestRankAttentionOpComplex(OpTest):
 
     def setUp(self):
         self.op_type = "rank_attention"
+        self.python_api = api_wrapper
+        self.python_out_sig = ['Out']
         self.config()
         ins_num, rank_offset = gen_rank_offset(self.pv_num, self.max_rank)
         input = np.random.random((ins_num, self.x_feat)).astype(self.dtype)
@@ -190,7 +200,7 @@ class TestRankAttentionOpComplex(OpTest):
 
     def test_check_output_gpu(self):
         if core.is_compiled_with_cuda():
-            self.check_output_with_place(core.CUDAPlace(0))
+            self.check_output_with_place(core.CUDAPlace(0), check_pir=True)
 
     def test_check_grad_gpu(self):
         if core.is_compiled_with_cuda():

@@ -15,15 +15,13 @@
 import unittest
 
 import numpy as np
+from dygraph_to_static_utils import (
+    Dy2StTestBase,
+)
 
 import paddle
 
 np.random.seed(1)
-
-if paddle.fluid.is_compiled_with_cuda():
-    place = paddle.fluid.CUDAPlace(0)
-else:
-    place = paddle.fluid.CPUPlace()
 
 
 class SimpleNet(paddle.nn.Layer):
@@ -37,24 +35,44 @@ class SimpleNet(paddle.nn.Layer):
         return x, x
 
 
-class TestDuplicateOutput(unittest.TestCase):
-    """
-    TestCase for the transformation from control flow `if/else`
-    dependent on tensor in Dygraph into Static `fluid.layers.cond`.
-    """
+class DuplicateOutputInPaddleLayer(paddle.nn.Layer):
+    def __init__(self):
+        super().__init__()
+        # In GRUCell, the output is a tuple (h, h)
+        self.layer = paddle.nn.GRUCell(10, 20)
 
-    def setUp(self):
-        self.net = paddle.jit.to_static(SimpleNet())
-        self.x = paddle.to_tensor([1.0])
+    def forward(self, x):
+        x = self.layer(x)
+        return x
 
+
+class TestDuplicateOutput(Dy2StTestBase):
     def _run_static(self):
-        loss0, loss1 = self.net(self.x)
+        net = paddle.jit.to_static(SimpleNet())
+        x = paddle.to_tensor([1.0])
+        param = net.parameters()
+        param[0].clear_grad()
+
+        loss0, loss1 = net(x)
         loss0.backward()
-        param = self.net.parameters()
+
         self.assertEqual(param[0].grad.numpy(), 1.0)
 
     def test_ast_to_func(self):
         self._run_static()
+
+
+class TestDuplicateOutputInPaddleLayer(Dy2StTestBase):
+    def check_dygraph_and_static_result(self, net, x):
+        static_net = paddle.jit.to_static(net)
+        dy_out = net(x)
+        st_out = static_net(x)
+        np.testing.assert_allclose(dy_out, st_out)
+
+    def test_ast_to_func(self):
+        net = DuplicateOutputInPaddleLayer()
+        x = paddle.randn([10, 10])
+        self.check_dygraph_and_static_result(net, x)
 
 
 if __name__ == '__main__':

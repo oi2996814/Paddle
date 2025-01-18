@@ -47,21 +47,17 @@ def get_cloud_cluster(args_node_ips, args_node_ip, args_port, selected_devices):
 
     if node_ip != "127.0.0.1" and node_ip != args_node_ip:
         logger.warning(
-            "Please NOTE: When using paddlecloud, node_ip is \
-automatically got from POD_IP. Your input node_ip: {} doesn't equals to \
-node_ip: {} from paddlecloud environment.".format(
-                args_node_ip, node_ip
-            )
+            f"Please NOTE: When using paddlecloud, node_ip is \
+automatically got from POD_IP. Your input node_ip: {args_node_ip} doesn't equals to \
+node_ip: {node_ip} from paddlecloud environment."
         )
 
     if args_node_ips != "127.0.0.1" and args_node_ips != ",".join(node_ips):
         logger.warning(
-            "Please NOTE: When using paddlecloud, cluster_node_ips is \
+            f"Please NOTE: When using paddlecloud, cluster_node_ips is \
 automatically got from PADDLE_TRAINERS(multi nodes) or POD_IP(single node).\
-Your input cluster_node_ips: {} doesn't equals to IPs: {} from \
-paddlecloud environment.".format(
-                args_node_ips, node_ips
-            )
+Your input cluster_node_ips: {args_node_ips} doesn't equals to IPs: {node_ips} from \
+paddlecloud environment."
         )
 
     # DISTRIBUTED_TRAINER_ENDPOINTS: new environment since paddlecloud 1.8.4
@@ -88,7 +84,7 @@ paddlecloud environment.".format(
         ports = list(range(started_port, started_port + len(selected_devices)))
         trainer_endpoints = []
         for ip in node_ips:
-            trainer_endpoints.append(["%s:%d" % (ip, port) for port in ports])
+            trainer_endpoints.append([f"{ip}:{port}" for port in ports])
     else:
         trainer_endpoints_ori = trainer_endpoints.split(",")
         trainer_endpoints = []
@@ -101,10 +97,8 @@ paddlecloud environment.".format(
             )
 
     logger.debug(
-        "parsed from args: node_ips:{} \
-        node_ip:{} node_rank:{} trainer_endpoints:{}".format(
-            node_ips, node_ip, node_rank, trainer_endpoints
-        )
+        f"parsed from args: node_ips:{node_ips} \
+        node_ip:{node_ip} node_rank:{node_rank} trainer_endpoints:{trainer_endpoints}"
     )
 
     cluster, pod = get_cluster(
@@ -122,9 +116,7 @@ def get_cluster_and_pod(args):
     selected_devices = get_gpus(args.selected_devices)
     trainers_num = _get_trainers_num()
     logger.debug(
-        "parsed from args trainerss_num:{} selected_devices:{}".format(
-            trainers_num, selected_devices
-        )
+        f"parsed from args trainerss_num:{trainers_num} selected_devices:{selected_devices}"
     )
 
     cluster = None

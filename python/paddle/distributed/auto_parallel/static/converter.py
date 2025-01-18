@@ -54,9 +54,7 @@ class Converter:
             )
         if not isinstance(tensors_dict, dict):
             raise TypeError(
-                "The type of 'tensors_dict' should be 'dict', but got '{}'.".format(
-                    str(type(tensors_dict))
-                )
+                f"The type of 'tensors_dict' should be 'dict', but got '{type(tensors_dict)}'."
             )
         return tensors_dict
 
@@ -69,7 +67,7 @@ class Converter:
         if not isinstance(pre_strategy, dict):
             raise TypeError(
                 "The type of 'pre_strategy' should be 'dict', "
-                "but got '{}'.".format(str(type(pre_strategy)))
+                f"but got '{type(pre_strategy)}'."
             )
         return pre_strategy
 
@@ -82,7 +80,7 @@ class Converter:
         if not isinstance(cur_strategy, dict):
             raise TypeError(
                 "The type of 'cur_strategy' should be 'dict', "
-                "but got '{}'.".format(str(type(cur_strategy)))
+                f"but got '{type(cur_strategy)}'."
             )
         return cur_strategy
 
@@ -101,28 +99,30 @@ class Converter:
         Examples:
             .. code-block:: python
 
-                import numpy as np
-                complete_tensors = np.arange(4).reshape([2, 2])
-                partitial_tensors = np.split(complete_tensors, 2, axis=0)
-                name = "tmp_0"
-                tensors_dict = {name: partitial_tensors}
-                strategy_1 = {
-                    name: {
-                        "process_shape": [2],
-                        "process_group": [0, 1],
-                        "dims_mapping": [0, -1]
-                    }
-                }
-                strategy_2 = {
-                    name: {
-                        "process_shape": [2],
-                        "process_group": [0, 1],
-                        "dims_mapping": [-1, -1]
-                    }
-                }
-                converter = Converter(tensors_dict, strategy_1, strategy_2)
-                result = converter.convert()
-                # the result's value is equal to `complete_tensors`
+                >>> # doctest: +REQUIRES(env:DISTRIBUTED)
+                >>> import numpy as np
+                >>> from paddle.distributed.auto_parallel.static.converter import Converter
+                >>> complete_tensors = np.arange(4).reshape([2, 2])
+                >>> partial_tensors = np.split(complete_tensors, 2, axis=0)
+                >>> name = "tmp_0"
+                >>> tensors_dict = {name: partial_tensors}
+                >>> strategy_1 = {
+                ...     name: {
+                ...         "process_shape": [2],
+                ...         "process_group": [0, 1],
+                ...         "dims_mapping": [0, -1]
+                ...     }
+                ... }
+                >>> strategy_2 = {
+                ...     name: {
+                ...         "process_shape": [2],
+                ...         "process_group": [0, 1],
+                ...         "dims_mapping": [-1, -1]
+                ...     }
+                ... }
+                >>> converter = Converter(tensors_dict, strategy_1, strategy_2)
+                >>> result = converter.convert()
+                >>> # the result's value is equal to `complete_tensors`
         """
         tensors_dict = {}
         # the name which is in cur_process but not in pre_process
@@ -150,7 +150,7 @@ class Converter:
                 )
             except ValueError as err:
                 raise ValueError(
-                    f"Fail to convert tensor '{str(tensor_name)}'. " + str(err)
+                    f"Fail to convert tensor '{tensor_name}'. {err}"
                 )
 
         for tensor_name in self._pre_strategy:
@@ -176,22 +176,16 @@ class Converter:
         tensor_not_in_cur = set(tensor_not_in_cur) - set(tensor_match_with_cur)
         if tensor_not_in_pre:
             warnings.warn(
-                "tensors [{}] are not found in last training strategy.".format(
-                    str(tensor_not_in_pre)
-                )
+                f"tensors [{tensor_not_in_pre}] are not found in last training strategy."
             )
         if tensor_not_in_cur:
             warnings.warn(
-                "tensors [{}] are not found in current training strategy.".format(
-                    str(tensor_not_in_cur)
-                )
+                f"tensors [{tensor_not_in_cur}] are not found in current training strategy."
             )
         if tensor_not_in_ckpt:
             warnings.warn(
-                "tensors [{}] are found in pre_strategy, but are not found"
-                "in checkpoint files, please check your checkpoint files.".format(
-                    str(tensor_not_in_ckpt)
-                )
+                f"tensors [{tensor_not_in_ckpt}] are found in pre_strategy, but are not found"
+                "in checkpoint files, please check your checkpoint files."
             )
 
         return tensors_dict
@@ -221,15 +215,10 @@ class Converter:
                             )
                         except ValueError as err:
                             raise ValueError(
-                                "Fail to convert tensor '{}' by '{}'. ".format(
-                                    str(cur_name), str(pre_name)
-                                )
-                                + str(err)
+                                f"Fail to convert tensor '{cur_name}' by '{pre_name}'. {err}"
                             )
                         self._logger.info(
-                            "tensor [{}] is matched with tensor [{}]".format(
-                                cur_name, pre_name
-                            )
+                            f"tensor [{cur_name}] is matched with tensor [{pre_name}]"
                         )
                         tensor_match_with_pre.append(cur_name)
                         tensor_match_with_cur.append(pre_name)
@@ -257,7 +246,10 @@ class Converter:
         else:
             pre_dims_mapping = pre_dist_attr["dims_mapping"]
             cur_dims_mapping = cur_dist_attr["dims_mapping"]
-            if len(set(pre_dims_mapping)) > 1 or -1 not in pre_dims_mapping:
+
+            if len(pre_dims_mapping) and (
+                len(set(pre_dims_mapping)) > 1 or -1 not in pre_dims_mapping
+            ):
                 # merge tensor
                 tensor = Converter.merge_with_dist_attr(
                     tensor_list, pre_dist_attr
@@ -266,7 +258,9 @@ class Converter:
                 # skip merge tensor
                 tensor = tensor_list[0]
 
-            if len(set(cur_dims_mapping)) > 1 or -1 not in cur_dims_mapping:
+            if len(cur_dims_mapping) and (
+                len(set(cur_dims_mapping)) > 1 or -1 not in cur_dims_mapping
+            ):
                 # slice tensor
                 tensor = Converter.slice_with_dist_attr(tensor, cur_dist_attr)
 
@@ -286,7 +280,7 @@ class Converter:
         )
         # merge the tensor with dist_attr
         partition_tensor_list = []
-        merged_partiton = []
+        merged_partition = []
         for process in process_group:
             partition_index = Resharder.compute_partition_index(
                 process,
@@ -296,8 +290,8 @@ class Converter:
                 process_group,
             )
             index = process_group.index(process)
-            if partition_index not in merged_partiton:
-                merged_partiton.append(partition_index)
+            if partition_index not in merged_partition:
+                merged_partition.append(partition_index)
                 Converter.merge(
                     partition_tensor_list,
                     tensor_list[index],
@@ -307,9 +301,7 @@ class Converter:
 
         if len(partition_tensor_list) != 1:
             raise ValueError(
-                "Fail to merge tensor with dist_attr '{}'.".format(
-                    str(dist_attr)
-                )
+                f"Fail to merge tensor with dist_attr '{dist_attr}'."
             )
         complete_tensor = partition_tensor_list[0][0]
         return complete_tensor
@@ -318,6 +310,9 @@ class Converter:
     def slice_with_dist_attr(tensor, dist_attr):
         """Slice tensor with distributed attribute"""
         dims_mapping = dist_attr["dims_mapping"]
+        if len(dims_mapping) == 0:
+            # NOTE: scalar tensor no need to split
+            return tensor
         process_shape = dist_attr["process_shape"]
         process_group = dist_attr["process_group"]
         # slice the tensor with dist_attr
@@ -334,9 +329,7 @@ class Converter:
         )
         if sliced_tensor_index not in range(len(sliced_tensor_list)):
             raise ValueError(
-                "Fail to slice tensor with dist_attr '{}'.".format(
-                    str(dist_attr)
-                )
+                f"Fail to slice tensor with dist_attr '{dist_attr}'."
             )
         sliced_tensor = sliced_tensor_list[sliced_tensor_index]
         return sliced_tensor
@@ -344,7 +337,7 @@ class Converter:
     @staticmethod
     def merge(partition_tensor_list, tensor, partition_index, complete_shape):
         """
-        Merge partitial tensors to a complete.
+        Merge partial tensors to a complete.
 
         Returns:
             None
@@ -352,13 +345,18 @@ class Converter:
         Examples:
             .. code-block:: python
 
-                import numpy as np
-                partition_tensor_list = [(np.array([[[1.11, 1.12]]]), [[0,1],[0,1],[0,2]])]
-                tensor = np.array([[[1.13, 1.14]]])
-                partition_index = [[0,1],[0,1],[2,4]]
+                >>> # doctest: +REQUIRES(env:DISTRIBUTED)
+                >>> import numpy as np
+                >>> import paddle
+                >>> from paddle.distributed.auto_parallel.static.converter import Converter
+                >>> partition_tensor_list = [(np.array([[[1.11, 1.12]]]), [[0,1],[0,1],[0,2]])]
+                >>> tensor = np.array([[[1.13, 1.14]]])
+                >>> partition_index = [[0,1],[0,1],[2,4]]
+                >>> complete_shape = [3, 2]
 
-                _merge_tensor(partition_tensor_list, tensor, partition_index)
-                # partition_tensor_list: [(np.array([[[1.11, 1.12, 1.13, 1.14]]]), [[0,1],[0,1],[0,4]])]
+                >>> Converter.merge(partition_tensor_list, tensor, partition_index, complete_shape)
+                >>> print(partition_tensor_list)
+                [(array([[[1.11, 1.12, 1.13, 1.14]]]), [[0, 1], [0, 1], [0, 4]])]
         """
         from .reshard import Resharder
 
@@ -416,16 +414,19 @@ class Converter:
         Examples:
             .. code-block:: python
 
-                import numpy as np
-                complete_tensor = np.array([[[1.11, 1.12, 1.13, 1.14, 1.15, 1.16]]])
-                rank = 2
-                complete_shape = [1, 1, 6]
-                dims_mapping = [-1, -1, 0]
-                process_shape = [3]
-                process_group = [0, 1, 2]
+                >>> # doctest: +REQUIRES(env:DISTRIBUTED)
+                >>> import numpy as np
+                >>> from paddle.distributed.auto_parallel.static.converter import Converter
+                >>> complete_tensor = np.array([[[1.11, 1.12, 1.13, 1.14, 1.15, 1.16]]])
+                >>> rank = 2
+                >>> complete_shape = [1, 1, 6]
+                >>> dims_mapping = [-1, -1, 0]
+                >>> process_shape = [3]
+                >>> process_group = [0, 1, 2]
 
-                sliced_tensor_list = split(complete_tensor, [[], [], [2, 4]], 3)
-                # [array([[[1.11, 1.12]]]), array([[[1.13, 1.14]]]), array([[[1.15, 1.16]]])]
+                >>> sliced_tensor_list = Converter.split(complete_tensor, [[], [], [2, 4]], 3)
+                >>> print(sliced_tensor_list)
+                [array([[[1.11, 1.12]]]), array([[[1.13, 1.14]]]), array([[[1.15, 1.16]]])]
         """
         sliced_tensor_list = []
         axis = len(complete_tensor.shape) - length
@@ -453,15 +454,18 @@ class Converter:
         Examples:
             .. code-block:: python
 
-                import numpy as np
-                complete_tensor = np.array([[[1.11, 1.12, 1.13, 1.14, 1.15, 1.16]]])
-                complete_shape = [1, 1, 6]
-                dims_mapping = [-1, -1, 0]
-                process_shape = [3]
-                process_group = [0, 1, 2]
+                >>> # doctest: +REQUIRES(env:DISTRIBUTED)
+                >>> import numpy as np
+                >>> from paddle.distributed.auto_parallel.static.utils import _get_split_indices
+                >>> complete_tensor = np.array([[[1.11, 1.12, 1.13, 1.14, 1.15, 1.16]]])
+                >>> complete_shape = [1, 1, 6]
+                >>> dims_mapping = [-1, -1, 0]
+                >>> process_shape = [3]
+                >>> process_group = [0, 1, 2]
 
-                index = _get_split_indices(complete_shape, dims_mapping, process_shape, process_group)
-                # index: [[], [], [2, 4]]
+                >>> index = _get_split_indices(complete_shape, dims_mapping, process_shape, process_group)
+                >>> print(index)
+                [[], [], [2, 4]]
         """
         from .reshard import Resharder
 
@@ -502,21 +506,20 @@ class Converter:
         Examples:
             .. code-block:: python
 
-                import numpy as np
-                complete_tensor = np.array([[[1.11, 1.12, 1.13, 1.14, 1.15, 1.16]]])
-                rank = 2
-                complete_shape = [1, 1, 6]
-                dims_mapping = [-1, -1, 0]
-                process_shape = [3]
-                process_group = [0, 1, 2]
+                >>> # doctest: +REQUIRES(env:DISTRIBUTED)
+                >>> import numpy as np
+                >>> from paddle.distributed.auto_parallel.static.converter import Converter
+                >>> complete_tensor = np.array([[[1.11, 1.12, 1.13, 1.14, 1.15, 1.16]]])
+                >>> rank = 2
+                >>> complete_shape = [1, 1, 6]
+                >>> dims_mapping = [-1, -1, 0]
+                >>> process_shape = [3]
+                >>> process_group = [0, 1, 2]
 
-                slice_tensor = _slice_tensor(complete_tensor, [[], [], [2, 4]], 3)
-                # slice_tensor:
-                # [array([[[1.11, 1.12]]]), array([[[1.13, 1.14]]]), array([[[1.15, 1.16]]])]
-
-                index = _get_sliced_index(rank, complete_shape, dims_mapping
-                                                process_shape, process_group)
-                # index: 2
+                >>> index = Converter._get_sliced_index(rank, complete_shape, dims_mapping,
+                ...                                 process_shape, process_group)
+                >>> print(index)
+                2
         """
         from .reshard import Resharder
 

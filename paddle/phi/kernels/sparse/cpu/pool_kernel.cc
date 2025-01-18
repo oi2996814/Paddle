@@ -21,8 +21,7 @@ limitations under the License. */
 #include "paddle/phi/kernels/funcs/sparse/convolution.h"
 #include "paddle/phi/kernels/sparse/cpu/conv.h"
 
-namespace phi {
-namespace sparse {
+namespace phi::sparse {
 
 /**
  * x: (N, D, H, W, C)
@@ -42,7 +41,9 @@ void MaxPoolCooCPUKernel(const CPUContext& dev_ctx,
   const auto& x_dims = x.dims();
   int kernel_size = kernel_sizes[0] * kernel_sizes[1] * kernel_sizes[2];
   const std::vector<int>& real_kernel_sizes =
-      phi::funcs::sparse::PoolResetKernel(kernel_sizes, x_dims[4], x_dims[4]);
+      phi::funcs::sparse::PoolResetKernel(kernel_sizes,
+                                          static_cast<int>(x_dims[4]),
+                                          static_cast<int>(x_dims[4]));
   DDim out_dims = {1, 1, 1, 1, 1};
   phi::funcs::sparse::GetOutShape(
       x_dims, real_kernel_sizes, paddings, dilations, strides, &out_dims);
@@ -66,7 +67,7 @@ void MaxPoolCooCPUKernel(const CPUContext& dev_ctx,
   UpdateRulebookAndOutIndex<T, CPUContext, IntT>(
       dev_ctx, x, kernel_size, in_channels, out_dims, rulebook, out);
 
-  int rulebook_len = rulebook->dims()[1];
+  int rulebook_len = static_cast<int>(rulebook->dims()[1]);
   const IntT* rulebook_ptr = rulebook->data<IntT>();
 
   counter->Resize({kernel_size});
@@ -123,8 +124,7 @@ void MaxPoolCooKernel(const Context& dev_ctx,
       }));
 }
 
-}  // namespace sparse
-}  // namespace phi
+}  // namespace phi::sparse
 
 PD_REGISTER_KERNEL(maxpool_coo,
                    CPU,

@@ -15,16 +15,41 @@
 decorator to deprecate a function or class
 """
 
+from __future__ import annotations
+
 import functools
+import inspect
 import sys
 import warnings
+from typing import Callable, TypeVar
+
+from typing_extensions import ParamSpec
 
 import paddle
+
+_InputT = ParamSpec("_InputT")
+_RetT = TypeVar("_RetT")
+
 
 __all__ = []
 
 
-def deprecated(update_to="", since="", reason="", level=0):
+class VisibleDeprecationWarning(UserWarning):
+    """Visible deprecation warning.
+
+    Since Python 3.7, Python only show the DeprecationWarning if the module
+    is __main__. So we use this warning to make the deprecation warning visible.
+
+    See more details from https://peps.python.org/pep-0565/
+    """
+
+
+def deprecated(
+    update_to: str = "",
+    since: str = "",
+    reason: str = "",
+    level: int = 0,
+) -> Callable[[Callable[_InputT, _RetT]], Callable[_InputT, _RetT]]:
     """Decorate a function to signify its deprecation.
 
     This function wraps a method that will soon be removed and does two things:
@@ -46,16 +71,14 @@ def deprecated(update_to="", since="", reason="", level=0):
         decorator: decorated function or class.
     """
 
-    def decorator(func):
-        # TODO(zhiqiu): temporally disable the warnings
-        return func
+    def decorator(func: Callable[_InputT, _RetT]) -> Callable[_InputT, _RetT]:
         """construct warning message, and return a decorated function or class."""
         assert isinstance(update_to, str), 'type of "update_to" must be str.'
         assert isinstance(since, str), 'type of "since" must be str.'
         assert isinstance(reason, str), 'type of "reason" must be str.'
         assert isinstance(level, int) and level >= 0 and level < 3, (
             'type of "level" must be int and must be one of 0, 1, 2. But '
-            'received: {}.'.format(level)
+            f'received: {level}.'
         )
 
         _since = since.strip()
@@ -70,20 +93,24 @@ def deprecated(update_to="", since="", reason="", level=0):
         if len(_update_to) > 0:
             assert _update_to.startswith(
                 "paddle."
-            ), 'Argument update_to must start with "paddle.", your value is "{}"'.format(
-                update_to
-            )
+            ), f'Argument update_to must start with "paddle.", your value is "{update_to}"'
             msg += f' Please use "{_update_to}" instead.'
         if len(_reason) > 0:
-            msg += f"\nreason: {_reason}"
+            msg += f"\n    Reason: {_reason}"
         if func.__doc__:
-            func.__doc__ = ('\n\nWarning: ' + msg + '\n') + func.__doc__
+            func.__doc__ = (
+                '\n\nWarning:\n    ' + msg + '\n\n'
+            ) + inspect.cleandoc(func.__doc__)
 
         if level == 0:
             return func
 
+        def parse_version(version: str):
+            # Split the version string and convert numeric parts to integers
+            return [int(part) for part in version.split(".") if part.isdigit()]
+
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: _InputT.args, **kwargs: _InputT.kwargs) -> _RetT:
             """deprecated warning should be fired in 3 circumstances:
             1. current version is develop version, i.e. "0.0.0", because we assume develop version is always the latest version.
             2. since version is empty, in this case, API is deprecated in all versions.
@@ -92,19 +119,17 @@ def deprecated(update_to="", since="", reason="", level=0):
 
             if level == 2:
                 raise RuntimeError(
-                    'API "{}.{}" has been deprecated.'.format(
-                        func.__module__, func.__name__
-                    )
+                    f'API "{func.__module__}.{func.__name__}" has been deprecated.'
                 )
 
-            warningmsg = "\033[93m\nWarning:\n%s \033[0m" % (msg)
+            warningmsg = f"\033[93m\nWarning:\n{msg} \033[0m"
             # ensure ANSI escape sequences print correctly in cmd and powershell
             if sys.platform.lower() == 'win32':
-                warningmsg = "\nWarning:\n%s " % (msg)
+                warningmsg = f"\nWarning:\n{msg} "
 
-            v_current = [int(i) for i in paddle.__version__.split(".")]
+            v_current = parse_version(paddle.__version__)
             v_current += [0] * (4 - len(v_current))
-            v_since = [int(i) for i in _since.split(".")]
+            v_since = parse_version(since)
             v_since += [0] * (4 - len(v_since))
             if (
                 paddle.__version__ == "0.0.0"
@@ -112,7 +137,7 @@ def deprecated(update_to="", since="", reason="", level=0):
                 or v_current >= v_since
             ):
                 warnings.warn(
-                    warningmsg, category=DeprecationWarning, stacklevel=2
+                    warningmsg, category=VisibleDeprecationWarning, stacklevel=2
                 )
 
             return func(*args, **kwargs)

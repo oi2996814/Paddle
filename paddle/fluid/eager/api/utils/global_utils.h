@@ -23,6 +23,7 @@
 #include "paddle/fluid/imperative/tracer.h"
 #include "paddle/phi/api/ext/op_meta_info.h"
 #include "paddle/utils/small_vector.h"
+#include "paddle/utils/test_macros.h"
 namespace egr {
 class UniqueNameGenerator {
  public:
@@ -44,13 +45,10 @@ class GradNodeBase;
 
 class Controller {
  public:
-  static Controller& Instance() { return *controller_; }
-  paddle::platform::Place GetExpectedPlace() const {
-    return tracer_->ExpectedPlace();
-  }
-  void SetExpectedPlace(const paddle::platform::Place& place) {
-    tracer_->SetExpectedPlace(place);
-  }
+  TEST_API static Controller& Instance();
+
+  phi::Place GetExpectedPlace() const { return tracer_->ExpectedPlace(); }
+  TEST_API void SetExpectedPlace(const phi::Place& place);
   void SetAMPLevel(paddle::imperative::AmpLevel level) {
     tracer_->SetAmpLevel(level);
   }
@@ -58,20 +56,10 @@ class Controller {
     return tracer_->GetAmpLevel();
   }
 
-  void SetUsePromote(bool use_promote) { tracer_->SetUsePromote(use_promote); }
-  bool GetUsePromote() const { return tracer_->GetUsePromote(); }
+  TEST_API void SetUsePromote(bool use_promote);
+  TEST_API bool GetUsePromote() const;
 
-  bool UseLayoutAutoTune() {
-    bool use_autotune = false;
-#if defined(PADDLE_WITH_CUDA)
-    auto place = tracer_->ExpectedPlace();
-    bool is_gpu_place = paddle::platform::is_gpu_place(place);
-    if (is_gpu_place) {
-      use_autotune = tracer_->UseLayoutAutoTune();
-    }
-#endif
-    return use_autotune;
-  }
+  TEST_API bool UseLayoutAutoTune();
 
   void DisableLayoutAutoTune() { tracer_->DisableLayoutAutoTune(); }
 
@@ -84,17 +72,25 @@ class Controller {
   std::string GetPythonStack() { return tracer_->GetPythonStack(); }
 
   bool HasGrad() const { return tracer_->HasGrad(); }
+
   void SetHasGrad(bool has_grad) { tracer_->SetHasGrad(has_grad); }
+
   std::string GenerateUniqueName(std::string key = "eager_in_tmp") {
     return tracer_->GenerateUniqueName(key);
   }
+
   const std::shared_ptr<paddle::imperative::Tracer>& GetCurrentTracer() {
     return tracer_;
   }
+
   void SetCurrentTracer(
       const std::shared_ptr<paddle::imperative::Tracer>& tracer) {
     tracer_ = tracer;
     VLOG(6) << "Set current tracer for Controller: " << tracer_;
+  }
+
+  const std::shared_ptr<paddle::imperative::AmpAttrs>& GetCurrentAmpAttrs() {
+    return paddle::imperative::GetCurrentAmpAttrs();
   }
 
   const std::unordered_map<std::string, std::vector<paddle::OpMetaInfo>>&
@@ -130,23 +126,33 @@ class Controller {
 
   void ClearFinalBackwardHooks() { final_backward_hooks_.clear(); }
 
-  void ClearForceSequentialNodes() {
-    while (!force_sequential_nodes_.empty()) {
-      force_sequential_nodes_.pop();
+  void ClearForceSequentialNodes() { force_sequential_nodes_.clear(); }
+  void PushBackForceSequentialNodes(GradNodeBase* node) {
+    force_sequential_nodes_.push_back(node);
+  }
+
+  void EraseForceSequentialNodes(GradNodeBase* node) {
+    for (auto iter = force_sequential_nodes_.begin();
+         iter != force_sequential_nodes_.end();
+         ++iter) {
+      if (*iter == node) {
+        force_sequential_nodes_.erase(iter);
+        return;
+      }
     }
   }
-  void PushBackForceSequentialNodes(GradNodeBase* node) {
-    force_sequential_nodes_.push(node);
-  }
-  std::queue<GradNodeBase*> GetForceSequentialNodes() {
+
+  std::list<GradNodeBase*> GetForceSequentialNodes() {
     return force_sequential_nodes_;
   }
+
+  TEST_API void SetIsInBackward(bool is_in_backward);
+  TEST_API bool GetIsInBackward() const;
 
  private:
   Controller() = default;
   static Controller* controller_;
-  std::shared_ptr<paddle::imperative::Tracer> tracer_{
-      new paddle::imperative::Tracer()};
+  static thread_local std::shared_ptr<paddle::imperative::Tracer> tracer_;
   std::unordered_map<std::string, std::vector<paddle::OpMetaInfo>>
       op_meta_info_map_;
   /* op_type : {{{grad_outputs}, {grad_inputs}, {input}, {output}, {attrs}},
@@ -155,8 +161,16 @@ class Controller {
                      std::vector<std::vector<std::unordered_map<int, int>>>>
       custom_edges_slot_map_;
   std::vector<std::shared_ptr<VoidHook>> final_backward_hooks_;
-  std::queue<GradNodeBase*> force_sequential_nodes_;
+  std::list<GradNodeBase*> force_sequential_nodes_;
+  bool is_in_backward_{false};
   DISABLE_COPY_AND_ASSIGN(Controller);
+};
+
+class EagerBackwardStateGuard {
+ public:
+  EagerBackwardStateGuard() { Controller::Instance().SetIsInBackward(true); }
+
+  ~EagerBackwardStateGuard() { Controller::Instance().SetIsInBackward(false); }
 };
 
 }  // namespace egr

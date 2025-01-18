@@ -15,17 +15,19 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16, paddle_static_guard
+from op_test import OpTest, convert_float_to_uint16, paddle_static_guard
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 
 class TestBmmOp(OpTest):
     def setUp(self):
         self.op_type = "bmm"
+        self.prim_op_type = "comp"
         self.python_api = paddle.tensor.bmm
+        self.public_python_api = paddle.tensor.bmm
         X = np.random.random((10, 3, 4)).astype("float64")
         Y = np.random.random((10, 4, 5)).astype("float64")
         self.inputs = {'X': X, 'Y': Y}
@@ -33,17 +35,19 @@ class TestBmmOp(OpTest):
         self.outputs = {'Out': Out}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_prim_pir=True)
 
     def test_checkout_grad(self):
-        self.check_grad(['X', 'Y'], 'Out')
+        self.check_grad(['X', 'Y'], 'Out', check_pir=True)
 
 
 class TestBmmFP16Op(OpTest):
     def setUp(self):
         self.op_type = "bmm"
+        self.prim_op_type = "comp"
         self.dtype = np.float16
         self.python_api = paddle.tensor.bmm
+        self.public_python_api = paddle.tensor.bmm
         X = np.random.random((10, 3, 4)).astype("float16")
         Y = np.random.random((10, 4, 5)).astype("float16")
         self.inputs = {'X': X, 'Y': Y}
@@ -51,10 +55,10 @@ class TestBmmFP16Op(OpTest):
         self.outputs = {'Out': Out}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_prim_pir=True)
 
     def test_checkout_grad(self):
-        self.check_grad(['X', 'Y'], 'Out')
+        self.check_grad(['X', 'Y'], 'Out', check_pir=True)
 
 
 @unittest.skipIf(
@@ -65,8 +69,10 @@ class TestBmmFP16Op(OpTest):
 class TestBmmBF16Op(OpTest):
     def setUp(self):
         self.op_type = "bmm"
+        self.prim_op_type = "comp"
         self.dtype = np.uint16
         self.python_api = paddle.tensor.bmm
+        self.public_python_api = paddle.tensor.bmm
         X = np.random.random((10, 3, 4)).astype("float32")
         Y = np.random.random((10, 4, 5)).astype("float32")
         self.inputs = {'X': X, 'Y': Y}
@@ -79,16 +85,23 @@ class TestBmmBF16Op(OpTest):
         self.place = core.CUDAPlace(0)
 
     def test_check_output(self):
-        self.check_output_with_place(self.place)
+        self.check_output_with_place(
+            self.place, check_pir=True, check_prim_pir=True
+        )
 
     def test_checkout_grad(self):
-        self.check_grad_with_place(self.place, ['X', 'Y'], 'Out')
+        self.check_grad_with_place(
+            self.place, ['X', 'Y'], 'Out', check_pir=True
+        )
 
 
 class API_TestBmm(unittest.TestCase):
+
     def test_out(self):
         with paddle_static_guard():
-            with fluid.program_guard(fluid.Program(), fluid.Program()):
+            with paddle.static.program_guard(
+                paddle.static.Program(), paddle.static.Program()
+            ):
                 data1 = paddle.static.data(
                     'data1', shape=[-1, 3, 4], dtype='float64'
                 )
@@ -96,8 +109,8 @@ class API_TestBmm(unittest.TestCase):
                     'data2', shape=[-1, 4, 5], dtype='float64'
                 )
                 result_bmm = paddle.bmm(data1, data2)
-                place = fluid.CPUPlace()
-                exe = fluid.Executor(place)
+                place = base.CPUPlace()
+                exe = base.Executor(place)
                 input1 = np.random.random([10, 3, 4]).astype('float64')
                 input2 = np.random.random([10, 4, 5]).astype('float64')
                 (result,) = exe.run(
@@ -122,9 +135,9 @@ class API_TestDygraphBmm(unittest.TestCase):
                 [[4.0, 4.0], [5.0, 5.0], [6.0, 6.0]],
             ]
         )
-        with fluid.dygraph.guard():
-            x = fluid.dygraph.to_variable(input1)
-            y = fluid.dygraph.to_variable(input2)
+        with base.dygraph.guard():
+            x = paddle.to_tensor(input1)
+            y = paddle.to_tensor(input2)
             out = paddle.bmm(x, y)
             out_np = out.numpy()
         expected_result = np.matmul(input1, input2)

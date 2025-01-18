@@ -12,23 +12,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import paddle
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from paddle import Tensor
 
 __all__ = []
 
 
 @paddle.autograd.no_grad()
 def clip_grad_value_(
-    parameters,
-    clip_value,
-):
-    r"""Clips gradient of an iterable of parameters at specified value.
+    parameters: Iterable[Tensor] | Tensor,
+    clip_value: float,
+) -> None:
+    r"""
+    Clips gradient of an iterable of parameters at specified value.
     The gradient will be modified in place.
     This API can only run in dynamic graph mode, not static graph mode.
+
     Args:
-        parameters (Iterable[paddle.Tensor] or paddle.Tensor): Tensors or a single Tensor
+        parameters (Iterable[paddle.Tensor]|paddle.Tensor): Tensors or a single Tensor
             that will be normalized gradients
-        clip_value (float or int): maximum allowed value of the gradients.
+        clip_value (float|int): maximum allowed value of the gradients.
             The gradients are clipped in the range
             :math:`\left[\text{-clip\_value}, \text{clip\_value}\right]`
 

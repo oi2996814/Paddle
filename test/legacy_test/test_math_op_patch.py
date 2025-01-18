@@ -14,12 +14,11 @@
 
 import unittest
 
-import numpy
 import numpy as np
 from decorator_helper import prog_scope
 
 import paddle
-from paddle import fluid
+from paddle import base
 
 
 class TestMathOpPatches(unittest.TestCase):
@@ -36,11 +35,11 @@ class TestMathOpPatches(unittest.TestCase):
         c = ab + 10
         d = ab + a
         # e = a + ab
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         a_np = np.random.random(size=[10, 1]).astype('float32')
         b_np, c_np, d_np = exe.run(
-            fluid.default_main_program(), feed={"a": a_np}, fetch_list=[b, c, d]
+            base.default_main_program(), feed={"a": a_np}, fetch_list=[b, c, d]
         )
         np.testing.assert_allclose(a_np + 10, b_np, rtol=1e-05)
         ab_np = np.concatenate([a_np, b_np], axis=1)
@@ -52,11 +51,11 @@ class TestMathOpPatches(unittest.TestCase):
     def test_radd_scalar(self):
         a = paddle.static.data(name="a", shape=[-1, 1])
         b = 10 + a
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         a_np = np.random.random(size=[10, 1]).astype('float32')
         (b_np,) = exe.run(
-            fluid.default_main_program(), feed={"a": a_np}, fetch_list=[b]
+            base.default_main_program(), feed={"a": a_np}, fetch_list=[b]
         )
         np.testing.assert_allclose(a_np + 10, b_np, rtol=1e-05)
 
@@ -64,11 +63,11 @@ class TestMathOpPatches(unittest.TestCase):
     def test_sub_scalar(self):
         a = paddle.static.data(name="a", shape=[-1, 1])
         b = a - 10
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         a_np = np.random.random(size=[10, 1]).astype('float32')
         (b_np,) = exe.run(
-            fluid.default_main_program(), feed={"a": a_np}, fetch_list=[b]
+            base.default_main_program(), feed={"a": a_np}, fetch_list=[b]
         )
         np.testing.assert_allclose(a_np - 10, b_np, rtol=1e-05)
 
@@ -76,11 +75,11 @@ class TestMathOpPatches(unittest.TestCase):
     def test_rsub_scalar(self):
         a = paddle.static.data(name="a", shape=[-1, 1])
         b = 10 - a
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         a_np = np.random.random(size=[10, 1]).astype('float32')
         (b_np,) = exe.run(
-            fluid.default_main_program(), feed={"a": a_np}, fetch_list=[b]
+            base.default_main_program(), feed={"a": a_np}, fetch_list=[b]
         )
         np.testing.assert_allclose(10 - a_np, b_np, rtol=1e-05)
 
@@ -88,11 +87,11 @@ class TestMathOpPatches(unittest.TestCase):
     def test_mul_scalar(self):
         a = paddle.static.data(name="a", shape=[-1, 1])
         b = a * 10
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         a_np = np.random.random(size=[10, 1]).astype('float32')
         (b_np,) = exe.run(
-            fluid.default_main_program(), feed={"a": a_np}, fetch_list=[b]
+            base.default_main_program(), feed={"a": a_np}, fetch_list=[b]
         )
         np.testing.assert_allclose(a_np * 10, b_np, rtol=1e-05)
 
@@ -100,11 +99,11 @@ class TestMathOpPatches(unittest.TestCase):
     def test_rmul_scalar(self):
         a = paddle.static.data(name="a", shape=[-1, 1])
         b = 10 * a
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         a_np = np.random.random(size=[10, 1]).astype('float32')
         (b_np,) = exe.run(
-            fluid.default_main_program(), feed={"a": a_np}, fetch_list=[b]
+            base.default_main_program(), feed={"a": a_np}, fetch_list=[b]
         )
         np.testing.assert_allclose(10 * a_np, b_np, rtol=1e-05)
 
@@ -112,11 +111,11 @@ class TestMathOpPatches(unittest.TestCase):
     def test_div_scalar(self):
         a = paddle.static.data(name="a", shape=[-1, 1])
         b = a / 10
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         a_np = np.random.random(size=[10, 1]).astype('float32')
         (b_np,) = exe.run(
-            fluid.default_main_program(), feed={"a": a_np}, fetch_list=[b]
+            base.default_main_program(), feed={"a": a_np}, fetch_list=[b]
         )
         np.testing.assert_allclose(a_np / 10, b_np, rtol=1e-05)
 
@@ -124,12 +123,12 @@ class TestMathOpPatches(unittest.TestCase):
     def test_rdiv_scalar(self):
         a = paddle.static.data(name="a", shape=[-1, 1])
         b = 10 / a
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         a_np = np.random.random(size=[10, 1]).astype('float32') + 1e-2
 
         (b_np,) = exe.run(
-            fluid.default_main_program(), feed={"a": a_np}, fetch_list=[b]
+            base.default_main_program(), feed={"a": a_np}, fetch_list=[b]
         )
         np.testing.assert_allclose(10 / a_np, b_np, rtol=1e-05)
 
@@ -138,12 +137,12 @@ class TestMathOpPatches(unittest.TestCase):
         a = paddle.static.data(name="a", shape=[-1, 1])
         b = paddle.static.data(name="b", shape=[-1, 1])
         c = a / b
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         a_np = np.random.random(size=[10, 1]).astype('float32')
         b_np = np.random.random(size=[10, 1]).astype('float32') + 1e-2
         (c_np,) = exe.run(
-            fluid.default_main_program(),
+            base.default_main_program(),
             feed={"a": a_np, 'b': b_np},
             fetch_list=[c],
         )
@@ -154,12 +153,12 @@ class TestMathOpPatches(unittest.TestCase):
         a = paddle.static.data(name="a", shape=[-1, 1])
         b = paddle.static.data(name="b", shape=[-1, 1])
         c = a * b
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         a_np = np.random.random(size=[10, 1]).astype('float32')
         b_np = np.random.random(size=[10, 1]).astype('float32')
         (c_np,) = exe.run(
-            fluid.default_main_program(),
+            base.default_main_program(),
             feed={"a": a_np, 'b': b_np},
             fetch_list=[c],
         )
@@ -170,12 +169,12 @@ class TestMathOpPatches(unittest.TestCase):
         a = paddle.static.data(name="a", shape=[-1, 1])
         b = paddle.static.data(name="b", shape=[-1, 1])
         c = a + b
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         a_np = np.random.random(size=[10, 1]).astype('float32')
         b_np = np.random.random(size=[10, 1]).astype('float32')
         (c_np,) = exe.run(
-            fluid.default_main_program(),
+            base.default_main_program(),
             feed={"a": a_np, 'b': b_np},
             fetch_list=[c],
         )
@@ -186,12 +185,12 @@ class TestMathOpPatches(unittest.TestCase):
         a = paddle.static.data(name="a", shape=[-1, 1])
         b = paddle.static.data(name="b", shape=[-1, 1])
         c = a - b
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         a_np = np.random.random(size=[10, 1]).astype('float32')
         b_np = np.random.random(size=[10, 1]).astype('float32')
         (c_np,) = exe.run(
-            fluid.default_main_program(),
+            base.default_main_program(),
             feed={"a": a_np, 'b': b_np},
             fetch_list=[c],
         )
@@ -201,11 +200,11 @@ class TestMathOpPatches(unittest.TestCase):
     def test_integer_div(self):
         a = paddle.static.data(name="a", shape=[-1, 1], dtype='int64')
         b = a / 7
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         a_np = np.array([3, 4, 10, 14, 9, 18]).astype('int64')
         (b_np,) = exe.run(
-            fluid.default_main_program(), feed={"a": a_np}, fetch_list=[b]
+            base.default_main_program(), feed={"a": a_np}, fetch_list=[b]
         )
 
         b_np_actual = (a_np / 7).astype('float32')
@@ -217,87 +216,106 @@ class TestMathOpPatches(unittest.TestCase):
         b = paddle.static.data(name="b", shape=[-1, 1], dtype='float32')
         c = a == b
 
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         a_np = np.array([3, 4, 10, 14, 9, 18]).astype('float32')
         b_np = np.array([3, 4, 11, 15, 8, 18]).astype('float32')
 
         (c_np,) = exe.run(
-            fluid.default_main_program(),
+            base.default_main_program(),
             feed={"a": a_np, "b": b_np},
             fetch_list=[c],
         )
 
         np.testing.assert_array_equal(c_np, a_np == b_np)
-        self.assertEqual(c.dtype, fluid.core.VarDesc.VarType.BOOL)
-
-    @prog_scope()
-    def test_equal_and_cond(self):
-        a = paddle.static.data(name="a", shape=[-1, 1], dtype='float32')
-        a.desc.set_need_check_feed(False)
-        b = paddle.static.data(name="b", shape=[-1, 1], dtype='float32')
-        b.desc.set_need_check_feed(False)
-        one = paddle.ones(shape=[1], dtype='int32')
-        zero = paddle.zeros(shape=[1], dtype='int32')
-        cond = one == zero
-        c = paddle.static.nn.cond(cond, lambda: a + b, lambda: a - b)
-
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
-        a_np = np.array([3, 4, 10, 14, 9, 18]).astype('float32')
-        b_np = np.array([3, 4, 11, 15, 8, 18]).astype('float32')
-        (c_np,) = exe.run(
-            fluid.default_main_program(),
-            feed={"a": a_np, "b": b_np},
-            fetch_list=[c],
-        )
-
-        np.testing.assert_array_equal(c_np, a_np - b_np)
+        self.assertEqual(c.dtype, paddle.bool)
 
     @prog_scope()
     def test_neg(self):
         a = paddle.static.data(name="a", shape=[-1, 10, 1], dtype='float32')
-        a.desc.set_need_check_feed(False)
+        if not paddle.framework.use_pir_api():
+            a.desc.set_need_check_feed(False)
         b = -a
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         a_np = np.random.uniform(-1, 1, size=[10, 1]).astype('float32')
 
         (b_np,) = exe.run(
-            fluid.default_main_program(), feed={"a": a_np}, fetch_list=[b]
+            base.default_main_program(), feed={"a": a_np}, fetch_list=[b]
         )
         np.testing.assert_allclose(-a_np, b_np, rtol=1e-05)
 
     @prog_scope()
+    def test_abs(self):
+        # test for real number
+        a = paddle.static.data(name="a", shape=[-1, 10, 1], dtype='float32')
+        if not paddle.framework.use_pir_api():
+            a.desc.set_need_check_feed(False)
+        b = abs(a)  # call __abs__
+        place = base.CPUPlace()
+        exe = base.Executor(place)
+        a_np = np.random.uniform(-1, 1, size=[10, 1]).astype('float32')
+
+        (b_np,) = exe.run(
+            base.default_main_program(), feed={"a": a_np}, fetch_list=[b]
+        )
+        np.testing.assert_allclose(np.abs(a_np), b_np, rtol=1e-05)
+
+    @prog_scope()
+    def test_abs_complex(self):
+        # test for complex number
+        a = paddle.static.data(name="a", shape=[-1, 10, 1], dtype='complex64')
+        if not paddle.framework.use_pir_api():
+            a.desc.set_need_check_feed(False)
+        b = abs(a)  # call __abs__
+        place = base.CPUPlace()
+        exe = base.Executor(place)
+        a_np = np.random.uniform(-1, 1, size=[10, 1]).astype(
+            'float32'
+        ) + 1j * np.random.uniform(-1, 1, size=[10, 1]).astype('float32')
+
+        (b_np,) = exe.run(
+            base.default_main_program(), feed={"a": a_np}, fetch_list=[b]
+        )
+        np.testing.assert_allclose(np.abs(a_np), b_np, rtol=1e-05)
+
+    @prog_scope()
     def test_astype(self):
         a = paddle.static.data(name="a", shape=[-1, 10, 1])
-        a.desc.set_need_check_feed(False)
-        b = a.astype('float32')
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        if not paddle.framework.use_pir_api():
+            a.desc.set_need_check_feed(False)
+        b = a.astype('float64')
+
+        c = a.astype(a.dtype)
+        self.assertTrue(c.is_same(a))
+
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         a_np = np.random.uniform(-1, 1, size=[10, 1]).astype('float64')
 
         (b_np,) = exe.run(
-            fluid.default_main_program(), feed={"a": a_np}, fetch_list=[b]
+            base.default_main_program(), feed={"a": a_np}, fetch_list=[b]
         )
         np.testing.assert_allclose(a_np.astype('float32'), b_np, rtol=1e-05)
 
     def test_bitwise_and(self):
+        temp = 2
         x_np = np.random.randint(-100, 100, [2, 3, 5]).astype("int32")
         y_np = np.random.randint(-100, 100, [2, 3, 5]).astype("int32")
         out_np = x_np & y_np
-
+        e_np = temp & x_np
         x = paddle.static.data(name="x", shape=[2, 3, 5], dtype="int32")
         y = paddle.static.data(name="y", shape=[2, 3, 5], dtype="int32")
         z = x & y
-
-        exe = fluid.Executor()
-        out = exe.run(
-            fluid.default_main_program(),
+        e = temp & x
+        exe = base.Executor()
+        (out, e_out) = exe.run(
+            base.default_main_program(),
             feed={"x": x_np, "y": y_np},
-            fetch_list=[z],
+            fetch_list=[z, e],
         )
-        np.testing.assert_array_equal(out[0], out_np)
+        np.testing.assert_array_equal(out, out_np)
+        np.testing.assert_array_equal(e_out, e_np)
 
     @prog_scope()
     def test_bitwise_or(self):
@@ -309,13 +327,49 @@ class TestMathOpPatches(unittest.TestCase):
         y = paddle.static.data(name="y", shape=[2, 3, 5], dtype="int32")
         z = x | y
 
-        exe = fluid.Executor()
+        exe = base.Executor()
         out = exe.run(
-            fluid.default_main_program(),
+            base.default_main_program(),
             feed={"x": x_np, "y": y_np},
             fetch_list=[z],
         )
         np.testing.assert_array_equal(out[0], out_np)
+
+    @prog_scope()
+    def test_ror(self):
+        place = (
+            paddle.CUDAPlace(0)
+            if paddle.is_compiled_with_cuda()
+            else paddle.CPUPlace()
+        )
+        x_int = 5
+        y_np = np.random.randint(-100, 100, [2, 3, 5]).astype("int32")
+        y = paddle.static.data("y", y_np.shape, dtype=y_np.dtype)
+        z = x_int | y
+        exe = paddle.static.Executor(place)
+        out = exe.run(
+            feed={'y': y_np},
+            fetch_list=[z],
+        )
+        out_ref = x_int | y_np
+        np.testing.assert_array_equal(out[0], out_ref)
+        x_bool = True
+        res_ror_bool = x_bool | y
+        out_bool = exe.run(
+            feed={'y': y_np},
+            fetch_list=[res_ror_bool],
+        )
+        res_py_bool = x_bool | y_np
+        np.testing.assert_array_equal(out_bool[0], res_py_bool)
+
+        for x_invalid in (
+            np.float32(5.0),
+            np.float64(5.0),
+            np.complex64(5),
+            np.complex128(5.0 + 2j),
+        ):
+            with self.assertRaises(TypeError):
+                x_invalid | y
 
     @prog_scope()
     def test_bitwise_xor(self):
@@ -327,13 +381,49 @@ class TestMathOpPatches(unittest.TestCase):
         y = paddle.static.data(name="y", shape=[2, 3, 5], dtype="int32")
         z = x ^ y
 
-        exe = fluid.Executor()
+        exe = base.Executor()
         out = exe.run(
-            fluid.default_main_program(),
+            base.default_main_program(),
             feed={"x": x_np, "y": y_np},
             fetch_list=[z],
         )
         np.testing.assert_array_equal(out[0], out_np)
+
+    @prog_scope()
+    def test_rxor(self):
+        place = (
+            paddle.CUDAPlace(0)
+            if paddle.is_compiled_with_cuda()
+            else paddle.CPUPlace()
+        )
+        x_int = 5
+        y_np = np.random.randint(-100, 100, [2, 3, 5]).astype("int32")
+        y = paddle.static.data("y", y_np.shape, dtype=y_np.dtype)
+        z = x_int ^ y
+        exe = paddle.static.Executor(place)
+        out = exe.run(
+            feed={'y': y_np},
+            fetch_list=[z],
+        )
+        out_ref = x_int ^ y_np
+        np.testing.assert_array_equal(out[0], out_ref)
+        x_bool = True
+        res_rxor_bool = x_bool ^ y
+        out_bool = exe.run(
+            feed={'y': y_np},
+            fetch_list=[res_rxor_bool],
+        )
+        res_py_bool = x_bool ^ y_np
+        np.testing.assert_array_equal(out_bool[0], res_py_bool)
+
+        for x_invalid in (
+            np.float32(5.0),
+            np.float64(5.0),
+            np.complex64(5),
+            np.complex128(5.0 + 2j),
+        ):
+            with self.assertRaises(TypeError):
+                x_invalid ^ y
 
     @prog_scope()
     def test_bitwise_not(self):
@@ -343,9 +433,9 @@ class TestMathOpPatches(unittest.TestCase):
         x = paddle.static.data(name="x", shape=[2, 3, 5], dtype="int32")
         z = ~x
 
-        exe = fluid.Executor()
+        exe = base.Executor()
         out = exe.run(
-            fluid.default_main_program(), feed={"x": x_np}, fetch_list=[z]
+            base.default_main_program(), feed={"x": x_np}, fetch_list=[z]
         )
         np.testing.assert_array_equal(out[0], out_np)
 
@@ -357,9 +447,9 @@ class TestMathOpPatches(unittest.TestCase):
         x = paddle.static.data(name="x", shape=[2, 8, 5, 3], dtype="int32")
         z = x.T
 
-        exe = fluid.Executor()
+        exe = base.Executor()
         out = exe.run(
-            fluid.default_main_program(), feed={"x": x_np}, fetch_list=[z]
+            base.default_main_program(), feed={"x": x_np}, fetch_list=[z]
         )
         np.testing.assert_array_equal(out[0], out_np)
 
@@ -385,6 +475,32 @@ class TestMathOpPatches(unittest.TestCase):
             fetch_list=[c],
         )
         np.testing.assert_allclose(a_np @ b_np, c_np, rtol=1e-05)
+
+    @prog_scope()
+    def test_rmatmul(self):
+        a = paddle.static.data(name='a', shape=[2, 3], dtype='float32')
+        b = paddle.static.data(name='b', shape=[3, 5], dtype='float32')
+        c = b.__rmatmul__(a)
+        a_np = np.random.uniform(-1, 1, size=[2, 3]).astype('float32')
+        b_np = np.random.uniform(-1, 1, size=[3, 5]).astype('float32')
+        place = paddle.CPUPlace()
+        exe = paddle.static.Executor(place)
+        (c_np,) = exe.run(
+            paddle.static.default_main_program(),
+            feed={"a": a_np, "b": b_np},
+            fetch_list=[c],
+        )
+        np.testing.assert_allclose(a_np @ b_np, c_np, rtol=1e-05)
+
+    @prog_scope()
+    def test_builtin_type_conversion(self):
+        a = paddle.static.data(name="a", shape=[])
+        with self.assertRaises(TypeError):
+            int(a)
+        with self.assertRaises(TypeError):
+            float(a)
+        with self.assertRaises(TypeError):
+            complex(a)
 
 
 class TestDygraphMathOpPatches(unittest.TestCase):
@@ -424,6 +540,15 @@ class TestDygraphMathOpPatches(unittest.TestCase):
         np.testing.assert_allclose(actual_out, expect_out, rtol=1e-7, atol=1e-7)
         paddle.enable_static()
 
+    def test_dygraph_rmod(self):
+        paddle.disable_static()
+        self.init_data()
+        # normal case: tenor % nparray
+        expect_out = self.np_a % self.np_b
+        actual_out = self.tensor_b.__rmod__(self.tensor_a)
+        np.testing.assert_allclose(actual_out, expect_out, rtol=1e-7, atol=1e-7)
+        paddle.enable_static()
+
     def test_dygraph_less_than(self):
         paddle.disable_static()
         self.init_data()
@@ -452,6 +577,19 @@ class TestDygraphMathOpPatches(unittest.TestCase):
         tensor_b = paddle.to_tensor(np_b, dtype="int32")
         expect_out = np_a // np_b
         actual_out = tensor_a // np_b
+        np.testing.assert_equal(actual_out, expect_out)
+        paddle.enable_static()
+
+    def test_dygraph_rfloordiv(self):
+        paddle.disable_static()
+        np_a = np.random.random((2, 3, 4)).astype(np.int32)
+        np_b = np.random.random((2, 3, 4)).astype(np.int32)
+        np_b[np.abs(np_b) < 1] = 2
+        # normal case: nparray // tensor
+        tensor_a = paddle.to_tensor(np_a, dtype="int32")
+        tensor_b = paddle.to_tensor(np_b, dtype="int32")
+        expect_out = np_b // np_a
+        actual_out = tensor_b.__rfloordiv__(np_a)
         np.testing.assert_equal(actual_out, expect_out)
         paddle.enable_static()
 
@@ -486,6 +624,16 @@ class TestDygraphMathOpPatches(unittest.TestCase):
         expect_out = self.np_a == self.np_b
         actual_out = self.tensor_a == self.np_b
         np.testing.assert_equal(actual_out, expect_out)
+        paddle.enable_static()
+
+    def test_dygraph_rmatmul(self):
+        paddle.disable_static()
+        a_np = np.random.random((2, 3)).astype(np.float32) * 100
+        b_np = np.random.random((3, 5)).astype(np.float32) * 100
+        a = paddle.to_tensor(a_np)
+        b = paddle.to_tensor(b_np)
+        c = b.__rmatmul__(a)
+        np.testing.assert_allclose(a @ b, c.numpy(), rtol=1e-5, atol=1e-5)
         paddle.enable_static()
 
 

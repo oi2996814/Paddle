@@ -38,8 +38,8 @@ using ConstEigenVectorArrayMap =
 template <typename T, typename Context>
 void BatchNormGradFunctor(const Context& ctx,
                           const DenseTensor& x,
-                          const DenseTensor& scale,
-                          const DenseTensor& bias,
+                          const paddle::optional<DenseTensor>& scale,
+                          const paddle::optional<DenseTensor>& bias,
                           const paddle::optional<DenseTensor>& mean,
                           const paddle::optional<DenseTensor>& variance,
                           const DenseTensor& saved_mean,
@@ -58,7 +58,7 @@ void BatchNormGradFunctor(const Context& ctx,
                           DenseTensor* bias_grad) {
   const auto* d_y = &y_grad;
 
-  DataLayout data_layout = phi::StringToDataLayout(data_layout_str);
+  DataLayout data_layout = common::StringToDataLayout(data_layout_str);
 
   auto* d_x = x_grad;
   auto* d_scale = scale_grad;
@@ -75,14 +75,14 @@ void BatchNormGradFunctor(const Context& ctx,
     if (d_x) {
       PADDLE_ENFORCE_EQ(d_x,
                         d_y,
-                        phi::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "X@GRAD and Y@GRAD inplaced in non-inplace mode"));
     }
   } else {
     if (d_x) {
       PADDLE_ENFORCE_NE(d_x,
                         d_y,
-                        phi::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "X@GRAD and Y@GRAD inplaced in non-inplace mode"));
     }
   }
@@ -93,21 +93,21 @@ void BatchNormGradFunctor(const Context& ctx,
   PADDLE_ENFORCE_GE(
       x_dims.size(),
       2,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The size of input X's dimensions should be larger than 1."
           "But received: the size of input X's dimensions is [%d]",
           x_dims.size()));
   PADDLE_ENFORCE_LE(
       x_dims.size(),
       5,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The size of input X's dimensions should be less than 6."
           "But received: the size of input X's dimensions is [%d]",
           x_dims.size()));
-  const int N = x_dims[0];
-  const int C = (data_layout == DataLayout::kNCHW ? x_dims[1]
-                                                  : x_dims[x_dims.size() - 1]);
-  const int sample_size = x.numel() / N / C;
+  const int N = static_cast<int>(x_dims[0]);
+  const int C = static_cast<int>(
+      data_layout == DataLayout::kNCHW ? x_dims[1] : x_dims[x_dims.size() - 1]);
+  const int sample_size = static_cast<int>(x.numel() / N / C);
 
   // input dimension is 2 and the format is NCHW. The input can be regarded as
   // NHWC format
@@ -139,8 +139,6 @@ void BatchNormGradFunctor(const Context& ctx,
     inv_var_data = saved_variance.data<T>();
   }
 
-  ConstEigenVectorArrayMap<T> scale_arr(scale.data<T>(), C);
-  ConstEigenVectorArrayMap<T> bias_arr(bias.data<T>(), C);
   ConstEigenVectorArrayMap<T> mean_arr(mean_data, C);
   ConstEigenVectorArrayMap<T> inv_var_arr(inv_var_data, C);
 
@@ -167,9 +165,23 @@ void BatchNormGradFunctor(const Context& ctx,
     phi::Copy(ctx, *d_y, ctx.GetPlace(), false, d_x);
     return;
   }
+  auto* Scale = scale.get_ptr();
+  auto* Bias = bias.get_ptr();
+  Eigen::Array<T, Eigen::Dynamic, 1> scale_arr(C);
+  Eigen::Array<T, Eigen::Dynamic, 1> bias_arr(C);
+  if (Scale) {
+    scale_arr = ConstEigenVectorArrayMap<T>(Scale->data<T>(), C);
+  } else {
+    scale_arr.setOnes();
+  }
+  if (Bias) {
+    bias_arr = ConstEigenVectorArrayMap<T>(Bias->data<T>(), C);
+  } else {
+    bias_arr.setZero();
+  }
 
-  int scale_coefff = use_global_stats ? 1 : N * sample_size;
-  const auto scale_inv_var_nhw = scale_arr * inv_var_arr / scale_coefff;
+  int scale_coeff = use_global_stats ? 1 : N * sample_size;
+  const auto scale_inv_var_nhw = scale_arr * inv_var_arr / scale_coeff;
 
   DenseTensor dy_sum;
   dy_sum.Resize({C});
@@ -201,7 +213,7 @@ void BatchNormGradFunctor(const Context& ctx,
         ConstEigenArrayMap<T> y_data(x.data<T>(), sample_size, N * C);
         for (int nc = 0; nc < N * C; ++nc) {
           x_data.col(nc) = (y_data.col(nc) - bias_arr(nc % C)) /
-                               scale_inv_var_nhw(nc % C) / scale_coefff +
+                               scale_inv_var_nhw(nc % C) / scale_coeff +
                            mean_arr(nc % C);
         }
       }
@@ -249,7 +261,7 @@ void BatchNormGradFunctor(const Context& ctx,
         ConstEigenArrayMap<T> y_data(x.data<T>(), C, N * sample_size);
         for (int nhw = 0; nhw < N * sample_size; nhw++) {
           x_data.col(nhw) =
-              (y_data.col(nhw) - bias_arr) / scale_inv_var_nhw / scale_coefff +
+              (y_data.col(nhw) - bias_arr) / scale_inv_var_nhw / scale_coeff +
               mean_arr;
         }
       }
@@ -287,16 +299,16 @@ void BatchNormGradFunctor(const Context& ctx,
       break;
     }
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument("Unknown storage order: %s",
-                                                data_layout_str));
+      PADDLE_THROW(common::errors::InvalidArgument("Unknown storage order: %s",
+                                                   data_layout_str));
   }
 }
 
 template <typename T, typename Context>
 void BatchNormGradKernel(const Context& dev_ctx,
                          const DenseTensor& x,
-                         const DenseTensor& scale,
-                         const DenseTensor& bias,
+                         const paddle::optional<DenseTensor>& scale,
+                         const paddle::optional<DenseTensor>& bias,
                          const paddle::optional<DenseTensor>& mean,
                          const paddle::optional<DenseTensor>& variance,
                          const DenseTensor& saved_mean,
@@ -338,7 +350,7 @@ template <typename T, typename Context>
 void BatchNormDoubleGradKernel(
     const Context& ctx,
     const DenseTensor& x,
-    const DenseTensor& scale,
+    const paddle::optional<DenseTensor>& scale,
     const paddle::optional<DenseTensor>& mean,
     const paddle::optional<DenseTensor>& variance,
     const DenseTensor& saved_mean,
@@ -357,19 +369,19 @@ void BatchNormDoubleGradKernel(
     DenseTensor* scale_grad,
     DenseTensor* y_grad_grad) {
   const auto* X = &x;
-  const auto* Scale = &scale;
+  const auto* Scale = scale.get_ptr();
   const auto* dY = &y_grad;
   const auto* Saved_mean = &saved_mean;
   const auto* Saved_variance = &saved_variance;
 
   PADDLE_ENFORCE_EQ(is_test,
                     false,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "`is_test = True` CANNOT be used in train program. If "
                         "you want to use global status in pre_train model, "
                         "please set `use_global_stats = True`"));
 
-  const auto data_layout = phi::StringToDataLayout(data_layout_str);
+  const auto data_layout = common::StringToDataLayout(data_layout_str);
 
   const auto* ddX = x_grad_grad.get_ptr();
   const auto* ddScale = scale_grad_grad.get_ptr();
@@ -382,9 +394,9 @@ void BatchNormDoubleGradKernel(
   ctx.template Alloc<T>(ddY);
 
   const auto& x_dims = X->dims();
-  const int C = (data_layout == DataLayout::kNCHW ? x_dims[1]
-                                                  : x_dims[x_dims.size() - 1]);
-  const int sample_size = X->numel() / C;
+  const int C = static_cast<int>(
+      data_layout == DataLayout::kNCHW ? x_dims[1] : x_dims[x_dims.size() - 1]);
+  const int sample_size = static_cast<int>(X->numel() / C);
   phi::funcs::SetConstant<Context, T> set_constant;
 
   const T* mean_data = Saved_mean->data<T>();
@@ -599,7 +611,7 @@ void BatchNormDoubleGradKernel(
     EigenArrayMap<T> ddy_arr(
         ctx.template Alloc<T>(&transformed_ddy), C, sample_size);
     ddy_arr.setZero();
-    if (use_global_stats) {
+    if (use_global_stats) {  // NOLINT
       // math: ddy = r * ddx * inv_var + ddbias +
       //           ddscale * (x - mean) * inv_var
       if (ddX) {

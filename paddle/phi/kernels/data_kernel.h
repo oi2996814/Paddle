@@ -14,15 +14,16 @@
 
 #pragma once
 
+#include "paddle/phi/common/int_array.h"
 #include "paddle/phi/core/dense_tensor.h"
 
 namespace phi {
 
 template <typename T, typename Context>
 void DataKernel(const Context& ctx,
-                int64_t index,
+                const std::string& name,
+                const phi::IntArray& shape,
                 phi::DataType data_type,
-                // std::string name,
                 DenseTensor* out);
 
 template <typename T, typename Context>
@@ -30,12 +31,19 @@ void ShadowOutputKernel(const Context& ctx,
                         const DenseTensor& x,
                         DenseTensor* out);
 
-template <typename T, typename Context>
+template <typename Context>
 void ShadowFeedKernel(const Context& ctx,
                       const DenseTensor& x,
+                      int dst_place_type,
                       DenseTensor* out);
 
-template <typename T, typename Context>
+template <typename Context>
+void ShadowFeedTensorsKernel(const Context& ctx,
+                             const std::vector<const DenseTensor*>& xs,
+                             int dst_place_type,
+                             std::vector<DenseTensor*> outs);
+
+template <typename Context>
 void PrintKernel(const Context& ctx,
                  const DenseTensor& x,
                  int first_n,

@@ -12,13 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import unittest
 
 import numpy as np
+
+sys.path.append("../deprecated/legacy_test")
 from test_softmax_op import ref_softmax
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 
 class TestSoftmax2DAPI(unittest.TestCase):

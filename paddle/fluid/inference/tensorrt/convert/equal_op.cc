@@ -15,9 +15,7 @@ limitations under the License. */
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 #include "paddle/fluid/inference/tensorrt/plugin/elementwise_op_plugin.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 class EqualOpConverter : public OpConverter {
  public:
@@ -68,7 +66,7 @@ class EqualOpConverter : public OpConverter {
 
     layer = TRT_ENGINE_ADD_LAYER(
         engine_, ElementWise, *X, *Y, nvinfer1::ElementWiseOperation::kEQUAL);
-    RreplenishLayerAndOutput(layer, "equal", {output_name}, test_mode);
+    ReplenishLayerAndOutput(layer, "equal", {output_name}, test_mode);
   }
 };
 
@@ -125,13 +123,11 @@ class NotEqualOpConverter : public OpConverter {
     layer = TRT_ENGINE_ADD_LAYER(
         engine_, Unary, *layer->getOutput(0), nvinfer1::UnaryOperation::kNOT);
 
-    RreplenishLayerAndOutput(layer, "not_equal", {output_name}, test_mode);
+    ReplenishLayerAndOutput(layer, "not_equal", {output_name}, test_mode);
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(equal, EqualOpConverter);
 REGISTER_TRT_OP_CONVERTER(not_equal, NotEqualOpConverter);

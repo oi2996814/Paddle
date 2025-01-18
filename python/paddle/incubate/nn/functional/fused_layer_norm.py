@@ -1,4 +1,4 @@
-# Copyright (c) 2022 PaddlePaddle Authors. All Rights Reserved.
+# Copyright (c) 2023 PaddlePaddle Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,10 +12,50 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, overload
 
 import paddle
 from paddle import _C_ops
-from paddle.framework import LayerHelper, in_dynamic_mode
+from paddle.framework import LayerHelper, in_dynamic_or_pir_mode
+
+if TYPE_CHECKING:
+    from paddle import Tensor
+
+
+@overload
+def fused_layer_norm(
+    x: Tensor,
+    norm_weight: Tensor,
+    norm_bias: Tensor,
+    epsilon: float,
+    residual_alpha: float = ...,
+    begin_norm_axis: int = ...,
+    bias: Tensor | None = ...,
+    residual: None = ...,
+    quant_scale: float = ...,
+    quant_round_type: float = ...,
+    quant_max_bound: float = ...,
+    quant_min_bound: float = ...,
+) -> Tensor: ...
+
+
+@overload
+def fused_layer_norm(
+    x: Tensor,
+    norm_weight: Tensor,
+    norm_bias: Tensor,
+    epsilon: float,
+    residual_alpha: float = ...,
+    begin_norm_axis: int = ...,
+    bias: Tensor | None = ...,
+    residual: Tensor = ...,
+    quant_scale: float = ...,
+    quant_round_type: float = ...,
+    quant_max_bound: float = ...,
+    quant_min_bound: float = ...,
+) -> tuple[Tensor, Tensor]: ...
 
 
 def fused_layer_norm(
@@ -58,17 +98,17 @@ def fused_layer_norm(
     Examples:
         .. code-block:: python
 
-            # required: gpu
-            import paddle
+            >>> # doctest: +REQUIRES(env:GPU)
+            >>> import paddle
+            >>> paddle.device.set_device('gpu')
 
-            paddle_x = paddle.cast(paddle.randn(shape=[32, 256]), dtype=paddle.float16)
-            paddle_weight = paddle.cast(paddle.randn(shape=[256]), dtype=paddle.float32)
-            paddle_bias = paddle.cast(paddle.randn(shape=[256]), dtype=paddle.float32)
-            epsilon = 1e-6
-            paddle_layernorm = paddle.incubate.nn.functional.fused_layer_norm(paddle_x, paddle_weight, paddle_bias, epsilon, 1)
+            >>> paddle_x = paddle.cast(paddle.randn(shape=[32, 256]), dtype=paddle.float16)
+            >>> paddle_weight = paddle.cast(paddle.randn(shape=[256]), dtype=paddle.float32)
+            >>> paddle_bias = paddle.cast(paddle.randn(shape=[256]), dtype=paddle.float32)
+            >>> epsilon = 1e-6
+            >>> paddle_layernorm = paddle.incubate.nn.functional.fused_layer_norm(paddle_x, paddle_weight, paddle_bias, epsilon, 1)
     """
-
-    if in_dynamic_mode():
+    if in_dynamic_or_pir_mode():
         return _C_ops.fused_bias_residual_layernorm(
             x,
             bias,
@@ -83,7 +123,7 @@ def fused_layer_norm(
             quant_max_bound,
             quant_min_bound,
         )
-
+    # static mode
     helper = LayerHelper('fused_layernorm', **locals())
     out = None
     if quant_scale <= 0:
@@ -102,7 +142,11 @@ def fused_layer_norm(
     residual_out = helper.create_variable_for_type_inference(dtype=x.dtype)
     outputs_dict['residual_out'] = residual_out
 
-    inputs = {'x': x, 'norm_weight': norm_weight, 'norm_bias': norm_bias}
+    inputs = {'x': x}
+    if norm_weight is not None:
+        inputs['norm_weight'] = norm_weight
+    if norm_bias is not None:
+        inputs['norm_bias'] = norm_bias
     if residual is not None:
         inputs['residual'] = residual
     if bias is not None:
@@ -122,4 +166,4 @@ def fused_layer_norm(
         },
         outputs=outputs_dict,
     )
-    return out
+    return (out, residual_out, outputs_dict['mean'], outputs_dict['variance'])

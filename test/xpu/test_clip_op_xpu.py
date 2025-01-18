@@ -20,11 +20,12 @@ from get_test_cover_info import (
     create_test_class,
     get_xpu_op_support_types,
 )
+from op_test import convert_float_to_uint16, convert_uint16_to_float
 from op_test_xpu import XPUOpTest
 
 import paddle
-from paddle import fluid
-from paddle.fluid import Program, core, program_guard
+from paddle import base
+from paddle.base import Program, core, program_guard
 
 
 class XPUTestClipOp(XPUOpTestWrapper):
@@ -34,6 +35,7 @@ class XPUTestClipOp(XPUOpTestWrapper):
 
     class TestClipOp(XPUOpTest):
         def setUp(self):
+            self.python_api = paddle.clip
             self.init_dtype()
             self.set_xpu()
             self.op_type = "clip"
@@ -42,9 +44,24 @@ class XPUTestClipOp(XPUOpTestWrapper):
             self.init_data()
             self.set_attrs()
             self.set_inputs()
-            self.outputs = {
-                'Out': np.clip(self.inputs['X'], self.min_v, self.max_v)
-            }
+            if self.dtype == np.uint16:
+                self.outputs = {
+                    'Out': convert_float_to_uint16(
+                        np.clip(
+                            convert_uint16_to_float(self.inputs['X']),
+                            np.array([self.min_v]).astype(np.float32).item(),
+                            np.array([self.min_v]).astype(np.float32).item(),
+                        )
+                    )
+                }
+            else:
+                self.outputs = {
+                    'Out': np.clip(
+                        self.inputs['X'],
+                        np.array([self.min_v]).astype(self.dtype).item(),
+                        np.array([self.max_v]).astype(self.dtype).item(),
+                    )
+                }
 
         def set_xpu(self):
             self.__class__.use_xpu = True
@@ -73,6 +90,10 @@ class XPUTestClipOp(XPUOpTestWrapper):
             input = np.random.random(self.shape).astype("float32")
             input[np.abs(input - min_v) < self.max_relative_error] = 0.5
             input[np.abs(input - max_v) < self.max_relative_error] = 0.5
+            if self.dtype == np.uint16:
+                input = convert_float_to_uint16(input)
+            else:
+                input = input.astype(self.dtype)
             self.inputs['X'] = input
 
         def set_attrs(self):
@@ -150,56 +171,67 @@ class TestClipAPI(unittest.TestCase):
 
     def test_clip(self):
         paddle.enable_static()
-        data_shape = [1, 9, 9, 4]
-        data = np.random.random(data_shape).astype('float32')
-        images = paddle.static.data(
-            name='image', shape=data_shape, dtype='float32'
-        )
-        min = paddle.static.data(name='min', shape=[1], dtype='float32')
-        max = paddle.static.data(name='max', shape=[1], dtype='float32')
+        train_prog = paddle.static.Program()
+        startup = paddle.static.Program()
+        with paddle.static.program_guard(train_prog, startup):
+            data_shape = [1, 9, 9, 4]
+            data = np.random.random(data_shape).astype('float32')
+            images = paddle.static.data(
+                name='image', shape=data_shape, dtype='float32'
+            )
+            min = paddle.static.data(name='min', shape=[1], dtype='float32')
+            max = paddle.static.data(name='max', shape=[1], dtype='float32')
 
-        place = (
-            fluid.XPUPlace(0)
-            if fluid.core.is_compiled_with_xpu()
-            else fluid.CPUPlace()
-        )
-        exe = fluid.Executor(place)
+            place = (
+                base.XPUPlace(0)
+                if base.core.is_compiled_with_xpu()
+                else base.CPUPlace()
+            )
+            exe = base.Executor(place)
 
-        out_1 = self._executed_api(images, min=min, max=max)
-        out_2 = self._executed_api(images, min=0.2, max=0.9)
-        out_3 = self._executed_api(images, min=0.3)
-        out_4 = self._executed_api(images, max=0.7)
-        out_5 = self._executed_api(images, min=min)
-        out_6 = self._executed_api(images, max=max)
-        out_7 = self._executed_api(images, max=-1.0)
-        out_8 = self._executed_api(images)
+            out_1 = self._executed_api(images, min=min, max=max)
+            out_2 = self._executed_api(images, min=0.2, max=0.9)
+            out_3 = self._executed_api(images, min=0.3)
+            out_4 = self._executed_api(images, max=0.7)
+            out_5 = self._executed_api(images, min=min)
+            out_6 = self._executed_api(images, max=max)
+            out_7 = self._executed_api(images, max=-1.0)
+            out_8 = self._executed_api(images)
+            res1, res2, res3, res4, res5, res6, res7, res8 = exe.run(
+                train_prog,
+                feed={
+                    "image": data,
+                    "min": np.array([0.2]).astype('float32'),
+                    "max": np.array([0.8]).astype('float32'),
+                },
+                fetch_list=[
+                    out_1,
+                    out_2,
+                    out_3,
+                    out_4,
+                    out_5,
+                    out_6,
+                    out_7,
+                    out_8,
+                ],
+            )
 
-        res1, res2, res3, res4, res5, res6, res7, res8 = exe.run(
-            fluid.default_main_program(),
-            feed={
-                "image": data,
-                "min": np.array([0.2]).astype('float32'),
-                "max": np.array([0.8]).astype('float32'),
-            },
-            fetch_list=[out_1, out_2, out_3, out_4, out_5, out_6, out_7, out_8],
-        )
-
-        np.testing.assert_allclose(res1, data.clip(0.2, 0.8))
-        np.testing.assert_allclose(res2, data.clip(0.2, 0.9))
-        np.testing.assert_allclose(res3, data.clip(min=0.3))
-        np.testing.assert_allclose(res4, data.clip(max=0.7))
-        np.testing.assert_allclose(res5, data.clip(min=0.2))
-        np.testing.assert_allclose(res6, data.clip(max=0.8))
-        np.testing.assert_allclose(res7, data.clip(max=-1))
-        np.testing.assert_allclose(res8, data)
+            np.testing.assert_allclose(res1, data.clip(0.2, 0.8))
+            np.testing.assert_allclose(res2, data.clip(0.2, 0.9))
+            np.testing.assert_allclose(res3, data.clip(min=0.3))
+            np.testing.assert_allclose(res4, data.clip(max=0.7))
+            np.testing.assert_allclose(res5, data.clip(min=0.2))
+            np.testing.assert_allclose(res6, data.clip(max=0.8))
+            np.testing.assert_allclose(res7, data.clip(max=-1))
+            np.testing.assert_allclose(res8, data)
         paddle.disable_static()
 
     def test_clip_dygraph(self):
         paddle.disable_static()
         place = (
-            fluid.XPUPlace(0)
-            if fluid.core.is_compiled_with_xpu()
-            else fluid.CPUPlace()
+            base.XPUPlace(0)
+            if base.core.is_compiled_with_xpu()
+            else base.CPUPlace()
         )
         paddle.disable_static(place)
         data_shape = [1, 9, 9, 4]
@@ -234,6 +266,9 @@ class TestInplaceClipAPI(TestClipAPI):
 
 support_types = get_xpu_op_support_types('clip')
 for stype in support_types:
+    # TODO(lilujia): disable int32 and int64 test temporarily, as xdnn not support corresponding resuce_mean
+    if stype in ["int32", "int64"]:
+        continue
     create_test_class(globals(), XPUTestClipOp, stype)
 
 if __name__ == '__main__':

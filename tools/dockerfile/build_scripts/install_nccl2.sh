@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -23,9 +23,9 @@ elif [ "$VERSION" == "10.2" ] || [ "$VERSION" == "10.1" ] || [ "$VERSION" == "11
     wget --no-check-certificate -q https://nccl2-deb.cdn.bcebos.com/libnccl-2.10.3-1+cuda11.4.x86_64.rpm
     wget --no-check-certificate -q https://nccl2-deb.cdn.bcebos.com/libnccl-devel-2.10.3-1+cuda11.4.x86_64.rpm
     wget --no-check-certificate -q https://nccl2-deb.cdn.bcebos.com/libnccl-static-2.10.3-1+cuda11.4.x86_64.rpm
-    rpm -Fivh libnccl-2.10.3-1+cuda11.4.x86_64.rpm
-    rpm -Fivh libnccl-devel-2.10.3-1+cuda11.4.x86_64.rpm
-    rpm -Fivh libnccl-static-2.10.3-1+cuda11.4.x86_64.rpm && rm -f libnccl-*
+    rpm -ivh libnccl-2.10.3-1+cuda11.4.x86_64.rpm
+    rpm -ivh libnccl-devel-2.10.3-1+cuda11.4.x86_64.rpm
+    rpm -ivh libnccl-static-2.10.3-1+cuda11.4.x86_64.rpm && rm -f libnccl-*
     exit 0
   fi
   DEB="nccl-repo-ubuntu1804-2.10.3-cuda11.4_1.0-1_amd64.deb"

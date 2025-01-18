@@ -55,7 +55,7 @@ void TopkGradKernel(const Context& dev_ctx,
   int pre, n, post;
   phi::funcs::GetDims(in_dims, axis, &pre, &n, &post);
 
-  // calcluate the block and grid num
+  // calculate the block and grid num
   auto ComputeBlockSize = [](int col) {
     if (col > 512)
       return 1024;
@@ -73,18 +73,39 @@ void TopkGradKernel(const Context& dev_ctx,
   const int max_blocks = std::max(((max_threads - 1) / block_size + 1), 1);
   int grid_size = std::min(max_blocks, pre);
 
-  // lanuch the cuda kernel to assign the grad
+  // launch the cuda kernel to assign the grad
   phi::funcs::AssignGradWithAxis<T>
       <<<grid_size, block_size, 64 * 4, dev_ctx.stream()>>>(
           out_grad_data, indices_data, x_grad_data, pre, post, n, k);
 }
 
+template <typename T, typename Context>
+void TopkV1GradKernel(const Context& dev_ctx,
+                      const DenseTensor& x,
+                      const DenseTensor& indices,
+                      const DenseTensor& out_grad,
+                      const Scalar& k_scalar,
+                      DenseTensor* x_grad) {
+  TopkGradKernel<T, Context>(
+      dev_ctx, x, indices, out_grad, k_scalar, -1, true, true, x_grad);
+}
 }  // namespace phi
 
 PD_REGISTER_KERNEL(topk_grad,
                    GPU,
                    ALL_LAYOUT,
                    phi::TopkGradKernel,
+                   float,
+                   double,
+                   int,
+                   int64_t,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}
+
+PD_REGISTER_KERNEL(topk_v1_grad,
+                   GPU,
+                   ALL_LAYOUT,
+                   phi::TopkV1GradKernel,
                    float,
                    double,
                    int,

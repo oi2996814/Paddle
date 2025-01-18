@@ -12,12 +12,14 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 #include "paddle/phi/backends/dynload/dynamic_loader.h"
+#include <dirent.h>
 
+#include <codecvt>
 #include <cstdlib>
 #include <string>
 #include <vector>
-
 #include "paddle/phi/backends/dynload/cupti_lib_path.h"
+#include "paddle/phi/common/port.h"
 #include "paddle/phi/core/enforce.h"
 
 #if defined(_WIN32)
@@ -27,59 +29,24 @@ limitations under the License. */
 // TODO(wilber): The phi computing library requires a component to manage flags
 // (maybe not use gflags).
 #include "glog/logging.h"
-#include "paddle/phi/core/flags.h"
 
-PHI_DEFINE_string(cudnn_dir,  // NOLINT
-                  "",
-                  "Specify path for loading libcudnn.so. For instance, "
-                  "/usr/local/cudnn/lib. If empty [default], dlopen "
-                  "will search cudnn from LD_LIBRARY_PATH");
+#include "paddle/common/flags.h"
 
-PHI_DEFINE_string(  // NOLINT
-    cuda_dir,
-    "",
-    "Specify path for loading cuda library, such as libcublas, libcublasLt "
-    "libcurand, libcusolver. For instance, /usr/local/cuda/lib64. "
-    "If default, dlopen will search cuda from LD_LIBRARY_PATH");
-
-PHI_DEFINE_string(nccl_dir,  // NOLINT
-                  "",
-                  "Specify path for loading nccl library, such as libnccl.so. "
-                  "For instance, /usr/local/cuda/lib64. If default, "
-                  "dlopen will search cuda from LD_LIBRARY_PATH");
-
-PHI_DEFINE_string(cupti_dir,
-                  "",
-                  "Specify path for loading cupti.so.");  // NOLINT
-
-PHI_DEFINE_string(  // NOLINT
-    tensorrt_dir,
-    "",
-    "Specify path for loading tensorrt library, such as libnvinfer.so.");
-
-PHI_DEFINE_string(mklml_dir,
-                  "",
-                  "Specify path for loading libmklml_intel.so.");  // NOLINT
-
-PHI_DEFINE_string(lapack_dir,
-                  "",
-                  "Specify path for loading liblapack.so.");  // NOLINT
-
-PHI_DEFINE_string(mkl_dir,  // NOLINT
-                  "",
-                  "Specify path for loading libmkl_rt.so. "
-                  "For insrance, /opt/intel/oneapi/mkl/latest/lib/intel64/."
-                  "If default, "
-                  "dlopen will search mkl from LD_LIBRARY_PATH");
-
-PHI_DEFINE_string(op_dir,  // NOLINT
-                  "",
-                  "Specify path for loading user-defined op library.");
-
-PHI_DEFINE_string(cusparselt_dir,  // NOLINT
-                  "",
-                  "Specify path for loading libcusparseLt.so.");
-
+COMMON_DECLARE_string(cudnn_dir);
+COMMON_DECLARE_string(cuda_dir);
+COMMON_DECLARE_string(cublas_dir);
+COMMON_DECLARE_string(nccl_dir);
+COMMON_DECLARE_string(cupti_dir);
+COMMON_DECLARE_string(tensorrt_dir);
+COMMON_DECLARE_string(mklml_dir);
+COMMON_DECLARE_string(lapack_dir);
+COMMON_DECLARE_string(mkl_dir);
+COMMON_DECLARE_string(op_dir);
+COMMON_DECLARE_string(cusparselt_dir);
+COMMON_DECLARE_string(curand_dir);
+COMMON_DECLARE_string(cusolver_dir);
+COMMON_DECLARE_string(cusparse_dir);
+COMMON_DECLARE_string(win_cuda_bin_dir);
 #ifdef PADDLE_WITH_HIP
 
 PHI_DEFINE_string(miopen_dir,
@@ -102,11 +69,10 @@ PHI_DEFINE_string(rccl_dir,
 #endif
 
 #ifdef PADDLE_WITH_XPU
-DEFINE_string(xpti_dir, "", "Specify path for loading libxpti.so.");
+PD_DEFINE_string(xpti_dir, "", "Specify path for loading libxpti.so.");
 #endif
 
-namespace phi {
-namespace dynload {
+namespace phi::dynload {
 
 struct PathNode {
   PathNode() = default;
@@ -138,13 +104,14 @@ static constexpr char* win_nvjpeg_lib =
     ".dll;nvjpeg64_" CUDA_VERSION_MAJOR ".dll;nvjpeg64_10.dll";
 static constexpr char* win_cusolver_lib =
     "cusolver64_" CUDA_VERSION_MAJOR CUDA_VERSION_MINOR
-    ".dll;cusolver64_" CUDA_VERSION_MAJOR ".dll;cusolver64_10.dll";
+    ".dll;cusolver64_" CUDA_VERSION_MAJOR
+    ".dll;cusolver64_11.dll;cusolver64_10.dll";
 static constexpr char* win_cusparse_lib =
     "cusparse64_" CUDA_VERSION_MAJOR CUDA_VERSION_MINOR
     ".dll;cusparse64_" CUDA_VERSION_MAJOR ".dll;cusparse64_10.dll";
 static constexpr char* win_cufft_lib =
     "cufft64_" CUDA_VERSION_MAJOR CUDA_VERSION_MINOR
-    ".dll;cufft64_" CUDA_VERSION_MAJOR ".dll;cufft64_10.dll";
+    ".dll;cufft64_" CUDA_VERSION_MAJOR ".dll;cufft64_11.dll;cufft64_10.dll";
 #else
 static constexpr char* win_curand_lib =
     "curand64_" CUDA_VERSION_MAJOR CUDA_VERSION_MINOR
@@ -166,8 +133,12 @@ static constexpr char* win_cufft_lib =
 
 static inline std::string join(const std::string& part1,
                                const std::string& part2) {
-  // directory separator
+// directory separator
+#if defined(_WIN32)
+  const char sep = '\\';
+#else
   const char sep = '/';
+#endif
   if (!part2.empty() && part2.front() == sep) {
     return part2;
   }
@@ -184,9 +155,9 @@ static inline std::string join(const std::string& part1,
 static inline std::vector<std::string> split(
     const std::string& str, const std::string separator = " ") {
   std::vector<std::string> str_list;
-  std::string::size_type firstPos;
+  std::string::size_type firstPos = 0;
   firstPos = str.find_first_not_of(separator, 0);
-  std::string::size_type lastPos;
+  std::string::size_type lastPos = 0;
   lastPos = str.find_first_of(separator, firstPos);
   while (std::string::npos != firstPos && std::string::npos != lastPos) {
     str_list.push_back(str.substr(firstPos, lastPos - firstPos));
@@ -218,6 +189,34 @@ static inline void* GetDsoHandleFromSpecificPath(const std::string& spec_path,
   return dso_handle;
 }
 
+static inline std::string FindLibAbsolutePath(const std::string& directory,
+                                              const std::string& filename) {
+  DIR* dir = opendir(directory.c_str());
+  struct dirent* ent;
+
+  if (dir != nullptr) {
+    while ((ent = readdir(dir)) != nullptr) {
+      if (ent->d_type == DT_REG || ent->d_type == DT_LNK) {
+        if (filename == std::string(ent->d_name)) {
+          closedir(dir);
+          return join(directory, ent->d_name);
+        }
+      } else if (ent->d_type == DT_DIR) {
+        if (strcmp(ent->d_name, ".") != 0 && strcmp(ent->d_name, "..") != 0) {
+          std::string res =
+              FindLibAbsolutePath(join(directory, ent->d_name) + "/", filename);
+          if (!res.empty()) {
+            closedir(dir);
+            return res;
+          }
+        }
+      }
+    }
+    closedir(dir);
+  }
+  return "";
+}
+
 static inline void* GetDsoHandleFromDefaultPath(const std::string& dso_path,
                                                 int dynload_flags) {
   // default search from LD_LIBRARY_PATH/DYLD_LIBRARY_PATH
@@ -231,10 +230,19 @@ static inline void* GetDsoHandleFromDefaultPath(const std::string& dso_path,
 // bring System Integrity Projection (SIP), if dso_handle
 // is null, search from default package path in Mac OS.
 #if defined(__APPLE__) || defined(__OSX__)
+#if defined(__arm__) || defined(__aarch64__)
   if (nullptr == dso_handle) {
     dso_handle =
-        dlopen(join("/usr/local/cuda/lib/", dso_path).c_str(), dynload_flags);
+        dlopen(FindLibAbsolutePath("/opt/homebrew/Cellar/", dso_path).c_str(),
+               dynload_flags);
   }
+#else
+  if (nullptr == dso_handle) {
+    dso_handle =
+        dlopen(FindLibAbsolutePath("/usr/local/cuda/lib/", dso_path).c_str(),
+               dynload_flags);
+  }
+#endif
 #endif
 
   return dso_handle;
@@ -260,9 +268,29 @@ static inline void* GetDsoHandleFromSearchPath(
 #else
   int dynload_flags = 0;
 #endif  // !_WIN32
+#if defined(_WIN32)
+  std::vector<std::wstring> cuda_bin_search_path = {
+      L"cublas",
+      L"cuda_nvrtc",
+      L"cuda_runtime",
+      L"cudnn",
+      L"cufft",
+      L"curand",
+      L"cusolver",
+      L"cusparse",
+      L"nvjitlink",
+  };
+  for (auto search_path : cuda_bin_search_path) {
+    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+    std::wstring win_path_wstring =
+        converter.from_bytes(FLAGS_win_cuda_bin_dir);
+    search_path = win_path_wstring + L"\\" + search_path + L"\\bin";
+    AddDllDirectory(search_path.c_str());
+  }
+#endif
   std::vector<std::string> dso_names = split(dso_name, ";");
   void* dso_handle = nullptr;
-  for (auto dso : dso_names) {
+  for (auto const& dso : dso_names) {
     // 1. search in user config path by FLAGS
     dso_handle = GetDsoHandleFromSpecificPath(config_path, dso, dynload_flags);
     // 2. search in system default path
@@ -271,7 +299,7 @@ static inline void* GetDsoHandleFromSearchPath(
     }
     // 3. search in extra paths
     if (nullptr == dso_handle) {
-      for (auto path : extra_paths) {
+      for (auto const& path : extra_paths) {
         VLOG(3) << "extra_paths: " << path;
         dso_handle = GetDsoHandleFromSpecificPath(path, dso, dynload_flags);
       }
@@ -296,7 +324,7 @@ static inline void* GetDsoHandleFromSearchPath(
         "  2. Configure third-party dynamic library environment variables as "
         "follows:\n"
         "  - Linux: set LD_LIBRARY_PATH by `export LD_LIBRARY_PATH=...`\n"
-        "  - Windows: set PATH by `set PATH=XXX;%PATH%`\n"
+        "  - Windows: set PATH by `set PATH=XXX;%%PATH%%`\n"
         "  - Mac: set  DYLD_LIBRARY_PATH by `export DYLD_LIBRARY_PATH=...` "
         "[Note: After Mac OS 10.11, using the DYLD_LIBRARY_PATH is "
         "impossible unless System Integrity Protection (SIP) is disabled.]";
@@ -308,7 +336,7 @@ static inline void* GetDsoHandleFromSearchPath(
     if (throw_on_error) {
       // NOTE: Special error report case, no need to change its format
       PADDLE_THROW(
-          phi::errors::PreconditionNotMet(error_msg, dso_name, errorno));
+          common::errors::PreconditionNotMet(error_msg, dso_name, errorno));
     } else {
       LOG(WARNING) << paddle::string::Sprintf(error_msg, dso_name, errorno);
     }
@@ -321,8 +349,45 @@ void* GetCublasDsoHandle() {
 #if defined(__APPLE__) || defined(__OSX__)
   return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "libcublas.dylib");
 #elif defined(_WIN32) && defined(PADDLE_WITH_CUDA)
-  return GetDsoHandleFromSearchPath(
-      FLAGS_cuda_dir, win_cublas_lib, true, {cuda_lib_path});
+  if (CUDA_VERSION >= 11000 && CUDA_VERSION < 12000) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "cublas64_11.dll");
+#else
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cuda_dir, win_cublas_lib, true, {cuda_lib_path});
+#endif
+  } else if (CUDA_VERSION >= 12000 && CUDA_VERSION < 13000) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "cublas64_12.dll");
+#else
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cuda_dir, win_cublas_lib, true, {cuda_lib_path});
+#endif
+  } else {
+    std::string warning_msg(
+        "Your CUDA_VERSION is less than 11 or greater than 12, paddle "
+        "temporarily no longer supports");
+    return nullptr;
+  }
+#elif defined(__linux__) && defined(PADDLE_WITH_CUDA)
+  if (CUDA_VERSION >= 11000 && CUDA_VERSION < 12000) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(FLAGS_cublas_dir, "libcublas.so.11");
+#else
+    return GetDsoHandleFromSearchPath(FLAGS_cublas_dir, "libcublas.so");
+#endif
+  } else if (CUDA_VERSION >= 12000 && CUDA_VERSION < 13000) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(FLAGS_cublas_dir, "libcublas.so.12");
+#else
+    return GetDsoHandleFromSearchPath(FLAGS_cublas_dir, "libcublas.so");
+#endif
+  } else {
+    std::string warning_msg(
+        "Your CUDA_VERSION is less than 11 or greater than 12, paddle "
+        "temporarily no longer supports");
+    return nullptr;
+  }
 #elif defined(PADDLE_WITH_HIP)
   return GetDsoHandleFromSearchPath(FLAGS_rocm_dir, "librocblas.so");
 #else
@@ -332,8 +397,50 @@ void* GetCublasDsoHandle() {
 
 void* GetCublasLtDsoHandle() {
 // APIs available after CUDA 10.1
-#if defined(PADDLE_WITH_CUDA) && CUDA_VERSION >= 10010
+#if defined(__linux__) && defined(PADDLE_WITH_CUDA)
+  if (CUDA_VERSION >= 11000 && CUDA_VERSION < 12000) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(FLAGS_cublas_dir, "libcublasLt.so.11");
+#else
+    return GetDsoHandleFromSearchPath(FLAGS_cublas_dir, "libcublasLt.so");
+#endif
+  } else if (CUDA_VERSION >= 12000 && CUDA_VERSION < 13000) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(FLAGS_cublas_dir, "libcublasLt.so.12");
+#else
+    return GetDsoHandleFromSearchPath(FLAGS_cublas_dir, "libcublasLt.so");
+#endif
+  } else {
+    std::string warning_msg(
+        "Your CUDA_VERSION is less than 11 or greater than 12, paddle "
+        "temporarily no longer supports");
+    return nullptr;
+  }
+#elif defined(_WIN32) && defined(PADDLE_WITH_CUDA)
+  if (CUDA_VERSION >= 11000 && CUDA_VERSION < 12000) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "cublasLt64_11.dll");
+#else
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cuda_dir, win_cublas_lib, true, {cuda_lib_path});
+#endif
+  } else if (CUDA_VERSION >= 12000 && CUDA_VERSION < 13000) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "cublasLt64_12.dll");
+#else
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cuda_dir, win_cublas_lib, true, {cuda_lib_path});
+#endif
+  } else {
+    std::string warning_msg(
+        "Your CUDA_VERSION is less than 11 or greater than 12, paddle "
+        "temporarily no longer supports");
+    return nullptr;
+  }
+#elif !defined(__linux__) && defined(PADDLE_WITH_CUDA) && CUDA_VERSION >= 10010
   return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "libcublasLt.so");
+#elif defined(PADDLE_WITH_HIP)
+  return GetDsoHandleFromSearchPath(FLAGS_rocm_dir, "libhipblaslt.so");
 #else
   std::string warning_msg(
       "Your CUDA_VERSION less 10.1, not support CublasLt. "
@@ -362,13 +469,38 @@ void* GetCUDNNDsoHandle() {
       "Toolkit\\CUDA\\v10.0\n"
       "You should do this according to your CUDA installation directory and "
       "CUDNN version.");
-  return GetDsoHandleFromSearchPath(
-      FLAGS_cudnn_dir, win_cudnn_lib, true, {cuda_lib_path}, win_warn_meg);
+  if (CUDA_VERSION >= 11000 && CUDA_VERSION < 12030) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cuda_dir, "cudnn64_8.dll", true, {cuda_lib_path}, win_warn_meg);
+#else
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cuda_dir, win_cudnn_lib, true, {cuda_lib_path}, win_warn_meg);
+#endif
+  } else if (CUDA_VERSION >= 12030) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cuda_dir, "cudnn64_9.dll", true, {cuda_lib_path}, win_warn_meg);
+#else
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cuda_dir, win_cudnn_lib, true, {cuda_lib_path}, win_warn_meg);
+#endif
+  }
 #elif defined(PADDLE_WITH_HIP)
   return GetDsoHandleFromSearchPath(FLAGS_miopen_dir, "libMIOpen.so", false);
 #else
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+  if (CUDA_VERSION >= 12030) {
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cudnn_dir, "libcudnn.so.9", false, {cuda_lib_path});
+  } else {
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cudnn_dir, "libcudnn.so.8", false, {cuda_lib_path});
+  }
+#else
   return GetDsoHandleFromSearchPath(
       FLAGS_cudnn_dir, "libcudnn.so", false, {cuda_lib_path});
+#endif
 #endif
 }
 
@@ -376,6 +508,30 @@ void* GetCUPTIDsoHandle() {
 #if defined(__APPLE__) || defined(__OSX__)
   return GetDsoHandleFromSearchPath(
       FLAGS_cupti_dir, "libcupti.dylib", false, {cupti_lib_path});
+#elif defined(__linux__) && defined(PADDLE_WITH_CUDA)
+  if (CUDA_VERSION >= 11000 && CUDA_VERSION < 12000) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cupti_dir, "libcupti.so.11.8", false, {cupti_lib_path});
+#else
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cupti_dir, "libcupti.so", false, {cupti_lib_path});
+#endif
+
+  } else if (CUDA_VERSION >= 12000 && CUDA_VERSION < 13000) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cupti_dir, "libcupti.so.12", false, {cupti_lib_path});
+#else
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cupti_dir, "libcupti.so", false, {cupti_lib_path});
+#endif
+  } else {
+    std::string warning_msg(
+        "Your CUDA_VERSION is less than 11 or greater than 12, paddle "
+        "temporarily no longer supports");
+    return nullptr;
+  }
 #else
   return GetDsoHandleFromSearchPath(
       FLAGS_cupti_dir, "libcupti.so", false, {cupti_lib_path});
@@ -386,12 +542,22 @@ void* GetCurandDsoHandle() {
 #if defined(__APPLE__) || defined(__OSX__)
   return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "libcurand.dylib");
 #elif defined(_WIN32) && defined(PADDLE_WITH_CUDA)
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+  return GetDsoHandleFromSearchPath(
+      FLAGS_cuda_dir, "curand64_10.dll", true, {cuda_lib_path});
+#else
   return GetDsoHandleFromSearchPath(
       FLAGS_cuda_dir, win_curand_lib, true, {cuda_lib_path});
+#endif
 #elif defined(PADDLE_WITH_HIP)
   return GetDsoHandleFromSearchPath(FLAGS_rocm_dir, "libhiprand.so");
 #else
-  return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "libcurand.so");
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+  return GetDsoHandleFromSearchPath(FLAGS_curand_dir, "libcurand.so.10");
+#else
+  return GetDsoHandleFromSearchPath(FLAGS_curand_dir, "libcurand.so");
+#endif
+
 #endif
 }
 
@@ -400,7 +566,7 @@ void* GetROCFFTDsoHandle() {
 #if defined(__APPLE__) || defined(__OSX__)
   return GetDsoHandleFromSearchPath(FLAGS_rocm_dir, "librocfft.dylib");
 #else
-  return GetDsoHandleFromSearchPath(FLAGS_rocm_dir, "librocfft.so");
+  return GetDsoHandleFromSearchPath(FLAGS_rocm_dir, "libhipfft.so");
 #endif
 }
 #endif
@@ -420,10 +586,21 @@ void* GetCusolverDsoHandle() {
 #if defined(__APPLE__) || defined(__OSX__)
   return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "libcusolver.dylib");
 #elif defined(_WIN32) && defined(PADDLE_WITH_CUDA)
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+  return GetDsoHandleFromSearchPath(
+      FLAGS_cuda_dir, "cusolver64_11.dll", true, {cuda_lib_path});
+#else
   return GetDsoHandleFromSearchPath(
       FLAGS_cuda_dir, win_cusolver_lib, true, {cuda_lib_path});
+#endif
+#elif defined(PADDLE_WITH_HIP)
+  return GetDsoHandleFromSearchPath(FLAGS_rocm_dir, "librocsolver.so");
+#else
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+  return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "libcusolver.so.11");
 #else
   return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "libcusolver.so");
+#endif
 #endif
 }
 
@@ -431,8 +608,45 @@ void* GetCusparseDsoHandle() {
 #if defined(__APPLE__) || defined(__OSX__)
   return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "libcusparse.dylib");
 #elif defined(_WIN32) && defined(PADDLE_WITH_CUDA)
-  return GetDsoHandleFromSearchPath(
-      FLAGS_cuda_dir, win_cusparse_lib, true, {cuda_lib_path});
+  if (CUDA_VERSION >= 11000 && CUDA_VERSION < 12000) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "cusparse64_11.dll");
+#else
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cuda_dir, win_cusparse_lib, true, {cuda_lib_path});
+#endif
+  } else if (CUDA_VERSION >= 12000 && CUDA_VERSION < 13000) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "cusparse64_12.dll");
+#else
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cuda_dir, win_cusparse_lib, true, {cuda_lib_path});
+#endif
+  } else {
+    std::string warning_msg(
+        "Your CUDA_VERSION is less than 11 or greater than 12, paddle "
+        "temporarily no longer supports");
+    return nullptr;
+  }
+#elif defined(__linux__) && defined(PADDLE_WITH_CUDA)
+  if (CUDA_VERSION >= 11000 && CUDA_VERSION < 12000) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(FLAGS_cusparse_dir, "libcusparse.so.11");
+#else
+    return GetDsoHandleFromSearchPath(FLAGS_cusparse_dir, "libcusparse.so");
+#endif
+  } else if (CUDA_VERSION >= 12000 && CUDA_VERSION < 13000) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(FLAGS_cusparse_dir, "libcusparse.so.12");
+#else
+    return GetDsoHandleFromSearchPath(FLAGS_cusparse_dir, "libcusparse.so");
+#endif
+  } else {
+    std::string warning_msg(
+        "Your CUDA_VERSION is less than 11 or greater than 12, paddle "
+        "temporarily no longer.");
+    return nullptr;
+  }
 #elif defined(PADDLE_WITH_HIP)
   return GetDsoHandleFromSearchPath(FLAGS_rocm_dir, "librocsparse.so");
 #else
@@ -506,6 +720,32 @@ void* GetFlashAttnDsoHandle() {
 #endif
 }
 
+void* GetFlashAttnV3DsoHandle() {
+  std::string flashattn_dir = "";
+  if (!s_py_site_pkg_path.path.empty()) {
+    flashattn_dir = s_py_site_pkg_path.path;
+  }
+#if defined(__APPLE__) || defined(__OSX__)
+  return GetDsoHandleFromSearchPath(flashattn_dir, "libflashattnv3.dylib");
+#elif defined(_WIN32)
+  return GetDsoHandleFromSearchPath(flashattn_dir, "flashattnv3.dll");
+#else
+  return GetDsoHandleFromSearchPath(flashattn_dir, "libflashattnv3.so");
+#endif
+}
+
+void* GetAfsApiDsoHandle() {
+  std::string afsapi_dir = "";
+  if (!s_py_site_pkg_path.path.empty()) {
+    afsapi_dir = s_py_site_pkg_path.path;
+  }
+#if defined(__APPLE__) || defined(__OSX__) || defined(_WIN32)
+  return NULL;
+#else
+  return GetDsoHandleFromSearchPath(afsapi_dir, "libafs-api-so.so");
+#endif
+}
+
 void* GetNCCLDsoHandle() {
 #ifdef PADDLE_WITH_HIP
   std::string warning_msg(
@@ -526,8 +766,14 @@ void* GetNCCLDsoHandle() {
   return GetDsoHandleFromSearchPath(
       FLAGS_rccl_dir, "librccl.so", true, {}, warning_msg);
 #else
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+  return GetDsoHandleFromSearchPath(
+      FLAGS_nccl_dir, "libnccl.so;libnccl.so.2", true, {}, warning_msg);
+#else
   return GetDsoHandleFromSearchPath(
       FLAGS_nccl_dir, "libnccl.so", true, {}, warning_msg);
+#endif
+
 #endif
 }
 
@@ -553,7 +799,11 @@ void* GetMKLMLDsoHandle() {
 
 void* GetLAPACKDsoHandle() {
 #if defined(__APPLE__) || defined(__OSX__)
+#if defined(__arm__) || defined(__aarch64__)
+  return GetDsoHandleFromSearchPath(FLAGS_lapack_dir, "liblapack.dylib");
+#else
   return GetDsoHandleFromSearchPath(FLAGS_lapack_dir, "liblapack.3.dylib");
+#endif
 #elif defined(_WIN32)
   return GetDsoHandleFromSearchPath(FLAGS_lapack_dir, "liblapack.dll");
 #else
@@ -567,11 +817,12 @@ void* GetOpDsoHandle(const std::string& dso_name) {
 
 void* GetNvtxDsoHandle() {
 #if defined(__APPLE__) || defined(__OSX__)
-  PADDLE_THROW(phi::errors::Unimplemented("Nvtx do not support Apple."));
+  PADDLE_THROW(common::errors::Unimplemented("Nvtx do not support Apple."));
 #elif defined(_WIN32)
-  PADDLE_THROW(phi::errors::Unimplemented("Nvtx do not support Windows."));
+  PADDLE_THROW(common::errors::Unimplemented("Nvtx do not support Windows."));
 #elif !defined(PADDLE_WITH_CUDA)
-  PADDLE_THROW(phi::errors::Unimplemented("Nvtx do not support without CUDA."));
+  PADDLE_THROW(
+      common::errors::Unimplemented("Nvtx do not support without CUDA."));
 #else
   return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "libnvToolsExt.so");
 #endif
@@ -580,9 +831,42 @@ void* GetNvtxDsoHandle() {
 void* GetCUFFTDsoHandle() {
 #if defined(__APPLE__) || defined(__OSX__)
   return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "libcufft.dylib");
+#elif defined(__linux__) && defined(PADDLE_WITH_CUDA)
+  if (CUDA_VERSION >= 11000 && CUDA_VERSION < 12000) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "libcufft.so.10");
+#else
+    return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "libcufft.so");
+#endif
+  } else if (CUDA_VERSION >= 12000 && CUDA_VERSION < 13000) {
+    return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "libcufft.so.11");
+  } else {
+    std::string warning_msg(
+        "Your CUDA_VERSION is less than 11 or greater than 12, paddle "
+        "temporarily no longer.");
+    return nullptr;
+  }
 #elif defined(_WIN32) && defined(PADDLE_WITH_CUDA)
-  return GetDsoHandleFromSearchPath(
-      FLAGS_cuda_dir, win_cufft_lib, true, {cuda_lib_path});
+  if (CUDA_VERSION >= 11000 && CUDA_VERSION < 12000) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "cufft64_10.dll");
+#else
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cuda_dir, win_cufft_lib, true, {cuda_lib_path});
+#endif
+  } else if (CUDA_VERSION >= 12000 && CUDA_VERSION < 13000) {
+#ifdef PADDLE_WITH_PIP_CUDA_LIBRARIES
+    return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "cufft64_11.dll");
+#else
+    return GetDsoHandleFromSearchPath(
+        FLAGS_cuda_dir, win_cufft_lib, true, {cuda_lib_path});
+#endif
+  } else {
+    std::string warning_msg(
+        "Your CUDA_VERSION is less than 11 or greater than 12, paddle "
+        "temporarily no longer supports");
+    return nullptr;
+  }
 #else
   return GetDsoHandleFromSearchPath(FLAGS_cuda_dir, "libcufft.so");
 #endif
@@ -618,6 +902,4 @@ void* GetXPTIDsoHandle() {
   return nullptr;
 #endif
 }
-
-}  // namespace dynload
-}  // namespace phi
+}  // namespace phi::dynload

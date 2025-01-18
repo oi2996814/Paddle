@@ -15,7 +15,7 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, OpTestTool, convert_float_to_uint16
+from op_test import OpTest, OpTestTool, convert_float_to_uint16
 
 import paddle
 
@@ -56,7 +56,7 @@ class TestSoftplusOneDNNOp(OpTest):
         self.dtype = np.float32
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir_onednn=True)
 
 
 class TestSoftplus4DOneDNNOp(TestSoftplusOneDNNOp):

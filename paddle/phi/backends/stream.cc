@@ -21,27 +21,29 @@
 #include "paddle/phi/backends/device_guard.h"
 #include "paddle/phi/backends/event.h"
 
-namespace phi {
-namespace stream {
+namespace phi::stream {
 
 std::list<Stream*> g_streams;
+std::mutex g_streams_mutex;
 
 void Stream::ReleaseAll() {
+  std::unique_lock lock(g_streams_mutex);
   for (auto* stream : g_streams) {
     stream->Destroy();
   }
 }
 
 Stream::~Stream() {
-  g_streams.remove(this);
   Destroy();
+  std::unique_lock lock(g_streams_mutex);
+  g_streams.remove(this);
 }
 
 const stream_t& Stream::raw_stream() const { return stream_; }
 
 void Stream::set_stream(stream_t stream) { stream_ = stream; }
 
-// For compatiable
+// For compatible
 Stream::Stream(const Place& place, stream_t stream)
     : place_(place),
       device_(phi::DeviceManager::GetDeviceWithPlace(place)),
@@ -65,6 +67,7 @@ bool Stream::Init(const Place& place,
           << ", priority: " << static_cast<int>(priority)
           << ", flag:" << static_cast<int>(flag);
   own_data_ = true;
+  std::unique_lock lock(g_streams_mutex);
   g_streams.push_back(this);
   return true;
 }
@@ -98,7 +101,8 @@ void Stream::WaitCallback() const { callback_manager_->Wait(); }
 
 void Stream::Destroy() {
   if (device_) {
-    if (own_data_) {
+    if (own_data_ &&
+        phi::DeviceManager::HasDeviceType(place_.GetDeviceType())) {
       phi::DeviceManager::SetDevice(place_);
       device_->DestroyStream(this);
     }
@@ -114,5 +118,4 @@ void Stream::Synchronize() const { device_->SynchronizeStream(this); }
 
 const Place& Stream::GetPlace() const { return place_; }
 
-}  // namespace stream
-}  // namespace phi
+}  // namespace phi::stream

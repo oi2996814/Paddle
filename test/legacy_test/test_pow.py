@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 from paddle.static import Program, program_guard
 
 DYNAMIC = 1
@@ -79,7 +80,13 @@ class TestPowerAPI(unittest.TestCase):
     """TestPowerAPI."""
 
     def setUp(self):
-        self.places = ['cpu']
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.places.append('cpu')
         if core.is_compiled_with_cuda():
             self.places.append('gpu')
 
@@ -211,6 +218,18 @@ class TestPowerError(unittest.TestCase):
         x = (np.random.rand(*dims) * 10).astype(np.float64)
         y = int(np.random.rand() * 10)
         self.assertRaises(TypeError, paddle.pow, x, str(y))
+
+    def test_pir_error(self):
+        with paddle.pir_utils.IrGuard():
+
+            def x_dtype_error():
+                with paddle.static.program_guard(
+                    paddle.static.Program(), paddle.static.Program()
+                ):
+                    x = paddle.static.data('x', [2, 2], dtype='int8')
+                    out = paddle.pow(x, 2)
+
+            self.assertRaises(TypeError, x_dtype_error)
 
 
 if __name__ == '__main__':

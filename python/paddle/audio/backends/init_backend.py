@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import sys
 import warnings
-from typing import List
 
 import paddle
 
@@ -34,11 +35,11 @@ def _check_version(version: str) -> bool:
     return True
 
 
-def list_available_backends() -> List[str]:
+def list_available_backends() -> list[str]:
     """List available backends, the backends in paddleaudio and the default backend.
 
     Returns:
-        List[str]: The list of available backends.
+        list[str]: The list of available backends.
 
     Examples:
         .. code-block:: python
@@ -49,7 +50,7 @@ def list_available_backends() -> List[str]:
             >>> wav_duration = 0.5
             >>> num_channels = 1
             >>> num_frames = sample_rate * wav_duration
-            >>> wav_data = paddle.linspace(-1.0, 1.0, num_frames) * 0.1
+            >>> wav_data = paddle.linspace(-1.0, 1.0, int(num_frames)) * 0.1
             >>> waveform = wav_data.tile([num_channels, 1])
             >>> wav_path = "./test.wav"
 
@@ -72,20 +73,20 @@ def list_available_backends() -> List[str]:
     except ImportError:
         package = "paddleaudio"
         warn_msg = (
-            "Failed importing {}. \n"
-            "only wave_banckend(only can deal with PCM16 WAV) supportted.\n"
-            "if want soundfile_backend(more audio type suppported),\n"
-            "please manually installed (usually with `pip install {} >= 1.0.2`). "
-        ).format(package, package)
+            f"Failed importing {package}. \n"
+            "only wave_backend(only can deal with PCM16 WAV) supported.\n"
+            "if want soundfile_backend(more audio type supported),\n"
+            f"please manually installed (usually with `pip install {package} >= 1.0.2`). "
+        )
         warnings.warn(warn_msg)
 
     if "paddleaudio" in sys.modules:
         version = paddleaudio.__version__
         if not _check_version(version):
             err_msg = (
-                "the version of paddleaudio installed is {},\n"
+                f"the version of paddleaudio installed is {version},\n"
                 "please ensure the paddleaudio >= 1.0.2."
-            ).format(version)
+            )
             raise ImportError(err_msg)
         backends = paddleaudio.backends.list_audio_backends()
     backends.append("wave_backend")
@@ -108,7 +109,7 @@ def get_current_backend() -> str:
             >>> wav_duration = 0.5
             >>> num_channels = 1
             >>> num_frames = sample_rate * wav_duration
-            >>> wav_data = paddle.linspace(-1.0, 1.0, num_frames) * 0.1
+            >>> wav_data = paddle.linspace(-1.0, 1.0, int(num_frames)) * 0.1
             >>> waveform = wav_data.tile([num_channels, 1])
             >>> wav_path = "./test.wav"
 
@@ -136,7 +137,7 @@ def get_current_backend() -> str:
     return "wave_backend"
 
 
-def set_backend(backend_name: str):
+def set_backend(backend_name: str) -> None:
     """Set the backend by one of the list_audio_backend return.
 
     Args:
@@ -154,7 +155,7 @@ def set_backend(backend_name: str):
             >>> wav_duration = 0.5
             >>> num_channels = 1
             >>> num_frames = sample_rate * wav_duration
-            >>> wav_data = paddle.linspace(-1.0, 1.0, num_frames) * 0.1
+            >>> wav_data = paddle.linspace(-1.0, 1.0, int(num_frames)) * 0.1
             >>> waveform = wav_data.tile([num_channels, 1])
             >>> wav_path = "./test.wav"
 
@@ -173,7 +174,7 @@ def set_backend(backend_name: str):
 
     """
     if backend_name not in list_available_backends():
-        raise NotImplementedError()
+        raise NotImplementedError
 
     if backend_name == "wave_backend":
         module = wave_backend
@@ -188,7 +189,7 @@ def set_backend(backend_name: str):
         setattr(paddle.audio, func, getattr(module, func))
 
 
-def _init_set_audio_backend():
+def _init_set_audio_backend() -> None:
     # init the default wave_backend.
     for func in ["save", "load", "info"]:
         setattr(backend, func, getattr(wave_backend, func))

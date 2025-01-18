@@ -24,17 +24,16 @@
 #include "paddle/cinn/auto_schedule/task_scheduler/task_scheduler.h"
 #include "paddle/cinn/auto_schedule/tuning.h"
 #include "paddle/cinn/common/target.h"
-#include "paddle/cinn/hlir/framework/graph.h"
 #include "paddle/cinn/hlir/framework/graph_compiler.h"
 #include "paddle/cinn/hlir/framework/op_lowering.h"
 
 namespace cinn {
 namespace auto_schedule {
-
 // This class is entrance of auto-tune, users can use it
 // to tune graph (not supported yet) and search a series of schedules
 // that maybe more likely to obtain better performance.
 // Internally, it creates necessary components and use them to perform tuning.
+using GroupPtr = hlir::framework::GroupPtr;
 class AutoTuner {
  public:
   // configure how to perform auto-tune, such as
@@ -46,7 +45,7 @@ class AutoTuner {
     DatabaseConfig database_config;
   };
 
-  AutoTuner(const common::Target& target, hlir::framework::Graph* graph);
+  AutoTuner(const cinn::common::Target& target, hlir::framework::Graph* graph);
 
   // Initialize tuner with specific config and auxiliary objects.
   void Initialize(const Config& config,
@@ -56,9 +55,9 @@ class AutoTuner {
   TuningResult Tune(const TuningOptions& options);
 
  private:
-  const common::Target& target_;
+  const cinn::common::Target& target_;
   hlir::framework::Graph* graph_;
-  std::unique_ptr<hlir::framework::OpLowerer> op_lowerer_;
+  std::unique_ptr<hlir::framework::OpLowerer<GroupPtr>> op_lowerer_;
 
   // Tasks to tune
   std::vector<TuneTask> tasks_;

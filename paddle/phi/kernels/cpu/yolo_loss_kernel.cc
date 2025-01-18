@@ -40,7 +40,7 @@ static T L1Loss(T x, T y) {
 }
 
 static int GetMaskIndex(std::vector<int> mask, int val) {
-  for (size_t i = 0; i < mask.size(); i++) {
+  for (int i = 0; i < static_cast<int>(mask.size()); i++) {
     if (mask[i] == val) {
       return i;
     }
@@ -60,7 +60,7 @@ static inline Box<T> GetYoloBox(const T* x,
                                 int stride,
                                 float scale,
                                 float bias) {
-  Box<T> b;
+  Box<T> b = {};
   b.x = (i + sigmoid<T>(x[index]) * scale + bias) / grid_size;
   b.y = (j + sigmoid<T>(x[index + stride]) * scale + bias) / grid_size;
   b.w = std::exp(x[index + 2 * stride]) * anchors[2 * an_idx] / input_size;
@@ -148,7 +148,7 @@ static inline void CalcObjnessLoss(T* loss,
             // positive sample: obj = mixup score
             loss[i] += SigmoidCrossEntropy<T>(input[k * w + l], 1.0) * obj;
           } else if (obj > -0.5) {
-            // negetive sample: obj = 0
+            // negative sample: obj = 0
             loss[i] += SigmoidCrossEntropy<T>(input[k * w + l], 0.0);
           }
         }
@@ -196,14 +196,14 @@ void YoloLossKernel(const Context& dev_ctx,
   auto* input = &x;
   auto objness_mask = objectness_mask;
   float scale = scale_x_y;
-  float bias = -0.5 * (scale - 1.);
+  float bias = -0.5f * (scale - 1.f);
 
-  const int n = input->dims()[0];
-  const int h = input->dims()[2];
-  const int w = input->dims()[3];
-  const int an_num = anchors.size() / 2;
-  const int mask_num = anchor_mask.size();
-  const int b = gt_box.dims()[1];
+  const int n = static_cast<int>(input->dims()[0]);
+  const int h = static_cast<int>(input->dims()[2]);
+  const int w = static_cast<int>(input->dims()[3]);
+  const int an_num = static_cast<int>(anchors.size() / 2);
+  const int mask_num = static_cast<int>(anchor_mask.size());
+  const int b = static_cast<int>(gt_box.dims()[1]);
   int input_size = downsample_ratio * h;
 
   const int stride = h * w;
@@ -229,7 +229,7 @@ void YoloLossKernel(const Context& dev_ctx,
   gt_match_mask->Resize({n, b});
   int* gt_match_mask_data = dev_ctx.template Alloc<int>(gt_match_mask);
 
-  const T* gt_score_data;
+  const T* gt_score_data = nullptr;
   DenseTensor gtscore;
   if (!(gt_score.is_initialized())) {
     gtscore.Resize({n, b});
@@ -307,7 +307,7 @@ void YoloLossKernel(const Context& dev_ctx,
       // for positive sample, all losses should be calculated, and for
       // other samples, only objectness loss is required.
       for (int an_idx = 0; an_idx < an_num; an_idx++) {
-        Box<T> an_box;
+        Box<T> an_box = {};
         an_box.x = 0.0;
         an_box.y = 0.0;
         an_box.w = anchors[2 * an_idx] / static_cast<T>(input_size);

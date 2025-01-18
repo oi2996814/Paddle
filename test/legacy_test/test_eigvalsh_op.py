@@ -15,7 +15,8 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
+from utils import dygraph_guard, static_guard
 
 import paddle
 
@@ -48,6 +49,24 @@ def valid_eigenvalues(actual, expected):
     np.testing.assert_array_less(relative_error, rtol)
 
 
+def compare_shape_result(actual, expected):
+    assert actual.ndim == 1 or actual.ndim == 2
+
+    if actual.ndim == 1:
+        valid_shape_eigenvalues(actual, expected)
+        return
+
+    for batch_actual, batch_expected in zip(actual, expected):
+        valid_shape_eigenvalues(batch_actual, batch_expected)
+
+
+def valid_shape_eigenvalues(actual, expected):
+    if actual.shape != expected.shape:
+        raise ValueError(
+            f"Shape mismatch: actual shape {actual.shape} does not match expected shape {expected.shape}."
+        )
+
+
 class TestEigvalshOp(OpTest):
     def setUp(self):
         paddle.enable_static()
@@ -72,10 +91,14 @@ class TestEigvalshOp(OpTest):
 
     def test_check_output(self):
         # Vectors in posetive or negative is equivalent
-        self.check_output(no_check_set=['Eigenvectors'])
+        self.check_output(
+            no_check_set=['Eigenvectors'],
+            check_pir=True,
+            check_symbol_infer=True,
+        )
 
     def test_grad(self):
-        self.check_grad(["X"], ["Eigenvalues"])
+        self.check_grad(["X"], ["Eigenvalues"], check_pir=True)
 
 
 class TestEigvalshUPLOCase(TestEigvalshOp):
@@ -122,7 +145,8 @@ class TestEigvalshAPI(unittest.TestCase):
         complex_data = np.random.random(self.x_shape).astype(
             self.dtype
         ) + 1j * np.random.random(self.x_shape).astype(self.dtype)
-        self.trans_dims = list(range(len(self.x_shape) - 2)) + [
+        self.trans_dims = [
+            *range(len(self.x_shape) - 2),
             len(self.x_shape) - 1,
             len(self.x_shape) - 2,
         ]
@@ -202,6 +226,7 @@ class TestEigvalshBatchAPI(TestEigvalshAPI):
 
 
 class TestEigvalshAPIError(unittest.TestCase):
+
     def test_error(self):
         main_prog = paddle.static.Program()
         startup_prog = paddle.static.Program()
@@ -230,6 +255,73 @@ class TestEigvalshAPIError(unittest.TestCase):
                 name='x_4', shape=[4, 4], dtype="int32"
             )
             self.assertRaises(TypeError, paddle.linalg.eigvalsh, input_x)
+
+
+class TestEigvalshAPIZeroSize(unittest.TestCase):
+    def setUp(self):
+        self.dtype = "float32"
+        self.place = (
+            paddle.CUDAPlace(0)
+            if paddle.is_compiled_with_cuda()
+            else paddle.CPUPlace()
+        )
+        np.random.seed(123)
+        self.init_input_shape()
+        self.init_input_data()
+
+    def init_input_shape(self):
+        self.x_shape = [0, 0]
+
+    def init_input_data(self):
+        self.real_data = np.random.random(self.x_shape).astype(self.dtype)
+
+    def test_in_static_mode(self):
+        with static_guard():
+            main_prog = paddle.static.Program()
+            startup_prog = paddle.static.Program()
+            with paddle.static.program_guard(main_prog, startup_prog):
+                input_x = paddle.static.data(
+                    'input_x', shape=self.x_shape, dtype=self.dtype
+                )
+                output_w = paddle.linalg.eigvalsh(input_x)
+                exe = paddle.static.Executor(self.place)
+                actual_w = exe.run(
+                    main_prog,
+                    feed={"input_x": self.real_data},
+                    fetch_list=[output_w],
+                )
+
+                expected_w = np.linalg.eigvalsh(self.real_data)
+                compare_shape_result(actual_w[0], expected_w)
+
+            main_prog = paddle.static.Program()
+            startup_prog = paddle.static.Program()
+            with paddle.static.program_guard(main_prog, startup_prog):
+                input_x = paddle.static.data(
+                    'input_x', shape=self.x_shape, dtype=self.dtype
+                )
+                output_w = paddle.linalg.eigvalsh(input_x)
+                exe = paddle.static.Executor(paddle.CPUPlace())
+                actual_w = exe.run(
+                    main_prog,
+                    feed={"input_x": self.real_data},
+                    fetch_list=[output_w],
+                )
+
+                expected_w = np.linalg.eigvalsh(self.real_data)
+                compare_shape_result(actual_w[0], expected_w)
+
+    def test_in_dynamic_mode(self):
+        with dygraph_guard():
+            input_real_data = paddle.to_tensor(self.real_data)
+            expected_w = np.linalg.eigvalsh(self.real_data)
+            actual_w = paddle.linalg.eigvalsh(input_real_data)
+            compare_shape_result(actual_w.numpy(), expected_w)
+
+
+class TestEigvalshBatchAPIZeroSize(TestEigvalshAPIZeroSize):
+    def init_input_shape(self):
+        self.x_shape = [0, 5, 5]
 
 
 if __name__ == "__main__":

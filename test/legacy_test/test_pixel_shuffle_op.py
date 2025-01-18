@@ -15,12 +15,11 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
 import paddle.nn.functional as F
-from paddle import fluid
-from paddle.fluid import core
+from paddle.base import core
 
 
 def pixel_shuffle_np(x, up_factor, data_format="NCHW"):
@@ -89,12 +88,13 @@ class TestPixelShuffleOp(OpTest):
         self.format = "NCHW"
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
         self.check_grad(
             ['X'],
             'Out',
+            check_pir=True,
         )
 
 
@@ -147,13 +147,14 @@ class TestPixelShuffleBF16Op(OpTest):
         self.format = "NCHW"
 
     def test_check_output(self):
-        self.check_output_with_place(self.place)
+        self.check_output_with_place(self.place, check_pir=True)
 
     def test_check_grad(self):
         self.check_grad_with_place(
             self.place,
             ['X'],
             'Out',
+            check_pir=True,
         )
 
 
@@ -182,15 +183,15 @@ class TestPixelShuffleAPI(unittest.TestCase):
 
             exe = paddle.static.Executor(place=place)
             res_1 = exe.run(
-                fluid.default_main_program(),
-                feed={"x": self.x_1_np},
+                paddle.static.default_main_program(),
+                feed={"x": self.x_1_np, "x2": self.x_2_np},
                 fetch_list=out_1,
                 use_prune=True,
             )[0]
 
             res_2 = exe.run(
-                fluid.default_main_program(),
-                feed={"x2": self.x_2_np},
+                paddle.static.default_main_program(),
+                feed={"x": self.x_1_np, "x2": self.x_2_np},
                 fetch_list=out_2,
                 use_prune=True,
             )[0]
@@ -222,14 +223,14 @@ class TestPixelShuffleAPI(unittest.TestCase):
                 out_2_np = pixel_shuffle_np(self.x_2_np, 3, "NHWC")
                 exe = paddle.static.Executor(place=place)
                 res_1 = exe.run(
-                    fluid.default_main_program(),
-                    feed={"x": self.x_1_np},
+                    paddle.static.default_main_program(),
+                    feed={"x": self.x_1_np, "x2": self.x_2_np},
                     fetch_list=out_1,
                     use_prune=True,
                 )[0]
                 res_2 = exe.run(
-                    fluid.default_main_program(),
-                    feed={"x2": self.x_2_np},
+                    paddle.static.default_main_program(),
+                    feed={"x": self.x_1_np, "x2": self.x_2_np},
                     fetch_list=out_2,
                     use_prune=True,
                 )[0]
@@ -237,6 +238,7 @@ class TestPixelShuffleAPI(unittest.TestCase):
                 np.testing.assert_allclose(res_2, out_2_np)
 
     # same test between layer and functional in this op.
+
     def test_static_graph_layer(self):
         for use_cuda in (
             [False, True] if core.is_compiled_with_cuda() else [False]
@@ -260,15 +262,15 @@ class TestPixelShuffleAPI(unittest.TestCase):
 
             exe = paddle.static.Executor(place=place)
             res_1 = exe.run(
-                fluid.default_main_program(),
-                feed={"x": self.x_1_np},
+                paddle.static.default_main_program(),
+                feed={"x": self.x_1_np, "x2": self.x_2_np},
                 fetch_list=out_1,
                 use_prune=True,
             )[0]
 
             res_2 = exe.run(
-                fluid.default_main_program(),
-                feed={"x2": self.x_2_np},
+                paddle.static.default_main_program(),
+                feed={"x": self.x_1_np, "x2": self.x_2_np},
                 fetch_list=out_2,
                 use_prune=True,
             )[0]
@@ -319,21 +321,21 @@ class TestPixelShuffleAPI(unittest.TestCase):
 class TestPixelShuffleError(unittest.TestCase):
     def test_error_functional(self):
         def error_upscale_factor():
-            with paddle.fluid.dygraph.guard():
+            with paddle.base.dygraph.guard():
                 x = np.random.random([2, 9, 4, 4]).astype("float64")
                 pixel_shuffle = F.pixel_shuffle(paddle.to_tensor(x), 3.33)
 
         self.assertRaises(TypeError, error_upscale_factor)
 
         def error_0_upscale_factor():
-            with paddle.fluid.dygraph.guard():
+            with paddle.base.dygraph.guard():
                 x = paddle.uniform([1, 1, 1, 1], dtype='float64')
                 pixel_shuffle = F.pixel_shuffle(x, 0)
 
         self.assertRaises(ValueError, error_0_upscale_factor)
 
         def error_data_format():
-            with paddle.fluid.dygraph.guard():
+            with paddle.base.dygraph.guard():
                 x = np.random.random([2, 9, 4, 4]).astype("float64")
                 pixel_shuffle = F.pixel_shuffle(paddle.to_tensor(x), 3, "WOW")
 
@@ -341,14 +343,14 @@ class TestPixelShuffleError(unittest.TestCase):
 
     def test_error_layer(self):
         def error_upscale_factor_layer():
-            with paddle.fluid.dygraph.guard():
+            with paddle.base.dygraph.guard():
                 x = np.random.random([2, 9, 4, 4]).astype("float64")
                 ps = paddle.nn.PixelShuffle(3.33)
 
         self.assertRaises(TypeError, error_upscale_factor_layer)
 
         def error_data_format_layer():
-            with paddle.fluid.dygraph.guard():
+            with paddle.base.dygraph.guard():
                 x = np.random.random([2, 9, 4, 4]).astype("float64")
                 ps = paddle.nn.PixelShuffle(3, "MEOW")
 

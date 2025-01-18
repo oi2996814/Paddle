@@ -12,20 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
 import paddle.nn.functional as F
 from paddle import nn
-from paddle.fluid import (
+from paddle.base import (
     Executor,
-    Program,
     core,
-    default_main_program,
-    program_guard,
 )
 
 
@@ -38,9 +36,20 @@ class TestPad3dOp(OpTest):
         self.op_type = "pad3d"
         self.python_api = paddle.nn.functional.pad
         self.inputs = {
-            'X': np.random.uniform(-1.0, 1.0, self.shape).astype("float32")
-            if self.dtype == np.uint16
-            else np.random.uniform(-1.0, 1.0, self.shape).astype(self.dtype)
+            'X': (
+                np.random.uniform(-1.0, 1.0, self.shape).astype("float32")
+                if self.dtype == np.uint16
+                else (
+                    (
+                        np.random.uniform(-1.0, 1.0, self.shape)
+                        + 1j * np.random.uniform(-1.0, 1.0, self.shape)
+                    ).astype(self.dtype)
+                    if self.dtype == np.complex64 or self.dtype == np.complex128
+                    else np.random.uniform(-1.0, 1.0, self.shape).astype(
+                        self.dtype
+                    )
+                )
+            )
         }
         self.attrs = {}
         if self.variable_paddings:
@@ -91,10 +100,10 @@ class TestPad3dOp(OpTest):
             self.outputs['Out'] = convert_float_to_uint16(self.outputs['Out'])
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad_normal(self):
-        self.check_grad(['X'], 'Out')
+        self.check_grad(['X'], 'Out', check_pir=True)
 
     def get_dtype(self):
         return np.float64
@@ -191,6 +200,9 @@ class TestCase9(TestPad3dOp):
         self.value = 1.0
         self.variable_paddings = True
 
+    def test_check_output(self):
+        self.check_output(check_pir=True, check_symbol_infer=False)
+
 
 class TestCase10(TestPad3dOp):
     def initTestCase(self):
@@ -200,6 +212,9 @@ class TestCase10(TestPad3dOp):
         self.data_format = "NDHWC"
         self.value = 1.0
         self.variable_paddings = True
+
+    def test_check_output(self):
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
 
 # ----------------Pad3d Fp16----------------
@@ -214,10 +229,16 @@ def create_test_fp16(parent):
             return np.float16
 
         def test_check_output(self):
-            self.check_output(atol=1e-3)
+            self.check_output(
+                atol=1e-3,
+                check_pir=True,
+                check_symbol_infer=(not self.variable_paddings),
+            )
 
         def test_check_grad_normal(self):
-            self.check_grad(['X'], 'Out', max_relative_error=1.5e-3)
+            self.check_grad(
+                ['X'], 'Out', max_relative_error=1.5e-3, check_pir=True
+            )
 
     cls_name = "{}_{}".format(parent.__name__, "FP16OP")
     TestPad3dFp16.__name__ = cls_name
@@ -251,12 +272,17 @@ def create_test_bf16(parent):
 
         def test_check_output(self):
             place = core.CUDAPlace(0)
-            self.check_output_with_place(place, atol=1e-2)
+            self.check_output_with_place(
+                place,
+                atol=1e-2,
+                check_pir=True,
+                check_symbol_infer=(not self.variable_paddings),
+            )
 
         def test_check_grad_normal(self):
             place = core.CUDAPlace(0)
             self.check_grad_with_place(
-                place, ['X'], 'Out', max_relative_error=1e-2
+                place, ['X'], 'Out', max_relative_error=1e-2, check_pir=True
             )
 
     cls_name = "{}_{}".format(parent.__name__, "BF16OP")
@@ -276,27 +302,124 @@ create_test_bf16(TestCase9)
 create_test_bf16(TestCase10)
 
 
+# ----------------Pad3d complex64----------------
+def create_test_complex64(parent):
+    @unittest.skipIf(
+        not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+    )
+    class TestPad3dComplex64(parent):
+        def get_dtype(self):
+            return np.complex64
+
+        def test_check_output(self):
+            self.check_output(
+                atol=1e-3,
+                check_pir=True,
+                check_symbol_infer=(not self.variable_paddings),
+            )
+
+        def test_check_grad_normal(self):
+            self.check_grad(
+                ['X'], 'Out', max_relative_error=1.5e-3, check_pir=True
+            )
+
+    cls_name = "{}_{}".format(parent.__name__, "Complex64OP")
+    TestPad3dComplex64.__name__ = cls_name  # 重新修改TestPad3dFp16的类名
+    globals()[cls_name] = TestPad3dComplex64
+
+
+create_test_complex64(TestCase1)
+create_test_complex64(TestCase2)
+create_test_complex64(TestCase3)
+create_test_complex64(TestCase4)
+create_test_complex64(TestCase5)
+create_test_complex64(TestCase6)
+create_test_complex64(TestCase7)
+create_test_complex64(TestCase8)
+create_test_complex64(TestCase9)
+create_test_complex64(TestCase10)
+
+
+# ----------------Pad3d complex128----------------
+
+
+def create_test_complex128(parent):
+    @unittest.skipIf(
+        not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
+    )
+    class TestPad3dComplex128(parent):
+        def get_dtype(self):
+            return np.complex128
+
+        def test_check_output(self):
+            self.check_output(
+                atol=1e-3,
+                check_pir=True,
+                check_symbol_infer=(not self.variable_paddings),
+            )
+
+        def test_check_grad_normal(self):
+            self.check_grad(
+                ['X'], 'Out', max_relative_error=1.5e-3, check_pir=True
+            )
+
+    cls_name = "{}_{}".format(parent.__name__, "Complex128OP")
+    TestPad3dComplex128.__name__ = cls_name  # 重新修改TestPad3dFp16的类名
+    globals()[cls_name] = TestPad3dComplex128
+
+
+create_test_complex128(TestCase1)
+create_test_complex128(TestCase2)
+create_test_complex128(TestCase3)
+create_test_complex128(TestCase4)
+create_test_complex128(TestCase5)
+create_test_complex128(TestCase6)
+create_test_complex128(TestCase7)
+create_test_complex128(TestCase8)
+create_test_complex128(TestCase9)
+create_test_complex128(TestCase10)
+
+
 class TestPadAPI(unittest.TestCase):
     def setUp(self):
-        self.places = [paddle.CPUPlace()]
+        self.init_dtype()
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.places.append(paddle.CPUPlace())
         if core.is_compiled_with_cuda():
             self.places.append(paddle.CUDAPlace(0))
 
+    def init_dtype(self):
+        self.dtype = np.float32
+
     def check_static_result_1(self, place):
         paddle.enable_static()
-        with program_guard(Program(), Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             input_shape = (1, 2, 3, 4, 5)
             pad = [1, 2, 1, 1, 3, 4]
             mode = "constant"
             value = 100
-            input_data = np.random.rand(*input_shape).astype(np.float32)
-            x = paddle.static.data(name="x", shape=input_shape)
+            input_data = np.random.rand(*input_shape).astype(self.dtype)
+            if self.dtype == np.complex64 or self.dtype == np.complex128:
+                input_data = (
+                    np.random.rand(*input_shape)
+                    + 1j * np.random.rand(*input_shape)
+                ).astype(self.dtype)
+            x = paddle.static.data(
+                name="x", shape=input_shape, dtype=self.dtype
+            )
             result = F.pad(
                 x=x, pad=pad, value=value, mode=mode, data_format="NCDHW"
             )
             exe = Executor(place)
             fetches = exe.run(
-                default_main_program(),
+                paddle.static.default_main_program(),
                 feed={"x": input_data},
                 fetch_list=[result],
             )
@@ -306,19 +429,29 @@ class TestPadAPI(unittest.TestCase):
 
     def check_static_result_2(self, place):
         paddle.enable_static()
-        with program_guard(Program(), Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             input_shape = (2, 3, 4, 5, 6)
             pad = [1, 2, 1, 1, 1, 2]
             mode = "reflect"
-            input_data = np.random.rand(*input_shape).astype(np.float32)
-            x = paddle.static.data(name="x", shape=input_shape)
+            input_data = np.random.rand(*input_shape).astype(self.dtype)
+            if self.dtype == np.complex64 or self.dtype == np.complex128:
+                input_data = (
+                    np.random.rand(*input_shape)
+                    + 1j * np.random.rand(*input_shape)
+                ).astype(self.dtype)
+            x = paddle.static.data(
+                name="x", shape=input_shape, dtype=self.dtype
+            )
             result1 = F.pad(x=x, pad=pad, mode=mode, data_format="NCDHW")
             result2 = F.pad(x=x, pad=pad, mode=mode, data_format="NDHWC")
+            result3 = F.pad(x=x, pad=pad, mode=mode)
             exe = Executor(place)
             fetches = exe.run(
-                default_main_program(),
+                paddle.static.default_main_program(),
                 feed={"x": input_data},
-                fetch_list=[result1, result2],
+                fetch_list=[result1, result2, result3],
             )
 
             np_out1 = self._get_numpy_out(
@@ -329,22 +462,33 @@ class TestPadAPI(unittest.TestCase):
             )
             np.testing.assert_allclose(fetches[0], np_out1, rtol=1e-05)
             np.testing.assert_allclose(fetches[1], np_out2, rtol=1e-05)
+            np.testing.assert_allclose(fetches[2], np_out1, rtol=1e-05)
 
     def check_static_result_3(self, place):
         paddle.enable_static()
-        with program_guard(Program(), Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             input_shape = (2, 3, 4, 5, 6)
             pad = [1, 2, 1, 1, 3, 4]
             mode = "replicate"
-            input_data = np.random.rand(*input_shape).astype(np.float32)
-            x = paddle.static.data(name="x", shape=input_shape)
+            input_data = np.random.rand(*input_shape).astype(self.dtype)
+            if self.dtype == np.complex64 or self.dtype == np.complex128:
+                input_data = (
+                    np.random.rand(*input_shape)
+                    + 1j * np.random.rand(*input_shape)
+                ).astype(self.dtype)
+            x = paddle.static.data(
+                name="x", shape=input_shape, dtype=self.dtype
+            )
             result1 = F.pad(x=x, pad=pad, mode=mode, data_format="NCDHW")
             result2 = F.pad(x=x, pad=pad, mode=mode, data_format="NDHWC")
+            result3 = F.pad(x=x, pad=pad, mode=mode)
             exe = Executor(place)
             fetches = exe.run(
-                default_main_program(),
+                paddle.static.default_main_program(),
                 feed={"x": input_data},
-                fetch_list=[result1, result2],
+                fetch_list=[result1, result2, result3],
             )
 
             np_out1 = self._get_numpy_out(
@@ -355,22 +499,33 @@ class TestPadAPI(unittest.TestCase):
             )
             np.testing.assert_allclose(fetches[0], np_out1, rtol=1e-05)
             np.testing.assert_allclose(fetches[1], np_out2, rtol=1e-05)
+            np.testing.assert_allclose(fetches[2], np_out1, rtol=1e-05)
 
     def check_static_result_4(self, place):
         paddle.enable_static()
-        with program_guard(Program(), Program()):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             input_shape = (2, 3, 4, 5, 6)
             pad = [1, 2, 1, 1, 3, 4]
             mode = "circular"
-            input_data = np.random.rand(*input_shape).astype(np.float32)
-            x = paddle.static.data(name="x", shape=input_shape)
+            input_data = np.random.rand(*input_shape).astype(self.dtype)
+            if self.dtype == np.complex64 or self.dtype == np.complex128:
+                input_data = (
+                    np.random.rand(*input_shape)
+                    + 1j * np.random.rand(*input_shape)
+                ).astype(self.dtype)
+            x = paddle.static.data(
+                name="x", shape=input_shape, dtype=self.dtype
+            )
             result1 = F.pad(x=x, pad=pad, mode=mode, data_format="NCDHW")
             result2 = F.pad(x=x, pad=pad, mode=mode, data_format="NDHWC")
+            result3 = F.pad(x=x, pad=pad, mode=mode)
             exe = Executor(place)
             fetches = exe.run(
-                default_main_program(),
+                paddle.static.default_main_program(),
                 feed={"x": input_data},
-                fetch_list=[result1, result2],
+                fetch_list=[result1, result2, result3],
             )
 
             np_out1 = self._get_numpy_out(
@@ -381,6 +536,7 @@ class TestPadAPI(unittest.TestCase):
             )
             np.testing.assert_allclose(fetches[0], np_out1, rtol=1e-05)
             np.testing.assert_allclose(fetches[1], np_out2, rtol=1e-05)
+            np.testing.assert_allclose(fetches[2], np_out1, rtol=1e-05)
 
     def _get_numpy_out(
         self, input_data, pad, mode, value=0, data_format="NCDHW"
@@ -455,7 +611,11 @@ class TestPadAPI(unittest.TestCase):
         pad_3 = [1, 2, 1, 1, 3, 4, 5, 6, 7, 8]
         mode = "constant"
         value = 100
-        input_data = np.random.rand(*input_shape).astype(np.float32)
+        input_data = np.random.rand(*input_shape).astype(self.dtype)
+        if self.dtype == np.complex64 or self.dtype == np.complex128:
+            input_data = (
+                np.random.rand(*input_shape) + 1j * np.random.rand(*input_shape)
+            ).astype(self.dtype)
         np_out1 = self._get_numpy_out(
             input_data, pad, mode, value, data_format="NCDHW"
         )
@@ -476,10 +636,12 @@ class TestPadAPI(unittest.TestCase):
         y3 = F.pad(
             tensor_data, pad=pad_3, mode=mode, value=value, data_format="NCDHW"
         )
+        y4 = F.pad(tensor_data, pad=pad, mode=mode, value=value)
 
         np.testing.assert_allclose(y1.numpy(), np_out1, rtol=1e-05)
         np.testing.assert_allclose(y2.numpy(), np_out2, rtol=1e-05)
         np.testing.assert_allclose(y3.numpy(), np_out3, rtol=1e-05)
+        np.testing.assert_allclose(y4.numpy(), np_out1, rtol=1e-05)
 
     def test_dygraph_2(self):
         paddle.disable_static()
@@ -488,7 +650,7 @@ class TestPadAPI(unittest.TestCase):
         pad_3 = [1, 2, 1, 1, 3, 4, 5, 6]
         mode = "constant"
         value = 100
-        input_data = np.random.rand(*input_shape).astype(np.float32)
+        input_data = np.random.rand(*input_shape).astype(self.dtype)
         np_out1 = self._get_numpy_out(
             input_data, pad, mode, value, data_format="NCHW"
         )
@@ -519,10 +681,16 @@ class TestPadAPI(unittest.TestCase):
         y3 = F.pad(
             tensor_data, pad=pad_3, mode=mode, value=value, data_format="NCHW"
         )
-
+        y4 = F.pad(
+            tensor_data,
+            pad=tensor_pad,
+            mode=mode,
+            value=value,
+        )
         np.testing.assert_allclose(y1.numpy(), np_out1, rtol=1e-05)
         np.testing.assert_allclose(y2.numpy(), np_out2, rtol=1e-05)
         np.testing.assert_allclose(y3.numpy(), np_out3, rtol=1e-05)
+        np.testing.assert_allclose(y4.numpy(), np_out1, rtol=1e-05)
 
     def test_dygraph_3(self):
         paddle.disable_static()
@@ -531,7 +699,11 @@ class TestPadAPI(unittest.TestCase):
         pad_3 = [3, 4, 5, 6, 7, 8]
         mode = "constant"
         value = 100
-        input_data = np.random.rand(*input_shape).astype(np.float32)
+        input_data = np.random.rand(*input_shape).astype(self.dtype)
+        if self.dtype == np.complex64 or self.dtype == np.complex128:
+            input_data = (
+                np.random.rand(*input_shape) + 1j * np.random.rand(*input_shape)
+            ).astype(self.dtype)
         np_out1 = self._get_numpy_out(
             input_data, pad, mode, value, data_format="NCL"
         )
@@ -561,10 +733,27 @@ class TestPadAPI(unittest.TestCase):
         y3 = F.pad(
             tensor_data, pad=pad_3, mode=mode, value=value, data_format="NCL"
         )
+        y4 = F.pad(
+            tensor_data,
+            pad=tensor_pad,
+            mode=mode,
+            value=value,
+        )
 
         np.testing.assert_allclose(y1.numpy(), np_out1, rtol=1e-05)
         np.testing.assert_allclose(y2.numpy(), np_out2, rtol=1e-05)
         np.testing.assert_allclose(y3.numpy(), np_out3, rtol=1e-05)
+        np.testing.assert_allclose(y4.numpy(), np_out1, rtol=1e-05)
+
+
+class TestPadAPI_complex64(TestPadAPI):
+    def init_dtype(self):
+        self.dtype = np.complex64
+
+
+class TestPadAPI_complex128(TestPadAPI):
+    def init_dtype(self):
+        self.dtype = np.complex128
 
 
 class TestPad1dAPI(unittest.TestCase):
@@ -596,9 +785,19 @@ class TestPad1dAPI(unittest.TestCase):
         return out
 
     def setUp(self):
-        self.places = [paddle.CPUPlace()]
+        self.init_dtype()
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.places.append(paddle.CPUPlace())
         if core.is_compiled_with_cuda():
             self.places.append(paddle.CUDAPlace(0))
+
+    def init_dtype(self):
+        self.dtype = np.float32
 
     def test_class(self):
         paddle.disable_static()
@@ -607,8 +806,12 @@ class TestPad1dAPI(unittest.TestCase):
             pad = [1, 2]
             pad_int = 1
             value = 100
-            input_data = np.random.rand(*input_shape).astype(np.float32)
-
+            input_data = np.random.rand(*input_shape).astype(self.dtype)
+            if self.dtype == np.complex64 or self.dtype == np.complex128:
+                input_data = (
+                    np.random.rand(*input_shape)
+                    + 1j * np.random.rand(*input_shape)
+                ).astype(self.dtype)
             pad_reflection = nn.Pad1D(padding=pad, mode="reflect")
             pad_replication = nn.Pad1D(padding=pad, mode="replicate")
             pad_constant = nn.Pad1D(padding=pad, mode="constant", value=value)
@@ -654,6 +857,16 @@ class TestPad1dAPI(unittest.TestCase):
             np.testing.assert_allclose(output.numpy(), np_out, rtol=1e-05)
 
 
+class TestPad1dAPI_complex64(TestPad1dAPI):
+    def init_dtype(self):
+        self.dtype = np.complex64
+
+
+class TestPad1dAPI_complex128(TestPad1dAPI):
+    def init_dtype(self):
+        self.dtype = np.complex128
+
+
 class TestPad2dAPI(unittest.TestCase):
     def _get_numpy_out(
         self, input_data, pad, mode, value=0.0, data_format="NCHW"
@@ -685,9 +898,19 @@ class TestPad2dAPI(unittest.TestCase):
         return out
 
     def setUp(self):
-        self.places = [paddle.CPUPlace()]
+        self.init_dtype()
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.places.append(paddle.CPUPlace())
         if core.is_compiled_with_cuda():
             self.places.append(paddle.CUDAPlace(0))
+
+    def init_dtype(self):
+        self.dtype = np.float32
 
     def test_class(self):
         paddle.disable_static()
@@ -696,8 +919,12 @@ class TestPad2dAPI(unittest.TestCase):
             pad = [1, 2, 2, 1]
             pad_int = 1
             value = 100
-            input_data = np.random.rand(*input_shape).astype(np.float32)
-
+            input_data = np.random.rand(*input_shape).astype(self.dtype)
+            if self.dtype == np.complex64 or self.dtype == np.complex128:
+                input_data = (
+                    np.random.rand(*input_shape)
+                    + 1j * np.random.rand(*input_shape)
+                ).astype(self.dtype)
             pad_reflection = nn.Pad2D(padding=pad, mode="reflect")
             pad_replication = nn.Pad2D(padding=pad, mode="replicate")
             pad_constant = nn.Pad2D(padding=pad, mode="constant", value=value)
@@ -743,6 +970,16 @@ class TestPad2dAPI(unittest.TestCase):
             np.testing.assert_allclose(output.numpy(), np_out, rtol=1e-05)
 
 
+class TestPad2dAPI_complex64(TestPad2dAPI):
+    def init_dtype(self):
+        self.dtype = np.complex64
+
+
+class TestPad2dAPI_complex128(TestPad2dAPI):
+    def init_dtype(self):
+        self.dtype = np.complex128
+
+
 class TestPad3dAPI(unittest.TestCase):
     def _get_numpy_out(
         self, input_data, pad, mode, value=0.0, data_format="NCDHW"
@@ -776,9 +1013,19 @@ class TestPad3dAPI(unittest.TestCase):
         return out
 
     def setUp(self):
-        self.places = [paddle.CPUPlace()]
+        self.init_dtype()
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.places.append(paddle.CPUPlace())
         if core.is_compiled_with_cuda():
             self.places.append(paddle.CUDAPlace(0))
+
+    def init_dtype(self):
+        self.dtype = np.float32
 
     def test_class(self):
         paddle.disable_static()
@@ -787,8 +1034,12 @@ class TestPad3dAPI(unittest.TestCase):
             pad = [1, 2, 2, 1, 1, 0]
             pad_int = 1
             value = 100
-            input_data = np.random.rand(*input_shape).astype(np.float32)
-
+            input_data = np.random.rand(*input_shape).astype(self.dtype)
+            if self.dtype == np.complex64 or self.dtype == np.complex128:
+                input_data = (
+                    np.random.rand(*input_shape)
+                    + 1j * np.random.rand(*input_shape)
+                ).astype(self.dtype)
             pad_reflection = nn.Pad3D(padding=pad, mode="reflect")
             pad_replication = nn.Pad3D(padding=pad, mode="replicate")
             pad_constant = nn.Pad3D(padding=pad, mode="constant", value=value)
@@ -839,8 +1090,12 @@ class TestPad3dAPI(unittest.TestCase):
             input_shape = (3, 4, 5, 6, 7)
             pad = [1, 2, 2, 1, 1, 0]
             pad_tensor = paddle.to_tensor(pad)
-            input_data = np.random.rand(*input_shape).astype(np.float32)
-
+            input_data = np.random.rand(*input_shape).astype(self.dtype)
+            if self.dtype == np.complex64 or self.dtype == np.complex128:
+                input_data = (
+                    np.random.rand(*input_shape)
+                    + 1j * np.random.rand(*input_shape)
+                ).astype(self.dtype)
             pad_reflection_ncdhw = nn.Pad3D(
                 padding=pad_tensor, mode="reflect", data_format="NCDHW"
             )
@@ -862,21 +1117,51 @@ class TestPad3dAPI(unittest.TestCase):
             np.testing.assert_allclose(output.numpy(), np_out, rtol=1e-05)
 
 
+class TestPad3dAPI_complex64(TestPad3dAPI):
+    def init_dtype(self):
+        self.dtype = np.complex64
+
+
+class TestPad3dAPI_complex128(TestPad3dAPI):
+    def init_dtype(self):
+        self.dtype = np.complex128
+
+
 class TestPad3dOpError(unittest.TestCase):
     def setUp(self):
-        self.places = [paddle.CPUPlace()]
+        self.init_dtype()
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.places.append(paddle.CPUPlace())
         if core.is_compiled_with_cuda():
             self.places.append(paddle.CUDAPlace(0))
+
+    def init_dtype(self):
+        self.dtype = np.float32
 
     def test_errors(self):
         def test_variable():
             input_shape = (1, 2, 3, 4, 5)
-            data = np.random.rand(*input_shape).astype(np.float32)
+            data = np.random.rand(*input_shape).astype(self.dtype)
+            if self.dtype == np.complex64 or self.dtype == np.complex128:
+                data = (
+                    np.random.rand(*input_shape)
+                    + 1j * np.random.rand(*input_shape)
+                ).astype(self.dtype)
             y = F.pad(x=data, pad=[1, 1, 1, 1, 1, 1], data_format="NCDHW")
 
         def test_reflect_1():
             input_shape = (1, 2, 3, 4, 5)
-            data = np.random.rand(*input_shape).astype(np.float32)
+            data = np.random.rand(*input_shape).astype(self.dtype)
+            if self.dtype == np.complex64 or self.dtype == np.complex128:
+                data = (
+                    np.random.rand(*input_shape)
+                    + 1j * np.random.rand(*input_shape)
+                ).astype(self.dtype)
             x = paddle.to_tensor(data)
             y = F.pad(
                 x,
@@ -888,7 +1173,12 @@ class TestPad3dOpError(unittest.TestCase):
 
         def test_reflect_2():
             input_shape = (1, 2, 3, 4, 5)
-            data = np.random.rand(*input_shape).astype(np.float32)
+            data = np.random.rand(*input_shape).astype(self.dtype)
+            if self.dtype == np.complex64 or self.dtype == np.complex128:
+                data = (
+                    np.random.rand(*input_shape)
+                    + 1j * np.random.rand(*input_shape)
+                ).astype(self.dtype)
             x = paddle.to_tensor(data)
             y = F.pad(
                 x,
@@ -900,7 +1190,12 @@ class TestPad3dOpError(unittest.TestCase):
 
         def test_reflect_3():
             input_shape = (1, 2, 3, 4, 5)
-            data = np.random.rand(*input_shape).astype(np.float32)
+            data = np.random.rand(*input_shape).astype(self.dtype)
+            if self.dtype == np.complex64 or self.dtype == np.complex128:
+                data = (
+                    np.random.rand(*input_shape)
+                    + 1j * np.random.rand(*input_shape)
+                ).astype(self.dtype)
             x = paddle.to_tensor(data)
             y = F.pad(
                 x,
@@ -912,7 +1207,12 @@ class TestPad3dOpError(unittest.TestCase):
 
         def test_circular_1():
             input_shape = (1, 2, 0, 4, 5)
-            data = np.random.rand(*input_shape).astype(np.float32)
+            data = np.random.rand(*input_shape).astype(self.dtype)
+            if self.dtype == np.complex64 or self.dtype == np.complex128:
+                data = (
+                    np.random.rand(*input_shape)
+                    + 1j * np.random.rand(*input_shape)
+                ).astype(self.dtype)
             x = paddle.to_tensor(data)
             y = F.pad(
                 x, pad=[1, 1, 1, 1, 2, 3], mode='circular', data_format="NCDHW"
@@ -920,7 +1220,12 @@ class TestPad3dOpError(unittest.TestCase):
 
         def test_replicate_1():
             input_shape = (1, 2, 0, 4, 5)
-            data = np.random.rand(*input_shape).astype(np.float32)
+            data = np.random.rand(*input_shape).astype(self.dtype)
+            if self.dtype == np.complex64 or self.dtype == np.complex128:
+                data = (
+                    np.random.rand(*input_shape)
+                    + 1j * np.random.rand(*input_shape)
+                ).astype(self.dtype)
             x = paddle.to_tensor(data)
             y = F.pad(
                 x, pad=[1, 1, 1, 1, 2, 3], mode='replicate', data_format="NCDHW"
@@ -935,6 +1240,16 @@ class TestPad3dOpError(unittest.TestCase):
             self.assertRaises(Exception, test_circular_1)
             self.assertRaises(Exception, test_replicate_1)
         paddle.enable_static()
+
+
+class TestPad3dOpError_complex64(TestPad3dOpError):
+    def init_dtype(self):
+        self.dtype = np.complex64
+
+
+class TestPad3dOpError_complex128(TestPad3dOpError):
+    def init_dtype(self):
+        self.dtype = np.complex128
 
 
 class TestPadDataformatError(unittest.TestCase):

@@ -22,33 +22,44 @@ limitations under the License. */
 namespace phi {
 
 template <typename Context>
-void ReshapeInferKernel(const Context& dev_ctx,
-                        const DenseTensor& x,
-                        const IntArray& shape,
-                        DenseTensor* out);
-
-template <typename Context>
 void ReshapeKernel(const Context& dev_ctx,
                    const DenseTensor& x,
                    const IntArray& shape,
-                   DenseTensor* out,
-                   DenseTensor* xshape);
+                   DenseTensor* out);
+
+// FIXME(dev): Need to deprecate this kernel while
+// cleaning old IR system.
+template <typename Context>
+void ReshapeWithXShapeKernel(const Context& dev_ctx,
+                             const DenseTensor& x,
+                             const IntArray& shape,
+                             DenseTensor* out,
+                             DenseTensor* xshape);
 
 template <typename Context>
 void ReshapeStridedKernel(const Context& dev_ctx,
                           const DenseTensor& x,
                           const IntArray& shape,
-                          DenseTensor* out,
-                          DenseTensor* xshape);
+                          DenseTensor* out);
+
+template <typename T, typename Context>
+void Reshape(const Context& dev_ctx,
+             const DenseTensor& x,
+             const std::vector<int64_t>& shape,
+             DenseTensor* out) {
+  MetaTensor meta_out(out);
+  InferMetaFromVecValue(x, shape, &meta_out);
+  if (x.initialized()) {
+    ReshapeKernel<Context>(dev_ctx, x, IntArray(shape), out);
+  }
+}
 
 template <typename T, typename Context>
 DenseTensor Reshape(const Context& dev_ctx,
                     const DenseTensor& x,
                     const std::vector<int64_t>& shape) {
   DenseTensor dense_out;
-  MetaTensor meta_out(&dense_out);
-  InferMetaFromVecValue(x, shape, &meta_out);
-  ReshapeInferKernel<Context>(dev_ctx, x, IntArray(shape), &dense_out);
+  Reshape<T, Context>(dev_ctx, x, shape, &dense_out);
   return dense_out;
 }
 

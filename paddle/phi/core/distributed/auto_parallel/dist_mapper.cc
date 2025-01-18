@@ -15,16 +15,16 @@ limitations under the License. */
 #include <algorithm>
 
 #include "paddle/phi/core/distributed/auto_parallel/dist_mapper.h"
+#include "paddle/phi/core/distributed/auto_parallel/proto_helper.h"
 #include "paddle/phi/core/distributed/auto_parallel/utils.h"
 
-namespace phi {
-namespace distributed {
-namespace auto_parallel {
+namespace phi::distributed::auto_parallel {
 
 void DistributedMapper::set_process_id_to_device_ids(
     const std::map<int64_t, std::pair<std::string, std::vector<int64_t>>>&
         process_id_to_device_ids) {
   std::vector<std::string> device_mesh_names;
+  device_mesh_names.reserve(device_meshes_.size());
   for (const auto& item : device_meshes_) {
     device_mesh_names.push_back(item.first);
   }
@@ -72,17 +72,18 @@ void DistributedMapper::set_process_id_to_device_ids(
 DistributedMapper DistributedMapper::from_proto(
     const DistributedMapperProto& proto) {
   DistributedMapper dist_mapper;
-  for (int64_t i = 0; i < proto.device_meshes_size(); ++i) {
+  for (int i = 0; i < proto.device_meshes_size(); ++i) {
     dist_mapper.device_meshes_[proto.device_meshes(i).name()] =
         DeviceMesh::from_proto(proto.device_meshes(i));
   }
-  for (int64_t i = 0; i < proto.process_id_to_device_ids_size(); ++i) {
+  for (int i = 0; i < proto.process_id_to_device_ids_size(); ++i) {
     int64_t process_id = proto.process_id_to_device_ids(i).process_id();
     std::string device_mesh_name =
         proto.process_id_to_device_ids(i).device_mesh_name();
     std::vector<int64_t> device_ids;
-    int64_t num_devices = proto.process_id_to_device_ids(i).device_ids_size();
-    for (int64_t j = 0; j < num_devices; ++j) {
+    int num_devices = proto.process_id_to_device_ids(i).device_ids_size();
+    device_ids.reserve(num_devices);
+    for (int j = 0; j < num_devices; ++j) {
       device_ids.push_back(proto.process_id_to_device_ids(i).device_ids(j));
     }
     dist_mapper.process_id_to_device_ids_[process_id].first = device_mesh_name;
@@ -91,20 +92,19 @@ DistributedMapper DistributedMapper::from_proto(
   return dist_mapper;
 }
 
-DistributedMapperProto DistributedMapper::to_proto() const {
-  DistributedMapperProto proto;
+void DistributedMapper::to_proto(DistributedMapperProto* proto) const {
   for (const auto& item : device_meshes_) {
-    proto.mutable_device_meshes()->Add()->CopyFrom(item.second.to_proto());
+    proto->mutable_device_meshes()->Add()->CopyFrom(
+        phi::distributed::to_proto(item.second));
   }
   for (const auto& outer : process_id_to_device_ids_) {
-    auto proto_item = proto.mutable_process_id_to_device_ids()->Add();
+    auto proto_item = proto->mutable_process_id_to_device_ids()->Add();
     proto_item->set_process_id(outer.first);
     proto_item->set_device_mesh_name(outer.second.first);
     for (const auto& inner : outer.second.second) {
       proto_item->add_device_ids(inner);
     }
   }
-  return proto;
 }
 
 std::string DistributedMapper::to_string() const {
@@ -141,6 +141,4 @@ bool operator==(const DistributedMapper& lhs, const DistributedMapper& rhs) {
   return true;
 }
 
-}  // namespace auto_parallel
-}  // namespace distributed
-}  // namespace phi
+}  // namespace phi::distributed::auto_parallel

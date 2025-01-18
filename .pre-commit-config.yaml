@@ -20,7 +20,6 @@ repos:
     -   id: sort-simple-yaml
         files: (ops|backward|op_[a-z_]+)\.yaml$
     -   id: trailing-whitespace
-        files: (.*\.(py|bzl|md|rst|c|cc|cxx|cpp|cu|h|hpp|hxx|xpu|kps|cmake|yaml|yml|hook)|BUILD|.*\.BUILD|WORKSPACE|CMakeLists\.txt)$
 -   repo: https://github.com/Lucas-C/pre-commit-hooks.git
     rev: v1.5.1
     hooks:
@@ -42,49 +41,36 @@ repos:
     hooks:
     -   id: copyright_checker
         name: copyright_checker
-        entry: python ./tools/codestyle/copyright.hook
+        entry: python ./tools/codestyle/copyright.py
         language: system
-        files: \.(c|cc|cxx|cpp|cu|h|hpp|hxx|proto|xpu|kps|py|sh)$
+        files: \.(c|cc|cxx|cpp|cu|h|hpp|hxx|proto|xpu|kps|py|pyi|sh)$
         exclude: |
             (?x)^(
                 paddle/utils/.*|
                 paddle/cinn/utils/registry.h
             )$
+-   repo: https://github.com/PFCCLab/typos-pre-commit-mirror.git
+    rev: v1.27.3
+    hooks:
+    -   id: typos
+        args: [--force-exclude]
 # For Python files
--   repo: https://github.com/psf/black.git
-    rev: 23.3.0
+-   repo: https://github.com/psf/black-pre-commit-mirror
+    rev: 24.8.0
     hooks:
     -   id: black
-        files: (.*\.(py|pyi|bzl)|BUILD|.*\.BUILD|WORKSPACE)$
--   repo: https://github.com/pycqa/isort
-    rev: 5.11.5
-    hooks:
-    -   id: isort
--   repo: https://github.com/PyCQA/flake8
-    rev: 5.0.4
-    hooks:
-    -   id: flake8
-        args: ["--config=.flake8"]
 -   repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.0.272
+    rev: v0.9.2
     hooks:
     -   id: ruff
         args: [--fix, --exit-non-zero-on-fix, --no-cache]
--   repo: local
-    hooks:
-    -   id: pylint-doc-string
-        name: pylint
-        description: Check python docstring style using docstring_checker.
-        entry: bash ./tools/codestyle/pylint_pre_commit.hook
-        language: system
-        files: \.(py)$
 # For C++ files
 -   repo: local
     hooks:
     -   id: clang-format
         name: clang-format
         description: Format files with ClangFormat.
-        entry: bash ./tools/codestyle/clang_format.hook -i
+        entry: bash ./tools/codestyle/clang_format.sh -i
         language: system
         files: \.(c|cc|cxx|cpp|cu|h|hpp|hxx|xpu|kps)$
 -   repo: local
@@ -92,11 +78,11 @@ repos:
     -   id: cpplint-cpp-source
         name: cpplint
         description: Check C++ code style using cpplint.py.
-        entry: bash ./tools/codestyle/cpplint_pre_commit.hook
+        entry: bash ./tools/codestyle/cpplint_pre_commit.sh
         language: system
-        files: \.(c|cc|cxx|cpp|cu|h|hpp|hxx)$
+        files: \.(cc|cxx|cpp|cu|h|hpp|hxx)$
         args:
-            - --extensions=c,cc,cxx,cpp,cu,cuh,h,hpp,hxx,kps
+            - --extensions=cc,cxx,cpp,cu,cuh,h,hpp,hxx,kps
             - --filter=-readability/fn_size,-build/include_what_you_use,-build/c++11,-whitespace/parens
             - --quiet
         # Exclude third-party libraries
@@ -155,8 +141,24 @@ repos:
             (?x)^(
                 paddle/fluid/operators/CMakeLists.txt
             )$
--   repo: https://github.com/cmake-lint/cmake-lint
-    rev: 1.4.2
+-   repo: https://github.com/PFCCLab/cmake-lint-paddle
+    rev: v1.5.1
     hooks:
     -   id: cmakelint
         args: [--config=./tools/codestyle/.cmakelintrc]
+        # Exclude some files has false positive warnings
+        # Need to fix them in the future
+        exclude: |
+            (?x)^(
+                cmake/external/onnxruntime.cmake
+                )$
+# Others
+-   repo: local
+    hooks:
+    -   id: sort-txt-file
+        name: sort-txt-file
+        description: Sorts each line string in a text file
+        entry: python ./tools/codestyle/sort_txt_file.py
+        language: python
+        files: test/white_list/pir_op_test_white_list
+        args: []

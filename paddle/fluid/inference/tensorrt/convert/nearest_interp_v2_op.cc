@@ -12,9 +12,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/data_layout.h"
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 class NearestInterpolateV2OpConverter : public OpConverter {
  public:
@@ -31,7 +29,7 @@ class NearestInterpolateV2OpConverter : public OpConverter {
     auto input = engine_->GetITensor(input_name);
     auto inputs = op_desc.Inputs();
 
-    auto data_layout = phi::StringToDataLayout(
+    auto data_layout = common::StringToDataLayout(
         PADDLE_GET_CONST(std::string, op_desc.GetAttr("data_layout")));
     auto interp_method =
         PADDLE_GET_CONST(std::string, op_desc.GetAttr("interp_method"));
@@ -44,7 +42,14 @@ class NearestInterpolateV2OpConverter : public OpConverter {
     auto out_w = PADDLE_GET_CONST(int, op_desc.GetAttr("out_w"));
 
     auto layer = TRT_ENGINE_ADD_LAYER(engine_, Resize, *input);
+#if IS_TRT_VERSION_GE(8600)
+    if (align_corners) {
+      layer->setCoordinateTransformation(
+          nvinfer1::ResizeCoordinateTransformation::kALIGN_CORNERS);
+    }
+#else
     layer->setAlignCorners(align_corners);
+#endif
 
     auto in_dim = input->getDimensions();
 
@@ -55,7 +60,7 @@ class NearestInterpolateV2OpConverter : public OpConverter {
 
     if (out_h > 0 && out_w > 0) {
       // axis are different in static/dynamic mode
-      bool with_dynamic = engine_->with_dynamic_shape();
+      bool with_dynamic = true;
 
       int h_axis = (data_layout == phi::DataLayout::kNCHW) + with_dynamic;
       int w_axis = (data_layout == phi::DataLayout::kNCHW) + 1 + with_dynamic;
@@ -74,8 +79,7 @@ class NearestInterpolateV2OpConverter : public OpConverter {
     // Priority: Input(SizeTensor) > attr(out_h/out_w) > attr(scale)
     nvinfer1::ITensor* outsize_tensor = nullptr;
 #if IS_TRT_VERSION_GE(8200)
-    if (engine_->with_dynamic_shape() &&
-        inputs.find("SizeTensor") != inputs.end()) {
+    if (inputs.find("SizeTensor") != inputs.end()) {
       if (op_desc.Input("SizeTensor").size() >= 2) {
         auto* outsize_h = engine_->GetITensor(op_desc.Input("SizeTensor")[0]);
         auto* outsize_w = engine_->GetITensor(op_desc.Input("SizeTensor")[1]);
@@ -85,9 +89,7 @@ class NearestInterpolateV2OpConverter : public OpConverter {
     }
 #endif
 
-    if (engine_->with_dynamic_shape()) {
-      scales.push_back(1.f);
-    }
+    scales.push_back(1.f);
 
     if (data_layout == phi::DataLayout::kNCHW) {
       scales.push_back(1.f);
@@ -99,38 +101,32 @@ class NearestInterpolateV2OpConverter : public OpConverter {
       scales.push_back(scale_w);
       scales.push_back(1.f);
     } else {
-      PADDLE_THROW(platform::errors::InvalidArgument(
-          "Data layout must be NCHW or NHWC."));
+      PADDLE_THROW(
+          common::errors::InvalidArgument("Data layout must be NCHW or NHWC."));
     }
 
-    if (engine_->with_dynamic_shape()) {
-      if (outsize_tensor != nullptr) {
-        std::vector<nvinfer1::ITensor*> outsize_itensors;
-        auto* input_shape = Shape(input);
-        outsize_itensors.push_back(GetEleTensorOfShape(input_shape, 0));
+    if (outsize_tensor != nullptr) {
+      std::vector<nvinfer1::ITensor*> outsize_itensors;
+      auto* input_shape = Shape(input);
+      outsize_itensors.push_back(GetEleTensorOfShape(input_shape, 0));
 
-        if (data_layout == phi::DataLayout::kNCHW) {
-          outsize_itensors.push_back(GetEleTensorOfShape(input_shape, 1));
-          outsize_itensors.push_back(outsize_tensor);
-        } else if (data_layout == phi::DataLayout::kNHWC) {
-          outsize_itensors.push_back(outsize_tensor);
-          outsize_itensors.push_back(GetEleTensorOfShape(input_shape, 3));
-        }
-        layer->setInput(1, *Concat(outsize_itensors));
-      } else {
-        layer->setScales(scales.data(), scales.size());
+      if (data_layout == phi::DataLayout::kNCHW) {
+        outsize_itensors.push_back(GetEleTensorOfShape(input_shape, 1));
+        outsize_itensors.push_back(outsize_tensor);
+      } else if (data_layout == phi::DataLayout::kNHWC) {
+        outsize_itensors.push_back(outsize_tensor);
+        outsize_itensors.push_back(GetEleTensorOfShape(input_shape, 3));
       }
+      layer->setInput(1, *Concat(outsize_itensors));
     } else {
       layer->setScales(scales.data(), scales.size());
     }
 
-    RreplenishLayerAndOutput(
+    ReplenishLayerAndOutput(
         layer, "nearest_interp_v2", {output_name}, test_mode);
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(nearest_interp_v2, NearestInterpolateV2OpConverter);

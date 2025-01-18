@@ -33,7 +33,7 @@ void NllLossRawKernel(const Context& dev_ctx,
       label_type == phi::DataType::INT32 || label_type == phi::DataType::INT64;
   PADDLE_ENFORCE_EQ(label_type_match,
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Input(Label) holds the wrong type, it holds %s, but "
                         "desires to be %s or %s",
                         label_type,
@@ -49,7 +49,7 @@ void NllLossRawKernel(const Context& dev_ctx,
   auto total_weight_data = dev_ctx.template Alloc<XPUType>(total_weight);
 
   auto x_dims = x.dims();
-  std::vector<int64_t> x_shape = phi::vectorize<int64_t>(x_dims);
+  std::vector<int64_t> x_shape = common::vectorize<int64_t>(x_dims);
 
   int64_t reduction_id = 0;
   if (reduction == "none") {

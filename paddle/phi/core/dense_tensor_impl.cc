@@ -15,6 +15,8 @@ limitations under the License. */
 #include "paddle/phi/common/bfloat16.h"
 #include "paddle/phi/common/complex.h"
 #include "paddle/phi/common/float16.h"
+#include "paddle/phi/common/float8_e4m3fn.h"
+#include "paddle/phi/common/float8_e5m2.h"
 #include "paddle/phi/common/memory_utils.h"
 #include "paddle/phi/core/compat/convert_utils.h"
 #include "paddle/phi/core/dense_tensor.h"
@@ -40,13 +42,13 @@ size_t DenseTensor::memory_size() const {
 void DenseTensor::check_memory_size() const {
   PADDLE_ENFORCE_NOT_NULL(
       holder_,
-      phi::errors::PreconditionNotMet("Tensor holds no memory. "
-                                      "Call Tensor::mutable_data firstly."));
+      common::errors::PreconditionNotMet("Tensor holds no memory. "
+                                         "Call Tensor::mutable_data firstly."));
   if (meta_.is_contiguous()) {
     PADDLE_ENFORCE_LE(
         numel() * SizeOf(dtype()),
         memory_size(),
-        phi::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "Tensor's dimension is out of bound."
             "Tensor's dimension must be equal or less than the size of its "
             "memory."
@@ -59,7 +61,7 @@ void DenseTensor::check_memory_size() const {
 const Place& DenseTensor::place() const {
   PADDLE_ENFORCE_NOT_NULL(
       holder_,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "Tensor not initialized yet when DenseTensor::place() is called."));
   return holder_->place();
 }
@@ -80,7 +82,7 @@ void DenseTensor::ResetHolder(const std::shared_ptr<phi::Allocation>& holder) {
         numel() * static_cast<int64_t>(SizeOf(dtype())) +
             static_cast<int64_t>(meta_.offset),
         static_cast<int64_t>(holder->size()),
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The size of Holder is not enough to store the Tensor."));
   }
   holder_ = holder;
@@ -101,7 +103,7 @@ void* DenseTensor::mutable_data(const Place& place,
   PADDLE_ENFORCE_GE(
       numel(),
       0,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "The Tensor's element number must be equal or greater than zero. "
           "The Tensor's shape is [",
           dims(),
@@ -118,8 +120,8 @@ void* DenseTensor::mutable_data(const Place& place,
     holder_ = memory_utils::AllocShared(place, size);
     meta_.offset = 0;
   }
-  return reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(holder_->ptr()) +
-                                 meta_.offset);
+  uintptr_t ptr = reinterpret_cast<uintptr_t>(holder_->ptr()) + meta_.offset;
+  return reinterpret_cast<void*>(ptr);
 }
 
 void* DenseTensor::mutable_data(const Place& place, size_t requested_size) {
@@ -133,7 +135,7 @@ void* DenseTensor::mutable_data(const Place& place,
   PADDLE_ENFORCE_GE(
       numel(),
       0,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "The Tensor's element number must be equal or greater than zero. "
           "The Tensor's shape is [",
           dims(),
@@ -149,8 +151,8 @@ void* DenseTensor::mutable_data(const Place& place,
     holder_ = memory_utils::AllocShared(place, size, stream);
     meta_.offset = 0;
   }
-  return reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(holder_->ptr()) +
-                                 meta_.offset);
+  uintptr_t ptr = reinterpret_cast<uintptr_t>(holder_->ptr()) + meta_.offset;
+  return reinterpret_cast<void*>(ptr);
 }
 
 /* @jim19930609: The following "mutable_data" only supports specific dtypes
@@ -166,7 +168,7 @@ inline T* DenseTensor::mutable_data(const DDim& dims,
   if (meta_.dims.size() != -1 && meta_.dims != dims) {
     PADDLE_ENFORCE_EQ(meta_.is_contiguous(),
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Right now Resize is only supported for contiguous "
                           "Tensor. Tensor dims is %s, Tensor layout is %s, "
                           "Tensor stride is %s. New dims is %s.",
@@ -195,11 +197,11 @@ void DenseTensor::ShareBufferWith(const DenseTensor& tensor, bool only_buffer) {
   }
 }
 
-#define LEGACY_DATA_MEMBER_FUNC_INSTANTIATION(dtype)                \
-  template dtype* DenseTensor::mutable_data(                        \
-      const DDim& dims, const Place& place, size_t requested_size); \
-  template dtype* DenseTensor::mutable_data(const Place& place,     \
-                                            size_t requested_size);
+#define LEGACY_DATA_MEMBER_FUNC_INSTANTIATION(dtype)                     \
+  template TEST_API dtype* DenseTensor::mutable_data(                    \
+      const DDim& dims, const Place& place, size_t requested_size);      \
+  template TEST_API dtype* DenseTensor::mutable_data(const Place& place, \
+                                                     size_t requested_size);
 
 LEGACY_DATA_MEMBER_FUNC_INSTANTIATION(bool)
 LEGACY_DATA_MEMBER_FUNC_INSTANTIATION(int8_t)
@@ -212,6 +214,8 @@ LEGACY_DATA_MEMBER_FUNC_INSTANTIATION(int64_t)
 LEGACY_DATA_MEMBER_FUNC_INSTANTIATION(uint64_t)
 LEGACY_DATA_MEMBER_FUNC_INSTANTIATION(::phi::dtype::bfloat16)
 LEGACY_DATA_MEMBER_FUNC_INSTANTIATION(::phi::dtype::float16)
+LEGACY_DATA_MEMBER_FUNC_INSTANTIATION(::phi::dtype::float8_e4m3fn)
+LEGACY_DATA_MEMBER_FUNC_INSTANTIATION(::phi::dtype::float8_e5m2)
 LEGACY_DATA_MEMBER_FUNC_INSTANTIATION(float)
 LEGACY_DATA_MEMBER_FUNC_INSTANTIATION(double)
 LEGACY_DATA_MEMBER_FUNC_INSTANTIATION(::phi::dtype::complex<float>)
@@ -223,18 +227,22 @@ LEGACY_DATA_MEMBER_FUNC_INSTANTIATION(::phi::dtype::complex<double>)
 /*   From phi::DenseTensor    */
 /* ------------------------------ */
 
-DenseTensor::DenseTensor(const LoD& lod) : DenseTensor() { meta_.lod = lod; }
+DenseTensor::DenseTensor(const LegacyLoD& legacy_lod) : DenseTensor() {
+  meta_.legacy_lod = legacy_lod;
+}
 
-void DenseTensor::set_lod(const LoD& lod) { meta_.lod = lod; }
+void DenseTensor::set_lod(const LegacyLoD& legacy_lod) {
+  meta_.legacy_lod = legacy_lod;
+}
 
-LoD* DenseTensor::mutable_lod() { return &meta_.lod; }
+LoD* DenseTensor::mutable_lod() { return &meta_.legacy_lod; }
 
 std::pair<size_t, size_t> DenseTensor::lod_element(size_t level,
                                                    size_t elem) const {
   PADDLE_ENFORCE_LT(
       level,
       NumLevels(),
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The input level of LoD is invalid, it should be less than LoD "
           "size. The input level is %zu, the LoD size is %zu.",
           level,
@@ -242,7 +250,7 @@ std::pair<size_t, size_t> DenseTensor::lod_element(size_t level,
 
   PADDLE_ENFORCE_LT(elem,
                     NumElements(level),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The input element of LoD is invalid, it should be "
                         "less than the number of elements in its level."
                         "The input element is %zu, the number of elements in "
@@ -250,30 +258,31 @@ std::pair<size_t, size_t> DenseTensor::lod_element(size_t level,
                         elem,
                         NumElements(level)));
 
-  return std::make_pair((meta_.lod)[level][elem], (meta_.lod)[level][elem + 1]);
+  return std::make_pair((meta_.legacy_lod)[level][elem],
+                        (meta_.legacy_lod)[level][elem + 1]);
 }
 
-size_t DenseTensor::NumLevels() const { return meta_.lod.size(); }
+size_t DenseTensor::NumLevels() const { return meta_.legacy_lod.size(); }
 
 size_t DenseTensor::NumElements(size_t level) const {
   PADDLE_ENFORCE_LT(
       level,
       NumLevels(),
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The input level of LoD is invalid, it should be less than LoD "
           "size. The input level is %zu, the LoD size is %zu.",
           level,
           NumLevels()));
 
   // the last offset is the end of last element
-  return (meta_.lod)[level].size() - 1;
+  return (meta_.legacy_lod)[level].size() - 1;
 }
 
 DenseTensor& DenseTensor::Resize(const DDim& dims) {
   if (meta_.dims.size() != -1 && meta_.dims != dims) {
     PADDLE_ENFORCE_EQ(meta_.is_contiguous(),
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Right now Resize is only supported for contiguous "
                           "Tensor. Tensor dims is %s, Tensor layout is %s, "
                           "Tensor stride is %s. New dims is %s.",
@@ -292,17 +301,17 @@ DenseTensor DenseTensor::Slice(int64_t begin_idx, int64_t end_idx) const {
   PADDLE_ENFORCE_GE(
       begin_idx,
       0,
-      phi::errors::OutOfRange("The start row index must be greater than 0."
-                              "But received the start index is d%.",
-                              begin_idx));
+      common::errors::OutOfRange("The start row index must be greater than 0."
+                                 "But received the start index is d%.",
+                                 begin_idx));
   PADDLE_ENFORCE_LE(
       end_idx,
       meta_.dims[0],
-      phi::errors::OutOfRange("The end row index is out of bound."));
+      common::errors::OutOfRange("The end row index is out of bound."));
   PADDLE_ENFORCE_LT(
       begin_idx,
       end_idx,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The start row index must be less than the end row index."
           "But received the start index = %d, the end index = %d.",
           begin_idx,
@@ -328,19 +337,19 @@ std::vector<DenseTensor> DenseTensor::Split(int64_t split_size,
                                             int64_t axis) const {
   check_memory_size();
 
-  PADDLE_ENFORCE_GE(
-      meta_.dims.size(),
-      0,
-      phi::errors::OutOfRange("split expects at least a 1-dimensional tensor"));
+  PADDLE_ENFORCE_GE(meta_.dims.size(),
+                    0,
+                    common::errors::OutOfRange(
+                        "split expects at least a 1-dimensional tensor"));
 
   PADDLE_ENFORCE_GE(
       split_size,
       0,
-      phi::errors::OutOfRange(
+      common::errors::OutOfRange(
           "split expects split_size be non-negative, but got split_size is %d",
           split_size));
 
-  int64_t numel_size = meta_.dims[axis];
+  int64_t numel_size = meta_.dims[static_cast<int>(axis)];
 
   int64_t num_splits = 1;
   if (split_size != 0) {
@@ -361,23 +370,46 @@ std::vector<DenseTensor> DenseTensor::Split(int64_t split_size,
 std::vector<DenseTensor> DenseTensor::Chunk(int64_t chunks,
                                             int64_t axis) const {
   check_memory_size();
-  PADDLE_ENFORCE_GE(
-      meta_.dims.size(),
-      0,
-      phi::errors::OutOfRange("split expects at least a 1-dimensional tensor"));
+  PADDLE_ENFORCE_GE(meta_.dims.size(),
+                    0,
+                    common::errors::OutOfRange(
+                        "split expects at least a 1-dimensional tensor"));
   PADDLE_ENFORCE_GE(
       chunks,
       0,
-      phi::errors::OutOfRange(
+      common::errors::OutOfRange(
           "chunks expects to be greater than 0, but got chunks is %d", chunks));
 
-  int64_t numel_size = meta_.dims[axis];
+  int64_t numel_size = meta_.dims[static_cast<int>(axis)];
   int64_t split_size = (numel_size + chunks - 1) / chunks;
   return Split(split_size, axis);
 }
 
 #ifdef PADDLE_WITH_DNNL
-const dnnl::memory::desc& DenseTensor::mem_desc() const { return mem_desc_; }
+const dnnl::memory::desc& DenseTensor::mem_desc() const {
+  if (storage_properties_ == nullptr) {
+    static dnnl::memory::desc undef_desc = dnnl::memory::desc();
+    return undef_desc;
+  }
+  return this->storage_properties<OneDNNStorageProperties>().mem_desc;
+}
+
+void DenseTensor::set_mem_desc(const dnnl::memory::desc& mem_desc) {
+  if (storage_properties_ == nullptr) {
+    storage_properties_ = std::make_unique<OneDNNStorageProperties>();
+    static_cast<OneDNNStorageProperties*>(storage_properties_.get())->mem_desc =
+        mem_desc;
+    meta_.layout = DataLayout::ONEDNN;
+  } else if (OneDNNStorageProperties::classof(storage_properties_.get())) {
+    static_cast<OneDNNStorageProperties*>(storage_properties_.get())->mem_desc =
+        mem_desc;
+    meta_.layout = DataLayout::ONEDNN;
+  } else {
+    PADDLE_THROW(common::errors::InvalidArgument(
+        "The actual type of storage_properties is inconsistent with the type "
+        "of the template parameter passed in."));
+  }
+}
 #endif
 
 // NOTE: For historical reasons, this interface has a special behavior,
@@ -392,11 +424,14 @@ DenseTensor& DenseTensor::ShareDataWith(const DenseTensor& src) {
   meta_.offset = src.meta_.offset;
   meta_.use_gpudnn = src.meta_.use_gpudnn;
   meta_.strides = src.meta_.strides;
-  storage_properties_ =
-      std::move(CopyStorageProperties(src.storage_properties_));
-#ifdef PADDLE_WITH_DNNL
-  mem_desc_ = src.mem_desc_;
-#endif
+  storage_properties_ = CopyStorageProperties(src.storage_properties_);
+  return *this;
+}
+
+DenseTensor& DenseTensor::ShareDataNoCheckWith(const DenseTensor& src) {
+  holder_ = src.holder_;
+  set_meta(src.meta());
+  storage_properties_ = CopyStorageProperties(src.storage_properties_);
   return *this;
 }
 
@@ -404,7 +439,7 @@ DenseTensor& DenseTensor::ShareInplaceVersionCounterWith(
     const DenseTensor& src) {
   PADDLE_ENFORCE_NOT_NULL(
       inplace_version_counter_,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "Tensor does not hold inplace_version_counter_."));
 
   inplace_version_counter_ = src.inplace_version_counter_;

@@ -14,7 +14,7 @@ namespace Eigen {
 namespace internal {
 
 #if defined(EIGEN_USE_GPU) && defined(EIGEN_GPUCC)
-// Full reducers for GPU, don't vectorize for now
+// Full reducers for GPU, don't common::vectorize for now
 
 // Reducer function that enables multiple gpu thread to safely accumulate at the same
 // output address. It basically reads the current value of the output variable, and
@@ -989,8 +989,8 @@ struct OuterReducer<Self, Op, GpuDevice> {
 
 #endif // defined(EIGEN_USE_GPU) && defined(EIGEN_GPUCC)
 
-} // end namespace internal
-} // end namespace Eigen
+} // namespace internal
+} // namespace Eigen
 
 #endif // EIGEN_CXX11_TENSOR_TENSOR_REDUCTION_GPU_H
 // clang-format on

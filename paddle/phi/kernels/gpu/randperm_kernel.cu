@@ -26,7 +26,7 @@
 namespace cub = hipcub;
 #endif
 
-#include "gflags/gflags.h"
+#include "paddle/common/flags.h"
 #include "paddle/phi/backends/gpu/gpu_launch_config.h"
 #include "paddle/phi/common/amp_type_traits.h"
 #include "paddle/phi/common/memory_utils.h"
@@ -107,7 +107,7 @@ void RandpermKernel(const Context& dev_ctx,
     range_data[idx] = static_cast<T>(idx);
   });
 
-  out->Resize(phi::make_ddim({n}));
+  out->Resize(common::make_ddim({n}));
   T* out_data = dev_ctx.template Alloc<T>(out);
 
   // Refer to [Algorithm of randperm] https://osf.io/af2hy/ to

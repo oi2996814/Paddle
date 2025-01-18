@@ -39,11 +39,7 @@ def get_pull(pull_id):
             repo = github.get_repo('PaddlePaddle/Paddle')
         except Exception as e:
             print(e)
-            print(
-                "get_repo error, retry {} times after {} secs.".format(
-                    idx, idx * 10
-                )
-            )
+            print(f"get_repo error, retry {idx} times after {idx * 10} secs.")
         else:
             break
         idx += 1
@@ -89,7 +85,7 @@ def clean(pull_id):
 
                 # convert paddle/fluid/imperative/CMakeFiles/layer.dir/layer.cc.gcda
                 # to paddle/fluid/imperative/layer.cc.gcda
-                # modifed to make it more robust
+                # modified to make it more robust
                 # covert /paddle/build/paddle/phi/backends/CMakeFiles/phi_backends.dir/gpu/cuda/cuda_info.cc.gcda
                 # to /paddle/build/paddle/phi/backends/gpu/cuda/cuda_info.cc.gcda
                 trimmed_tmp = []

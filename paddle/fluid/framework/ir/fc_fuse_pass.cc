@@ -19,9 +19,7 @@
 #include "paddle/fluid/framework/op_version_registry.h"
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 FCFusePass::FCFusePass() {
   AddOpCompat(OpCompat("mul"))
@@ -91,7 +89,7 @@ FCFusePass::FCFusePass() {
 
 void FCFusePass::ApplyImpl(ir::Graph* graph) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, platform::errors::InvalidArgument("Graph cannot be nullptr."));
+      graph, common::errors::InvalidArgument("Graph cannot be nullptr."));
   FusePassBase::Init("fc_fuse", graph);
 
   int found_fc_count = 0;
@@ -198,9 +196,9 @@ int FCFusePass::ApplyFCPattern(Graph* graph, bool with_relu) const {
       auto* weight = scope->FindVar(w->Name())->GetMutable<phi::DenseTensor>();
       auto* weight_data = weight->data<float>();
       auto weight_dims = weight->dims();
-      int weight_num = product(weight_dims);
-      int w_h = weight_dims[0];
-      int w_w = weight_dims[1];
+      int weight_num = static_cast<int>(product(weight_dims));
+      int w_h = static_cast<int>(weight_dims[0]);
+      int w_w = static_cast<int>(weight_dims[1]);
       if (w_h % 128 == 0 && w_w % 128 == 0) {
         auto* w_var = scope->Var(w_name);
         auto* w_tensor = w_var->GetMutable<phi::DenseTensor>();
@@ -212,8 +210,7 @@ int FCFusePass::ApplyFCPattern(Graph* graph, bool with_relu) const {
                  w_w * sizeof(float));
         }
         w_tensor->Resize(DDim{weight_dims[0] + 4, weight_dims[1] + 4});
-        auto* weight_data_new =
-            w_tensor->mutable_data<float>(platform::CPUPlace());
+        auto* weight_data_new = w_tensor->mutable_data<float>(phi::CPUPlace());
         for (int i = 0; i < w_h; i++) {
           memcpy(weight_data_new + i * (w_w + 4),
                  weight_data_tmp + i * w_w,
@@ -301,9 +298,7 @@ int FCFusePass::ApplyFCPattern(Graph* graph, bool with_relu) const {
   return found_fc_count;
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(fc_fuse_pass, paddle::framework::ir::FCFusePass)
     .RequirePassAttr("use_gpu");

@@ -12,10 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
+
+sys.path.append("../deprecated/legacy_test")
 from test_fc_op import MatrixGenerate, fc_refer
 
 
@@ -78,7 +81,7 @@ class TestFusionRepeatedFCReluOp(OpTest):
         self.outputs = {'Out': outs[-1], 'ReluOut': relu_outs}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_dygraph=False)
 
     def set_conf(self):
         pass

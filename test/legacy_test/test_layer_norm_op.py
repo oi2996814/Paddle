@@ -17,16 +17,11 @@ from functools import reduce
 from operator import mul
 
 import numpy as np
-from eager_op_test import (
-    OpTest,
-    _set_use_system_allocator,
-    convert_float_to_uint16,
-)
+from op_test import OpTest, _set_use_system_allocator, convert_float_to_uint16
 
 import paddle
 import paddle.nn.functional as F
-from paddle import fluid
-from paddle.fluid import Program, core, program_guard
+from paddle.base import Program, core, program_guard
 from paddle.static.amp.fp16_utils import _keep_layer_norm_scale_bias_to_fp32
 
 paddle.enable_static()
@@ -145,7 +140,9 @@ class TestLayerNormOpByOpTest(OpTest):
             no_check_set=["Mean", "Variance"],
             atol=self.ori_atol,
             rtol=self.ori_rtol,
-            check_prim=True,
+            check_prim=self.check_prim,
+            check_prim_pir=self.check_prim_pir,
+            check_pir=self.check_pir,
         )
 
     def test_check_grad(self):
@@ -153,7 +150,9 @@ class TestLayerNormOpByOpTest(OpTest):
             self.check_grad_input_list,
             ['Y'],
             max_relative_error=self.max_relative_error,
-            check_prim=True,
+            check_prim=self.check_prim,
+            check_prim_pir=self.check_prim_pir,
+            check_pir=self.check_pir,
         )
 
     def initConfig(self):
@@ -175,6 +174,9 @@ class TestLayerNormOpByOpTest(OpTest):
         self.begin_norm_axis = 1
         self.has_scale = True
         self.has_bias = True
+        self.check_prim = True
+        self.check_prim_pir = True
+        self.check_pir = True
 
     def initTestCase(self):
         np.random.seed(123)
@@ -242,7 +244,9 @@ class TestLayerNormBF16OpByOpTest(OpTest):
             no_check_set=["Mean", "Variance"],
             atol=self.ori_atol,
             rtol=self.ori_rtol,
-            check_prim=True,
+            check_prim=self.check_prim,
+            check_prim_pir=self.check_prim_pir,
+            check_pir=self.check_pir,
         )
 
     def test_check_grad(self):
@@ -251,7 +255,9 @@ class TestLayerNormBF16OpByOpTest(OpTest):
             self.check_grad_input_list,
             ['Y'],
             max_relative_error=self.max_relative_error,
-            check_prim=True,
+            check_prim=self.check_prim,
+            check_prim_pir=self.check_prim_pir,
+            check_pir=self.check_pir,
         )
 
     def initConfig(self):
@@ -266,6 +272,9 @@ class TestLayerNormBF16OpByOpTest(OpTest):
         self.begin_norm_axis = 1
         self.has_scale = True
         self.has_bias = True
+        self.check_prim = True
+        self.check_prim_pir = True
+        self.check_pir = True
 
     def initTestCase(self):
         np.random.seed(123)
@@ -335,6 +344,9 @@ class TestLayerNormOpByOpTestFP64_case2(TestLayerNormOpByOpTest):
         self.begin_norm_axis = 1
         self.has_scale = False
         self.has_bias = False
+        self.check_prim = False
+        self.check_prim_pir = False
+        self.check_pir = True
 
 
 @unittest.skipIf(
@@ -356,6 +368,9 @@ class TestLayerNormBF16OpByOpTest_case2(TestLayerNormBF16OpByOpTest):
         self.begin_norm_axis = 1
         self.has_scale = False
         self.has_bias = False
+        self.check_prim = False
+        self.check_prim_pir = False
+        self.check_pir = True
 
 
 @unittest.skipIf(
@@ -382,6 +397,9 @@ class TestLayerNormOpByOpTestFP64_case3(TestLayerNormOpByOpTest):
         self.begin_norm_axis = 1
         self.has_scale = True
         self.has_bias = False
+        self.check_prim = False
+        self.check_prim_pir = False
+        self.check_pir = True
 
 
 @unittest.skipIf(
@@ -403,6 +421,9 @@ class TestLayerNormBF16OpByOpTest_case3(TestLayerNormBF16OpByOpTest):
         self.begin_norm_axis = 1
         self.has_scale = True
         self.has_bias = False
+        self.check_prim = False
+        self.check_prim_pir = False
+        self.check_pir = True
 
 
 @unittest.skipIf(
@@ -429,6 +450,9 @@ class TestLayerNormOpByOpTestFP64_case4(TestLayerNormOpByOpTest):
         self.begin_norm_axis = 1
         self.has_scale = False
         self.has_bias = True
+        self.check_prim = False
+        self.check_prim_pir = False
+        self.check_pir = True
 
 
 @unittest.skipIf(
@@ -450,6 +474,9 @@ class TestLayerNormBF16OpByOpTest_case4(TestLayerNormBF16OpByOpTest):
         self.begin_norm_axis = 1
         self.has_scale = False
         self.has_bias = True
+        self.check_prim = False
+        self.check_prim_pir = False
+        self.check_pir = True
 
 
 class TestLayerNormOpByOpTestFP32(TestLayerNormOpByOpTest):
@@ -467,6 +494,29 @@ class TestLayerNormOpByOpTestFP32(TestLayerNormOpByOpTest):
         self.begin_norm_axis = 1
         self.has_scale = True
         self.has_bias = True
+        self.check_prim = True
+        self.check_prim_pir = True
+        self.check_pir = True
+
+
+class TestLayerNormOpByOpTestFP32_case1(TestLayerNormOpByOpTest):
+    def initConfig(self):
+        self.rev_comp_atol = 1e-5
+        self.rev_comp_rtol = 1e-5
+
+        self.ori_atol = 1e-4
+        self.ori_rtol = 1e-4
+        self.max_relative_error = 1e-2
+
+        self.dtype = "float32"
+        self.x_shape = [2, 100]
+        self.epsilon = 0.00001
+        self.begin_norm_axis = 1
+        self.has_scale = True
+        self.has_bias = True
+        self.check_prim = True
+        self.check_prim_pir = True
+        self.check_pir = True
 
 
 class TestLayerNormOpByOpTestFP32_case2(TestLayerNormOpByOpTest):
@@ -484,6 +534,9 @@ class TestLayerNormOpByOpTestFP32_case2(TestLayerNormOpByOpTest):
         self.begin_norm_axis = 1
         self.has_scale = False
         self.has_bias = False
+        self.check_prim = False
+        self.check_prim_pir = False
+        self.check_pir = True
 
 
 class TestLayerNormOpByOpTestFP32_case3(TestLayerNormOpByOpTest):
@@ -501,6 +554,9 @@ class TestLayerNormOpByOpTestFP32_case3(TestLayerNormOpByOpTest):
         self.begin_norm_axis = 1
         self.has_scale = True
         self.has_bias = False
+        self.check_prim = False
+        self.check_prim_pir = False
+        self.check_pir = True
 
 
 class TestLayerNormOpByOpTestFP32_case4(TestLayerNormOpByOpTest):
@@ -518,264 +574,9 @@ class TestLayerNormOpByOpTestFP32_case4(TestLayerNormOpByOpTest):
         self.begin_norm_axis = 1
         self.has_scale = False
         self.has_bias = True
-
-
-class TestLayerNormOp(unittest.TestCase):
-    def setUp(self):
-        self.use_cudnn = True
-
-    def __assert_close(self, tensor, np_array, msg, atol=1e-4):
-        np.testing.assert_allclose(
-            np.array(tensor).flatten(),
-            np_array.flatten(),
-            rtol=1e-3,
-            atol=atol,
-            err_msg=msg,
-        )
-
-    def check_forward_backward(
-        self,
-        shape,
-        begin_norm_axis,
-        has_scale=True,
-        has_bias=True,
-        y_grad_scale=1.0,
-        use_mkldnn=False,
-    ):
-        def test_with_place(
-            place, shape, begin_norm_axis, use_mkldnn=use_mkldnn
-        ):
-            # attr
-            epsilon = 0.00001
-            x_shape = shape
-            D = reduce(mul, x_shape[begin_norm_axis : len(x_shape)], 1)
-            scale_shape = [D]
-
-            np.random.seed(123)
-            x = np.random.random_sample(x_shape).astype(np.float32)
-            scale = (
-                np.random.random_sample(scale_shape).astype(np.float32)
-                if has_scale
-                else None
-            )
-            bias = (
-                np.random.random_sample(scale_shape).astype(np.float32)
-                if has_bias
-                else None
-            )
-            y_grad = (np.random.random_sample(x_shape) * y_grad_scale).astype(
-                np.float32
-            )
-
-            # reference forward & backward
-            y, mean, variance = _reference_layer_norm_naive(
-                x, scale, bias, epsilon, begin_norm_axis
-            )
-            x_grad, scale_grad, bias_grad = _reference_layer_norm_grad(
-                x, y_grad, scale, bias, mean, variance, begin_norm_axis
-            )
-
-            var_dict = locals()
-            var_dict['y@GRAD'] = y_grad
-            var_names = ['x', 'mean', 'variance', 'y', 'y@GRAD']
-            if has_scale:
-                var_names += ['scale']
-            if has_bias:
-                var_names += ['bias']
-            ground_truth = {name: var_dict[name] for name in var_names}
-
-            program = fluid.Program()
-            with fluid.program_guard(program):
-                block = program.global_block()
-                for name in ground_truth:
-                    block.create_var(
-                        name=name,
-                        dtype='float32',
-                        shape=ground_truth[name].shape,
-                    )
-                inputs = {"X": block.var('x')}
-                fetch_list = [
-                    'y',
-                    'mean',
-                    'variance',
-                    'x@GRAD',
-                ]
-                if has_scale:
-                    inputs["Scale"] = block.var('scale')
-                    fetch_list += ['scale@GRAD']
-                if has_bias:
-                    inputs["Bias"] = block.var('bias')
-                    fetch_list += ['bias@GRAD']
-                layer_norm_op = block.append_op(
-                    type="layer_norm",
-                    inputs=inputs,
-                    outputs={
-                        "Y": block.var('y'),
-                        "Mean": block.var('mean'),  # share the same memory
-                        "Variance": block.var(
-                            'variance'
-                        ),  # share the same memory
-                    },
-                    attrs={
-                        "epsilon": epsilon,
-                        "begin_norm_axis": begin_norm_axis,
-                        "use_mkldnn": use_mkldnn,
-                    },
-                )
-                # generate backward op_desc
-                grad_op_desc_list, op_grad_to_var = core.get_grad_op_desc(
-                    layer_norm_op.desc, set(), []
-                )
-                grad_op_desc = grad_op_desc_list[0]
-                new_op_desc = block.desc.append_op()
-                new_op_desc.copy_from(grad_op_desc)
-                for var_name in grad_op_desc.output_arg_names():
-                    block.desc.var(var_name.encode("ascii"))
-                grad_op_desc.infer_var_type(block.desc)
-                grad_op_desc.infer_shape(block.desc)
-                for arg in grad_op_desc.output_arg_names():
-                    grad_var = block.desc.find_var(arg.encode("ascii"))
-                    grad_var.set_dtype(core.VarDesc.VarType.FP32)
-
-                program._sync_with_cpp()
-                exe = fluid.Executor(place)
-                out = exe.run(
-                    program,
-                    feed={
-                        name: var_dict[name]
-                        for name in ['x', 'scale', 'bias', 'y@GRAD']
-                    },
-                    fetch_list=fetch_list,
-                )
-                # print(y)
-                # print(out[0])
-                self.__assert_close(y, out[0], "y")
-                self.__assert_close(mean, out[1], "mean")
-                self.__assert_close(variance, out[2], "variance", 1e-3)
-                self.__assert_close(x_grad, out[3], "x_grad")
-                if has_scale:
-                    self.__assert_close(
-                        scale_grad,
-                        out[fetch_list.index('scale@GRAD')],
-                        "scale_grad",
-                        1e-3,
-                    )
-                if has_bias:
-                    self.__assert_close(
-                        bias_grad,
-                        out[fetch_list.index('bias@GRAD')],
-                        "bias_grad",
-                    )
-
-        places = [core.CPUPlace()]
-        if (
-            core.is_compiled_with_cuda()
-            and core.op_support_gpu("layer_norm")
-            and self.use_cudnn
-        ):
-            places.append(core.CUDAPlace(0))
-
-        for place in places:
-            test_with_place(place, shape, begin_norm_axis)
-
-    def test_check_forward_backward_with_scale_and_bias(self):
-        self.check_forward_backward(shape=[2, 3, 4, 5], begin_norm_axis=1)
-        self.check_forward_backward(shape=[1, 3, 4, 5], begin_norm_axis=1)
-        self.check_forward_backward(
-            shape=[2, 3, 4, 5],
-            begin_norm_axis=1,
-            has_scale=False,
-            has_bias=True,
-        )
-        self.check_forward_backward(
-            shape=[2, 3, 4, 5],
-            begin_norm_axis=1,
-            has_scale=True,
-            has_bias=False,
-        )
-        self.check_forward_backward(
-            shape=[2, 3, 4, 5],
-            begin_norm_axis=1,
-            has_scale=False,
-            has_bias=False,
-        )
-        self.check_forward_backward(shape=[2, 3, 4, 5], begin_norm_axis=3)
-        self.check_forward_backward(
-            shape=[92, 513, 129], begin_norm_axis=2, y_grad_scale=0.1
-        )
-        self.check_forward_backward(shape=[3, 34, 1134], begin_norm_axis=2)
-        self.check_forward_backward(shape=[3, 2, 1133], begin_norm_axis=2)
-        self.check_forward_backward(
-            shape=[92, 513, 1134], begin_norm_axis=2, y_grad_scale=0.1
-        )
-        self.check_forward_backward(
-            shape=[92, 513, 1134],
-            begin_norm_axis=2,
-            has_scale=False,
-            has_bias=True,
-            y_grad_scale=0.1,
-        )
-        self.check_forward_backward(
-            shape=[92, 513, 1134],
-            begin_norm_axis=2,
-            has_scale=True,
-            has_bias=False,
-            y_grad_scale=0.1,
-        )
-        self.check_forward_backward(
-            shape=[92, 513, 1134],
-            begin_norm_axis=2,
-            has_scale=False,
-            has_bias=False,
-            y_grad_scale=0.1,
-        )
-        self.check_forward_backward(
-            shape=[512, 1024], begin_norm_axis=1, has_scale=True, has_bias=True
-        )
-        self.check_forward_backward(
-            shape=[1, 128, 256, 256],
-            begin_norm_axis=3,
-            has_scale=True,
-            has_bias=True,
-        )
-        self.check_forward_backward(
-            shape=[1, 256, 384],
-            begin_norm_axis=2,
-            has_scale=True,
-            has_bias=True,
-        )
-
-
-class TestLayerNormAPI(unittest.TestCase):
-    def test_case(self):
-        x = paddle.static.data(name='x', shape=[64, 32, 256], dtype='float32')
-        x = paddle.static.nn.layer_norm(
-            x,
-            scale=True,
-            shift=True,
-            begin_norm_axis=1,
-            epsilon=1e-05,
-            param_attr=None,
-            bias_attr=None,
-        )
-        x = paddle.static.nn.layer_norm(
-            x,
-            scale=False,
-            shift=False,
-            begin_norm_axis=1,
-            epsilon=1e-05,
-            param_attr=None,
-            bias_attr=None,
-        )
-        x = paddle.static.nn.layer_norm(
-            x,
-            scale=True,
-            shift=True,
-            begin_norm_axis=1,
-            epsilon=1e-05,
-            param_attr="scale",
-            bias_attr="shift",
-        )
+        self.check_prim = False
+        self.check_prim_pir = False
+        self.check_pir = True
 
 
 class TestDygraphLayerNormAPIError(unittest.TestCase):
@@ -794,6 +595,11 @@ class TestDygraphLayerNormAPIError(unittest.TestCase):
                 name='x2', shape=[-1, 3, 32, 32], dtype="int32"
             )
             self.assertRaises(TypeError, layer_norm, x2)
+        with paddle.pir_utils.IrGuard(), program_guard(Program(), Program()):
+            layer_norm = paddle.nn.LayerNorm([32, 32])
+            # the input of LayerNorm must be Variable.
+            x1 = np.random.random((3, 32, 32)).astype('float32')
+            self.assertRaises(TypeError, layer_norm, x1)
 
 
 @unittest.skipIf(
@@ -859,7 +665,7 @@ class TestBF16ScaleBiasLayerNorm(unittest.TestCase):
         bias = paddle.to_tensor(bias_np)
 
         if dtype == "bfloat16":
-            x = x.cast(paddle.fluid.core.VarDesc.VarType.BF16)
+            x = x.cast(paddle.base.core.VarDesc.VarType.BF16)
 
         x.stop_gradient = False
         weight.stop_gradient = False
@@ -919,7 +725,7 @@ class TestFastMathLayerNormOp(unittest.TestCase):
 
         x = paddle.to_tensor(x_np)
         if dtype == "bfloat16":
-            x = x.cast(paddle.fluid.core.VarDesc.VarType.BF16)
+            x = x.cast(paddle.base.core.VarDesc.VarType.BF16)
 
         x.stop_gradient = True
         bias = paddle.to_tensor(bias_np) if has_scale else None

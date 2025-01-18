@@ -32,11 +32,7 @@ limitations under the License. */
 
 #endif
 
-#ifdef __HIPCC__
-constexpr int ELEMWISE_MAX_BLOCK_DIM = 256;
-#else
 constexpr int ELEMWISE_MAX_BLOCK_DIM = 1024;
-#endif
 
 #define BLOCK_X 32
 #define BLOCK_Y 32
@@ -248,8 +244,8 @@ void CommonElementwiseBroadcastBackward(const CPUContext &ctx,
   }
 
   VLOG(3) << "CommonElementwiseBroadcastBackward xdims:"
-          << phi::make_ddim(x_dims_array)
-          << " ydim:" << phi::make_ddim(y_dims_array);
+          << common::make_ddim(x_dims_array)
+          << " ydim:" << common::make_ddim(y_dims_array);
 
   CommonGradBroadcastCPU<T, DX_OP, DY_OP, Tout>(x,
                                                 y,
@@ -397,7 +393,7 @@ void ElemwiseGradComputeNoBroadcast(const DeviceContext &dev_ctx,
                                     DenseTensor *dy,
                                     DX_OP dx_op,
                                     DY_OP dy_op) {
-  size_t N = static_cast<size_t>(phi::product(x_dim));
+  size_t N = static_cast<size_t>(common::product(x_dim));
   phi::funcs::ForRange<DeviceContext> for_range(dev_ctx, N);
   for_range(ElemwiseGradNoBroadcast<T, DX_OP, DY_OP, Tout>{
       x.data<T>(),
@@ -421,19 +417,19 @@ static inline bool CheckContiguousDims(const std::vector<int> &broadcast_pos) {
   return true;
 }
 
-inline void ComputeBroadcastTranspositionArray(const int *x_one_indexs,
-                                               int *x_trans_indexs,
+inline void ComputeBroadcastTranspositionArray(const int *x_one_indices,
+                                               int *x_trans_indices,
                                                const int max_dim,
                                                const int x_one_size) {
   int diff = max_dim - x_one_size;
-  std::copy_n(x_one_indexs, x_one_size, x_trans_indexs + diff);
+  std::copy_n(x_one_indices, x_one_size, x_trans_indices + diff);
   int p = 0;
   int q = diff;
   for (int i = 0; i < max_dim; ++i) {
-    if (q < max_dim && i == x_trans_indexs[q]) {
+    if (q < max_dim && i == x_trans_indices[q]) {
       ++q;
     } else {
-      x_trans_indexs[p++] = i;
+      x_trans_indices[p++] = i;
     }
   }
 }
@@ -988,7 +984,7 @@ static void ElemwiseGradBroadcast1CUDA(gpuStream_t stream,
     ElemwiseGradBroadcast1CUDAKernel<<<grid_size, block_size, 0, stream>>>(
         x, y, out, dout, h, w, is_xsize_larger, dx_op, dy_op, dx, dy);
   } else {
-    // suppose perfoemance improves with h increased.
+    // suppose performance improves with h increased.
     dim3 block_size = dim3(BLOCK_X, BLOCK_Y);
     dim3 grid_size = dim3((w + BLOCK_X - 1) / BLOCK_X);
     auto gplace = phi::GPUPlace(phi::backends::gpu::GetCurrentDeviceId());
@@ -1094,25 +1090,29 @@ void CommonGradBroadcastCUDA(const DenseTensor &x,
   T *dx_data = dx == nullptr ? nullptr : ctx.Alloc<T>(dx);
   T *dy_data = dy == nullptr ? nullptr : ctx.Alloc<T>(dy);
 
-  std::vector<int> x_one_indexs;
-  std::vector<int> y_one_indexs;
+  std::vector<int> x_one_indices;
+  std::vector<int> y_one_indices;
   for (int i = 0; i < max_dim; i++) {
     if (x_dims_array[i] != y_dims_array[i]) {
       if (x_dims_array[i] == 1) {
-        x_one_indexs.push_back(i);
+        x_one_indices.push_back(i);
       }
       if (y_dims_array[i] == 1) {
-        y_one_indexs.push_back(i);
+        y_one_indices.push_back(i);
       }
     }
   }
 
-  std::vector<int> x_trans_indexs(max_dim);
-  std::vector<int> y_trans_indexs(max_dim);
-  ComputeBroadcastTranspositionArray(
-      x_one_indexs.data(), x_trans_indexs.data(), max_dim, x_one_indexs.size());
-  ComputeBroadcastTranspositionArray(
-      y_one_indexs.data(), y_trans_indexs.data(), max_dim, y_one_indexs.size());
+  std::vector<int> x_trans_indices(max_dim);
+  std::vector<int> y_trans_indices(max_dim);
+  ComputeBroadcastTranspositionArray(x_one_indices.data(),
+                                     x_trans_indices.data(),
+                                     max_dim,
+                                     x_one_indices.size());
+  ComputeBroadcastTranspositionArray(y_one_indices.data(),
+                                     y_trans_indices.data(),
+                                     max_dim,
+                                     y_one_indices.size());
 
   // compute array stride for cuda kernel;
   // e.g. x.dims=[2,3,4], x_stride=[12,4,1]
@@ -1136,10 +1136,10 @@ void CommonGradBroadcastCUDA(const DenseTensor &x,
   std::vector<int> x_dims_order(max_dim);
   std::vector<int> y_dims_order(max_dim);
   for (int i = 0; i < max_dim; ++i) {
-    x_strides_order[i] = out_strides_array[x_trans_indexs[i]];
-    y_strides_order[i] = out_strides_array[y_trans_indexs[i]];
-    x_dims_order[i] = out_dims_array[x_trans_indexs[i]];
-    y_dims_order[i] = out_dims_array[y_trans_indexs[i]];
+    x_strides_order[i] = out_strides_array[x_trans_indices[i]];
+    y_strides_order[i] = out_strides_array[y_trans_indices[i]];
+    x_dims_order[i] = out_dims_array[x_trans_indices[i]];
+    y_dims_order[i] = out_dims_array[y_trans_indices[i]];
   }
   std::vector<int> x_broadcast_pos;
   std::vector<int> y_broadcast_pos;
@@ -1517,10 +1517,13 @@ void CommonGradBroadcastCUDA(const DenseTensor &x,
     VLOG(3) << "CommonBroadcast can_split_y:" << can_split_y
             << " can_split_x:" << can_split_x;
     // if both x and y into fast path then return
-    if (fast_broadcast_x && fast_broadcast_y) {
-      fast_broadcast = true;
-    }
-    if (can_split_y && can_split_x && fast_broadcast) return;
+
+    //* It's possible that some bugs are a result of early returns, comment out
+    // the code for checking.
+    // if (fast_broadcast_x && fast_broadcast_y) {
+    //   fast_broadcast = true;
+    // }
+    // if (can_split_y && can_split_x && fast_broadcast) return;
   }
 
   // Should remove memory copy, use reg instead.
@@ -1681,8 +1684,8 @@ void CommonElementwiseBroadcastBackward(const GPUContext &ctx,
   }
 
   VLOG(3) << "CommonElementwiseBroadcastBackward xdims:"
-          << phi::make_ddim(x_dims_array)
-          << " ydim:" << phi::make_ddim(y_dims_array);
+          << common::make_ddim(x_dims_array)
+          << " ydim:" << common::make_ddim(y_dims_array);
 
   CommonGradBroadcastCUDA<T, DX_OP, DY_OP, Tout>(x,
                                                  y,

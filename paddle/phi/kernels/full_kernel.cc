@@ -28,10 +28,10 @@ void FullBatchSizeLikeKernel(const Context& dev_ctx,
                              int out_batch_size_dim,
                              DenseTensor* out) {
   if (!x.lod().empty() && x_batch_size_dim == 0) {
-    // set the correct batch size for the LoDTensor.
+    // set the correct batch size for the DenseTensor.
     auto odims = out->dims();
     odims[out_batch_size_dim] = static_cast<int>(x.lod().back().size()) - 1;
-    FullKernel<T, Context>(dev_ctx, phi::vectorize(odims), val, dtype, out);
+    FullKernel<T, Context>(dev_ctx, common::vectorize(odims), val, dtype, out);
   }
   FullLikeKernel<T, Context>(dev_ctx, x, val, dtype, out);
 }

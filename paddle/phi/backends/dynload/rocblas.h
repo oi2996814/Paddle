@@ -15,13 +15,13 @@ limitations under the License. */
 #pragma once
 
 #include <hip/hip_runtime.h>
-#include <rocblas.h>
+#include <rocblas/rocblas.h>
 
 #include <mutex>  // NOLINT
 #include <type_traits>
 
 #include "paddle/phi/backends/dynload/dynamic_loader.h"
-#include "paddle/phi/backends/dynload/port.h"
+#include "paddle/phi/common/port.h"
 
 namespace phi {
 namespace dynload {
@@ -108,6 +108,13 @@ ROCBLAS_BLAS_ROUTINE_EACH_R2(DECLARE_DYNAMIC_LOAD_ROCBLAS_WRAP)
 
 ROCBLAS_BLAS_ROUTINE_EACH_R4(DECLARE_DYNAMIC_LOAD_ROCBLAS_WRAP)
 
+#if HIP_VERSION >= 30000000
+#define ROCBLAS_BLAS_ROUTINE_EACH_R5(__macro) \
+  __macro(rocblas_strsm_batched);             \
+  __macro(rocblas_dtrsm_batched);
+
+ROCBLAS_BLAS_ROUTINE_EACH_R5(DECLARE_DYNAMIC_LOAD_ROCBLAS_WRAP)
+#endif
 #undef DECLARE_DYNAMIC_LOAD_ROCBLAS_WRAP
 }  // namespace dynload
 }  // namespace phi

@@ -17,9 +17,8 @@ import unittest
 import numpy as np
 
 import paddle
-import paddle.fluid.dygraph as dg
-import paddle.nn.functional as F
-from paddle import fluid, nn
+import paddle.base.dygraph as dg
+from paddle import base, nn
 
 
 def _reverse_repeat_list(t, n):
@@ -71,13 +70,16 @@ class Conv2DTestCase(unittest.TestCase):
         self.channel_last = self.data_format == "NHWC"
         if self.channel_last:
             input_shape = (
-                (self.batch_size,) + self.spartial_shape + (self.num_channels,)
+                self.batch_size,
+                *self.spartial_shape,
+                self.num_channels,
             )
         else:
             input_shape = (
                 self.batch_size,
                 self.num_channels,
-            ) + self.spartial_shape
+                *self.spartial_shape,
+            )
         self.input = np.random.randn(*input_shape).astype(self.dtype)
 
         if isinstance(self.filter_size, int):
@@ -87,7 +89,8 @@ class Conv2DTestCase(unittest.TestCase):
         self.weight_shape = weight_shape = (
             self.num_filters,
             self.num_channels // self.groups,
-        ) + tuple(filter_size)
+            *filter_size,
+        )
         self.weight = np.random.uniform(-1, 1, size=weight_shape).astype(
             self.dtype
         )
@@ -97,103 +100,6 @@ class Conv2DTestCase(unittest.TestCase):
             ).astype(self.dtype)
         else:
             self.bias = None
-
-    def fluid_layer(self, place):
-        main = fluid.Program()
-        start = fluid.Program()
-        with fluid.unique_name.guard():
-            with fluid.program_guard(main, start):
-                input_shape = (
-                    (-1, -1, -1, self.num_channels)
-                    if self.channel_last
-                    else (-1, self.num_channels, -1, -1)
-                )
-                x_var = paddle.static.data(
-                    "input", input_shape, dtype=self.dtype
-                )
-                weight_attr = paddle.nn.initializer.Assign(self.weight)
-                if self.bias is None:
-                    bias_attr = False
-                else:
-                    bias_attr = paddle.nn.initializer.Assign(self.bias)
-                if self.padding_mode != 'zeros':
-                    x_var = F.pad(
-                        x_var,
-                        self._reversed_padding_repeated_twice,
-                        mode=self.padding_mode,
-                        data_format=self.data_format,
-                    )
-                    padding = 0
-                else:
-                    padding = self.padding
-
-                y_var = paddle.static.nn.conv2d(
-                    x_var,
-                    self.num_filters,
-                    self.filter_size,
-                    padding=padding,
-                    stride=self.stride,
-                    dilation=self.dilation,
-                    groups=self.groups,
-                    param_attr=weight_attr,
-                    bias_attr=bias_attr,
-                    data_format=self.data_format,
-                )
-
-        feed_dict = {"input": self.input}
-        exe = fluid.Executor(place)
-        exe.run(start)
-        (y_np,) = exe.run(main, feed=feed_dict, fetch_list=[y_var])
-        return y_np
-
-    def functional(self, place):
-        main = fluid.Program()
-        start = fluid.Program()
-        with fluid.unique_name.guard():
-            with fluid.program_guard(main, start):
-                input_shape = (
-                    (-1, -1, -1, self.num_channels)
-                    if self.channel_last
-                    else (-1, self.num_channels, -1, -1)
-                )
-                x_var = paddle.static.data(
-                    "input", input_shape, dtype=self.dtype
-                )
-                w_var = paddle.static.data(
-                    "weight", self.weight_shape, dtype=self.dtype
-                )
-                b_var = paddle.static.data(
-                    "bias", (self.num_filters,), dtype=self.dtype
-                )
-
-                if self.padding_mode != 'zeros':
-                    x_var = F.pad(
-                        x_var,
-                        self._reversed_padding_repeated_twice,
-                        mode=self.padding_mode,
-                        data_format=self.data_format,
-                    )
-                    padding = 0
-                else:
-                    padding = self.padding
-
-                y_var = F.conv2d(
-                    x_var,
-                    w_var,
-                    b_var if not self.no_bias else None,
-                    padding=padding,
-                    stride=self.stride,
-                    dilation=self.dilation,
-                    groups=self.groups,
-                    data_format=self.data_format,
-                )
-        feed_dict = {"input": self.input, "weight": self.weight}
-        if self.bias is not None:
-            feed_dict["bias"] = self.bias
-        exe = fluid.Executor(place)
-        exe.run(start)
-        (y_np,) = exe.run(main, feed=feed_dict, fetch_list=[y_var])
-        return y_np
 
     def paddle_nn_layer(self):
         x_var = paddle.to_tensor(self.input)
@@ -218,27 +124,71 @@ class Conv2DTestCase(unittest.TestCase):
         t1 = x_var.gradient()
         return y_np, t1
 
-    def _test_equivalence(self, place):
-        place = fluid.CPUPlace()
-        result1 = self.fluid_layer(place)
-        result2 = self.functional(place)
-        with dg.guard(place):
-            result3, g1 = self.paddle_nn_layer()
-        np.testing.assert_array_almost_equal(result1, result2)
-        np.testing.assert_array_almost_equal(result2, result3)
+    def run_Conv2D_static(self, place):
+        paddle.seed(2023)
+        main = base.Program()
+        start = base.Program()
+        with base.unique_name.guard():
+            with base.program_guard(main, start):
+                x_var = paddle.static.data(
+                    "input", self.input.shape, dtype=self.dtype
+                )
+                conv = nn.Conv2D(
+                    self.num_channels,
+                    self.num_filters,
+                    self.filter_size,
+                    padding=self.padding,
+                    padding_mode=self.padding_mode,
+                    stride=self.stride,
+                    dilation=self.dilation,
+                    groups=self.groups,
+                    data_format=self.data_format,
+                )
+                y_var = conv(x_var)
+        feed_dict = {"input": self.input}
+        exe = base.Executor(place)
+        exe.run(start)
+        (y_np,) = exe.run(main, feed=feed_dict, fetch_list=[y_var])
+        return y_np
+
+    def run_Conv2D_dygraph(self):
+        paddle.seed(2023)
+        x_var = paddle.to_tensor(self.input)
+        x_var.stop_gradient = False
+        conv = nn.Conv2D(
+            self.num_channels,
+            self.num_filters,
+            self.filter_size,
+            padding=self.padding,
+            padding_mode=self.padding_mode,
+            stride=self.stride,
+            dilation=self.dilation,
+            groups=self.groups,
+            data_format=self.data_format,
+        )
+        y_var = conv(x_var)
+        y_np = y_var.numpy()
+        return y_np
+
+    def _test_equivalence_in_pir(self, place):
+        with paddle.pir_utils.IrGuard():
+            result1 = self.run_Conv2D_static(place)
+            with dg.guard(place):
+                result2 = self.run_Conv2D_dygraph()
+            np.testing.assert_array_almost_equal(result1, result2)
 
     def runTest(self):
-        place = fluid.CPUPlace()
-        self._test_equivalence(place)
+        place = base.CPUPlace()
+        self._test_equivalence_in_pir(place)
 
-        if fluid.core.is_compiled_with_cuda():
-            place = fluid.CUDAPlace(0)
-            self._test_equivalence(place)
+        if base.core.is_compiled_with_cuda():
+            place = base.CUDAPlace(0)
+            self._test_equivalence_in_pir(place)
 
 
 class Conv2DErrorTestCase(Conv2DTestCase):
     def runTest(self):
-        place = fluid.CPUPlace()
+        place = base.CPUPlace()
         with dg.guard(place):
             with self.assertRaises(ValueError):
                 self.paddle_nn_layer()

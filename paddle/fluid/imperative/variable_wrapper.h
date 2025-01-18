@@ -19,13 +19,13 @@
 #include <string>
 #include <utility>
 
+#include "paddle/common/layout.h"
 #include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/fluid/framework/op_kernel_type.h"
-#include "paddle/fluid/framework/string_array.h"
 #include "paddle/fluid/framework/variable.h"
 #include "paddle/fluid/imperative/hooks.h"
 #include "paddle/fluid/imperative/op_base.h"
-#include "paddle/phi/common/layout.h"
+#include "paddle/phi/core/vocab/string_array.h"
 
 namespace paddle {
 namespace imperative {
@@ -51,36 +51,36 @@ class VariableWrapper {
   framework::Variable* MutableVar() { return &var_; }
 
   // This is used for python api
-  void SetOverridedStopGradient(bool stop_gradient) {
-    overrided_stop_gradient_ = static_cast<int>(stop_gradient);
+  void SetOverriddenStopGradient(bool stop_gradient) {
+    overridden_stop_gradient_ = static_cast<int>(stop_gradient);
 
     if (auto grad_var = grad_var_.lock()) {
-      grad_var->SetOverridedStopGradient(stop_gradient);
+      grad_var->SetOverriddenStopGradient(stop_gradient);
     }
   }
 
   // This is used for python api
-  bool OverridedStopGradient() const { return overrided_stop_gradient_ != 0; }
+  bool OverriddenStopGradient() const { return overridden_stop_gradient_ != 0; }
 
   // This is used inside C++
-  int InnerOverridedStopGradient() const { return overrided_stop_gradient_; }
+  int InnerOverriddenStopGradient() const { return overridden_stop_gradient_; }
 
   // This is used inside C++
-  void InnerSetOverridedStopGradient(bool stop_gradient) {
-    if (overrided_stop_gradient_ == -1) {
-      overrided_stop_gradient_ = static_cast<int>(stop_gradient);
+  void InnerSetOverriddenStopGradient(bool stop_gradient) {
+    if (overridden_stop_gradient_ == -1) {
+      overridden_stop_gradient_ = static_cast<int>(stop_gradient);
     } else {
       VLOG(6) << "Ignore Stop gradient conversion for Var: " << Name()
-              << "Set value is: " << overrided_stop_gradient_;
+              << "Set value is: " << overridden_stop_gradient_;
     }
 
     if (auto grad_var = grad_var_.lock()) {
-      grad_var->InnerSetOverridedStopGradient(stop_gradient);
+      grad_var->InnerSetOverriddenStopGradient(stop_gradient);
     }
   }
 
   bool IsLeaf() const {
-    if (OverridedStopGradient()) {
+    if (OverriddenStopGradient()) {
       return true;
     }
     if (HasGradVar() && !GetGradVar()->HasGradNode()) {
@@ -90,7 +90,7 @@ class VariableWrapper {
   }
 
   bool IsLeafGrad() const {
-    if (!HasGradNode() && !OverridedStopGradient()) {
+    if (!HasGradNode() && !OverriddenStopGradient()) {
       return true;
     }
     return false;
@@ -109,8 +109,8 @@ class VariableWrapper {
       } else if (var_.IsType<phi::SelectedRows>()) {
         tensor = &(var_.Get<phi::SelectedRows>().value());
       } else {
-        PADDLE_THROW(platform::errors::PermissionDenied(
-            "Only support LoDTensor and SelectedRows for gradient var"));
+        PADDLE_THROW(common::errors::PermissionDenied(
+            "Only support DenseTensor and SelectedRows for gradient var"));
       }
       if (tensor && tensor->IsInitialized()) {
         is_empty = false;
@@ -152,13 +152,13 @@ class VariableWrapper {
   framework::proto::VarType::Type DataType() const {
     const phi::DenseTensor* tensor = nullptr;
     if (var_.IsInitialized()) {
-      if (type_ == framework::proto::VarType::LOD_TENSOR) {
+      if (type_ == framework::proto::VarType::DENSE_TENSOR) {
         tensor = &(var_.Get<phi::DenseTensor>());
       } else if (type_ == framework::proto::VarType::SELECTED_ROWS) {
         tensor = &(var_.Get<phi::SelectedRows>().value());
       } else if (type_ == framework::proto::VarType::VOCAB) {
-        const framework::Vocab* data = nullptr;
-        data = &(var_.Get<framework::Vocab>());
+        const phi::Vocab* data = nullptr;
+        data = &(var_.Get<phi::Vocab>());
         if (data && data->size() != 0) {
           VLOG(6) << "The tensor of variable " << name_
                   << " is not initialized";
@@ -191,12 +191,11 @@ class VariableWrapper {
 
   void SetDataLayout(const phi::DataLayout layout) { layout_ = layout; }
 
-  const platform::Place Place() const {
+  const phi::Place Place() const {
     const phi::DenseTensor* tensor = nullptr;
-    auto place =
-        platform::CPUPlace();  // Default place for var not initialized.
+    auto place = phi::CPUPlace();  // Default place for var not initialized.
     if (var_.IsInitialized()) {
-      if (type_ == framework::proto::VarType::LOD_TENSOR) {
+      if (type_ == framework::proto::VarType::DENSE_TENSOR) {
         tensor = &(var_.Get<phi::DenseTensor>());
       } else if (type_ == framework::proto::VarType::SELECTED_ROWS) {
         tensor = &(var_.Get<phi::SelectedRows>().value());
@@ -287,7 +286,7 @@ class VariableWrapper {
       PADDLE_ENFORCE_EQ(
           shared_var,
           nullptr,
-          platform::errors::PermissionDenied(
+          common::errors::PermissionDenied(
               "Cannot set gradient variable wrapper twice for %s", name_));
       grad_var_ = var;
     }
@@ -306,7 +305,7 @@ class VariableWrapper {
         PADDLE_ENFORCE_EQ(
             shared_node,
             nullptr,
-            platform::errors::PermissionDenied(
+            common::errors::PermissionDenied(
                 "Cannot set gradient op twice unless using Inplace Strategy."));
       } else if (shared_node) {
         VLOG(3) << "The gradient op of Var (" << Name()
@@ -325,14 +324,15 @@ class VariableWrapper {
   std::map<phi::KernelKey, std::shared_ptr<VariableWrapper>> var_cache;
   // add this property for users may set stop_gradient themselves and this
   // should override the frameworks setting (-1) unset, (1) true, (0) false
-  int overrided_stop_gradient_{-1};
+  int overridden_stop_gradient_{-1};
   bool persistable_{false};
 
   // Used for checking whether there is any inplace operation affecting gradient
   // calculation.
   uint32_t inplace_version_snapshot_{0};
 
-  framework::proto::VarType::Type type_{framework::proto::VarType::LOD_TENSOR};
+  framework::proto::VarType::Type type_{
+      framework::proto::VarType::DENSE_TENSOR};
   framework::proto::VarType::Type data_type_{framework::proto::VarType::FP32};
 
   // See [ Why need handle complex gradient to real gradient? ]

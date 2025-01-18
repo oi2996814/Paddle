@@ -12,12 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    TypedDict,
+)
+
+from typing_extensions import NotRequired, Unpack
+
 import paddle
 from paddle import nn
 from paddle.utils.download import get_weights_path_from_url
 
 from ..ops import ConvNormActivation
 from ._utils import _make_divisible
+
+if TYPE_CHECKING:
+    from paddle import Tensor
+
+    class _MobileNetV2Options(TypedDict):
+        num_classes: NotRequired[int]
+        with_pool: NotRequired[bool]
+
 
 __all__ = []
 
@@ -31,8 +49,13 @@ model_urls = {
 
 class InvertedResidual(nn.Layer):
     def __init__(
-        self, inp, oup, stride, expand_ratio, norm_layer=nn.BatchNorm2D
-    ):
+        self,
+        inp: int,
+        oup: int,
+        stride: int,
+        expand_ratio: float,
+        norm_layer: Callable[..., nn.Layer] = nn.BatchNorm2D,
+    ) -> None:
         super().__init__()
         self.stride = stride
         assert stride in [1, 2]
@@ -67,7 +90,7 @@ class InvertedResidual(nn.Layer):
         )
         self.conv = nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         if self.use_res_connect:
             return x + self.conv(x)
         else:
@@ -81,7 +104,7 @@ class MobileNetV2(nn.Layer):
     Args:
         scale (float, optional): Scale of channels in each layer. Default: 1.0.
         num_classes (int, optional): Output dim of last fc layer. If num_classes <= 0, last fc layer
-                            will not be defined. Default: 1000.
+            will not be defined. Default: 1000.
         with_pool (bool, optional): Use pool before the last fc layer or not. Default: True.
 
     Returns:
@@ -90,19 +113,27 @@ class MobileNetV2(nn.Layer):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import MobileNetV2
+            >>> import paddle
+            >>> from paddle.vision.models import MobileNetV2
 
-            model = MobileNetV2()
+            >>> model = MobileNetV2()
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
 
-    def __init__(self, scale=1.0, num_classes=1000, with_pool=True):
+    num_classes: int
+    with_pool: bool
+
+    def __init__(
+        self,
+        scale: float = 1.0,
+        num_classes: int = 1000,
+        with_pool: bool = True,
+    ) -> None:
         super().__init__()
         self.num_classes = num_classes
         self.with_pool = with_pool
@@ -171,7 +202,7 @@ class MobileNetV2(nn.Layer):
                 nn.Dropout(0.2), nn.Linear(self.last_channel, num_classes)
             )
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         x = self.features(x)
 
         if self.with_pool:
@@ -183,14 +214,14 @@ class MobileNetV2(nn.Layer):
         return x
 
 
-def _mobilenet(arch, pretrained=False, **kwargs):
+def _mobilenet(
+    arch: str, pretrained: bool = False, **kwargs: Unpack[_MobileNetV2Options]
+) -> MobileNetV2:
     model = MobileNetV2(**kwargs)
     if pretrained:
         assert (
             arch in model_urls
-        ), "{} model do not have a pretrained model now, you should set pretrained=False".format(
-            arch
-        )
+        ), f"{arch} model do not have a pretrained model now, you should set pretrained=False"
         weight_path = get_weights_path_from_url(
             model_urls[arch][0], model_urls[arch][1]
         )
@@ -201,15 +232,18 @@ def _mobilenet(arch, pretrained=False, **kwargs):
     return model
 
 
-def mobilenet_v2(pretrained=False, scale=1.0, **kwargs):
+def mobilenet_v2(
+    pretrained: bool = False,
+    scale: float = 1.0,
+    **kwargs: Unpack[_MobileNetV2Options],
+) -> MobileNetV2:
     """MobileNetV2 from
     `"MobileNetV2: Inverted Residuals and Linear Bottlenecks" <https://arxiv.org/abs/1801.04381>`_.
 
     Args:
-        pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
-                            on ImageNet. Default: False.
+        pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained on ImageNet. Default: False.
         scale (float, optional): Scale of channels in each layer. Default: 1.0.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`MobileNetV2 <api_paddle_vision_MobileNetV2>`.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`MobileNetV2 <api_paddle_vision_models_MobileNetV2>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of MobileNetV2 model.
@@ -217,23 +251,23 @@ def mobilenet_v2(pretrained=False, scale=1.0, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import mobilenet_v2
+            >>> import paddle
+            >>> from paddle.vision.models import mobilenet_v2
 
-            # build model
-            model = mobilenet_v2()
+            >>> # Build model
+            >>> model = mobilenet_v2()
 
-            # build model and load imagenet pretrained weight
-            # model = mobilenet_v2(pretrained=True)
+            >>> # Build model and load imagenet pretrained weight
+            >>> # model = mobilenet_v2(pretrained=True)
 
-            # build mobilenet v2 with scale=0.5
-            model = mobilenet_v2(scale=0.5)
+            >>> # Build mobilenet v2 with scale=0.5
+            >>> model = mobilenet_v2(scale=0.5)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     model = _mobilenet(
         'mobilenetv2_' + str(scale), pretrained, scale=scale, **kwargs

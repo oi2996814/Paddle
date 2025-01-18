@@ -19,7 +19,7 @@ import inspect
 import logging
 from enum import Enum
 
-from paddle.fluid.log_helper import get_logger
+from paddle.base.log_helper import get_logger
 
 _logger = get_logger(
     __name__, logging.INFO, fmt='%(asctime)s-%(levelname)s: %(message)s'
@@ -88,7 +88,7 @@ class Namespace:
         """
         assert isinstance(
             key, FunctionType
-        ), f"The type of  key is expected to be FunctionType, but recieved {type(key)}."
+        ), f"The type of  key is expected to be FunctionType, but received {type(key)}."
         func = Function(fn)
         self.function_map[key] = fn
         return func
@@ -123,7 +123,7 @@ class Namespace:
                         satisfied_function_keys.remove(func_key)
                         break
         if len(satisfied_function_keys) == 1:
-            key = list(satisfied_function_keys)[0]
+            key = next(iter(satisfied_function_keys))
         elif len(args) >= 3 and isinstance(args[2], float):
             key = FunctionType.FP16_ONLY
         else:

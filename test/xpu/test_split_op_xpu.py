@@ -17,6 +17,7 @@ import unittest
 import numpy as np
 from get_test_cover_info import (
     XPUOpTestWrapper,
+    check_run_big_shape_test,
     create_test_class,
     get_xpu_op_support_types,
 )
@@ -49,7 +50,7 @@ class XPUTestSplitOp(XPUOpTestWrapper):
 
             out = np.split(self.x, self.indices_or_sections, self.axis)
             self.outputs = {
-                'Out': [('out%d' % i, out[i]) for i in range(len(out))]
+                'Out': [(f'out{i}', out[i]) for i in range(len(out))]
             }
 
         def init_dtype(self):
@@ -80,6 +81,24 @@ class XPUTestSplitOp(XPUOpTestWrapper):
             self.x = np.random.random((4, 5, 6)).astype(np.int32)
             self.axis = 2
             self.sections = []
+            self.num = 3
+            self.indices_or_sections = 3
+
+    # test sections list contains 0
+    class TestSplitOp3(TestSplitOp):
+        def initParameters(self):
+            self.x = np.random.random((4, 5, 6)).astype(self.dtype)
+            self.axis = 1
+            self.sections = [2, 0, 3]
+            self.num = 3
+            self.indices_or_sections = [2, 2]
+
+    @check_run_big_shape_test()
+    class TestSplitOpLargeShape1(TestSplitOp):
+        def initParameters(self):
+            self.x = np.random.random((1, 8192, 5, 384)).astype(self.dtype)
+            self.sections = []
+            self.axis = 3
             self.num = 3
             self.indices_or_sections = 3
 

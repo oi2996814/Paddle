@@ -1,29 +1,63 @@
-add_subdirectory(garbage_collector)
-add_subdirectory(instruction)
-add_subdirectory(interpreter)
-add_subdirectory(workqueue)
+file(GLOB_RECURSE standalone_executor_srcs "*.cc")
 
-set(STANDALONE_EXECUTOR_SRCS
-    feed_fetch_utils.cc interpretercore.cc new_executor_defs.cc
-    standalone_executor.cc program_interpreter.cc new_ir_interpreter.cc)
+if(NOT (WITH_CINN))
+  list(REMOVE_ITEM standalone_executor_srcs
+       ${CMAKE_CURRENT_SOURCE_DIR}/instruction/cinn_jit_instruction.cc)
+endif()
 
-set(STANDALONE_EXECUTOR_DEPS
-    interpreter
-    interpretercore_garbage_collector
-    workqueue
-    pd_dialect
-    pd_op_to_kernel_pass
-    phi_kernel_adaptor
+if(NOT WITH_ONEDNN)
+  list(
+    REMOVE_ITEM
+    standalone_executor_srcs
+    ${CMAKE_CURRENT_SOURCE_DIR}/instruction/onednn/onednn_legacy_instruction.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/instruction/onednn/onednn_instruction.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/instruction/onednn/onednn_mixed_instruction.cc)
+endif()
+
+if(NOT WITH_CUSTOM_DEVICE)
+  list(REMOVE_ITEM standalone_executor_srcs
+       ${CMAKE_CURRENT_SOURCE_DIR}/instruction/custom_engine_instruction.cc)
+endif()
+
+if(NOT TENSORRT_FOUND OR NOT WITH_TENSORRT)
+  list(REMOVE_ITEM standalone_executor_srcs
+       ${CMAKE_CURRENT_SOURCE_DIR}/instruction/tensorrt_engine_instruction.cc)
+endif()
+
+set(standalone_executor_deps
+    pir
     program_translator
-    instruction_base
-    ir)
+    op_dialect_vjp
+    global_utils
+    framework_io
+    garbage_collector
+    executor_gc_helper
+    phi
+    common)
+
+if(WITH_CINN)
+  set(standalone_executor_deps
+      ${standalone_executor_deps}
+      cinn_runtime_dialect
+      phi
+      common
+      cinnapi
+      device_context
+      op_registry
+      ${DEVICE_EVENT_LIBS})
+endif()
+
+if(TENSORRT_FOUND AND WITH_TENSORRT)
+  set(standalone_executor_deps ${standalone_executor_deps} trt_engine)
+endif()
 
 cc_library(
   standalone_executor
-  SRCS ${STANDALONE_EXECUTOR_SRCS}
-  DEPS ${STANDALONE_EXECUTOR_DEPS})
+  SRCS ${standalone_executor_srcs}
+  DEPS ${standalone_executor_deps})
 
-cc_library(
-  staticgraph_executor_statistics
-  SRCS executor_statistics.cc
-  DEPS enforce glog phi)
+add_dependencies(standalone_executor xxhash)
+
+if(WITH_ONEDNN)
+  add_dependencies(standalone_executor onednn)
+endif()

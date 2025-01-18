@@ -38,7 +38,7 @@ class ProgressBar:
         if isinstance(num, int) and num <= 0:
             raise TypeError('num should be None or integer (> 0)')
         max_width = self._get_max_width()
-        self._width = width if width <= max_width else max_width
+        self._width = min(width, max_width)
         self._total_width = 0
         self._verbose = verbose
         self.file = file
@@ -96,9 +96,9 @@ class ProgressBar:
         if time_per_unit >= 1 or time_per_unit == 0:
             fps = f' - {time_per_unit:.0f}s/{self.name}'
         elif time_per_unit >= 1e-3:
-            fps = ' - {:.0f}ms/{}'.format(time_per_unit * 1e3, self.name)
+            fps = f' - {time_per_unit * 1e3:.0f}ms/{self.name}'
         else:
-            fps = ' - {:.0f}us/{}'.format(time_per_unit * 1e6, self.name)
+            fps = f' - {time_per_unit * 1e6:.0f}us/{self.name}'
 
         info = ''
         if self._verbose == 1:
@@ -129,37 +129,35 @@ class ProgressBar:
                 bar_chars += '.' * (self._width - prog_width)
                 bar_chars += ']'
             else:
-                bar_chars = self.name + ' %3d' % current_num
+                bar_chars = f'{self.name} {current_num:3}'
 
             self._total_width = len(bar_chars)
             sys.stdout.write(bar_chars)
 
             for k, val in values:
-                info += ' - %s:' % k
+                info += f' - {k}:'
                 val = val if isinstance(val, list) else [val]
                 for i, v in enumerate(val):
                     if isinstance(v, (float, np.float32, np.float64)):
                         if abs(v) > 1e-3:
-                            info += ' %.4f' % v
+                            info += f' {v:.4f}'
                         else:
-                            info += ' %.4e' % v
+                            info += f' {v:.4e}'
                     else:
-                        info += ' %s' % v
+                        info += f' {v}'
 
             if self._num is not None and current_num < self._num:
                 eta = time_per_unit * (self._num - current_num)
                 if eta > 3600:
-                    eta_format = '%d:%02d:%02d' % (
-                        eta // 3600,
-                        (eta % 3600) // 60,
-                        eta % 60,
+                    eta_format = (
+                        f'{eta // 3600}:{(eta % 3600) // 60:02}:{eta % 60:02}'
                     )
                 elif eta > 60:
-                    eta_format = '%d:%02d' % (eta // 60, eta % 60)
+                    eta_format = f'{eta // 60}:{eta % 60:02}'
                 else:
-                    eta_format = '%ds' % eta
+                    eta_format = f'{eta}s'
 
-                info += ' - ETA: %s' % eta_format
+                info += f' - ETA: {eta_format}'
 
             info += fps
             self._total_width += len(info)
@@ -183,29 +181,29 @@ class ProgressBar:
                     self._num,
                 )
             else:
-                count = self.name + ' %3d' % current_num
+                count = f'{self.name} {current_num:3}'
             info = count + info
 
             for k, val in values:
-                info += ' - %s:' % k
+                info += f' - {k}:'
                 val = val if isinstance(val, list) else [val]
                 for v in val:
                     if isinstance(v, (float, np.float32, np.float64)):
                         if abs(v) > 1e-3:
-                            info += ' %.4f' % v
+                            info += f' {v:.4f}'
                         else:
-                            info += ' %.4e' % v
+                            info += f' {v:.4e}'
                     elif (
                         isinstance(v, np.ndarray)
                         and v.size == 1
                         and v.dtype in [np.float32, np.float64]
                     ):
                         if abs(v.item()) > 1e-3:
-                            info += ' %.4f' % v.item()
+                            info += f' {v.item():.4f}'
                         else:
-                            info += ' %.4e' % v.item()
+                            info += f' {v.item():.4e}'
                     else:
-                        info += ' %s' % v
+                        info += f' {v}'
 
             info += fps
             info += '\n'

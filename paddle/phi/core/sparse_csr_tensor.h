@@ -42,7 +42,7 @@ class SparseCsrTensor : public TensorBase,
   SparseCsrTensor(const SparseCsrTensor& other);
 
   /// \brief create the sparse csr tensor.
-  /// \param non_zero_crows The compresessed row index of non zero elements in
+  /// \param non_zero_crows The compressed row index of non zero elements in
   /// original dense tensor.
   /// \param non_zero_cols The column index of non zero elements in original
   /// dense tensor.
@@ -70,25 +70,25 @@ class SparseCsrTensor : public TensorBase,
   /// \return The name of the class.
   static const char* name() { return "SparseCsrTensor"; }
 
-  /// \brief Returns the compressed row index of non zero elemetns in original
+  /// \brief Returns the compressed row index of non zero elements in original
   /// dense tensor.
-  /// \return The compressed row index of non zero elemetns in original dense
+  /// \return The compressed row index of non zero elements in original dense
   /// tensor.
   const DenseTensor& crows() const { return non_zero_crows_; }
 
   /// Note: This function will removed soon. It is recommended to use crows()
   const DenseTensor& non_zero_crows() const { return non_zero_crows_; }
 
-  /// \brief Returns the column index of non zero elemetns in original dense
+  /// \brief Returns the column index of non zero elements in original dense
   /// tensor.
-  /// \return The column index of non zero elemetns in original dense tensor.
+  /// \return The column index of non zero elements in original dense tensor.
   const DenseTensor& cols() const { return non_zero_cols_; }
 
   /// Note: This function will removed soon. It is recommended to use cols()
   const DenseTensor& non_zero_cols() const { return non_zero_cols_; }
 
-  /// \brief Returns the non zero elemetns in original dense tensor.
-  /// \return The non zero elemetns in original dense tensor.
+  /// \brief Returns the non zero elements in original dense tensor.
+  /// \return The non zero elements in original dense tensor.
   const DenseTensor& values() const { return non_zero_elements_; }
 
   /// Note: This function will removed soon. It is recommended to use indices()
@@ -110,6 +110,14 @@ class SparseCsrTensor : public TensorBase,
   /// \return The data type of the tensor.
   DataType dtype() const noexcept override { return meta_.dtype; }
 
+  /// \brief get the sparse dim
+  /// \return The sparse dim of the tensor.
+  int32_t sparse_dim() const;
+
+  /// \brief get the dense dim
+  /// \return The dense dim of the tensor.
+  int32_t dense_dim() const;
+
 #ifndef PADDLE_WITH_CUSTOM_KERNEL
   void set_type(const DataType dtype);
 #endif
@@ -130,9 +138,13 @@ class SparseCsrTensor : public TensorBase,
   /// \return Whether the non_zero_elements_ metadata is valid.
   bool valid() const noexcept override { return non_zero_elements_.valid(); }
 
+  /// \brief Test whether the holder is created.
+  /// \return Whether the holder is created.
+  bool has_allocation() const override { return values().has_allocation(); }
+
   /// \brief Test whether the non_zero_elements_ storage is allocated.
   /// In special cases, when nnz=0, non_zero_elements_ will not need to be
-  /// initialized, but it is neccessary to return true here, otherwise the
+  /// initialized, but it is necessary to return true here, otherwise the
   /// gradient will be None. return Whether the non_zero_elements_ storage is
   /// allocated.
   bool initialized() const override {
@@ -145,7 +157,7 @@ class SparseCsrTensor : public TensorBase,
   void Resize(const DDim& dense_dims, const int64_t non_zero_num);
 
   /// \brief set the member of sparse csr tensor.
-  /// \param non_zero_crows The compresessed row index of non zero elements in
+  /// \param non_zero_crows The compressed row index of non zero elements in
   /// original dense tensor.
   /// \param non_zero_cols The column index of non zero elements in original
   /// dense tensor.
@@ -157,7 +169,7 @@ class SparseCsrTensor : public TensorBase,
                  const DDim& dims);
 
   /// \brief set the member of sparse csr tensor.
-  /// \param non_zero_crows The compresessed row index of non zero elements in
+  /// \param non_zero_crows The compressed row index of non zero elements in
   /// original dense tensor.
   /// \param non_zero_cols The column index of non zero elements in original
   /// dense tensor.

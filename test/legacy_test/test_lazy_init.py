@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import unittest
 
 import numpy as np
 
 import paddle
 from paddle import LazyGuard
-from paddle.fluid import unique_name
+from paddle.base import unique_name
 from paddle.nn import Layer, Linear
 from paddle.nn.initializer import (
     Constant,
@@ -57,13 +58,17 @@ class TestInitializerBase(unittest.TestCase):
         unique_name.dygraph_parameter_name_checker._name_set = set()
 
     def test_wrapper(self):
+        paddle.disable_static()
         with LazyGuard():
             fc = Linear(
-                10, 10, weight_attr=self.weight_attr, bias_attr=self.bias_attr
+                10,
+                10,
+                weight_attr=self.weight_attr,
+                bias_attr=self.bias_attr,
             )
         program = fc._startup_program()
-        print(program)
-        self.check_program(program)
+        if not paddle.framework.use_pir_api():
+            self.check_program(program)
 
     def check_program(self, program):
         self.assertEqual(program.block(0).var("weight").shape, (10, 10))
@@ -115,14 +120,19 @@ class NestModel(Layer):
 
 class TestNestModelLazy(TestInitializerBase):
     def test_wrapper(self):
+        paddle.disable_static()
         with LazyGuard():
             base_model = Linear(
-                10, 10, weight_attr=self.weight_attr, bias_attr=self.bias_attr
+                10,
+                10,
+                weight_attr=self.weight_attr,
+                bias_attr=self.bias_attr,
             )
             nest_model = NestModel(base_model)
 
         self.check_data(nest_model)
-        self.check_program(nest_model)
+        if not paddle.framework.use_pir_api():
+            self.check_program(nest_model)
 
     def check_data(self, model):
         x = paddle.randn([2, 10])
@@ -150,7 +160,7 @@ class TestNestModelLazy(TestInitializerBase):
         self.assertEqual(whole_program.block(0).var("weight").shape, (10, 10))
         self.assertEqual(whole_program.block(0).var("bias").shape, (10,))
         ops = [op.type for op in whole_program.block(0).ops]
-        init_ops = self.init_ops + ['uniform_random', 'fill_constant']
+        init_ops = [*self.init_ops, 'uniform_random', 'fill_constant']
         self.assertEqual(ops, init_ops)
 
         # verify base_model startup_program
@@ -201,6 +211,20 @@ class TestXavierUniform(TestUniform):
     def set_initializer(self):
         self.w_initializer = XavierUniform()
         self.b_initializer = XavierUniform()
+
+
+class LinearNet(paddle.nn.Layer):
+    def __init__(self):
+        super().__init__()
+        self.linear = paddle.nn.Linear(10, 10)
+
+
+class TestDeepCopyLazyInitializedParam(unittest.TestCase):
+    def test_deepcopy_lazy_initialized_param(self):
+        paddle.disable_static()
+        with LazyGuard():
+            net = LinearNet()
+            copy.deepcopy(net)
 
 
 if __name__ == '__main__':

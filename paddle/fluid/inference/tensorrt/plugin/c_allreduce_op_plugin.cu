@@ -16,7 +16,12 @@
 
 #include "glog/logging.h"
 #include "paddle/fluid/inference/tensorrt/plugin/c_allreduce_op_plugin.h"
-#include "paddle/fluid/platform/collective_helper.h"
+#include "paddle/phi/core/distributed/comm_context_manager.h"
+#include "paddle/phi/core/distributed/utils.h"
+#include "paddle/phi/core/platform/collective_helper.h"
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
+#include "paddle/phi/core/distributed/nccl_comm_context.h"
+#endif
 
 namespace paddle {
 namespace inference {
@@ -33,7 +38,7 @@ inline ncclDataType_t NvInferDtypeToNCCLDType(nvinfer1::DataType type) {
   } else if (type == nvinfer1::DataType::kINT32) {
     return ncclInt32;
   } else {
-    PADDLE_THROW(platform::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "This datatype in nccl is not supported."));
   }
 }
@@ -86,16 +91,16 @@ bool CAllReducePluginDynamic::supportsFormatCombination(
     int nb_outputs) TRT_NOEXCEPT {
   PADDLE_ENFORCE_NOT_NULL(
       in_out,
-      platform::errors::InvalidArgument(
-          "The input of CAllReduce plugin shoule not be nullptr."));
+      common::errors::InvalidArgument(
+          "The input of CAllReduce plugin should not be nullptr."));
 
   PADDLE_ENFORCE_LT(
       pos,
       nb_inputs + nb_outputs,
-      platform::errors::InvalidArgument("The pos(%d) should be less than the "
-                                        "num(%d) of the input and the output.",
-                                        pos,
-                                        nb_inputs + nb_outputs));
+      common::errors::InvalidArgument("The pos(%d) should be less than the "
+                                      "num(%d) of the input and the output.",
+                                      pos,
+                                      nb_inputs + nb_outputs));
 
   const nvinfer1::PluginTensorDesc& in = in_out[pos];
   if (pos == 0 || pos == 1) {
@@ -131,7 +136,7 @@ nvinfer1::DataType CAllReducePluginDynamic::getOutputDataType(
     int nb_inputs) const TRT_NOEXCEPT {
   PADDLE_ENFORCE_EQ(index,
                     0,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The CAllReduce Plugin only has one input, so the "
                         "index value should be 0, but get %d.",
                         index));
@@ -172,15 +177,36 @@ int CAllReducePluginDynamic::enqueue(
       break;
 
     default:
-      PADDLE_THROW(platform::errors::InvalidArgument("Invalid reduce type: %d",
-                                                     red_type_));
+      PADDLE_THROW(common::errors::InvalidArgument("Invalid reduce type: %d",
+                                                   red_type_));
   }
-
-  auto comm = platform::NCCLCommContext::Instance().Get(ring_id_);
-  cudaStream_t custream = use_calc_stream_ ? stream : comm->stream();
-  PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(
-      sendbuff, recvbuff, numel, dtype, nccl_red_type, comm->comm(), stream));
-
+  const auto& comm_context_manager =
+      phi::distributed::CommContextManager::GetInstance();
+  PADDLE_ENFORCE_EQ(comm_context_manager.Has(std::to_string(ring_id_)),
+                    true,
+                    common::errors::InvalidArgument(
+                        "You choose to use new communication library. "
+                        "But ring_id(%d) is "
+                        "not found in comm_context_manager.",
+                        std::to_string(ring_id_)));
+  auto comm_ctx = static_cast<phi::distributed::NCCLCommContext*>(
+      comm_context_manager.Get(std::to_string(ring_id_)));
+  PADDLE_ENFORCE_NE(comm_ctx,
+                    nullptr,
+                    common::errors::Unavailable(
+                        "NCCLCommContext is nullptr, collective op should "
+                        "has ring_id attr."));
+  auto stream2 = comm_ctx->GetStream();
+  // ncclRedOp_t nccl_red_type = ncclSum;
+  // comm_ctx->AllReduce(&inputs[0], inputs[0], nccl_red_type, stream);
+  phi::dynload::ncclAllReduce(sendbuff,
+                              recvbuff,
+                              numel,
+                              dtype,
+                              nccl_red_type,
+                              comm_ctx->GetNcclComm(),
+                              stream2);
+  VLOG(3) << "new NCCLCommContext has ring_id_ " << ring_id_;
 #endif
   return (cudaGetLastError() != cudaSuccess);
 }

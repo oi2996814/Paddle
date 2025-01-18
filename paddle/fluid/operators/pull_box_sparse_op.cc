@@ -24,30 +24,31 @@ class PullBoxSparseOp : public framework::OperatorWithKernel {
     PADDLE_ENFORCE_GE(
         ctx->Inputs("Ids").size(),
         1UL,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Inputs(Ids) of PullBoxSparseOp should not be empty."));
     PADDLE_ENFORCE_GE(
         ctx->Outputs("Out").size(),
         1UL,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Outputs(Out) of PullBoxSparseOp should not be empty."));
     auto hidden_size = static_cast<int64_t>(ctx->Attrs().Get<int>("size"));
     auto all_ids_dim = ctx->GetInputsDim("Ids");
     const size_t n_ids = all_ids_dim.size();
-    std::vector<framework::DDim> outs_dims;
+    std::vector<phi::DDim> outs_dims;
     outs_dims.resize(n_ids);
     for (size_t i = 0; i < n_ids; ++i) {
       const auto ids_dims = all_ids_dim[i];
       int ids_rank = ids_dims.size();
       PADDLE_ENFORCE_EQ(ids_dims[ids_rank - 1],
                         1,
-                        platform::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "Shape error in %lu id, the last dimension of the "
                             "'Ids' tensor must be 1.",
                             i));
-      auto out_dim = phi::vectorize(phi::slice_ddim(ids_dims, 0, ids_rank - 1));
+      auto out_dim =
+          common::vectorize(common::slice_ddim(ids_dims, 0, ids_rank - 1));
       out_dim.push_back(hidden_size);
-      outs_dims[i] = phi::make_ddim(out_dim);
+      outs_dims[i] = common::make_ddim(out_dim);
     }
     ctx->SetOutputsDim("Out", outs_dims);
     for (size_t i = 0; i < n_ids; ++i) {

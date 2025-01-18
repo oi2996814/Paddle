@@ -19,7 +19,7 @@ import unittest
 from contextlib import closing
 
 import paddle
-from paddle import fluid
+from paddle import base
 
 port_set = set()
 paddle.enable_static()
@@ -64,15 +64,15 @@ class CollectiveCPUBarrierWithGlooTest(unittest.TestCase):
 
     def barrier_op(self, id, rank_num, server_endpoint, out_dict, sleep_time):
         try:
-            main_prog = fluid.Program()
-            startup_prog = fluid.Program()
+            main_prog = base.Program()
+            startup_prog = base.Program()
             paddle.distributed.gloo_init_parallel_env(
                 id, rank_num, server_endpoint
             )
-            place = fluid.CPUPlace()
-            with fluid.program_guard(main_prog, startup_prog):
+            place = base.CPUPlace()
+            with base.program_guard(main_prog, startup_prog):
                 paddle.distributed.barrier()
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             # Run barrier to synchronize processes after starting
             exe.run(main_prog)
             # Let rank 0 sleep for one second and check that all processes
@@ -92,7 +92,7 @@ class CollectiveCPUBarrierWithGlooTest(unittest.TestCase):
         num_of_ranks = 4
         sleep_time = 1
         # create endpoints
-        ep_str = "127.0.0.1:%s" % (self.find_free_port())
+        ep_str = f"127.0.0.1:{self.find_free_port()}"
         # call barrier op inside each process
         manager = multiprocessing.Manager()
         procs_out_dict = manager.dict()
@@ -113,7 +113,7 @@ class CollectiveCPUBarrierWithGlooTest(unittest.TestCase):
         num_of_ranks = 4
         sleep_time = 1
         # create endpoints
-        ep_str = "127.0.0.1:%s" % (self.find_free_port())
+        ep_str = f"127.0.0.1:{self.find_free_port()}"
         # call barrier op inside each process
         manager = multiprocessing.Manager()
         procs_out_dict = manager.dict()

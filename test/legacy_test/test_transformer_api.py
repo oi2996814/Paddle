@@ -15,9 +15,10 @@
 import unittest
 
 import numpy as np
+from utils import static_guard
 
 import paddle
-from paddle import fluid
+from paddle import base
 from paddle.nn.layer.transformer import (
     MultiHeadAttention,
     Transformer,
@@ -187,7 +188,7 @@ def scaled_dot_product_attention(q, k, v, d_key, attn_mask, multi_head_attn):
 
 
 def cal_qkv(key, value, num_heads, embed_dim, multi_head_attn):
-    with fluid.dygraph.guard():
+    with base.dygraph.guard():
         head_dim = embed_dim // num_heads
         k_weight = multi_head_attn.k_proj.weight.numpy()
         v_weight = multi_head_attn.v_proj.weight.numpy()
@@ -226,8 +227,8 @@ def prepare_qkv(
 
 
 def add(x, y=None):
-    fluid.enable_dygraph()
-    with fluid.dygraph.guard():
+    base.enable_dygraph()
+    with base.dygraph.guard():
         x = x.numpy() if not isinstance(x, np.ndarray) else x
         if y is not None:
             x += y
@@ -241,8 +242,8 @@ def relu(x):
 
 
 def layer_norm(x, normalized_shape, norm, epsilon=1e-05, act=None):
-    fluid.enable_dygraph()
-    with fluid.dygraph.guard():
+    base.enable_dygraph()
+    with base.dygraph.guard():
         # scale:
         weight = norm.weight.numpy()
         # shift:
@@ -251,9 +252,9 @@ def layer_norm(x, normalized_shape, norm, epsilon=1e-05, act=None):
         batch_size, src_len, d_model = x.shape
         x = x.reshape((batch_size * src_len, d_model))
         mu = np.mean(x, axis=1, keepdims=True)
-        sigma_squar = np.sum(np.square(x - mu), axis=1) / d_model
+        sigma_square = np.sum(np.square(x - mu), axis=1) / d_model
         x1_up = x - mu
-        x1_down_1 = sigma_squar + epsilon
+        x1_down_1 = sigma_square + epsilon
         x1_down = np.sqrt(x1_down_1)
         x1_down = x1_down.reshape((x1_down.shape[0], 1))
         x1 = x1_up / x1_down
@@ -265,8 +266,8 @@ def layer_norm(x, normalized_shape, norm, epsilon=1e-05, act=None):
 
 def ffn(src, encoder_layer, ffn_fc1_act="relu"):
     assert ffn_fc1_act == "relu", "only relu is supported"
-    fluid.enable_dygraph()
-    with fluid.dygraph.guard():
+    base.enable_dygraph()
+    with base.dygraph.guard():
         src = src.numpy() if not isinstance(src, np.ndarray) else src
         w1 = encoder_layer.linear1.weight.numpy()
         w2 = encoder_layer.linear2.weight.numpy()
@@ -282,9 +283,16 @@ class TestTransformer(unittest.TestCase):
     def test_multi_head_attention(self):
         def multihead_attention_test_helper(self_attention, cache):
             paddle.seed(2020)
-            paddle.framework.random._manual_program_seed(2020)
-            # self_attention|cross_attention, cache|No cache
-            with fluid.dygraph.guard(fluid.CPUPlace()):
+            if paddle.framework.use_pir_api():
+                with paddle.pir_utils.OldIrGuard():
+                    # Note: dygraph use self.main_program.global_block().create_parameter(), it's need manual seed to old Program
+                    paddle.framework.random._manual_program_seed(2020)
+                paddle.framework.random._manual_program_seed(2020)
+            else:
+                paddle.framework.random._manual_program_seed(
+                    2020
+                )  # self_attention|cross_attention, cache|No cache
+            with base.dygraph.guard(base.CPUPlace()):
                 # generate params for multi_head_attention
                 (
                     batch_size,
@@ -398,9 +406,17 @@ class TestTransformer(unittest.TestCase):
         multihead_attention_test_helper(False, False)
 
     def test_transformer_encoder_layer(self):
-        with fluid.dygraph.guard(fluid.CPUPlace()):
+        with base.dygraph.guard(base.CPUPlace()):
             paddle.framework.seed(2020)
-            paddle.framework.random._manual_program_seed(2020)
+            if paddle.framework.use_pir_api():
+                with paddle.pir_utils.OldIrGuard():
+                    # Note: dygraph use self.main_program.global_block().create_parameter(), it's need manual seed to old Program
+                    paddle.framework.random._manual_program_seed(2020)
+                paddle.framework.random._manual_program_seed(2020)
+            else:
+                paddle.framework.random._manual_program_seed(
+                    2020
+                )  # self_attention|cross_attention, cache|No cache
 
             ffn_fc1_act = "relu"
             # 1.generate basic params
@@ -463,9 +479,17 @@ class TestTransformer(unittest.TestCase):
             )
 
     def test_transformer_encoder_layer_attr_1(self):
-        with fluid.dygraph.guard(fluid.CPUPlace()):
+        with base.dygraph.guard(base.CPUPlace()):
             paddle.framework.seed(2020)
-            paddle.framework.random._manual_program_seed(2020)
+            if paddle.framework.use_pir_api():
+                with paddle.pir_utils.OldIrGuard():
+                    # Note: dygraph use self.main_program.global_block().create_parameter(), it's need manual seed to old Program
+                    paddle.framework.random._manual_program_seed(2020)
+                paddle.framework.random._manual_program_seed(2020)
+            else:
+                paddle.framework.random._manual_program_seed(
+                    2020
+                )  # self_attention|cross_attention, cache|No cache
 
             ffn_fc1_act = "relu"
             # 1.generate basic params
@@ -544,7 +568,7 @@ class TestTransformer(unittest.TestCase):
                 )
 
     def test_transformer_decoder_layer(self):
-        with fluid.dygraph.guard(fluid.CPUPlace()):
+        with base.dygraph.guard(base.CPUPlace()):
             paddle.framework.seed(2020)
             activation = "relu"
             normalize_before = False
@@ -679,7 +703,7 @@ class TestTransformer(unittest.TestCase):
             (batch_size, n_head, sequence_length, sequence_length)
         ).astype("float32")
         src_mask[0][0][0][0] = -np.inf
-        with fluid.dygraph.guard(fluid.CPUPlace()):
+        with base.dygraph.guard(base.CPUPlace()):
             encoder_layer = TransformerEncoderLayer(
                 d_model, n_head, dim_feedforward, dropout
             )
@@ -710,7 +734,7 @@ class TestTransformer(unittest.TestCase):
             (batch_size, n_head, sequence_length, sequence_length)
         ).astype("float32")
         src_mask[0][0][0][0] = -np.inf
-        with fluid.dygraph.guard(fluid.CPUPlace()):
+        with base.dygraph.guard(base.CPUPlace()):
             for cache in [True, False]:
                 # paddle
                 encoder_layer = TransformerEncoderLayer(
@@ -755,7 +779,7 @@ class TestTransformer(unittest.TestCase):
             (batch_size, n_head, target_length, source_length)
         ).astype("float32")
         memory_mask[0][0][0][0] = -1e9
-        with fluid.dygraph.guard(fluid.CPUPlace()):
+        with base.dygraph.guard(base.CPUPlace()):
             decoder_layer = TransformerDecoderLayer(
                 d_model, n_head, dim_feedforward, dropout
             )
@@ -783,7 +807,7 @@ class TestTransformer(unittest.TestCase):
         ) = generate_basic_params(mode="decoder_layer")
 
         # batch_size, source_length, target_length, d_model, n_head = 4, 8, 8, 64, 8
-        with fluid.dygraph.guard(fluid.CPUPlace()):
+        with base.dygraph.guard(base.CPUPlace()):
             transformer = Transformer(
                 d_model,
                 n_head,
@@ -834,7 +858,7 @@ class TestTransformer(unittest.TestCase):
         ) = generate_basic_params(mode="decoder_layer")
 
         # batch_size, source_length, target_length, d_model, n_head = 4, 8, 8, 64, 8
-        with fluid.dygraph.guard(fluid.CPUPlace()):
+        with base.dygraph.guard(base.CPUPlace()):
             transformer = Transformer(
                 d_model,
                 n_head,
@@ -887,7 +911,7 @@ class TestTransformer(unittest.TestCase):
         ) = generate_basic_params(mode="decoder_layer")
 
         # batch_size, source_length, target_length, d_model, n_head = 4, 8, 8, 64, 8
-        with fluid.dygraph.guard(fluid.CPUPlace()):
+        with base.dygraph.guard(base.CPUPlace()):
             transformer = Transformer(
                 d_model,
                 n_head,
@@ -940,7 +964,7 @@ class TestTransformer(unittest.TestCase):
         ) = generate_basic_params(mode="decoder_layer")
 
         # batch_size, source_length, target_length, d_model, n_head = 4, 8, 8, 64, 8
-        with fluid.dygraph.guard(fluid.CPUPlace()):
+        with base.dygraph.guard(base.CPUPlace()):
             transformer = Transformer(
                 d_model,
                 n_head,
@@ -993,7 +1017,7 @@ class TestTransformer(unittest.TestCase):
         ) = generate_basic_params(mode="decoder_layer")
 
         # batch_size, source_length, target_length, d_model, n_head = 4, 8, 8, 64, 8
-        with fluid.dygraph.guard(fluid.CPUPlace()):
+        with base.dygraph.guard(base.CPUPlace()):
             transformer = Transformer(
                 d_model,
                 n_head,
@@ -1038,6 +1062,30 @@ class TestTransformer(unittest.TestCase):
             d_model, n_head, dim_feedforward=dim_feedforward
         )
         mask = transformer.generate_square_subsequent_mask(length)
+
+
+class TestPirMultiHeadAttention(unittest.TestCase):
+    def run_program(self):
+        with static_guard():
+            paddle.seed(1)
+            startup = paddle.static.Program()
+            main = paddle.static.Program()
+            with paddle.static.program_guard(main, startup):
+                query = paddle.rand((2, 4, 128))
+                attn_mask = paddle.rand((2, 2, 4, 4))
+                multi_head_attn = paddle.nn.MultiHeadAttention(128, 2)
+                output = multi_head_attn(query, None, None, attn_mask=attn_mask)
+
+                exe = paddle.static.Executor()
+                exe.run(startup)
+                out = exe.run(feed={}, fetch_list=[output])
+                return out
+
+    def test_pir(self):
+        out1 = self.run_program()
+        with paddle.pir_utils.IrGuard():
+            out2 = self.run_program()
+        np.testing.assert_allclose(out1, out2)
 
 
 if __name__ == "__main__":

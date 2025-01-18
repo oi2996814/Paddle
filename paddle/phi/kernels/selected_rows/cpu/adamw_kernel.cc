@@ -24,8 +24,7 @@
 #include "paddle/phi/kernels/funcs/adam_functors.h"
 #include "paddle/phi/kernels/selected_rows/adam_kernel.h"
 
-namespace phi {
-namespace sr {
+namespace phi::sr {
 
 template <typename T, typename Context>
 void AdamwDenseParamSparseGradKernel(
@@ -35,6 +34,7 @@ void AdamwDenseParamSparseGradKernel(
     const DenseTensor& learning_rate,
     const DenseTensor& moment1,
     const DenseTensor& moment2,
+    const paddle::optional<DenseTensor>& moment2_max,
     const DenseTensor& beta1_pow,
     const DenseTensor& beta2_pow,
     const paddle::optional<DenseTensor>& master_param,
@@ -49,9 +49,11 @@ void AdamwDenseParamSparseGradKernel(
     int64_t min_row_size_to_use_multithread,
     bool multi_precision,
     bool use_global_beta_pow,
+    bool amsgrad,
     DenseTensor* param_out,
     DenseTensor* moment1_out,
     DenseTensor* moment2_out,
+    DenseTensor* moment2_max_out,
     DenseTensor* beta1_pow_out,
     DenseTensor* beta2_pow_out,
     DenseTensor* master_param_outs) {
@@ -75,6 +77,7 @@ void AdamwDenseParamSparseGradKernel(
                                                learning_rate,
                                                moment1,
                                                moment2,
+                                               moment2_max,
                                                beta1_pow,
                                                beta2_pow,
                                                master_param,
@@ -86,9 +89,11 @@ void AdamwDenseParamSparseGradKernel(
                                                min_row_size_to_use_multithread,
                                                multi_precision,
                                                use_global_beta_pow,
+                                               amsgrad,
                                                param_out,
                                                moment1_out,
                                                moment2_out,
+                                               moment2_max_out,
                                                beta1_pow_out,
                                                beta2_pow_out,
                                                master_param_outs);
@@ -112,6 +117,7 @@ void AdamwDenseParamSparseGradKernel(
                                              learning_rate,
                                              moment1,
                                              moment2,
+                                             moment2_max,
                                              beta1_pow,
                                              beta2_pow,
                                              master_param,
@@ -123,16 +129,17 @@ void AdamwDenseParamSparseGradKernel(
                                              min_row_size_to_use_multithread,
                                              multi_precision,
                                              use_global_beta_pow,
+                                             amsgrad,
                                              param_out,
                                              moment1_out,
                                              moment2_out,
+                                             moment2_max_out,
                                              beta1_pow_out,
                                              beta2_pow_out,
                                              master_param_outs);
 }
 
-}  // namespace sr
-}  // namespace phi
+}  // namespace phi::sr
 
 PD_REGISTER_KERNEL(adamw_dense_param_sparse_grad,
                    CPU,

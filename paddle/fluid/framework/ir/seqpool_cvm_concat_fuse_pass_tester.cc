@@ -17,9 +17,7 @@
 #include "paddle/fluid/framework/ir/seqpool_cvm_concat_fuse_pass.h"
 #include "paddle/fluid/framework/op_proto_maker.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 void SetOp(ProgramDesc* prog,
            const std::string& type,
@@ -67,9 +65,9 @@ std::unique_ptr<ir::Graph> GetNumNodesOfBeforeAfter(
     int* after,
     const std::string& pass_type = "seqpool_cvm_concat_fuse_pass") {
   auto pass = PassRegistry::Instance().Get(pass_type);
-  *before = graph->Nodes().size();
+  *before = static_cast<int>(graph->Nodes().size());
   graph.reset(pass->Apply(graph.release()));
-  *after = graph->Nodes().size();
+  *after = static_cast<int>(graph->Nodes().size());
   return graph;
 }
 
@@ -118,7 +116,7 @@ TEST(SeqPoolCVMConcatFusePass, basic) {
                                            "m",
                                            "n"})) {
     auto* var = prog.MutableBlock(0)->Var(v);
-    var->SetType(proto::VarType::LOD_TENSOR);
+    var->SetType(proto::VarType::DENSE_TENSOR);
   }
 
   SetOp(&prog,
@@ -151,7 +149,7 @@ TEST(SeqPoolCVMConcatFusePass, basic) {
         std::vector<std::string>({"m"}));
 
   std::unique_ptr<ir::Graph> graph(new ir::Graph(prog));
-  int before, after;
+  int before = 0, after = 0;
   graph = GetNumNodesOfBeforeAfter(std::move(graph), &before, &after);
   // Remove 16 Nodes: op1, op2, op3, op4, op5, op6, d, e, f, g, h, i, j, k, l,
   // concat_op
@@ -190,7 +188,7 @@ TEST(SeqPoolCVMConcatFusePass, advanced) {
   for (auto& v : std::vector<std::string>(
            {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"})) {
     auto* var = prog.MutableBlock(0)->Var(v);
-    var->SetType(proto::VarType::LOD_TENSOR);
+    var->SetType(proto::VarType::DENSE_TENSOR);
   }
 
   SetOp(&prog,
@@ -219,7 +217,7 @@ TEST(SeqPoolCVMConcatFusePass, advanced) {
         std::vector<std::string>({"j"}));
 
   std::unique_ptr<ir::Graph> graph(new ir::Graph(prog));
-  int before, after;
+  int before = 0, after = 0;
   graph = GetNumNodesOfBeforeAfter(std::move(graph), &before, &after);
   // Remove 11 Nodes: op1, op2, op4, op5, c, d, e, f, h, i, concat_op
   // Add 1 Node: fusion_seqpool_cvm_concat
@@ -231,7 +229,7 @@ ProgramDesc BuildProgramDesc(int num_inputs_of_concat) {
   ProgramDesc prog;
   auto new_var = [&](const std::string& name) {
     auto* var = prog.MutableBlock(0)->Var(name);
-    var->SetType(proto::VarType::LOD_TENSOR);
+    var->SetType(proto::VarType::DENSE_TENSOR);
   };
   std::vector<std::string> concat_inputs;
   new_var("cvm_in");
@@ -265,7 +263,7 @@ TEST(SeqPoolCVMConcatFusePass, more_inputs) {
   for (int num : {1, 2, 10}) {
     ProgramDesc prog = BuildProgramDesc(num);
     std::unique_ptr<ir::Graph> graph(new ir::Graph(prog));
-    int before, after;
+    int before = 0, after = 0;
     graph = GetNumNodesOfBeforeAfter(std::move(graph), &before, &after);
     // Remove Nodes: n * (seqpool_op, seqpool_out, out_unused, cvm_op, cvm_out),
     // and concat_op
@@ -275,8 +273,6 @@ TEST(SeqPoolCVMConcatFusePass, more_inputs) {
   }
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 USE_PASS(seqpool_cvm_concat_fuse_pass);

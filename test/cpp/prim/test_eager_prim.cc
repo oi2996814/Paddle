@@ -16,68 +16,32 @@
 
 #include "glog/logging.h"
 #include "gtest/gtest.h"
+#include "paddle/common/flags.h"
 #include "paddle/fluid/eager/api/generated/eager_generated/forwards/dygraph_functions.h"
 #include "paddle/fluid/eager/api/utils/hook_utils.h"
 #include "paddle/fluid/eager/backward.h"
 #include "paddle/fluid/prim/utils/utils.h"
 #include "paddle/phi/core/dense_tensor.h"
-#include "paddle/phi/core/flags.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/core/tensor_meta.h"
 #include "test/cpp/eager/test_utils.h"
 #include "test/cpp/prim/init_env_utils.h"
 
-PHI_DECLARE_string(tensor_operants_mode);
-
-PD_DECLARE_KERNEL(full, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(tanh, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(tanh_grad, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(pow, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(scale, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(multiply, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(less_equal, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(less_than, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(equal, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(not_equal, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(greater_equal, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(greater_than, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(bitwise_and, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(bitwise_or, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(bitwise_xor, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(bitwise_not, CPU, ALL_LAYOUT);
-#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
-PD_DECLARE_KERNEL(full, GPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(tanh, GPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(tanh_grad, GPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(pow, GPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(scale, GPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(multiply, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(less_equal, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(less_than, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(equal, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(not_equal, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(greater_equal, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(greater_than, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(bitwise_and, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(bitwise_or, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(bitwise_xor, KPS, ALL_LAYOUT);
-PD_DECLARE_KERNEL(bitwise_not, KPS, ALL_LAYOUT);
-
-#endif
+COMMON_DECLARE_string(tensor_operants_mode);
 
 namespace paddle {
 namespace prim {
 
 TEST(EagerPrim, TanhBackwardTest) {
   // 1. Initialized
-  eager_test::InitEnv(paddle::platform::CPUPlace());
+  eager_test::InitEnv(phi::CPUPlace());
   FLAGS_tensor_operants_mode = "eager";
   paddle::prim::InitTensorOperants();
   // 2. pre
-  paddle::framework::DDim ddim = phi::make_ddim({4, 16, 16, 32});
+  phi::DDim ddim = common::make_ddim({4, 16, 16, 32});
   paddle::Tensor tensor0 =
       eager_test::CreateTensorWithValue(ddim,
-                                        paddle::platform::CPUPlace(),
+                                        phi::CPUPlace(),
                                         phi::DataType::FLOAT32,
                                         phi::DataLayout::NCHW,
                                         5.0 /*value*/,
@@ -85,7 +49,7 @@ TEST(EagerPrim, TanhBackwardTest) {
   ::egr::egr_utils_api::RetainGradForTensor(tensor0);
   paddle::Tensor tensor1 =
       eager_test::CreateTensorWithValue(ddim,
-                                        paddle::platform::CPUPlace(),
+                                        phi::CPUPlace(),
                                         phi::DataType::FLOAT32,
                                         phi::DataLayout::NCHW,
                                         5.0 /*value*/,
@@ -127,14 +91,14 @@ TEST(EagerPrim, TanhBackwardTest) {
 
 TEST(EagerPrim, LogicalOperantsTest) {
   // 1. Initialized
-  eager_test::InitEnv(paddle::platform::CPUPlace());
+  eager_test::InitEnv(phi::CPUPlace());
   FLAGS_tensor_operants_mode = "eager";
   paddle::prim::InitTensorOperants();
   // 2. pre
-  paddle::framework::DDim ddim = phi::make_ddim({4, 16, 16, 32});
+  phi::DDim ddim = common::make_ddim({4, 16, 16, 32});
   paddle::Tensor tensor0 =
       eager_test::CreateTensorWithValue(ddim,
-                                        paddle::platform::CPUPlace(),
+                                        phi::CPUPlace(),
                                         phi::DataType::INT32,
                                         phi::DataLayout::NCHW,
                                         1 /*value*/,
@@ -142,7 +106,7 @@ TEST(EagerPrim, LogicalOperantsTest) {
   ::egr::egr_utils_api::RetainGradForTensor(tensor0);
   paddle::Tensor tensor1 =
       eager_test::CreateTensorWithValue(ddim,
-                                        paddle::platform::CPUPlace(),
+                                        phi::CPUPlace(),
                                         phi::DataType::INT32,
                                         phi::DataLayout::NCHW,
                                         0 /*value*/,
@@ -165,14 +129,14 @@ TEST(EagerPrim, LogicalOperantsTest) {
 
 TEST(EagerPrim, CompareOperantsTest) {
   // 1. Initialized
-  eager_test::InitEnv(paddle::platform::CPUPlace());
+  eager_test::InitEnv(phi::CPUPlace());
   FLAGS_tensor_operants_mode = "eager";
   paddle::prim::InitTensorOperants();
   // 2. pre
-  paddle::framework::DDim ddim = phi::make_ddim({4, 16, 16, 32});
+  phi::DDim ddim = common::make_ddim({4, 16, 16, 32});
   paddle::Tensor tensor0 =
       eager_test::CreateTensorWithValue(ddim,
-                                        paddle::platform::CPUPlace(),
+                                        phi::CPUPlace(),
                                         phi::DataType::INT32,
                                         phi::DataLayout::NCHW,
                                         1 /*value*/,
@@ -180,7 +144,7 @@ TEST(EagerPrim, CompareOperantsTest) {
   ::egr::egr_utils_api::RetainGradForTensor(tensor0);
   paddle::Tensor tensor1 =
       eager_test::CreateTensorWithValue(ddim,
-                                        paddle::platform::CPUPlace(),
+                                        phi::CPUPlace(),
                                         phi::DataType::INT32,
                                         phi::DataLayout::NCHW,
                                         0 /*value*/,

@@ -42,36 +42,28 @@ class DistributedTensor:
             and all(isinstance(x, int) and x >= 0 for x in sizes)
         ):
             raise ValueError(
-                "The sizes must be list or tuple and item in sizes must be non-negative integer, but got {}".format(
-                    sizes
-                )
+                f"The sizes must be list or tuple and item in sizes must be non-negative integer, but got {sizes}"
             )
         if not (
             isinstance(dims_mapping, (list, tuple))
             and all(isinstance(x, int) and x >= -1 for x in dims_mapping)
         ):
             raise ValueError(
-                "The dims_mapping must be list or tuple and item in dims_mapping must >= -1, but got {}".format(
-                    dims_mapping
-                )
+                f"The dims_mapping must be list or tuple and item in dims_mapping must >= -1, but got {dims_mapping}"
             )
         if not (
             isinstance(processes, (list, tuple))
             and all(isinstance(x, int) and x >= 0 for x in processes)
         ):
             raise ValueError(
-                "The processes must be list or tuple and item in processes must be integer, but got {}".format(
-                    processes
-                )
+                f"The processes must be list or tuple and item in processes must be integer, but got {processes}"
             )
         if not (
             isinstance(topology, (list, tuple))
             and all(isinstance(x, int) and x > 0 for x in topology)
         ):
             raise ValueError(
-                "The topology must be list or tuple and item in topology must be non-negative integer, but got {}".format(
-                    topology
-                )
+                f"The topology must be list or tuple and item in topology must be non-negative integer, but got {topology}"
             )
         if rank is not None and not (isinstance(rank, int) and rank >= 0):
             raise ValueError(f"The rank must >= 0, but got {rank}")
@@ -114,8 +106,8 @@ class DistributedTensor:
             global_sizes, dims_mapping, topology, processes, rank, shard_sizes
         )
         local_offsets = []
-        rank_relatvie = processes.index(rank)
-        coordinate = _linear_idx2coordinate(topology, rank_relatvie)
+        rank_relative = processes.index(rank)
+        coordinate = _linear_idx2coordinate(topology, rank_relative)
 
         for i in range(len(global_sizes)):
             if dims_mapping[i] == -1:
@@ -158,9 +150,7 @@ class DistributedTensor:
         )
         assert len(local_sizes) == len(
             local_offsets
-        ), "The length of local_sizes must be equal to local_offsets, but got {} and {}.".format(
-            len(local_sizes), len(local_offsets)
-        )
+        ), f"The length of local_sizes must be equal to local_offsets, but got {len(local_sizes)} and {len(local_offsets)}."
 
         local_end_offsets = [
             x[0] + x[1] for x in zip(local_offsets, local_sizes)
@@ -386,11 +376,7 @@ class DistributedTensor:
         return result
 
     def __str__(self):
-        str = "{{tensor name: {}, tensor id: {}, tensor original_id {}".format(
-            self.serial_tensor.desc.name(),
-            self.serial_tensor.desc.id(),
-            self.serial_tensor.desc.original_id(),
-        )
+        str = f"{{tensor name: {self.serial_tensor.desc.name()}, tensor id: {self.serial_tensor.desc.id()}, tensor original_id {self.serial_tensor.desc.original_id()}"
 
         # str += ", {}".format(self.dist_attr)
         # return str
@@ -399,19 +385,18 @@ class DistributedTensor:
             annotated_str = "annotated"
         else:
             annotated_str = "non-annotated"
-        str += ", process_mesh ({}): {}".format(
-            annotated_str, self.dist_attr.process_mesh
+        str += (
+            f", process_mesh ({annotated_str}): {self.dist_attr.process_mesh}"
         )
 
         str += f", is_parameter: {self.serial_tensor.is_parameter}"
+        str += f", chunk_id: {self.dist_attr.chunk_id}"
 
         if self.dist_attr.is_annotated("dims_mapping"):
             annotated_str = "annotated"
         else:
             annotated_str = "non-annotated"
-        str += ", dims_mapping ({}): {} }}".format(
-            annotated_str, self.dist_attr.dims_mapping
-        )
+        str += f", dims_mapping ({annotated_str}): {self.dist_attr.dims_mapping} }}"
 
         # if self.dist_attr.is_annotated("shard_mask"):
         #     annotated_str = "annotated"

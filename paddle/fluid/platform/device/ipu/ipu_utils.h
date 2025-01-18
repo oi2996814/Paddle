@@ -27,9 +27,9 @@ limitations under the License. */
 #include "paddle/fluid/framework/ir/graph.h"
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/scope.h"
-#include "paddle/fluid/platform/float16.h"
+#include "paddle/phi/common/float16.h"
 
-using float16 = paddle::platform::float16;
+using float16 = phi::dtype::float16;
 using Scope = paddle::framework::Scope;
 using OpDesc = paddle::framework::OpDesc;
 using Graph = paddle::framework::ir::Graph;
@@ -104,7 +104,7 @@ const popart::DataType OnnxDType2PopartType(const ONNXDataType type);
 const ONNXDataType VarType2OnnxDType(const VarType::Type type);
 // VarType::Type to String in Popart
 const std::string VarType2PopartStr(const VarType::Type type);
-// Get bool from envirnment varaible
+// Get bool from environment variable
 const bool GetBoolEnv(const std::string& str);
 // Request number of ipus must be pow(2, n)
 const int RequestIpus(const int num_ipus);

@@ -79,7 +79,7 @@ void LaunchIndexPutGradKernel(const Context& dev_ctx,
                               bool accumulate,
                               DenseTensor* value_grad,
                               DenseTensor* x_grad) {
-  std::array<const int64_t*, 7> pd_indices;
+  std::array<const int64_t*, 7> pd_indices = {};
   for (size_t i = 0; i < indices.size(); ++i) {
     pd_indices[i] = indices[i]->data<int64_t>();
   }
@@ -91,16 +91,16 @@ void LaunchIndexPutGradKernel(const Context& dev_ctx,
 
       auto x_grad_dims = x_grad->dims();
       const int64_t numel = indices[0]->numel();
-      auto x_grad_stride = phi::stride(x_grad_dims);
+      auto x_grad_stride = common::stride(x_grad_dims);
 
       set_zero_kernel<T>(
           numel, pd_indices.data(), x_grad_stride, x_grad_dims, x_grad_data);
     }
   }
 
-  auto out_grad_dims = out_grad.dims();
+  const auto& out_grad_dims = out_grad.dims();
   const int64_t numel = indices[0]->numel();
-  auto out_grad_stride = phi::stride(out_grad_dims);
+  auto out_grad_stride = common::stride(out_grad_dims);
 
   if (value_grad) {
     if (value_grad->numel() == 1) {
@@ -150,8 +150,9 @@ void LaunchIndexPutGradKernel(const Context& dev_ctx,
                                out_grad_dims,
                                tmp_value_grad_data);
 
-      std::vector<int64_t> after_dims = phi::vectorize(tmp_value_grad.dims());
-      std::vector<int64_t> before_dims = phi::vectorize(value_grad->dims());
+      std::vector<int64_t> after_dims =
+          common::vectorize(tmp_value_grad.dims());
+      std::vector<int64_t> before_dims = common::vectorize(value_grad->dims());
       std::vector<int64_t> compress_dims;
       std::vector<int64_t> dims_without_1;
 
@@ -159,7 +160,7 @@ void LaunchIndexPutGradKernel(const Context& dev_ctx,
           &after_dims, &before_dims, &compress_dims, &dims_without_1);
 
       auto pre_dims = value_grad->dims();
-      value_grad->Resize(phi::make_ddim(dims_without_1));
+      value_grad->Resize(common::make_ddim(dims_without_1));
       IntArray v_axis(compress_dims);
       SumKernel<T>(dev_ctx,
                    tmp_value_grad,
@@ -184,7 +185,7 @@ void IndexPutGradKernel(const Context& dev_ctx,
   PADDLE_ENFORCE_EQ(
       x.dtype(),
       value.dtype(),
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The data type of tensor value must be same to the data type "
           "of tensor x."));
   std::vector<DenseTensor> tmp_args;
@@ -196,7 +197,7 @@ void IndexPutGradKernel(const Context& dev_ctx,
     }
     if (value_grad) {
       FullKernel<T, Context>(dev_ctx,
-                             phi::vectorize(value_grad->dims()),
+                             common::vectorize(value_grad->dims()),
                              0.0f,
                              value_grad->dtype(),
                              value_grad);
@@ -205,12 +206,13 @@ void IndexPutGradKernel(const Context& dev_ctx,
   }
   auto bd_dim = funcs::BroadCastTensorsDims(int_indices_v);
 
-  std::vector<int64_t> res_dim_v(phi::vectorize(bd_dim));
+  std::vector<int64_t> res_dim_v(common::vectorize(bd_dim));
   std::vector<const phi::DenseTensor*> res_indices_v(x.dims().size(), nullptr);
   std::vector<DenseTensor> tmp_res_indices_v;
   std::vector<DenseTensor> range_tensor_v;
 
-  for (int i = int_indices_v.size(); i < x.dims().size(); ++i) {
+  for (int i = static_cast<int>(int_indices_v.size()); i < x.dims().size();
+       ++i) {
     range_tensor_v.emplace_back(funcs::GetRangeTensor<int64_t, Context>(
         dev_ctx, x.dims()[i], phi::DataType::INT64));
   }
@@ -237,4 +239,11 @@ PD_REGISTER_KERNEL(index_put_grad,
                    double,
                    int,
                    int64_t,
-                   bool) {}
+                   bool,
+                   int16_t,
+                   uint8_t,
+                   int8_t,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}

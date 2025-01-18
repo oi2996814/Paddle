@@ -18,10 +18,9 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle.fluid import core
-from paddle.fluid.dygraph import guard
-from paddle.fluid.executor import Executor
-from paddle.fluid.framework import Variable, default_main_program
+from paddle.base.dygraph import guard
+from paddle.base.executor import Executor
+from paddle.base.framework import Variable, default_main_program
 
 paddle.enable_static()
 main_program = default_main_program()
@@ -29,26 +28,29 @@ main_program = default_main_program()
 
 class ParameterChecks(unittest.TestCase):
     def test_parameter(self):
-        shape = [784, 100]
-        val = 1.0625
-        b = main_program.global_block()
-        param = b.create_parameter(
-            name='fc.w',
-            shape=shape,
-            dtype='float32',
-            initializer=paddle.nn.initializer.Constant(val),
-        )
-        self.assertIsNotNone(param)
-        self.assertEqual('fc.w', param.name)
-        self.assertEqual((784, 100), param.shape)
-        self.assertEqual(core.VarDesc.VarType.FP32, param.dtype)
-        self.assertEqual(0, param.block.idx)
-        exe = Executor(paddle.CPUPlace())
-        p = exe.run(main_program, fetch_list=[param])[0]
-        np.testing.assert_array_equal(p, np.ones(shape) * val)
+        with paddle.pir_utils.OldIrGuard():
+            shape = [784, 100]
+            val = 1.0625
+            b = main_program.global_block()
+            param = b.create_parameter(
+                name='fc.w',
+                shape=shape,
+                dtype='float32',
+                initializer=paddle.nn.initializer.Constant(val),
+            )
+            self.assertIsNotNone(param)
+            self.assertEqual('fc.w', param.name)
+            self.assertEqual((784, 100), param.shape)
+            self.assertEqual(paddle.float32, param.dtype)
+            self.assertEqual(0, param.block.idx)
+            exe = Executor(paddle.CPUPlace())
+            p = exe.run(main_program, fetch_list=[param])[0]
+            np.testing.assert_array_equal(p, np.ones(shape) * val)
 
-        zero_dim_param = b.create_parameter(name='x', shape=[], dtype='float32')
-        self.assertEqual(zero_dim_param.shape, ())
+            zero_dim_param = b.create_parameter(
+                name='x', shape=[], dtype='float32'
+            )
+            self.assertEqual(zero_dim_param.shape, ())
 
     def test_parambase(self):
         with guard():
@@ -72,6 +74,22 @@ class ParameterChecks(unittest.TestCase):
 
             pram_copy2 = copy.deepcopy(param, memo)
             self.assertEqual(id(param_copy), id(pram_copy2))
+
+    def test_create_0_size_param(self):
+        with guard():
+            shape = [0, 4]
+            for dtype in [
+                paddle.float32,
+                paddle.float64,
+            ]:
+                zero_size_param = paddle.create_parameter(
+                    shape,
+                    dtype,
+                )
+                self.assertEqual(zero_size_param.shape, shape)
+                self.assertEqual(zero_size_param.data_ptr(), 0)
+                # strides will be same with shape for 0-size tensor in paddle
+                self.assertEqual(zero_size_param.strides, shape)
 
     def func_exception(self):
         b = main_program.global_block()

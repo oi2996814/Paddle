@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import random
 import unittest
 import warnings
@@ -19,16 +20,16 @@ import warnings
 import numpy as np
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
-from paddle.fluid.framework import Block
+from paddle import base
+from paddle.base import core
+from paddle.base.framework import Block
 
 
 class PassTest(unittest.TestCase):
     @classmethod
     def setUpClass(self):
-        self.main_program = fluid.Program()
-        self.startup_program = fluid.Program()
+        self.main_program = base.Program()
+        self.startup_program = base.Program()
         self.feeds = None
         self.fetch_list = None
         self.pass_names = None
@@ -41,9 +42,15 @@ class PassTest(unittest.TestCase):
         random.seed(124)
 
     def _get_places(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         return places
 
     def grad(self, var):
@@ -51,9 +58,9 @@ class PassTest(unittest.TestCase):
         return self.main_program.global_block().var(grad_name)
 
     def append_gradients(self, outs):
-        with fluid.program_guard(self.main_program, self.startup_program):
+        with base.program_guard(self.main_program, self.startup_program):
             loss = paddle.mean(outs)
-            fluid.backward.append_backward(loss)
+            base.backward.append_backward(loss)
 
     def check_output(self, startup_on_cpu=False, atol=1e-5):
         '''
@@ -84,7 +91,7 @@ class PassTest(unittest.TestCase):
 
     def _apply_ir_passes(self):
         graph = core.Graph(self.main_program.desc)
-        graph.set_not_owned("__param_scope__", fluid.global_scope())
+        graph.set_not_owned("__param_scope__", base.global_scope())
         for attr_name, attr_value in self.graph_attrs.items():
             graph.set(attr_name, attr_value)
 
@@ -101,7 +108,7 @@ class PassTest(unittest.TestCase):
                     ir_pass.set(key, attrs[key])
 
         trans_pass = pass_builder.append_pass("graph_to_program_pass")
-        opt_program = fluid.Program()
+        opt_program = base.Program()
         trans_pass.set_not_owned("program", opt_program.desc)
         for p in pass_builder.all_passes():
             p.apply(graph)
@@ -120,10 +127,10 @@ class PassTest(unittest.TestCase):
         after apply all specified passes, then copy the parameters to GPUPlace.
         We can set startup_on_cpu to True to test inference pass.
         '''
-        executor = fluid.Executor(place)
+        executor = base.Executor(place)
         if startup_on_cpu:
             # Initialize parameters on CPU
-            cpu_executor = fluid.Executor(fluid.CPUPlace())
+            cpu_executor = base.Executor(base.CPUPlace())
             cpu_executor.run(self.startup_program)
             outs, lods = self._run_program(cpu_executor, self.main_program)
         else:
@@ -131,16 +138,14 @@ class PassTest(unittest.TestCase):
             outs, lods = self._run_program(executor, self.main_program)
         self.assertTrue(
             len(self.fetch_list) == len(outs),
-            "Checking the number of fetchs failed. Expected: {}, Received: {}".format(
-                len(self.fetch_list), len(outs)
-            ),
+            f"Checking the number of fetches failed. Expected: {len(self.fetch_list)}, Received: {len(outs)}",
         )
 
         # Parameters may be changed in ir passes.
         opt_program = self._apply_ir_passes()
         self.check_program(opt_program)
 
-        if startup_on_cpu and not isinstance(place, fluid.CPUPlace):
+        if startup_on_cpu and not isinstance(place, base.CPUPlace):
             warnings.warn(
                 "Parameters are on CPU, and will be transferred to GPU "
                 "automatically by data transform."
@@ -149,9 +154,7 @@ class PassTest(unittest.TestCase):
         outs_opt, lods_opt = self._run_program(executor, opt_program)
         self.assertTrue(
             len(self.fetch_list) == len(outs_opt),
-            "Checking the number of fetchs failed. Expected: {}, Received: {}".format(
-                len(self.fetch_list), len(outs_opt)
-            ),
+            f"Checking the number of fetches failed. Expected: {len(self.fetch_list)}, Received: {len(outs_opt)}",
         )
         for i in range(len(self.fetch_list)):
             is_allclose = np.allclose(outs_opt[i], outs[i], atol=atol)
@@ -163,17 +166,9 @@ class PassTest(unittest.TestCase):
                 offset = np.argmax(diff_mat > atol)
                 self.assertTrue(
                     is_allclose,
-                    "Output (name: %s, shape: %s, dtype: %s) has diff at %s. The maximum diff is %e, first error element is %d, expected %e, but got %e"
-                    % (
-                        self.fetch_list[i].name,
-                        str(self.fetch_list[i].shape),
-                        self.fetch_list[i].dtype,
-                        str(place),
-                        max_diff,
-                        offset,
-                        a.flatten()[offset],
-                        b.flatten()[offset],
-                    ),
+                    f"Output (name: {self.fetch_list[i].name}, shape: {self.fetch_list[i].shape!s}, dtype: {self.fetch_list[i].dtype}) "
+                    f"has diff at {place!s}. The maximum diff is {max_diff:e}, first error element is {offset}, "
+                    f"expected {a.flatten()[offset].item():e}, but got {b.flatten()[offset].item():e}",
                 )
 
     def _check_fused_ops(self, program):
@@ -187,17 +182,15 @@ class PassTest(unittest.TestCase):
         if program is None or program == self.main_program:
             program = self._apply_ir_passes()
 
-        acctual_num_fused_ops = 0
-        # Ir passes can only be applyed to block 0.
+        actual_num_fused_ops = 0
+        # Ir passes can only be applied to block 0.
         for op in program.block(0).ops:
             if op.type == self.fused_op_type:
-                acctual_num_fused_ops += 1
+                actual_num_fused_ops += 1
         self.assertTrue(
-            self.num_fused_ops == acctual_num_fused_ops,
-            "Checking of the number of fused operator < {} > failed. "
-            "Expected: {}, Received: {}".format(
-                self.fused_op_type, self.num_fused_ops, acctual_num_fused_ops
-            ),
+            self.num_fused_ops == actual_num_fused_ops,
+            f"Checking of the number of fused operator < {self.fused_op_type} > failed. "
+            f"Expected: {self.num_fused_ops}, Received: {actual_num_fused_ops}",
         )
 
     def check_program(self, program=None):
@@ -219,9 +212,7 @@ class PassTest(unittest.TestCase):
         self.assertTrue(
             self.main_program.num_blocks == program.num_blocks,
             "The number of blocks of the origin program and the optimized "
-            "program are different ({} vs {}).".format(
-                self.main_program.num_blocks, program.num_blocks
-            ),
+            f"program are different ({self.main_program.num_blocks} vs {program.num_blocks}).",
         )
 
         is_different = False

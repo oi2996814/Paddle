@@ -32,9 +32,9 @@ void EmbeddingKernel(const Context &ctx,
   PADDLE_ENFORCE_EQ(
       (std::is_same<Context, XPUContext>::value),
       true,
-      phi::errors::PreconditionNotMet("Unsupported place! only support "
-                                      "xpu place , please check your "
-                                      "place."));
+      common::errors::PreconditionNotMet("Unsupported place! only support "
+                                         "xpu place , please check your "
+                                         "place."));
 
   int64_t ids_numel = ids_t->numel();
 
@@ -44,22 +44,10 @@ void EmbeddingKernel(const Context &ctx,
   auto *table = table_t->data<T>();
   auto *output = dev_ctx.template Alloc<T>(output_t);
 
-  xpu::ctx_guard RAII_GUARD(ctx.x_context());
-  const int64_t *ids;
-  if (ids_t->dtype() == phi::DataType::INT64) {
-    ids = ids_t->data<int64_t>();
-  } else {
-    int64_t *ids_tt = RAII_GUARD.alloc_l3_or_gm<int64_t>(ids_t->numel());
-    int r = xpu::cast<int32_t, int64_t>(
-        ctx.x_context(), ids_t->data<int>(), ids_tt, ids_t->numel());
-    PADDLE_ENFORCE_XDNN_SUCCESS(r, "cast");
-    ids = reinterpret_cast<const int64_t *>(ids_tt);
-  }
-
   PADDLE_ENFORCE_EQ(
       ids_numel <= std::numeric_limits<int32_t>::max(),
       true,
-      phi::errors::OutOfRange(
+      common::errors::OutOfRange(
           "Number of ids greater than int32_t::max , please check "
           "number of ids in LookupTableV2XPUKernel."));
 
@@ -68,16 +56,58 @@ void EmbeddingKernel(const Context &ctx,
   size_t xm = table_t->dims()[0];
   size_t n = table_t->dims()[1];
 
-  int r = xpu::embedding<XPUType>(dev_ctx.x_context(),
-                                  reinterpret_cast<const XPUType *>(table),
-                                  ids,
-                                  reinterpret_cast<XPUType *>(output),
-                                  xm,
-                                  n,
-                                  ym,
-                                  padding_idx);
-
-  PADDLE_ENFORCE_XDNN_SUCCESS(r, "embedding");
+  int r;
+  xpu::ctx_guard RAII_GUARD(ctx.x_context());
+  if (ids_t->dtype() == phi::DataType::INT64) {
+#ifndef PADDLE_WITH_XPU_PLUGIN
+    r = xpu::paddle_embedding<XPUType, int64_t>(
+        dev_ctx.x_context(),
+        reinterpret_cast<const XPUType *>(table),
+        ids_t->data<int64_t>(),
+        reinterpret_cast<XPUType *>(output),
+        xm,
+        n,
+        ym,
+        padding_idx);
+#else
+    r = xpu::plugin::fast_embedding<XPUType, int64_t>(
+        dev_ctx.x_context(),
+        reinterpret_cast<const XPUType *>(table),
+        ids_t->data<int64_t>(),
+        reinterpret_cast<XPUType *>(output),
+        xm,
+        n,
+        ym,
+        padding_idx);
+#endif
+  } else {
+#ifndef PADDLE_WITH_XPU_PLUGIN
+    int64_t *ids_tt = RAII_GUARD.alloc_l3_or_gm<int64_t>(ids_t->numel());
+    r = xpu::cast<int32_t, int64_t>(
+        ctx.x_context(), ids_t->data<int>(), ids_tt, ids_t->numel());
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "cast");
+    const int64_t *ids = reinterpret_cast<const int64_t *>(ids_tt);
+    r = xpu::paddle_embedding<XPUType>(dev_ctx.x_context(),
+                                       reinterpret_cast<const XPUType *>(table),
+                                       ids,
+                                       reinterpret_cast<XPUType *>(output),
+                                       xm,
+                                       n,
+                                       ym,
+                                       padding_idx);
+#else
+    r = xpu::plugin::fast_embedding<XPUType, int>(
+        dev_ctx.x_context(),
+        reinterpret_cast<const XPUType *>(table),
+        ids_t->data<int>(),
+        reinterpret_cast<XPUType *>(output),
+        xm,
+        n,
+        ym,
+        padding_idx);
+#endif
+  }
+  PADDLE_ENFORCE_XDNN_SUCCESS(r, "paddle_embedding");
 }
 
 }  // namespace phi
@@ -87,4 +117,5 @@ PD_REGISTER_KERNEL(embedding,
                    ALL_LAYOUT,
                    phi::EmbeddingKernel,
                    float,
-                   phi::dtype::float16) {}
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}

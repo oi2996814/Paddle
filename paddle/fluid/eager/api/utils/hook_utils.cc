@@ -19,8 +19,7 @@
 #include "paddle/fluid/eager/utils.h"
 #include "paddle/phi/core/dense_tensor.h"
 
-namespace egr {
-namespace egr_utils_api {
+namespace egr::egr_utils_api {
 
 int64_t RegisterGradientHookForTensor(
     const paddle::Tensor& tensor,
@@ -30,9 +29,7 @@ int64_t RegisterGradientHookForTensor(
   auto rank_info = EagerUtils::unsafe_autograd_meta(tensor)->OutRankInfo();
 
   return grad_node->RegisterGradientHook(
-      rank_info.first,
-      rank_info.second,
-      std::move(std::make_shared<CppTensorHook>(hook)));
+      rank_info.first, rank_info.second, std::make_shared<CppTensorHook>(hook));
 }
 
 void RegisterReduceHookForTensor(const paddle::Tensor& tensor,
@@ -42,15 +39,15 @@ void RegisterReduceHookForTensor(const paddle::Tensor& tensor,
     std::shared_ptr<GradNodeBase> grad_node = EagerUtils::grad_node(tensor);
     PADDLE_ENFORCE(
         grad_node.get() != nullptr,
-        paddle::platform::errors::Fatal("Detected NULL grad_node,"
-                                        "Leaf tensor should have had grad_node "
-                                        "with type: GradNodeAccumulation"));
+        common::errors::Fatal("Detected NULL grad_node,"
+                              "Leaf tensor should have had grad_node "
+                              "with type: GradNodeAccumulation"));
     auto accumulation_grad_node =
         std::dynamic_pointer_cast<GradNodeAccumulation>(grad_node);
     accumulation_grad_node->RegisterReduceHook(
-        std::move(std::make_shared<CppVoidHook>(hook)));
+        std::make_shared<CppVoidHook>(hook));
   } else {
-    PADDLE_THROW(paddle::platform::errors::Fatal(
+    PADDLE_THROW(common::errors::Fatal(
         "Only can register reduce hook for leaf Tensor."));
   }
 }
@@ -98,5 +95,4 @@ void RetainGradForTensor(const paddle::Tensor& tensor) {
 void RegisterBackwardFinalHook(const std::function<void()>& hook) {
   Controller::Instance().RegisterBackwardFinalHook(hook);
 }
-}  // namespace egr_utils_api
-}  // namespace egr
+}  // namespace egr::egr_utils_api

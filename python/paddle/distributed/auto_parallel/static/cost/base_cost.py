@@ -19,7 +19,7 @@ import numpy as np
 import paddle
 from paddle.utils.flops import flops
 
-from ..cluster import LinkType
+from ..cluster import DeviceType, LinkType, get_default_cluster
 from ..dist_tensor import DistributedTensor
 from ..process_group import get_process_group
 from ..utils import _get_comm_group, _get_idx_in_axis
@@ -27,12 +27,12 @@ from ..utils import _get_comm_group, _get_idx_in_axis
 COMM_OP_TYPE = [
     "send_v2",
     "recv_v2",
-    "c_broadcast",
-    "c_allgather",
+    "broadcast",
+    "all_gather",
     "c_allreduce_sum",
     "c_identity",
 ]
-NON_COMP_TYPE = ["while"] + COMM_OP_TYPE
+NON_COMP_TYPE = ["while", *COMM_OP_TYPE]
 _g_op_cost_factory = {}
 
 
@@ -64,6 +64,7 @@ def build_comp_desc_from_op(op):
             var = get_var_with_recursion(var_name, op.block, op.block.program)
             shape = var.shape
             var_desc.append((var.dtype, shape))
+            desc["dtype"] = var.dtype
         output_desc[out_name] = var_desc
     desc["outputs"] = output_desc
 
@@ -166,6 +167,7 @@ def build_comp_desc_from_dist_op(dist_op, dist_context):
                     shard_sizes,
                 )
                 var_desc.append((var.dtype, shape))
+                desc["dtype"] = var.dtype
 
                 # For special op such as fill_constant_batch_size_like
                 if op.type == "fill_constant_batch_size_like":
@@ -377,7 +379,9 @@ def build_comp_costs_from_descs(op_cost_class, ctx, processes, descs, cluster):
     """Build comp costs by descriptions."""
     costs = {}
     for process in processes:
-        costs[process] = op_cost_class(op_desc=descs[process], cluster=cluster)
+        costs[process] = op_cost_class(
+            op_desc=descs[process], cluster=cluster, rank=process
+        )
     return costs
 
 
@@ -464,8 +468,9 @@ def build_dp_costs(
             desc["inputs"]["X"] = [(var.dtype, shape)]
             attrs = {"scale": 1.0 / dp_degree}
             desc["attrs"] = attrs
+            desc["dtype"] = var.dtype
             scale_op_cost = _g_op_cost_factory["scale"](
-                op_desc=desc, cluster=cluster
+                op_desc=desc, cluster=cluster, rank=rank
             )
             scale_costs[rank] = scale_op_cost
         result.append(scale_costs)
@@ -585,11 +590,7 @@ class CommContext:
                     backward_order_beta = self.cluster.get_beta(
                         ranks[j], ranks[i]
                     )
-                    beta = (
-                        forward_order_beta
-                        if forward_order_beta > backward_order_beta
-                        else backward_order_beta
-                    )
+                    beta = max(backward_order_beta, forward_order_beta)
                     if max_beta is None:
                         max_beta = beta
                     else:
@@ -784,10 +785,13 @@ class CommOpCost(OpCost):
             shape = None
             if self.op is not None:
                 vars = self.op.block.vars
-                # NOTE: The tensor communicated input_name is "X" in default. Otherwise, this function should be overrided
-                var_name = self.op.input("X")[0]
+                # NOTE: The tensor communicated input_name is "X" in default. Otherwise, this function should be overridden
+                try:
+                    var_name = self.op.input("X")[0]
+                except:
+                    var_name = self.op.output("Out")[0]
                 var = get_var_with_recursion(
-                    var_name, self.op.block, self.program
+                    var_name, self.op.block, self.op.block.program
                 )
                 dtype = var.dtype
                 shape = var.shape
@@ -838,13 +842,11 @@ class CommOpCost(OpCost):
             if self.op_desc is not None:
                 self._group_ranks = self.op_desc["group_ranks"]
             elif self.op is not None:
-                ring_id = self.op.attrs("ring_id")
+                ring_id = self.op.attr("ring_id")
                 process_group = get_process_group(ring_id)
                 if process_group is None:
                     raise ValueError(
-                        "There not exists process group whose ring_id is {}.".format(
-                            ring_id
-                        )
+                        f"There not exists process group whose ring_id is {ring_id}."
                     )
                 self._group_ranks = process_group.ranks
         return self._group_ranks
@@ -854,30 +856,38 @@ class CommOpCost(OpCost):
         if cls.OP_TYPE != "COMM":
             if cls.OP_TYPE not in COMM_OP_TYPE:
                 raise TypeError(
-                    "Please Check op type in {}, but got {}.".format(
-                        COMM_OP_TYPE, cls.OP_TYPE
-                    )
+                    f"Please Check op type in {COMM_OP_TYPE}, but got {cls.OP_TYPE}."
                 )
 
 
 class CompOpCost(OpCost):
     OP_TYPE = "COMP"
 
-    def __init__(self, op=None, op_desc=None, cluster=None):
+    def __init__(self, op=None, op_desc=None, cluster=None, rank=None):
         super().__init__(op=op, op_desc=op_desc)
         self._check_comp_op_type()
-        self._cost = self.calc_cost()
         self.cluster = cluster
+        self.rank = rank
+        self._cost = self.calc_cost()
 
     @classmethod
     def _check_comp_op_type(cls):
         if cls.OP_TYPE != "COMP":
             if cls.OP_TYPE in NON_COMP_TYPE:
                 raise TypeError(
-                    "Please Check op type not in {}, but got {}.".format(
-                        NON_COMP_TYPE, cls.OP_TYPE
-                    )
+                    f"Please Check op type not in {NON_COMP_TYPE}, but got {cls.OP_TYPE}."
                 )
+
+    def get_rank_gflops(self, rank, dtype):
+        device = self.cluster.get_device(rank)
+        gflops = 7800
+        if dtype == paddle.float64:
+            gflops = device.dp_gflops
+        elif dtype == paddle.float32:
+            gflops = device.sp_gflops
+        elif dtype == paddle.float16 or dtype == paddle.bfloat16:
+            gflops = device.hp_gflops
+        return gflops
 
     def calc_flops(self):
         if not self.op_desc:
@@ -894,8 +904,15 @@ class CompOpCost(OpCost):
         )
 
     def calc_time(self):
+        if self.rank is None or self.op_desc is None:
+            device_gflops = 7800
+        else:
+            device_gflops = self.get_rank_gflops(
+                self.rank, self.op_desc["dtype"]
+            )
         flops_count = self.calc_flops()
-        return flops_count * 2.9e-7
+        utilization_rate = 0.65
+        return flops_count / (utilization_rate * device_gflops) * 1e-3
 
 
 def register_op_cost(cls):
@@ -920,4 +937,76 @@ def calc_time_by_modeling(op=None, desc=None, cluster=None):
             op=op, op_desc=desc, cluster=cluster
         )
     time = op_cost.calc_time()
+    return time
+
+
+def calc_time_by_cost_model(op, cluster=None):
+    """Calc op time by cost model and the unit is microsecond."""
+    if not isinstance(op, paddle.base.framework.Operator):
+        raise TypeError(
+            f"OP must be paddle.base.framework.Operator, but got {type(op)}."
+        )
+    if not cluster:
+        cluster = get_default_cluster()
+
+    assert cluster._gpu_model in [
+        "V100",
+        "A100",
+    ], "Only A100 and V100 gpu has been supported currently."
+
+    time = 0.0  # microsecond
+    op_type = op.type
+    # calc comp op time by flops
+    if op_type not in NON_COMP_TYPE:
+        attrs = op.all_attrs()
+        # build comp op inputs desc to calc flops.
+        # for example, a matmul op inputs desc will be {"X": [(1024, 1024)], "Y": [(1024, 1024)]}
+        inputs = {}
+        for input_name in op.input_names:
+            var_names = op.input(input_name)
+            inputs[input_name] = []
+            for var_name in var_names:
+                var = op.block._var_recursive(var_name)
+                inputs[input_name].append(var.shape)
+
+        # the time of grad operator is twice than its forward operator empirically
+        if "_grad" in op_type:
+            op_type = op_type[: len(op_type) - 5]
+            flops_count = 2 * flops(op_type, inputs, attrs)
+        else:
+            flops_count = flops(op_type, inputs, attrs)
+
+        # FIXME(Ruibiao): Need a better way to get dtype
+        var_name = op.output_arg_names[0]
+        dtype = op.block._var_recursive(var_name).dtype
+        device = cluster.get_device(0)
+        assert (
+            device.type == DeviceType.GPU
+        ), "Only GPU device is supported currently."
+
+        gflops = 0.0
+        if dtype == paddle.float64:
+            gflops = device.dp_gflops
+        elif dtype == paddle.float32:
+            gflops = device.sp_gflops
+        elif dtype == paddle.float16 or dtype == paddle.bfloat16:
+            gflops = device.hp_gflops
+        else:
+            raise ValueError(
+                f"Unsupported modeling compute time for dtype: {dtype}."
+            )
+
+        utilization_rate = 0.98
+        time = flops_count / (utilization_rate * gflops) * 1e-3
+
+    # calc comm op time by communication modeling formula
+    elif op_type in COMM_OP_TYPE:
+        op_cost = _g_op_cost_factory[op_type](
+            op=op, comm_context=CommContext(cluster)
+        )
+        time = op_cost.calc_time()
+
+    else:
+        raise ValueError(f"The {op_type} has not been supported now.")
+
     return time

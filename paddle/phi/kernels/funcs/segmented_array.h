@@ -112,13 +112,13 @@ struct ArraySetterBase {
                      void* src,
                      size_t num_bytes,
                      bool use_cuda_graph = false) {
-    allocation = phi::memory_utils::Alloc(
+    auto allocation = phi::memory_utils::Alloc(
         ctx.GetPlace(),
         num_bytes,
         phi::Stream(reinterpret_cast<phi::StreamId>(ctx.stream())));
 
     int8_t* restored = reinterpret_cast<int8_t*>(src);
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
     if (use_cuda_graph) {
       restored = phi::backends::gpu::RestoreHostMemIfCapturingCUDAGraph<int8_t>(
           restored, num_bytes);
@@ -129,10 +129,13 @@ struct ArraySetterBase {
                                        num_bytes,
                                        phi::gpuMemcpyHostToDevice,
                                        ctx.stream());
-    return allocation->ptr();
+
+    auto ptr = allocation->ptr();
+    allocations.emplace_back(std::move(allocation));
+    return ptr;
   }
 
-  phi::Allocator::AllocationPtr allocation{nullptr};
+  std::vector<phi::Allocator::AllocationPtr> allocations;
 };
 
 template <typename Context, typename T, SegmentedArraySize Size>
@@ -168,7 +171,7 @@ struct PointerArraySetter : public ArraySetterBase<Context> {
 
   // need_alloc : tensor data needs extra buffer or not.
   // use_cuda_graph: tensor data shall be captured by cuda_graph or not.
-  // pre_alloc_host_buf: tensor data is temporaily stored by pinned memory or
+  // pre_alloc_host_buf: tensor data is temporarily stored by pinned memory or
   // not.
   PointerArraySetter(const Context& ctx,
                      std::vector<DenseTensor*>* t,

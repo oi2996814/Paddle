@@ -19,8 +19,7 @@
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/imperative/saved_variable_wrapper_list.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 const Attribute &InferNoNeedBufferVarsContext::GetAttr(
     const std::string &name) const {
@@ -28,7 +27,7 @@ const Attribute &InferNoNeedBufferVarsContext::GetAttr(
   PADDLE_ENFORCE_NE(
       iter,
       attrs_.end(),
-      platform::errors::NotFound("Cannot find attribute (%s).", name));
+      common::errors::NotFound("Cannot find attribute (%s).", name));
   return iter->second;
 }
 
@@ -66,5 +65,4 @@ bool DyGraphInferNoNeedBufferVarsContext::HasOutput(
   return false;
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

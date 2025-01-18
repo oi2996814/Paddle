@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # Copyright (c) 2022 PaddlePaddle Authors. All Rights Reserved.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -53,7 +53,7 @@ if [[ $exit_code -eq 0 ]]; then
     exit 0
 fi
 
-echo "${name} faild with ${exit_code}"
+echo "${name} failed with ${exit_code}"
 
 echo "after run ${name}"
 ps -aux
@@ -79,12 +79,12 @@ fi
 which ${GPU_SYS_INFO_CMD}
 exit_code=$?
 if [[ $exit_code -ne 0 ]]; then
-    echo "nvidia-smi or rocm-smi faild with ${exit_code}"
+    echo "nvidia-smi or rocm-smi failed with ${exit_code}"
     exit ${exit_code}
 fi
 
 #display system context
-for i in {1..2}; do 
+for i in {1..2}; do
     sleep 3
     ps -aux
     netstat -anlp

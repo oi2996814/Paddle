@@ -13,50 +13,15 @@
 # limitations under the License.
 
 import contextlib
+import os
 import random
 import unittest
-from functools import partial
 
 import numpy as np
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
-
-
-def bow_net(
-    data,
-    label,
-    dict_dim,
-    is_sparse=False,
-    emb_dim=8,
-    hid_dim=8,
-    hid_dim2=6,
-    class_dim=2,
-):
-    """
-    BOW net
-    This model is from https://github.com/PaddlePaddle/models:
-    fluid/PaddleNLP/text_classification/nets.py
-    """
-    emb = paddle.static.nn.embedding(
-        input=data, is_sparse=is_sparse, size=[dict_dim, emb_dim]
-    )
-    bow = paddle.static.nn.sequence_lod.sequence_pool(
-        input=emb, pool_type='sum'
-    )
-    bow_tanh = paddle.tanh(bow)
-    fc_1 = paddle.static.nn.fc(x=bow_tanh, size=hid_dim, activation="tanh")
-    fc_2 = paddle.static.nn.fc(x=fc_1, size=hid_dim2, activation="tanh")
-    prediction = paddle.static.nn.fc(
-        x=[fc_2], size=class_dim, activation="softmax"
-    )
-    cost = paddle.nn.functional.cross_entropy(
-        input=prediction, label=label, reduction='none', use_softmax=False
-    )
-    avg_cost = paddle.mean(x=cost)
-
-    return avg_cost
+from paddle import base
+from paddle.base import core
 
 
 class TestRegularizer(unittest.TestCase):
@@ -67,25 +32,31 @@ class TestRegularizer(unittest.TestCase):
         ]
 
     def get_places(self):
-        places = [core.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(core.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(core.CUDAPlace(0))
         return places
 
     @contextlib.contextmanager
     def scope_prog_guard(self, main_prog, startup_prog):
-        scope = fluid.core.Scope()
-        with fluid.unique_name.guard():
-            with fluid.scope_guard(scope):
-                with fluid.program_guard(main_prog, startup_prog):
+        scope = base.core.Scope()
+        with base.unique_name.guard():
+            with base.scope_guard(scope):
+                with base.program_guard(main_prog, startup_prog):
                     yield
 
     def run_program(self, place, feed_list):
-        exe = fluid.Executor(place)
-        feeder = fluid.DataFeeder(feed_list=feed_list, place=place)
-        exe.run(fluid.default_startup_program())
+        exe = base.Executor(place)
+        feeder = base.DataFeeder(feed_list=feed_list, place=place)
+        exe.run(base.default_startup_program())
 
-        main_prog = fluid.default_main_program()
+        main_prog = base.default_main_program()
         param_list = [var.name for var in main_prog.block(0).all_parameters()]
 
         param_sum = []
@@ -102,13 +73,13 @@ class TestRegularizer(unittest.TestCase):
     def check_l2decay_regularizer(self, place, model):
         paddle.seed(1)
         paddle.framework.random._manual_program_seed(1)
-        main_prog = fluid.framework.Program()
-        startup_prog = fluid.framework.Program()
+        main_prog = paddle.static.Program()
+        startup_prog = paddle.static.Program()
         with self.scope_prog_guard(
             main_prog=main_prog, startup_prog=startup_prog
         ):
             data = paddle.static.data(
-                name="words", shape=[-1, 1], dtype="int64", lod_level=1
+                name="words", shape=[-1, 1], dtype="int64"
             )
             label = paddle.static.data(
                 name="label", shape=[-1, 1], dtype="int64"
@@ -127,14 +98,14 @@ class TestRegularizer(unittest.TestCase):
     def check_l2decay(self, place, model):
         paddle.seed(1)
         paddle.framework.random._manual_program_seed(1)
-        main_prog = fluid.framework.Program()
-        startup_prog = fluid.framework.Program()
+        main_prog = base.framework.Program()
+        startup_prog = base.framework.Program()
 
         with self.scope_prog_guard(
             main_prog=main_prog, startup_prog=startup_prog
         ):
             data = paddle.static.data(
-                name="words", shape=[-1, 1], dtype="int64", lod_level=1
+                name="words", shape=[-1, 1], dtype="int64"
             )
             label = paddle.static.data(
                 name="label", shape=[-1, 1], dtype="int64"
@@ -142,7 +113,7 @@ class TestRegularizer(unittest.TestCase):
 
             avg_cost_l2 = model(data, label, self.word_len)
 
-            param_list = fluid.default_main_program().block(0).all_parameters()
+            param_list = base.default_main_program().block(0).all_parameters()
             para_sum = []
             for para in param_list:
                 para_mul = paddle.square(x=para)
@@ -154,27 +125,6 @@ class TestRegularizer(unittest.TestCase):
             param_sum = self.run_program(place, [data, label])
         return param_sum
 
-    def test_l2(self):
-        paddle.enable_static()
-        for place in self.get_places():
-            dense_sparse_p_sum = []
-            for sparse in [True, False]:
-                model = partial(bow_net, is_sparse=sparse)
-                framework_l2 = self.check_l2decay_regularizer(place, model)
-                l2 = self.check_l2decay(place, model)
-                assert len(l2) == len(framework_l2)
-                for i in range(len(l2)):
-                    assert np.isclose(a=framework_l2[i], b=l2[i], rtol=5e-5)
-                dense_sparse_p_sum.append(framework_l2)
-
-            assert len(dense_sparse_p_sum[0]) == len(dense_sparse_p_sum[1])
-            for i in range(len(dense_sparse_p_sum[0])):
-                assert np.isclose(
-                    a=dense_sparse_p_sum[0][i],
-                    b=dense_sparse_p_sum[1][i],
-                    rtol=5e-5,
-                )
-
     def test_repeated_regularization(self):
         paddle.enable_static()
         l1 = paddle.regularizer.L1Decay(0.1)
@@ -182,18 +132,23 @@ class TestRegularizer(unittest.TestCase):
         fc_param_attr = paddle.ParamAttr(
             regularizer=paddle.regularizer.L1Decay()
         )
-        with fluid.program_guard(fluid.Program(), fluid.Program()):
+        with base.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             x = paddle.uniform([2, 2, 3])
-            out = paddle.static.nn.fc(x, 5, weight_attr=fc_param_attr)
+            linear = paddle.nn.Linear(3, 5, weight_attr=fc_param_attr)
+            out = linear(x)
             loss = paddle.sum(out)
             sgd = paddle.optimizer.SGD(learning_rate=0.1, weight_decay=l2)
             sgd.minimize(loss)
-        with fluid.dygraph.guard():
-            input = fluid.dygraph.to_variable(
-                np.random.randn(3, 2).astype('float32')
-            )
+        with base.dygraph.guard():
+            input = paddle.to_tensor(np.random.randn(3, 2).astype('float32'))
             paddle.seed(1)
-            paddle.framework.random._manual_program_seed(1)
+            if paddle.framework.use_pir_api():
+                with paddle.pir_utils.OldIrGuard():
+                    paddle.framework.random._manual_program_seed(1)
+            else:
+                paddle.framework.random._manual_program_seed(1)
 
             linear1 = paddle.nn.Linear(
                 2, 2, weight_attr=fc_param_attr, bias_attr=fc_param_attr
@@ -204,14 +159,14 @@ class TestRegularizer(unittest.TestCase):
 
             loss1 = linear1(input)
             loss1.backward()
-            # set l2 regularizer in optimizer, but l1 in fluid.ParamAttr
+            # set l2 regularizer in optimizer, but l1 in base.ParamAttr
 
             paddle.optimizer.SGD(
                 parameters=linear1.parameters(),
                 learning_rate=1e-2,
                 weight_decay=l2,
             ).minimize(loss1)
-            # only set l1 in fluid.ParamAttr
+            # only set l1 in base.ParamAttr
             loss2 = linear2(input)
             loss2.backward()
             paddle.optimizer.SGD(
@@ -222,13 +177,13 @@ class TestRegularizer(unittest.TestCase):
                 linear1.weight.numpy(),
                 linear2.weight.numpy(),
                 rtol=1e-05,
-                err_msg='weight should use the regularization in fluid.ParamAttr!',
+                err_msg='weight should use the regularization in base.ParamAttr!',
             )
             np.testing.assert_allclose(
                 linear1.bias.numpy(),
                 linear2.bias.numpy(),
                 rtol=1e-05,
-                err_msg='bias should use the regularization in fluid.ParamAttr!',
+                err_msg='bias should use the regularization in base.ParamAttr!',
             )
 
 

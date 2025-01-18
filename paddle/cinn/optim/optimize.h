@@ -14,6 +14,7 @@
 
 #pragma once
 #include "paddle/cinn/ir/ir.h"
+#include "paddle/cinn/ir/lowered_func.h"
 #include "paddle/cinn/ir/module.h"
 
 namespace cinn {
@@ -21,14 +22,14 @@ namespace optim {
 
 /**
  * Optimize the expression but Module.
- * @param e
+ * @param fn
  * @param runtime_debug_info
  * @return
  */
-Expr Optimize(Expr e,
-              Target target,
-              bool runtime_debug_info = false,
-              bool remove_gpu_for_loops = true);
+ir::LoweredFunc Optimize(ir::LoweredFunc fn,
+                         Target target,
+                         bool runtime_debug_info = false,
+                         bool remove_gpu_for_loops = true);
 
 /**
  * Optimize a Module.

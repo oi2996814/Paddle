@@ -12,15 +12,19 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include <stddef.h>
-#include <stdint.h>
-#include <stdio.h>
+#include <glog/logging.h>
+#include <gtest/gtest.h>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
 
 #include <string>
 #include <vector>
 
+#include "paddle/common/flags.h"
 #include "paddle/fluid/inference/capi_exp/pd_inference_api.h"
-#include "test/cpp/inference/api/tester_helper.h"
+
+PD_DEFINE_string(infer_model, "", "model path");
 
 namespace paddle {
 namespace inference {
@@ -59,13 +63,6 @@ TEST(PD_Config, interface) {
   bool memory_enabled = PD_ConfigMemoryOptimEnabled(config);
   EXPECT_TRUE(memory_enabled);
 
-#ifndef PADDLE_WITH_LITE
-  PD_ConfigEnableLiteEngine(
-      config, PD_PRECISION_FLOAT32, TRUE, 0, nullptr, 0, nullptr);
-  bool lite_enabled = PD_ConfigLiteEngineEnabled(config);
-  EXPECT_TRUE(lite_enabled);
-#endif
-
   PD_ConfigSwitchIrDebug(config, TRUE);
 #ifdef PADDLE_WITH_DNNL
   const char* ops_name = "conv_2d";
@@ -78,10 +75,6 @@ TEST(PD_Config, interface) {
   PD_ConfigSetCpuMathLibraryNumThreads(config, 10);
   int32_t cpu_threads = PD_ConfigGetCpuMathLibraryNumThreads(config);
   EXPECT_EQ(cpu_threads, 10);
-
-  PD_ConfigEnableMkldnnQuantizer(config);
-  bool mkldnn_qt_enabled = PD_ConfigMkldnnQuantizerEnabled(config);
-  EXPECT_TRUE(mkldnn_qt_enabled);
 
   PD_ConfigEnableMkldnnBfloat16(config);
   PD_ConfigSetBfloat16Op(config, 1, &ops_name);
@@ -108,14 +101,13 @@ TEST(PD_Config, interface) {
   EXPECT_TRUE(profile_enabled);
 
   PD_ConfigDisableGlogInfo(config);
-  bool glog_diabled = PD_ConfigGlogInfoDisabled(config);
-  EXPECT_TRUE(glog_diabled);
+  bool glog_disabled = PD_ConfigGlogInfoDisabled(config);
+  EXPECT_TRUE(glog_disabled);
 
   PD_ConfigSetInvalid(config);
   bool is_valid = PD_ConfigIsValid(config);
   EXPECT_FALSE(is_valid);
 
-  PD_ConfigPartiallyRelease(config);
   PD_ConfigDestroy(config);
 }
 

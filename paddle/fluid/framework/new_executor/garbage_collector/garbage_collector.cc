@@ -17,51 +17,28 @@
 #include "paddle/fluid/framework/new_executor/garbage_collector/event_garbage_collector.h"
 #include "paddle/fluid/framework/new_executor/garbage_collector/fast_garbage_collector.h"
 #include "paddle/fluid/framework/new_executor/garbage_collector/no_event_garbage_collector.h"
-#include "paddle/phi/core/flags.h"
 
-PHI_DECLARE_bool(fast_eager_deletion_mode);
-PHI_DECLARE_bool(new_executor_use_cuda_graph);
+namespace paddle::framework {
 
-namespace paddle {
-namespace framework {
-
-bool IsInterpretercoreFastGCEnabled() {
-  // When using cuda graph, fast GC must be used. Because
-  // `EventQuery` method in event GC cannot be used in
-  // cuda graph.
-  PADDLE_ENFORCE_EQ(memory::allocation::AllocatorFacade::Instance()
-                                .IsStreamSafeCUDAAllocatorUsed() == false &&
-                        FLAGS_new_executor_use_cuda_graph,
-                    false,
-                    platform::errors::InvalidArgument(
-                        "When FLAGS_new_executor_use_cuda_graph is true, "
-                        "IsStreamSafeCUDAAllocatorUsed must be true, but "
-                        "got false."));
-  return (memory::allocation::AllocatorFacade::Instance()
-              .IsStreamSafeCUDAAllocatorUsed() &&
-          FLAGS_fast_eager_deletion_mode) ||
-         FLAGS_new_executor_use_cuda_graph;
-}
-
-InterpreterCoreGarbageCollector::InterpreterCoreGarbageCollector() {
-  garbages_ = std::make_unique<GarbageQueue>();
+InterpreterCoreGarbageCollector::InterpreterCoreGarbageCollector()
+    : garbages_(std::make_unique<GarbageQueue>()) {
   max_memory_size_ = static_cast<int64_t>(GetEagerDeletionThreshold());
   cur_memory_size_ = 0;
 }
 
 std::unique_ptr<InterpreterCoreGarbageCollector>
 CreateInterpreterCoreGarbageCollector(
-    const platform::Place& place,
+    const phi::Place& place,
     const std::vector<std::unique_ptr<InstructionBase>>& vec_instruction) {
-  if (platform::is_gpu_place(place)) {
-    if (IsInterpretercoreFastGCEnabled()) {
+  if (phi::is_gpu_place(place)) {
+    if (IsInterpretercoreFastGCEnabled()) {  // NOLINT
       return std::unique_ptr<InterpreterCoreGarbageCollector>(
           new InterpreterCoreFastGarbageCollector());
     } else {
       return std::unique_ptr<InterpreterCoreGarbageCollector>(
           new InterpreterCoreEventGarbageCollector(vec_instruction));
     }
-  } else if (platform::is_xpu_place(place)) {
+  } else if (phi::is_xpu_place(place)) {  // NOLINT
     // Because there is no multi-stream on XPU device, fast GC can
     // be used.
     // Previously, XPU used no_event GC. But `Wait` in no_event GC
@@ -70,7 +47,7 @@ CreateInterpreterCoreGarbageCollector(
     // are needed to be adapted for XPU.
     return std::unique_ptr<InterpreterCoreGarbageCollector>(
         new InterpreterCoreFastGarbageCollector());
-  } else if (platform::is_ipu_place(place)) {
+  } else if (phi::is_ipu_place(place)) {
     return std::unique_ptr<InterpreterCoreGarbageCollector>(
         new InterpreterCoreNoEventGarbageCollector());
   } else {
@@ -81,17 +58,16 @@ CreateInterpreterCoreGarbageCollector(
 
 std::unique_ptr<InterpreterCoreGarbageCollector>
 CreateInterpreterCoreGarbageCollector(
-    const platform::Place& place,
-    const std::vector<Instruction>& vec_instruction) {
-  if (platform::is_gpu_place(place)) {
-    if (IsInterpretercoreFastGCEnabled()) {
+    const phi::Place& place, const std::vector<Instruction>& vec_instruction) {
+  if (phi::is_gpu_place(place)) {
+    if (IsInterpretercoreFastGCEnabled()) {  // NOLINT
       return std::unique_ptr<InterpreterCoreGarbageCollector>(
           new InterpreterCoreFastGarbageCollector());
     } else {
       return std::unique_ptr<InterpreterCoreGarbageCollector>(
           new InterpreterCoreEventGarbageCollector(vec_instruction));
     }
-  } else if (platform::is_xpu_place(place)) {
+  } else if (phi::is_xpu_place(place)) {  // NOLINT
     // Because there is no multi-stream on XPU device, fast GC can
     // be used.
     // Previously, XPU used no_event GC. But `Wait` in no_event GC
@@ -100,7 +76,7 @@ CreateInterpreterCoreGarbageCollector(
     // are needed to be adapted for XPU.
     return std::unique_ptr<InterpreterCoreGarbageCollector>(
         new InterpreterCoreFastGarbageCollector());
-  } else if (platform::is_ipu_place(place)) {
+  } else if (phi::is_ipu_place(place)) {
     return std::unique_ptr<InterpreterCoreGarbageCollector>(
         new InterpreterCoreNoEventGarbageCollector());
   } else {
@@ -109,5 +85,4 @@ CreateInterpreterCoreGarbageCollector(
   }
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

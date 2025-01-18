@@ -15,8 +15,8 @@ limitations under the License. */
 #pragma once
 #include <vector>
 
+#include "paddle/common/hostdevice.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
-#include "paddle/phi/core/hostdevice.h"
 
 #ifdef __NVCC__
 #include <cub/cub.cuh>
@@ -38,6 +38,7 @@ namespace math {
  * \brief Compute the depthwise convolution which include
  * forward process and backpropagation process
  */
+using DataLayout = phi::DataLayout;
 template <typename DeviceContext,
           typename T,
           bool fuse_relu_before_conv = false>
@@ -1234,10 +1235,10 @@ class DepthwiseConvFunctor<phi::GPUContext, T, fuse_relu_before_conv> {
 
     phi::DenseTensor filter_hwc;
     if (data_layout == DataLayout::kNHWC) {
-      framework::DDim filter_hwc_dims({filter.dims()[2],
-                                       filter.dims()[3],
-                                       filter.dims()[0],
-                                       filter.dims()[1]});
+      phi::DDim filter_hwc_dims({filter.dims()[2],
+                                 filter.dims()[3],
+                                 filter.dims()[0],
+                                 filter.dims()[1]});
       filter_hwc.Resize(filter_hwc_dims);
       context.template Alloc<T>(&filter_hwc);
       std::vector<int> perm_axis({2, 3, 0, 1});
@@ -1256,16 +1257,10 @@ class DepthwiseConvFunctor<phi::GPUContext, T, fuse_relu_before_conv> {
         thread = (output_width - 1) / 2 + 1;
       else if (output_width > 512 && output_width <= 1024)
         thread = output_width;
-#ifdef __HIPCC__
-      thread = std::min(thread, 256);
-#endif
       blocks = std::min(std::max(thread / output_width, 1), output_height);
       threads = dim3(std::min(output_width, thread), blocks, 1);
       grid = dim3(output_channels, batch_size, 1);
     } else {
-#ifdef __HIPCC__
-      thread = std::min(thread, 256);
-#endif
       blocks = std::min(
           std::max(thread / output_channels, 1),
           ((output_width + dilate_width - 1) / dilate_width) * dilate_width);
@@ -1276,11 +1271,7 @@ class DepthwiseConvFunctor<phi::GPUContext, T, fuse_relu_before_conv> {
     }
     int filter_multiplier = output_channels / input_channels;
     int nums_output = output->numel();
-#ifdef __HIPCC__
-    int block_size = 256;
-#else
     int block_size = 512;
-#endif
     int grid_size = (nums_output + block_size - 1) / block_size;
 
 #define check_case(c_filter_multiplier, c_stride, c_filter)             \
@@ -1412,10 +1403,10 @@ class DepthwiseConvInputGradFunctor<phi::GPUContext, T, fuse_relu_before_conv> {
 
     phi::DenseTensor filter_hwc;
     if (data_layout == DataLayout::kNHWC) {
-      framework::DDim filter_hwc_dims({filter.dims()[2],
-                                       filter.dims()[3],
-                                       filter.dims()[0],
-                                       filter.dims()[1]});
+      phi::DDim filter_hwc_dims({filter.dims()[2],
+                                 filter.dims()[3],
+                                 filter.dims()[0],
+                                 filter.dims()[1]});
       filter_hwc.Resize(filter_hwc_dims);
       context.template Alloc<T>(&filter_hwc);
       std::vector<int> perm_axis({2, 3, 0, 1});
@@ -1449,11 +1440,7 @@ class DepthwiseConvInputGradFunctor<phi::GPUContext, T, fuse_relu_before_conv> {
     }
     int filter_multiplier = output_channels / input_channels;
     int nums_input = input_grad->numel();
-#ifdef __HIPCC__
-    int block_size = 256;
-#else
     int block_size = 512;
-#endif
     int grid_size = (nums_input + block_size - 1) / block_size;
 
 #define check_case(c_filter_multiplier, c_stride, c_filter)             \
@@ -1648,10 +1635,10 @@ class DepthwiseConvFilterGradFunctor<phi::GPUContext,
     } else {                                                                   \
       phi::DenseTensor filter_grad_hwc;                                        \
       if (c_filter != -1) {                                                    \
-        framework::DDim filter_grad_hwc_dims({filter_grad->dims()[2],          \
-                                              filter_grad->dims()[3],          \
-                                              filter_grad->dims()[0],          \
-                                              filter_grad->dims()[1]});        \
+        phi::DDim filter_grad_hwc_dims({filter_grad->dims()[2],                \
+                                        filter_grad->dims()[3],                \
+                                        filter_grad->dims()[0],                \
+                                        filter_grad->dims()[1]});              \
         filter_grad_hwc.Resize(filter_grad_hwc_dims);                          \
         context.template Alloc<T>(&filter_grad_hwc);                           \
         phi::funcs::SetConstant<phi::GPUContext, T> set_zero;                  \

@@ -33,7 +33,7 @@ KernelKey InterpolateGetKernelTypeForVar(
       (tensor.layout() != DataLayout::ONEDNN)) {
     auto it = attrs.find("data_layout");
     const std::string data_layout = PADDLE_GET_CONST(std::string, it->second);
-    auto dl = StringToDataLayout(data_layout);
+    auto dl = common::StringToDataLayout(data_layout);
     // Some models may have intentionally set "AnyLayout" for pool
     // op. Treat this as NCHW (default data_format value)
     if (dl != DataLayout::kAnyLayout) {
@@ -62,7 +62,7 @@ class InterpolateOneDNNHandler
                            DenseTensor* out)
       : OneDNNHandlerNoCachingT<T, dnnl::resampling_forward>(engine,
                                                              cpu_place) {
-    const auto dst_tz = vectorize(out->dims());
+    const auto dst_tz = common::vectorize(out->dims());
     const auto dst_md = dnnl::memory::desc(
         dst_tz, OneDNNGetDataType<T>(), OneDNNMemoryFormat::any);
     this->AcquireForwardPrimitiveDescriptor(
@@ -126,7 +126,7 @@ std::vector<int> ComputeOutputShape(
     if (scale.size() == 3 && scale[0] > 0.0f && scale[1] > 0.0f &&
         scale[2] > 0.0f) {
       int j = 0;
-      std::vector<int64_t> in_dhw_vec = vectorize(in_dhw_dims);
+      std::vector<int64_t> in_dhw_vec = common::vectorize(in_dhw_dims);
       std::transform(
           in_dhw_vec.begin(),
           in_dhw_vec.end(),
@@ -176,7 +176,7 @@ void InterpolateKernel(
                                                out_h,
                                                out_w,
                                                scale);
-  DDim dim_out = make_ddim(out_dims_vec);
+  DDim dim_out = common::make_ddim(out_dims_vec);
   out->Resize(dim_out);
 
   funcs::InterpolateOneDNNHandler<T> handler(
@@ -227,6 +227,43 @@ void BilinearInterpKernel(
 }
 
 template <typename T, typename Context>
+void LegacyBilinearInterpKernel(
+    const Context& ctx,
+    const DenseTensor& x,
+    const paddle::optional<DenseTensor>& out_size,
+    const paddle::optional<std::vector<const DenseTensor*>>& size_tensor,
+    const paddle::optional<DenseTensor>& scale_tensor,
+    const std::string& data_layout,
+    int out_d,
+    int out_h,
+    int out_w,
+    float scale,
+    const std::string& interp_method,
+    bool align_corners UNUSED,
+    int align_mode UNUSED,
+    DenseTensor* output) {
+  const auto& dim_x = x.dims();
+  std::vector<float> scale_vec;
+  if (scale > 0) {
+    for (int i = 0; i < dim_x.size() - 2; i++) {
+      scale_vec.push_back(scale);
+    }
+  }
+  InterpolateKernel<T, Context>(ctx,
+                                x,
+                                out_size,
+                                size_tensor,
+                                scale_tensor,
+                                data_layout,
+                                out_d,
+                                out_h,
+                                out_w,
+                                scale_vec,
+                                interp_method,
+                                output);
+}
+
+template <typename T, typename Context>
 void NearestInterpKernel(
     const Context& ctx,
     const DenseTensor& x,
@@ -255,6 +292,43 @@ void NearestInterpKernel(
                                 interp_method,
                                 output);
 }
+
+template <typename T, typename Context>
+void LegacyNearestInterpKernel(
+    const Context& ctx,
+    const DenseTensor& x,
+    const paddle::optional<DenseTensor>& out_size,
+    const paddle::optional<std::vector<const DenseTensor*>>& size_tensor,
+    const paddle::optional<DenseTensor>& scale_tensor,
+    const std::string& data_layout,
+    int out_d,
+    int out_h,
+    int out_w,
+    float scale,
+    const std::string& interp_method,
+    bool align_corners UNUSED,
+    int align_mode UNUSED,
+    DenseTensor* output) {
+  const auto& dim_x = x.dims();
+  std::vector<float> scale_vec;
+  if (scale > 0) {
+    for (int i = 0; i < dim_x.size() - 2; i++) {
+      scale_vec.push_back(scale);
+    }
+  }
+  InterpolateKernel<T, Context>(ctx,
+                                x,
+                                out_size,
+                                size_tensor,
+                                scale_tensor,
+                                data_layout,
+                                out_d,
+                                out_h,
+                                out_w,
+                                scale_vec,
+                                interp_method,
+                                output);
+}
 }  // namespace phi
 
 PD_REGISTER_KERNEL(bilinear_interp,
@@ -271,6 +345,26 @@ PD_REGISTER_KERNEL(nearest_interp,
                    OneDNN,
                    ONEDNN,
                    phi::NearestInterpKernel,
+                   float,
+                   phi::dtype::bfloat16,
+                   phi::dtype::float16,
+                   int8_t,
+                   uint8_t) {
+  kernel->get_kerneltype_forvar_fn_ = phi::InterpolateGetKernelTypeForVar;
+}
+PD_REGISTER_KERNEL(legacy_bilinear_interp,
+                   OneDNN,
+                   ONEDNN,
+                   phi::LegacyBilinearInterpKernel,
+                   float,
+                   phi::dtype::bfloat16,
+                   phi::dtype::float16) {
+  kernel->get_kerneltype_forvar_fn_ = phi::InterpolateGetKernelTypeForVar;
+}
+PD_REGISTER_KERNEL(legacy_nearest_interp,
+                   OneDNN,
+                   ONEDNN,
+                   phi::LegacyNearestInterpKernel,
                    float,
                    phi::dtype::bfloat16,
                    phi::dtype::float16,

@@ -1,6 +1,11 @@
 # compatible utils used for fluid op system
 add_subdirectory(compat)
 add_subdirectory(distributed)
+add_subdirectory(memory)
+add_subdirectory(platform)
+add_subdirectory(framework)
+add_subdirectory(vocab)
+add_subdirectory(operators)
 
 if(WITH_GPU)
   proto_library(external_error_proto SRCS external_error.proto)
@@ -10,11 +15,10 @@ collect_srcs(
   core_srcs
   SRCS
   flags.cc
-  errors.cc
   enforce.cc
+  storage_properties.cc
   os_info.cc
   kernel_context.cc
-  ddim.cc
   tensor_base.cc
   allocator.cc
   tensor_meta.cc
@@ -36,5 +40,6 @@ collect_srcs(
   mixed_vector.cc
   generator.cc
   kernel_factory.cc
+  kernel_registry.cc
   tensor_utils.cc
   utils/type_info.cc)

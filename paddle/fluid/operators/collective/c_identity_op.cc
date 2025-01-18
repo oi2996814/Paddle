@@ -12,10 +12,12 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include "paddle/fluid/operators/collective/c_identity_op.h"
+#include "paddle/fluid/framework/infershape_utils.h"
+#include "paddle/fluid/framework/op_registry.h"
 
-namespace paddle {
-namespace operators {
+#include "paddle/phi/common/reduce_type.h"
+#include "paddle/phi/infermeta/unary.h"
+namespace paddle::operators {
 
 class CIdentityOp : public framework::OperatorWithKernel {
  public:
@@ -28,9 +30,9 @@ class CIdentityOp : public framework::OperatorWithKernel {
     PADDLE_ENFORCE_GE(
         ring_id,
         0,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The ring_id (%d) for c_identity must be non-negative.", ring_id));
-    framework::DDim dim = ctx->GetInputDim("X");
+    phi::DDim dim = ctx->GetInputDim("X");
     ctx->SetOutputDim("Out", dim);
   }
 
@@ -69,30 +71,24 @@ class CIdentityOpGradMaker : public framework::SingleGradOpMaker<T> {
 
  protected:
   void Apply(GradOpPtr<T> retv) const override {
-    retv->SetType("c_allreduce_sum");
-    retv->SetInput("X", this->OutputGrad("Out"));
-    retv->SetOutput("Out", this->InputGrad("X"));
+    retv->SetType("all_reduce");
+    retv->SetInput("x", this->OutputGrad("Out"));
+    retv->SetOutput("out", this->InputGrad("X"));
     retv->SetAttrMap(this->Attrs());
+    retv->SetAttr("reduce_type", static_cast<int>(phi::ReduceType::kRedSum));
   }
 };
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
-namespace plat = paddle::platform;
+
+DECLARE_INFER_SHAPE_FUNCTOR(c_identity,
+                            CIdentityShapeFunctor,
+                            PD_INFER_META(phi::CIdentityInferMeta));
 
 REGISTER_OPERATOR(c_identity,
                   ops::CIdentityOp,
                   ops::CIdentityOpGradMaker<paddle::framework::OpDesc>,
                   ops::CIdentityOpGradMaker<paddle::imperative::OpBase>,
-                  ops::CIdentityOpMaker);
-
-PD_REGISTER_STRUCT_KERNEL(c_identity,
-                          CPU,
-                          ALL_LAYOUT,
-                          ops::CIdentityOpCPUKernel,
-                          float,
-                          double,
-                          int,
-                          int64_t,
-                          plat::float16) {}
+                  ops::CIdentityOpMaker,
+                  CIdentityShapeFunctor);

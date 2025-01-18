@@ -31,7 +31,6 @@ void SetConfig(PD_AnalysisConfig *config) {
   PD_SetModel(config,
               (model_dir + "/__model__").c_str(),
               (model_dir + "/param").c_str());
-  PD_SwitchUseFeedFetchOps(config, false);
   PD_SwitchSpecifyInputNames(config, true);
   PD_DisableGpu(config);
 }
@@ -112,7 +111,7 @@ TEST(PD_ZeroCopyRun, zero_copy_run) {
            "%s",
            PD_GetOutputName(predictor, 0));
 
-  // not necessary, just for converage tests
+  // not necessary, just for coverage tests
   output.lod.data = std::malloc(sizeof(size_t));
 
   PD_GetZeroCopyOutput(predictor, &output);

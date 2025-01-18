@@ -74,7 +74,7 @@ void TileKernel(const Context& dev_ctx,
             "be positive integers, but the value received is %d.",
             repeat_times[i]));
   }
-  auto vec_in_dims = phi::vectorize<int>(in_dims);
+  auto vec_in_dims = common::vectorize<int>(in_dims);
   if (repeat_times.size() < vec_in_dims.size()) {
     int diff = vec_in_dims.size() - repeat_times.size();
     repeat_times.insert(repeat_times.begin(), diff, 1);
@@ -91,19 +91,19 @@ void TileKernel(const Context& dev_ctx,
           vec_in_dims.size(),
           repeat_times.size()));
 
-  DDim new_in_dims = phi::make_ddim(vec_in_dims);
+  DDim new_in_dims = common::make_ddim(vec_in_dims);
   DDim out_dims(new_in_dims);
 
   for (size_t i = 0; i < repeat_times.size(); ++i) {
     out_dims[i] *= repeat_times[i];
   }
-  auto vec_out_dims = phi::vectorize<int>(out_dims);
+  auto vec_out_dims = common::vectorize<int>(out_dims);
   out->Resize(out_dims);
   dev_ctx.template Alloc<T>(out);
 
   std::vector<int64_t> temp(repeat_times.size(), 1);
   if (rank == 0 || repeat_times == temp) {
-    out->Resize(x.dims());
+    out->Resize(out_dims);
     dev_ctx.template Alloc<T>(out);
     int64_t count = x.numel() * sizeof(T);
     int r = xpu::copy(dev_ctx.x_context(),
@@ -123,36 +123,25 @@ void TileKernel(const Context& dev_ctx,
                                  vec_in_dims,
                                  vec_out_dims);
 
-  } else if (std::is_same<T, double>::value) {
-    float* x_t = RAII_GUARD.alloc_l3_or_gm<float>(x.numel());
-    float* y_t = RAII_GUARD.alloc_l3_or_gm<float>(out->numel());
-    int r =
-        xpu::cast<XPUType, float>(dev_ctx.x_context(),
-                                  reinterpret_cast<const XPUType*>(x.data<T>()),
-                                  x_t,
-                                  x.numel());
-    PADDLE_ENFORCE_XDNN_SUCCESS(r, "cast");
-    ret = xpu::broadcast<float>(
-        dev_ctx.x_context(), x_t, y_t, vec_in_dims, vec_out_dims);
-    PADDLE_ENFORCE_XDNN_SUCCESS(ret, "broadcast");
-    r = xpu::cast<float, XPUType>(dev_ctx.x_context(),
-                                  y_t,
-                                  reinterpret_cast<XPUType*>(out->data<T>()),
-                                  out->numel());
-    PADDLE_ENFORCE_XDNN_SUCCESS(r, "cast");
-
   } else {
-    ret = xpu::broadcast<T>(dev_ctx.x_context(),
-                            x.data<T>(),
-                            out->data<T>(),
-                            vec_in_dims,
-                            vec_out_dims);
+    const auto* x_data = reinterpret_cast<const XPUType*>(x.data<T>());
+    auto* out_data = reinterpret_cast<XPUType*>(out->data<T>());
+    ret = xpu::broadcast<XPUType>(
+        dev_ctx.x_context(), x_data, out_data, vec_in_dims, vec_out_dims);
   }
   PADDLE_ENFORCE_XDNN_SUCCESS(ret, "broadcast");
 }
 
 }  // namespace phi
 
-PD_REGISTER_KERNEL(
-    tile, XPU, ALL_LAYOUT, phi::TileKernel, bool, float, double, int, int64_t) {
-}
+PD_REGISTER_KERNEL(tile,
+                   XPU,
+                   ALL_LAYOUT,
+                   phi::TileKernel,
+                   bool,
+                   float,
+                   double,
+                   int,
+                   int64_t,
+                   phi::dtype::bfloat16,
+                   phi::dtype::float16) {}

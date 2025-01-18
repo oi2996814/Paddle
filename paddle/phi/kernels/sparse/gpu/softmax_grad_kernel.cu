@@ -86,7 +86,7 @@ void SoftmaxCsrGradKernel(const Context& dev_ctx,
                           SparseCsrTensor* dx) {
   PADDLE_ENFORCE_EQ(axis,
                     -1,
-                    phi::errors::Unimplemented(
+                    common::errors::Unimplemented(
                         "SparseCsrTensor only support axis=-1 for softmax, "
                         "which is faster when reading data by row (axis=-1)"));
   EmptyLikeCsrKernel<T, Context>(dev_ctx, dout, dx);
@@ -189,7 +189,7 @@ void SoftmaxCooGradGPUKernel(const Context& dev_ctx,
   const auto output_indices_dims = out.indices().dims();
   const auto out_dims = out.dims();
   auto sparse_dim = out.sparse_dim();
-  auto sizes = phi::vectorize<IntT>(out_dims);
+  auto sizes = common::vectorize<IntT>(out_dims);
   auto grad_indices = dout.indices();
   auto grad_values = dout.values();
   auto grad_values_ptr = grad_values.data<T>();
@@ -229,7 +229,7 @@ void SoftmaxCooGradGPUKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         is_same_offset,
         true,
-        phi::errors::Unimplemented(
+        common::errors::Unimplemented(
             "SparseCooTensor only support same offsets for softmax."));
     SoftmaxGradKernel<T, Context>(
         dev_ctx, out_values, grad_values, dim - sparse_dim + 1, values);
@@ -243,7 +243,7 @@ void SoftmaxCooGradGPUKernel(const Context& dev_ctx,
                                  std::multiplies<>());
 
   DenseTensor values_2(*values);
-  values_2.Resize(phi::make_ddim({nnz, nvalues}));
+  values_2.Resize(common::make_ddim({nnz, nvalues}));
 
   DenseTensor sorted_indices;
   DenseTensor pool_offsets;

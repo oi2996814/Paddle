@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_uint16_to_float
+from op_test import OpTest, convert_uint16_to_float
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 
 def output_hist(out):
@@ -45,8 +46,14 @@ class TestUniformRandomInplaceOpDtype(unittest.TestCase):
             tensor_fp64.uniform_()
             self.assertEqual(tensor_fp64.dtype, paddle.float64)
 
-        places = ['cpu']
-        if fluid.core.is_compiled_with_cuda():
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            places.append('cpu')
+        if base.core.is_compiled_with_cuda():
             places.append('gpu')
         for place in places:
             paddle.set_device(place)
@@ -73,7 +80,7 @@ class TestUniformRandomInplaceFP16Op(OpTest):
 
     def verify_output(self, outs):
         hist, prob = self.output_hist(np.array(outs[0]))
-        np.testing.assert_allclose(hist, prob, rtol=0, atol=0.001)
+        np.testing.assert_allclose(hist, prob, rtol=0.015, atol=0.001)
 
     # TODO: Due to the lack of the self.python_api=paddle.uniform_random_inplace setting, the dynamic graph is temporarily turned off, set check_dygraph=False
     def test_check_grad(self):
@@ -218,8 +225,14 @@ class TestUniformRandomInplaceOpError(unittest.TestCase):
 
 class TestUniformRandomInplaceOpEmptyTensor(unittest.TestCase):
     def test_uniform_random_inplace_op_empty_tensor(self):
-        places = ['cpu']
-        if fluid.core.is_compiled_with_cuda():
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            places.append('cpu')
+        if base.core.is_compiled_with_cuda():
             places.append('gpu')
         test_shapes = [(200, 0), (0, 200)]
         for place in places:
@@ -248,8 +261,14 @@ class TestUniformRandomInplaceGrad(unittest.TestCase):
             uniform_grad = tensor_b.grad.numpy()
             self.assertTrue((uniform_grad == 0).all())
 
-        places = ['cpu']
-        if fluid.core.is_compiled_with_cuda():
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            places.append('cpu')
+        if base.core.is_compiled_with_cuda():
             places.append('gpu')
         for place in places:
             paddle.set_device(place)

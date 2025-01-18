@@ -19,18 +19,11 @@ limitations under the License. */
 #include "paddle/fluid/framework/ir/graph_pattern_detector.h"
 #include "paddle/fluid/framework/op_version_registry.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 class Node;
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
-namespace paddle {
-namespace framework {
-namespace ir {
-namespace patterns {
+namespace paddle::framework::ir::patterns {
 
 struct FCElementwiseLayerNorm : public PatternBase {
   FCElementwiseLayerNorm(PDPattern *pattern, const std::string &name_scope)
@@ -122,7 +115,8 @@ PDNode *FCElementwiseLayerNorm::operator()(PDNode *x) {
   return layer_norm_out_var;
 }
 
-}  // namespace patterns
+}  // namespace paddle::framework::ir::patterns
+namespace paddle::framework::ir {
 
 template <typename T>
 static bool IsEqual(const std::vector<T> &x, const std::vector<T> &y) {
@@ -203,7 +197,7 @@ FCElementwiseLayerNormFusePass::FCElementwiseLayerNormFusePass() {
 
 void FCElementwiseLayerNormFusePass::ApplyImpl(ir::Graph *graph) const {
   PADDLE_ENFORCE_NOT_NULL(graph,
-                          platform::errors::InvalidArgument(
+                          common::errors::InvalidArgument(
                               "Pointer to graph argument should not be NULL."));
   FusePassBase::Init("fc_elementwise_layernorm_fuse", graph);
   int found_subgraph_count = 0;
@@ -255,8 +249,8 @@ void FCElementwiseLayerNormFusePass::ApplyImpl(ir::Graph *graph) const {
     int begin_norm_axis =
         PADDLE_GET_CONST(int, layer_norm->Op()->GetAttr("begin_norm_axis"));
     auto layer_norm_x_dims = fc_out->Var()->GetShape();
-    auto layer_norm_x_mat_dims =
-        phi::flatten_to_2d(phi::make_ddim(layer_norm_x_dims), begin_norm_axis);
+    auto layer_norm_x_mat_dims = common::flatten_to_2d(
+        common::make_ddim(layer_norm_x_dims), begin_norm_axis);
     if (fc_w->Var()->GetShape()[1] != layer_norm_x_mat_dims[1]) {
       return;
     }
@@ -333,9 +327,7 @@ void FCElementwiseLayerNormFusePass::ApplyImpl(ir::Graph *graph) const {
   AddStatis(found_subgraph_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(fc_elementwise_layernorm_fuse_pass,
               paddle::framework::ir::FCElementwiseLayerNormFusePass);

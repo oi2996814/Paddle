@@ -12,6 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Literal, Tuple
+
+if TYPE_CHECKING:
+    import numpy.typing as npt
+
+    from paddle.vision.transforms.transforms import _Transform
+
+    from ..image import _ImageBackend, _ImageDataType
+
+    _DatasetMode = Literal["train", "valid", "test"]
+
 import os
 import tarfile
 
@@ -38,24 +51,24 @@ SETID_MD5 = 'a5357ecc9cb78c4bef273ce3793fc85c'
 MODE_FLAG_MAP = {'train': 'tstid', 'test': 'trnid', 'valid': 'valid'}
 
 
-class Flowers(Dataset):
+class Flowers(Dataset[Tuple["_ImageDataType", "npt.NDArray[np.int64]"]]):
     """
     Implementation of `Flowers102 <https://www.robots.ox.ac.uk/~vgg/data/flowers/>`_
     dataset.
 
     Args:
-        data_file (str, optional): Path to data file, can be set None if
+        data_file (str|None, optional): Path to data file, can be set None if
             :attr:`download` is True. Default: None, default data path: ~/.cache/paddle/dataset/flowers/.
-        label_file (str, optional): Path to label file, can be set None if
+        label_file (str|None, optional): Path to label file, can be set None if
             :attr:`download` is True. Default: None, default data path: ~/.cache/paddle/dataset/flowers/.
-        setid_file (str, optional): Path to subset index file, can be set
+        setid_file (str|None, optional): Path to subset index file, can be set
             None if :attr:`download` is True. Default: None, default data path: ~/.cache/paddle/dataset/flowers/.
         mode (str, optional): Either train or test mode. Default 'train'.
-        transform (Callable, optional): transform to perform on image, None for no transform. Default: None.
-        download (bool, optional): download dataset automatically if :attr:`data_file` is None. Default: True.
-        backend (str, optional): Specifies which type of image to be returned:
+        transform (Callable|None, optional): transform to perform on image, None for no transform. Default: None.
+        download (bool|None, optional): download dataset automatically if :attr:`data_file` is None. Default: True.
+        backend (str|None, optional): Specifies which type of image to be returned:
             PIL.Image or numpy.ndarray. Should be one of {'pil', 'cv2'}.
-            If this option is not set, will get backend from :ref:`paddle.vision.get_image_backend <api_vision_image_get_image_backend>`,
+            If this option is not set, will get backend from :ref:`paddle.vision.get_image_backend <api_paddle_vision_get_image_backend>`,
             default backend is 'pil'. Default: None.
 
     Returns:
@@ -65,58 +78,63 @@ class Flowers(Dataset):
 
         .. code-block:: python
 
-            import itertools
-            import paddle.vision.transforms as T
-            from paddle.vision.datasets import Flowers
+            >>> # doctest: +TIMEOUT(60)
+            >>> import itertools
+            >>> import paddle.vision.transforms as T
+            >>> from paddle.vision.datasets import Flowers
 
+            >>> flowers = Flowers()
+            >>> print(len(flowers))
+            6149
 
-            flowers = Flowers()
-            print(len(flowers))
-            # 6149
+            >>> for i in range(5):  # only show first 5 images
+            ...     img, label = flowers[i]
+            ...     # do something with img and label
+            ...     print(type(img), img.size, label)
+            ...     # <class 'PIL.JpegImagePlugin.JpegImageFile'> (523, 500) [1]
 
-            for i in range(5):  # only show first 5 images
-                img, label = flowers[i]
-                # do something with img and label
-                print(type(img), img.size, label)
-                # <class 'PIL.JpegImagePlugin.JpegImageFile'> (523, 500) [1]
+            >>> transform = T.Compose(
+            ...     [
+            ...         T.Resize(64),
+            ...         T.ToTensor(),
+            ...         T.Normalize(
+            ...             mean=[0.5, 0.5, 0.5],
+            ...             std=[0.5, 0.5, 0.5],
+            ...             to_rgb=True,
+            ...         ),
+            ...     ]
+            ... )
+            >>> flowers_test = Flowers(
+            ...     mode="test",
+            ...     transform=transform,  # apply transform to every image
+            ...     backend="cv2",  # use OpenCV as image transform backend
+            ... )
+            >>> print(len(flowers_test))
+            1020
 
-
-            transform = T.Compose(
-                [
-                    T.Resize(64),
-                    T.ToTensor(),
-                    T.Normalize(
-                        mean=[0.5, 0.5, 0.5],
-                        std=[0.5, 0.5, 0.5],
-                        to_rgb=True,
-                    ),
-                ]
-            )
-
-            flowers_test = Flowers(
-                mode="test",
-                transform=transform,  # apply transform to every image
-                backend="cv2",  # use OpenCV as image transform backend
-            )
-            print(len(flowers_test))
-            # 1020
-
-            for img, label in itertools.islice(iter(flowers_test), 5):  # only show first 5 images
-                # do something with img and label
-                print(type(img), img.shape, label)
-                # <class 'paddle.Tensor'> [3, 64, 96] [1]
+            >>> for img, label in itertools.islice(iter(flowers_test), 5):  # only show first 5 images
+            ...     # do something with img and label
+            ...     print(type(img), img.shape, label) # type: ignore
+            ...     # <class 'paddle.Tensor'> [3, 64, 96] [1]
     """
+
+    backend: _ImageBackend
+    data_file: str | None
+    label_file: str | None
+    setid_file: str | None
+    mode: _DatasetMode
+    transform: _Transform[Any, Any] | None
 
     def __init__(
         self,
-        data_file=None,
-        label_file=None,
-        setid_file=None,
-        mode='train',
-        transform=None,
-        download=True,
-        backend=None,
-    ):
+        data_file: str | None = None,
+        label_file: str | None = None,
+        setid_file: str | None = None,
+        mode: _DatasetMode = 'train',
+        transform: _Transform[Any, Any] | None = None,
+        download: bool = True,
+        backend: _ImageBackend | None = None,
+    ) -> None:
         assert mode.lower() in [
             'train',
             'valid',
@@ -127,9 +145,7 @@ class Flowers(Dataset):
             backend = paddle.vision.get_image_backend()
         if backend not in ['pil', 'cv2']:
             raise ValueError(
-                "Expected backend are one of ['pil', 'cv2'], but got {}".format(
-                    backend
-                )
+                f"Expected backend are one of ['pil', 'cv2'], but got {backend}"
             )
         self.backend = backend
 
@@ -165,16 +181,20 @@ class Flowers(Dataset):
         self.data_path = data_file.replace(".tgz", "/")
         if not os.path.exists(self.data_path):
             os.mkdir(self.data_path)
-        data_tar.extractall(self.data_path)
+        jpg_path = os.path.join(self.data_path, "jpg")
+        if not os.path.exists(jpg_path):
+            data_tar.extractall(self.data_path)
 
         scio = try_import('scipy.io')
         self.labels = scio.loadmat(label_file)['labels'][0]
         self.indexes = scio.loadmat(setid_file)[flag][0]
 
-    def __getitem__(self, idx):
+    def __getitem__(
+        self, idx: int
+    ) -> tuple[_ImageDataType, npt.NDArray[np.int64]]:
         index = self.indexes[idx]
         label = np.array([self.labels[index - 1]])
-        img_name = "jpg/image_%05d.jpg" % index
+        img_name = f"jpg/image_{index:05}.jpg"
         image = os.path.join(self.data_path, img_name)
         if self.backend == 'pil':
             image = Image.open(image)

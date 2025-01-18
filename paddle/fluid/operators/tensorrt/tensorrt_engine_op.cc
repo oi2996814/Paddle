@@ -16,9 +16,7 @@
 
 #include "paddle/fluid/operators/tensorrt/tensorrt_engine_op.h"
 
-namespace paddle {
-
-namespace operators {
+namespace paddle::operators {
 
 class TensorRTEngineOpMaker : public framework::OpProtoAndCheckerMaker {
  public:
@@ -36,7 +34,7 @@ class TensorRTEngineOpMaker : public framework::OpProtoAndCheckerMaker {
     AddAttr<int>("max_batch_size", "the maximum batch size.");
     AddAttr<int64_t>("workspace_size", "the workspace size.").AsExtra();
     AddAttr<framework::BlockDesc *>("sub_block", "the trt block");
-    AddAttr<bool>("enable_int8", "whether swith to int8 mode");
+    AddAttr<bool>("enable_int8", "whether switch to int8 mode");
     AddComment("TensorRT engine operator.");
   }
 };
@@ -46,8 +44,7 @@ class TensorRTEngineInferVarType : public framework::VarTypeInference {
   void operator()(framework::InferVarTypeContext *ctx) const override {}
 };
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
 

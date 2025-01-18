@@ -14,9 +14,7 @@ limitations under the License. */
 
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 class Squeeze2OpConverter : public OpConverter {
  public:
@@ -39,11 +37,11 @@ class Squeeze2OpConverter : public OpConverter {
     if (axes.empty()) {
       for (int i = 0; i < input_dims.nbDims; i++) {
         if (input_dims.d[i] == -1) {
-          PADDLE_THROW(platform::errors::InvalidArgument(
+          PADDLE_THROW(common::errors::InvalidArgument(
               "The necessary attributes of the squeeze2 operator axes is "
               "missing."));
         } else if (input_dims.d[i] == 1) {
-          axes.push_back(engine_->with_dynamic_shape() ? i : i + 1);
+          axes.push_back(i);
         }
       }
     }
@@ -51,18 +49,14 @@ class Squeeze2OpConverter : public OpConverter {
     PADDLE_ENFORCE_GT(
         axes.size(),
         0,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Attr(axes).size should be > 0 in squeeze2 op in TensorRT,"
             "but received axes.size() = %d.",
             axes.size()));
 
     std::vector<bool> should_squeeze(input_dims.nbDims, false);
     for (int& axis : axes) {
-      if (engine_->with_dynamic_shape()) {
-        axis += (axis < 0) ? input_dims.nbDims : 0;
-      } else {
-        axis += (axis < 0) ? input_dims.nbDims : -1;
-      }
+      axis += (axis < 0) ? input_dims.nbDims : 0;
       should_squeeze[axis] = true;
     }
 
@@ -78,19 +72,13 @@ class Squeeze2OpConverter : public OpConverter {
     }
 
     auto* layer = TRT_ENGINE_ADD_LAYER(engine_, Shuffle, *input);
-    if (engine_->with_dynamic_shape()) {
-      auto* shape_tensor = Shape(input);
-      auto* real_shape_tensor = Gather(shape_tensor, gather_indices);
-      layer->setInput(1, *real_shape_tensor);
-    } else {
-      layer->setReshapeDimensions(trt_out_dims);
-    }
-    RreplenishLayerAndOutput(layer, "squeeze2", {output_name}, test_mode);
+    auto* shape_tensor = Shape(input);
+    auto* real_shape_tensor = Gather(shape_tensor, gather_indices);
+    layer->setInput(1, *real_shape_tensor);
+    ReplenishLayerAndOutput(layer, "squeeze2", {output_name}, test_mode);
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(squeeze2, Squeeze2OpConverter);

@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import contextlib
 import inspect
@@ -19,22 +20,33 @@ import pickle
 import socket
 import time
 import warnings
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    List,
+    Literal,
+    Union,
+    overload,
+)
 
 import numpy as np
+from typing_extensions import TypeAlias
 
 import paddle
 import paddle.distributed as dist
-from paddle import fluid
+import paddle.optimizer
+from paddle import base
 from paddle.autograd import no_grad
+from paddle.base import core
+from paddle.base.executor import global_scope
+from paddle.base.framework import (
+    Variable,
+    _current_expected_place_ as _get_device,
+    _get_paddle_place,
+)
 from paddle.distributed import fleet
 from paddle.distributed.fleet.base import role_maker
-from paddle.fluid import core
-from paddle.fluid.dygraph.base import to_variable
-from paddle.fluid.executor import global_scope
-from paddle.fluid.framework import Variable
-from paddle.fluid.framework import _current_expected_place as _get_device
-from paddle.fluid.framework import _get_paddle_place
-from paddle.framework import in_dynamic_mode
+from paddle.framework import in_dynamic_mode, in_pir_mode
 from paddle.framework.io_utils import is_belong_to_optimizer
 from paddle.io import DataLoader, Dataset, DistributedBatchSampler
 from paddle.jit.translated_layer import INFER_MODEL_SUFFIX, INFER_PARAMS_SUFFIX
@@ -43,6 +55,25 @@ from paddle.static import InputSpec as Input
 
 from .callbacks import EarlyStopping, config_callbacks
 from .model_summary import summary
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+    import numpy.typing as npt
+
+    from paddle import Tensor
+    from paddle._typing.dtype_like import _DTypeLiteral
+
+    from .callbacks import Callback
+    from .model_summary import ModelSummary
+
+    _InputBatch: TypeAlias = Union[
+        Tensor,
+        npt.NDArray[Any],
+        List[Tensor],
+        List[npt.NDArray[Any]],
+    ]
+
 
 __all__ = []
 
@@ -59,9 +90,9 @@ def to_list(value):
 
 def to_numpy(var):
     assert isinstance(
-        var, (Variable, fluid.core.eager.Tensor)
+        var, (Variable, base.core.eager.Tensor, paddle.base.libpaddle.pir.Value)
     ), "not a variable"
-    if isinstance(var, fluid.core.eager.Tensor):
+    if isinstance(var, base.core.eager.Tensor):
         return np.array(var)
     t = global_scope().find_var(var.name).get_tensor()
     return np.array(t)
@@ -124,6 +155,7 @@ def init_communicator(
 ):
     if nranks < 2:
         return
+    endpoints_str = ",".join(endpoints)
     other_endpoints = endpoints[:]
     other_endpoints.remove(current_endpoint)
     block = program.global_block()
@@ -131,9 +163,9 @@ def init_communicator(
         wait_server_ready(other_endpoints)
     if core.is_compiled_with_cuda():
         nccl_id_var = block.create_var(
-            name=fluid.unique_name.generate('nccl_id'),
+            name=base.unique_name.generate('nccl_id'),
             persistable=True,
-            type=fluid.core.VarDesc.VarType.RAW,
+            type=base.core.VarDesc.VarType.RAW,
         )
 
         block.append_op(
@@ -155,13 +187,14 @@ def init_communicator(
                 'nranks': nranks,
                 'rank': rank,
                 'ring_id': 0,
+                'endpoints': endpoints_str,
             },
         )
     elif core.is_compiled_with_xpu():
         bkcl_id_var = block.create_var(
-            name=fluid.unique_name.generate('bkcl_id'),
+            name=base.unique_name.generate('bkcl_id'),
             persistable=True,
-            type=fluid.core.VarDesc.VarType.RAW,
+            type=base.core.VarDesc.VarType.RAW,
         )
 
         block.append_op(
@@ -183,6 +216,7 @@ def init_communicator(
                 'nranks': nranks,
                 'rank': rank,
                 'ring_id': 0,
+                'endpoints': endpoints_str,
             },
         )
     elif (
@@ -190,9 +224,9 @@ def init_communicator(
         in paddle.device.get_all_custom_device_type()
     ):
         xccl_id_var = block.create_var(
-            name=fluid.unique_name.generate('xccl_id'),
+            name=base.unique_name.generate('xccl_id'),
             persistable=True,
-            type=fluid.core.VarDesc.VarType.RAW,
+            type=base.core.VarDesc.VarType.RAW,
         )
 
         block.append_op(
@@ -214,6 +248,7 @@ def init_communicator(
                 'nranks': nranks,
                 'rank': rank,
                 'ring_id': 0,
+                'endpoints': endpoints_str,
             },
         )
 
@@ -221,9 +256,9 @@ def init_communicator(
 def prepare_distributed_context(place=None):
     if place is None:
         place = (
-            fluid.CUDAPlace(paddle.distributed.ParallelEnv().dev_id)
+            base.CUDAPlace(paddle.distributed.ParallelEnv().dev_id)
             if paddle.distributed.ParallelEnv().nranks > 1
-            else fluid.CUDAPlace(0)
+            else base.CUDAPlace(0)
         )
 
     place = _get_paddle_place(place)
@@ -242,10 +277,10 @@ def prepare_distributed_context(place=None):
 
     global _parallel_context_initialized
 
-    if not _parallel_context_initialized and isinstance(place, fluid.CUDAPlace):
+    if not _parallel_context_initialized and isinstance(place, base.CUDAPlace):
 
         def _init_context():
-            communicator_prog = fluid.Program()
+            communicator_prog = base.Program()
             init_communicator(
                 communicator_prog,
                 strategy.local_rank,
@@ -254,13 +289,13 @@ def prepare_distributed_context(place=None):
                 strategy.current_endpoint,
                 strategy.trainer_endpoints,
             )
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             exe.run(communicator_prog)
 
         if in_dynamic_mode():
-            fluid.disable_dygraph()
+            base.disable_dygraph()
             _init_context()
-            fluid.enable_dygraph(place)
+            base.enable_dygraph(place)
 
     else:
         assert "Only support CUDAPlace for now."
@@ -287,10 +322,10 @@ def _update_input_info(inputs):
     return shapes, dtypes
 
 
-class StaticGraphAdapter:
+class StaticPIRGraphAdapter:
     """
 
-    Model traning/inference with a static graph.
+    Model training/inference with PIR.
 
     """
 
@@ -299,8 +334,396 @@ class StaticGraphAdapter:
         self.model = model
         # with `_build_once` gone, parameters are now created in `__init__`
         # so we need to keep track of the parameters already created
-        self._startup_prog = fluid.default_startup_program()
-        self._orig_prog = fluid.default_main_program()
+        self._startup_prog = paddle.pir.core.default_startup_program()
+        self._orig_prog = paddle.pir.core.default_main_program()
+
+        self._label_vars = {}
+        self._input_vars = {}
+        self._endpoints = {}
+        self._loss_endpoint = None
+        self._executor = None
+        self._progs = {}
+        self._compiled_progs = {}
+
+        self._merge_count = {
+            'eval_total': 0,
+            'test_total': 0,
+            'eval_batch': 0,
+            'test_batch': 0,
+        }
+
+        self._nranks = paddle.distributed.ParallelEnv().nranks
+        self._local_rank = paddle.distributed.ParallelEnv().local_rank
+
+        self._amp_level = "O0"
+        self._amp_configs = {}
+        self._amp_custom_lists = {}
+        self._use_fp16_guard = None
+
+    @property
+    def mode(self):
+        return self.model.mode
+
+    @mode.setter
+    def mode(self, value):
+        self.model.mode = value
+
+    def train_batch(self, inputs, labels=None, update=True):
+        assert (
+            self.model._optimizer
+        ), "model not ready, please call `model.prepare()` first"
+        self.mode = 'train'
+        assert (
+            update is True
+        ), "Does not support `update == False` in static graph mode by now."
+        return self._run(inputs, labels)
+
+    def eval_batch(self, inputs, labels=None):
+        self.mode = 'eval'
+        return self._run(inputs, labels)
+
+    def predict_batch(self, inputs):
+        self.mode = 'test'
+        return self._run(inputs, None)
+
+    def parameters(self, *args, **kwargs):
+        return self.model.network.parameters(*args, **kwargs)
+
+    def save(self, path):
+        def _save(state, path):
+            if not state:
+                return
+            state = {
+                k: (
+                    to_numpy(v)
+                    if isinstance(v, paddle.base.libpaddle.pir.Value)
+                    else v
+                )
+                for k, v in state.items()
+            }
+            with open(path, 'wb') as f:
+                pickle.dump(state, f)
+
+        def get_tensor(var):
+            t = global_scope().find_var(var.name).get_tensor()
+            return np.array(t)
+
+        base = os.path.basename(path)
+        assert base != "", "path should be of 'dirname/filename' format"
+        dir_name = os.path.dirname(path)
+        if dir_name and not os.path.exists(dir_name):
+            os.makedirs(dir_name)
+        param_path = path + ".pdparams"
+        _save(self.model.network.state_dict(), param_path)
+
+        prog = self._progs.get('train', None)
+
+        if prog is None or self.model._optimizer is None:
+            return
+        # XXX `optimizer.state_dict()` only work in dygraph mode
+        optim_path = path + ".pdopt"
+
+        opts = []
+        for var in prog.list_vars():
+            if var.persistable and var.get_defining_op().name() == "pd_op.data":
+                opts.append(var)
+
+        opt_dict = {
+            var.name: get_tensor(var) for var in opts if var.persistable
+        }
+        if not opt_dict:
+            return
+
+        _save(opt_dict, optim_path)
+
+    def _set_var(self, name, ndarray):
+        t = global_scope().find_var(name).get_tensor()
+        p = t._place()
+        if p.is_cpu_place():
+            place = paddle.base.CPUPlace()
+        elif p.is_cuda_pinned_place():
+            place = paddle.base.CUDAPinnedPlace()
+        elif p.is_xpu_place():
+            p = paddle.base.core.Place()
+            p.set_place(t._place())
+            place = paddle.base.XPUPlace(p.xpu_device_id())
+        elif p.is_custom_place():
+            p = paddle.base.core.Place()
+            p.set_place(t._place())
+            place = paddle.base.CustomPlace(
+                paddle.device.get_device().split(':')[0], p.custom_device_id()
+            )
+        else:
+            p = paddle.base.core.Place()
+            p.set_place(t._place())
+            place = paddle.base.CUDAPlace(p.gpu_device_id())
+
+        t.set(ndarray, place)
+
+    def load(self, param_state_pairs, optim_state):
+        if self._executor is None:
+            executor = base.Executor(base.CPUPlace())._default_executor
+        else:
+            executor = self._executor._default_executor
+
+        paddle.base.libpaddle.pir.create_loaded_parameter(
+            [param for param, state in param_state_pairs],
+            global_scope(),
+            executor,
+        )
+        for param, state in param_state_pairs:
+            self._set_var(param.name, state)
+
+        # restore optimizer states
+        # FIXME what if a different optimizer is used?
+        if not self.model._optimizer or not optim_state:
+            return
+        self._load_optimizer(optim_state, executor)
+
+    def _load_optimizer(self, state, executor):
+        prog = self._progs.get('train', None)
+        optim = []
+        for var in prog.list_vars():
+            if not var.is_parameter:
+                if var.persistable:
+                    optim.append(var)
+
+        if not optim:
+            return
+
+        base.core._create_loaded_parameter(optim, global_scope(), executor)
+
+        converted_state = dict(state)
+        for var in optim:
+            if var.name.startswith("learning_rate_"):
+                # When using static learning rate, static-graph would make it
+                # a persistable var named 'unique_name.generate("learning_rate")',
+                # However, dygraph wouldn't save it.
+                if var.name not in state:
+                    continue
+            assert (
+                var.name in converted_state
+            ), f"variable [{var.name}] is not in optimizer state file"
+            self._set_var(var.name, converted_state[var.name])
+
+    def _run(self, inputs, labels=None):
+        compiled_prog = self._compiled_progs.get(self.mode, None)
+        assert (
+            compiled_prog
+        ), "Model is not ready, please call `model.prepare()` first"
+
+        inputs = to_list(inputs)
+        if labels is not None:
+            labels = to_list(labels)
+        assert len(inputs) == len(self._input_vars[self.mode]), (
+            "number of inputs"
+            + " does not match number of arguments of `forward` method"
+        )
+
+        feed = {}
+        input_names = [v.name for v in self._input_vars[self.mode]]
+        input_dtypes = [v.dtype for v in self._input_vars[self.mode]]
+
+        for idx, n in enumerate(input_names):
+            # train and test may take different arguments
+            if inputs[idx] is not None:
+                feed[n] = inputs[idx]
+            if self._amp_level == 'O2' and input_dtypes[idx] == paddle.float16:
+                if isinstance(feed[n], core.DenseTensor):
+                    feed[n] = feed[n]._as_type(paddle.pir.core.DataType.FLOAT16)
+                elif isinstance(feed[n], np.ndarray):
+                    feed[n] = feed[n].astype('float16')
+
+        if labels is not None:
+            for idx, v in enumerate(self._label_vars[self.mode]):
+                feed[v.name] = labels[idx]
+
+        endpoints = self._endpoints[self.mode]
+        if self.mode == 'test':
+            fetch_list = endpoints['output']
+        else:
+            metric_list, metric_splits = flatten_list(endpoints['metric'])
+            fetch_list = endpoints['loss'] + metric_list
+            num_loss = len(endpoints['loss'])
+
+        # if fetch Variable is same as input Variable, do not fetch
+        # from program, get it from input directly
+        pruned_fetch_list = []
+        pruned_fetch_idx_name_map = [""] * len(fetch_list)
+        for i, fetch_var in enumerate(fetch_list):
+            if fetch_var in feed.keys():
+                pruned_fetch_idx_name_map[i] = fetch_var
+            else:
+                pruned_fetch_list.append(fetch_var)
+
+        rets = self._executor.run(
+            compiled_prog,
+            feed=feed,
+            fetch_list=pruned_fetch_list,
+            return_numpy=False,
+        )
+
+        # restore pruned fetch_list Variable from feeds
+        for i, name in enumerate(pruned_fetch_idx_name_map):
+            if len(name) > 0:
+                rets.insert(i, feed[name])
+
+        # DenseTensor cannot be fetch as numpy directly
+        rets = [np.array(v) for v in rets]
+        if self.mode == 'test':
+            return rets[:]
+
+        metric_states = restore_flatten_list(rets[num_loss:], metric_splits)
+        metrics = []
+        for metric, state in zip(self.model._metrics, metric_states):
+            metrics.append(metric.update(*state))
+
+        if num_loss and len(metrics):
+            return rets[:num_loss], metrics
+        else:
+            return rets[:num_loss] if num_loss else metrics
+
+    def prepare(self):
+        modes = ['train', 'test', 'eval']
+        for mode in modes:
+            self._make_program(mode)
+            self._initialize(self._progs[mode], mode)
+
+    def _make_program(self, mode):
+        prog = self._progs.get(mode, None)
+        if prog is not None:
+            return
+
+        prog = self._orig_prog.clone()
+
+        losses = []
+        metrics = []
+        prog_param = prog.get_all_parameter_values()
+
+        named_sublayers = self.model.network.named_sublayers(
+            prefix='',
+            include_self=True,
+            remove_duplicate=True,
+        )
+        for layer_prefix, sublayer in named_sublayers:
+            params = sublayer._parameters.items()
+            for key, param in params:
+                sublayer._parameters[key] = prog_param[param.name]
+
+        with base.program_guard(prog, self._startup_prog):
+            inputs = self.model._inputs
+            labels = self.model._labels if self.model._labels else []
+            inputs = [k._create_feed_layer() for k in to_list(inputs)]
+            labels = [k._create_feed_layer() for k in to_list(labels)]
+            self._label_vars[mode] = labels
+
+            if mode == 'train' and self.model._optimizer:
+                opt_param = []
+                for key, value in prog_param.items():
+                    opt_param.append(value)
+
+                self.model._optimizer._parameter_list = list(opt_param)
+
+                if self._amp_level != "O0" and core.is_compiled_with_cuda:
+                    self.model.network, self.model._optimizer = (
+                        paddle.amp.decorate(
+                            models=self.model.network,
+                            optimizers=self.model._optimizer,
+                            level=self._amp_level,
+                        )
+                    )
+
+                    with paddle.amp.auto_cast(
+                        level=self._amp_level, dtype='float16', use_promote=True
+                    ):
+                        outputs = to_list(self.model.network.forward(*inputs))
+
+                        if mode != 'test' and self.model._loss:
+                            losses = self.model._loss(*(outputs + labels))
+
+                        if mode != 'test':
+                            for metric in self.model._metrics:
+                                metrics.append(
+                                    to_list(metric.compute(*(outputs + labels)))
+                                )
+                else:
+                    outputs = to_list(self.model.network.forward(*inputs))
+
+                    if mode != 'test' and self.model._loss:
+                        losses = self.model._loss(*(outputs + labels))
+
+                    if mode != 'test':
+                        for metric in self.model._metrics:
+                            metrics.append(
+                                to_list(metric.compute(*(outputs + labels)))
+                            )
+
+                self._loss_endpoint = paddle.add_n(losses)
+
+                self.model._optimizer.minimize(self._loss_endpoint)
+            else:
+                outputs = to_list(self.model.network.forward(*inputs))
+
+                if mode != 'test' and self.model._loss:
+                    losses = self.model._loss(*(outputs + labels))
+
+                if mode != 'test':
+                    for metric in self.model._metrics:
+                        metrics.append(
+                            to_list(metric.compute(*(outputs + labels)))
+                        )
+
+        if mode != 'train':
+            # Some operators, e.g., :ref:`api_paddle_base_layers_batch_norm` , behave differently between
+            # training and testing. They have an attribute, :code:`is_test`, to
+            # control this behaviour. This method will change the :code:`is_test`
+            # attribute of them to :code:`True` when :code:`for_test=True`.
+            prog.set_is_test_attr()
+
+        self._input_vars[mode] = inputs
+
+        self._progs[mode] = prog
+        self._endpoints[mode] = {
+            "output": outputs,
+            "loss": to_list(losses),
+            "metric": metrics,
+        }
+
+    def _initialize(self, prog, mode):
+        assert (
+            self.model._place is not None
+        ), "device is not set, please call `model.prepare()` first"
+
+        place = self.model._place
+
+        if self._executor is None:
+            self._executor = base.Executor(place)
+            self._executor.run(self._startup_prog)
+
+        if (
+            self._amp_level == "O2"
+            and mode == 'train'
+            and core.is_compiled_with_cuda()
+        ):
+            self.model._optimizer.amp_init(place)
+
+        self._compiled_progs[mode] = prog
+
+
+class StaticGraphAdapter:
+    """
+
+    Model training/inference with a static graph.
+
+    """
+
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        # with `_build_once` gone, parameters are now created in `__init__`
+        # so we need to keep track of the parameters already created
+        self._startup_prog = base.default_startup_program()
+        self._orig_prog = base.default_main_program()
 
         self._label_vars = {}  # label variables
         self._input_vars = {}  # label variables
@@ -385,15 +808,15 @@ class StaticGraphAdapter:
 
         _save(optim, optim_path)
 
-    # TODO: support save/load scaler state in static graph
+    # TODO: Support save/load scaler state in static graph
     def load(self, param_state_pairs, optim_state):
         if self._executor is None:
-            executor = fluid.Executor(fluid.CPUPlace())._default_executor
+            executor = base.Executor(base.CPUPlace())._default_executor
         else:
             executor = self._executor._default_executor
 
         # restore parameter states
-        fluid.core._create_loaded_parameter(
+        base.core._create_loaded_parameter(
             [param for param, state in param_state_pairs],
             global_scope(),
             executor,
@@ -413,7 +836,7 @@ class StaticGraphAdapter:
         if not optim:
             return
 
-        fluid.core._create_loaded_parameter(optim, global_scope(), executor)
+        base.core._create_loaded_parameter(optim, global_scope(), executor)
 
         converted_state = dict(state)
         for var in optim:
@@ -493,9 +916,9 @@ class StaticGraphAdapter:
                                 + accum_name
                                 + "_0"
                             )
-                            converted_state[
-                                state_var.name
-                            ] = converted_state.pop(dy_state_name)
+                            converted_state[state_var.name] = (
+                                converted_state.pop(dy_state_name)
+                            )
 
             assert (
                 var.name in converted_state
@@ -506,13 +929,13 @@ class StaticGraphAdapter:
         t = global_scope().find_var(var.name).get_tensor()
         p = t._place()
         if p.is_cpu_place():
-            place = fluid.CPUPlace()
+            place = base.CPUPlace()
         elif p.is_cuda_pinned_place():
-            place = fluid.CUDAPinnedPlace()
+            place = base.CUDAPinnedPlace()
         else:
-            p = fluid.core.Place()
+            p = base.core.Place()
             p.set_place(t._place())
-            place = fluid.CUDAPlace(p.gpu_device_id())
+            place = base.CUDAPlace(p.gpu_device_id())
 
         t.set(ndarray, place)
 
@@ -538,11 +961,8 @@ class StaticGraphAdapter:
             # train and test may take different arguments
             if inputs[idx] is not None:
                 feed[n] = inputs[idx]
-            if (
-                self._amp_level == 'O2'
-                and input_dtypes[idx] == core.VarDesc.VarType.FP16
-            ):
-                if isinstance(feed[n], core.LoDTensor):
+            if self._amp_level == 'O2' and input_dtypes[idx] == paddle.float16:
+                if isinstance(feed[n], core.DenseTensor):
                     feed[n] = feed[n]._as_type(core.VarDesc.VarType.FP16)
                 elif isinstance(feed[n], np.array):
                     feed[n] = feed[n].astype('float16')
@@ -581,7 +1001,7 @@ class StaticGraphAdapter:
             if len(name) > 0:
                 rets.insert(i, feed[name])
 
-        # LoDTensor cannot be fetch as numpy directly
+        # DenseTensor cannot be fetch as numpy directly
         rets = [np.array(v) for v in rets]
         if self.mode == 'test':
             return rets[:]
@@ -633,7 +1053,7 @@ class StaticGraphAdapter:
         prog = self._orig_prog.clone()
         # NOTE: When defining learning rate scheduling in static-graph, ops to
         # increase the global step var and calculate learning rate would be
-        # prepended into _orig_prog. test program maked by `_orig_prog.clone`
+        # prepended into _orig_prog. test program marked by `_orig_prog.clone`
         # also would include these ops. Thus must prune these ops in test
         # program, otherwise the global step would be changed in test.
         if mode != 'train':
@@ -651,7 +1071,7 @@ class StaticGraphAdapter:
 
         losses = []
         metrics = []
-        with fluid.program_guard(prog, self._startup_prog):
+        with base.program_guard(prog, self._startup_prog):
             inputs = self.model._inputs
             labels = self.model._labels if self.model._labels else []
             inputs = [k._create_feed_layer() for k in to_list(inputs)]
@@ -732,11 +1152,11 @@ class StaticGraphAdapter:
         # even if `forward()` may run different code path for different mode
         # therefore startup program only needs to run once
         if self._executor is None:
-            self._executor = fluid.Executor(place)
+            self._executor = base.Executor(place)
             # XXX incremental initialization
             uninitialized = []
             for var_py in self._startup_prog.list_vars():
-                var = fluid.global_scope().find_var(var_py.name)
+                var = base.global_scope().find_var(var_py.name)
                 if (
                     not var_py.name.startswith('nccl_id')
                     and var
@@ -766,7 +1186,7 @@ class StaticGraphAdapter:
             self.model._optimizer.amp_init(place)
 
         if self._nranks < 2:
-            compiled_prog = fluid.CompiledProgram(prog)
+            compiled_prog = base.CompiledProgram(prog)
         else:
             compiled_prog = prog
 
@@ -794,16 +1214,16 @@ class DynamicGraphAdapter:
 
         if self._nranks > 1:
             dist.init_parallel_env()
-            stradegy = paddle.distributed.parallel.ParallelStrategy()
-            stradegy.nranks = paddle.distributed.ParallelEnv().nranks
-            stradegy.local_rank = paddle.distributed.ParallelEnv().local_rank
-            stradegy.trainer_endpoints = (
+            strategy = paddle.distributed.parallel.ParallelStrategy()
+            strategy.nranks = paddle.distributed.ParallelEnv().nranks
+            strategy.local_rank = paddle.distributed.ParallelEnv().local_rank
+            strategy.trainer_endpoints = (
                 paddle.distributed.ParallelEnv().trainer_endpoints
             )
-            stradegy.current_endpoint = (
+            strategy.current_endpoint = (
                 paddle.distributed.ParallelEnv().current_endpoint
             )
-            self.ddp_model = paddle.DataParallel(self.model.network, stradegy)
+            self.ddp_model = paddle.DataParallel(self.model.network, strategy)
 
     @property
     def mode(self):
@@ -823,7 +1243,7 @@ class DynamicGraphAdapter:
         inputs = to_list(inputs)
         self._input_info = _update_input_info(inputs)
         labels = labels or []
-        labels = [to_variable(l) for l in to_list(labels)]
+        labels = [paddle.to_tensor(l) for l in to_list(labels)]
 
         # scaler should be initialized only once
         if self._amp_level != "O0" and self.model._scaler is None:
@@ -835,9 +1255,11 @@ class DynamicGraphAdapter:
             level=self._amp_level,
         ):
             if self._nranks > 1:
-                outputs = self.ddp_model(*[to_variable(x) for x in inputs])
+                outputs = self.ddp_model(*[paddle.to_tensor(x) for x in inputs])
             else:
-                outputs = self.model.network(*[to_variable(x) for x in inputs])
+                outputs = self.model.network(
+                    *[paddle.to_tensor(x) for x in inputs]
+                )
 
         losses = self.model._loss(*(to_list(outputs) + labels))
         losses = to_list(losses)
@@ -873,11 +1295,11 @@ class DynamicGraphAdapter:
         inputs = to_list(inputs)
         self._input_info = _update_input_info(inputs)
         labels = labels or []
-        labels = [to_variable(l) for l in to_list(labels)]
+        labels = [paddle.to_tensor(l) for l in to_list(labels)]
 
-        outputs = self.model.network(*[to_variable(x) for x in inputs])
+        outputs = self.model.network(*[paddle.to_tensor(x) for x in inputs])
 
-        # Transfrom data to expected device
+        # Transform data to expected device
         expected_device = paddle.device.get_device()
         for o in to_list(outputs):
             o._to(device=expected_device)
@@ -932,10 +1354,10 @@ class DynamicGraphAdapter:
     def predict_batch(self, inputs):
         self.model.network.eval()
         self.mode = 'test'
-        inputs = [to_variable(x) for x in to_list(inputs)]
+        inputs = [paddle.to_tensor(x) for x in to_list(inputs)]
         self._input_info = _update_input_info(inputs)
         outputs = self.model.network(*inputs)
-        if self._nranks > 1 and isinstance(self.model._place, fluid.CUDAPlace):
+        if self._nranks > 1 and isinstance(self.model._place, base.CUDAPlace):
             outputs = [_all_gather(o) for o in to_list(outputs)]
 
         return [to_numpy(o) for o in to_list(outputs)]
@@ -964,7 +1386,7 @@ class DynamicGraphAdapter:
             if scaler_state:
                 self.model._scaler.load_state_dict(scaler_state)
 
-        # resotre optimizer states
+        # restore optimizer states
         if not self.model._optimizer or not optim_state:
             return
 
@@ -972,7 +1394,7 @@ class DynamicGraphAdapter:
         # which would happen when set_state_dict before minimize, the state would be
         # stored in optimizer._accumulators_holder and loaded lazily.
         # To contrive this when loading from static-graph saved states, extend
-        # state dict to include keys named accoring to dygraph naming rules.
+        # state dict to include keys named according to dygraph naming rules.
         # TODO: if len(self.model._optimizer._accumulators) > 0
         converted_state = dict(optim_state)
         opt_unq_name = self.model._optimizer._name
@@ -1026,7 +1448,7 @@ class DynamicGraphAdapter:
 
         if not hasattr(self.model._optimizer, 'set_state_dict'):
             warnings.warn(
-                "paddle.fluid.optimizer is deprecated in API 2.0, please use paddle.optimizer instead."
+                "paddle.base.optimizer is deprecated in API 2.0, please use paddle.optimizer instead."
             )
             self.model._optimizer.set_dict(converted_state)
         else:
@@ -1075,7 +1497,7 @@ class Model:
             or dict ({name: InputSpec}), and it couldn't be None in static
             graph. Default: None.
         labels (InputSpec|list|tuple|None, optional): `labels`, entry points of network,
-            could be a InputSpec instnace or list/tuple of InputSpec instances,
+            could be a InputSpec instance or list/tuple of InputSpec instances,
             or None. For static graph, if labels is required in loss,
             labels must be set. Otherwise, it could be None. Default: None.
 
@@ -1084,81 +1506,91 @@ class Model:
         1. A common example
 
         .. code-block:: python
-          :name: code-example1
+            :name: code-example1
 
-            import paddle
-            import paddle.nn as nn
-            import paddle.vision.transforms as T
-            from paddle.static import InputSpec
+            >>> import paddle
+            >>> import paddle.nn as nn
+            >>> import paddle.vision.transforms as T
+            >>> from paddle.static import InputSpec
 
-            device = paddle.set_device('cpu') # or 'gpu'
+            >>> device = paddle.set_device('cpu') # or 'gpu'
 
-            net = nn.Sequential(
-                nn.Flatten(1),
-                nn.Linear(784, 200),
-                nn.Tanh(),
-                nn.Linear(200, 10))
+            >>> net = nn.Sequential(
+            ...     nn.Flatten(1),
+            ...     nn.Linear(784, 200),
+            ...     nn.Tanh(),
+            ...     nn.Linear(200, 10))
+            ...
+            >>> # inputs and labels are not required for dynamic graph.
+            >>> input = InputSpec([None, 784], 'float32', 'x')
+            >>> label = InputSpec([None, 1], 'int64', 'label')
 
-            # inputs and labels are not required for dynamic graph.
-            input = InputSpec([None, 784], 'float32', 'x')
-            label = InputSpec([None, 1], 'int64', 'label')
-
-            model = paddle.Model(net, input, label)
-            optim = paddle.optimizer.SGD(learning_rate=1e-3,
-                parameters=model.parameters())
-
-            model.prepare(optim,
-                        paddle.nn.CrossEntropyLoss(),
-                        paddle.metric.Accuracy())
-
-            transform = T.Compose([
-                T.Transpose(),
-                T.Normalize([127.5], [127.5])
-            ])
-            data = paddle.vision.datasets.MNIST(mode='train', transform=transform)
-            model.fit(data, epochs=2, batch_size=32, verbose=1)
+            >>> model = paddle.Model(net, input, label)
+            >>> optim = paddle.optimizer.SGD(learning_rate=1e-3,
+            ...     parameters=model.parameters())
+            ...
+            >>> model.prepare(optim,
+            ...             paddle.nn.CrossEntropyLoss(),
+            ...             paddle.metric.Accuracy())
+            ...
+            >>> transform = T.Compose([
+            ...     T.Transpose(),
+            ...     T.Normalize([127.5], [127.5])
+            >>> ])
+            >>> data = paddle.vision.datasets.MNIST(mode='train', transform=transform)
+            >>> model.fit(data, epochs=2, batch_size=32, verbose=1)
 
 
         2. An example using mixed precision training.
 
         .. code-block:: python
-          :name: code-example2
+            :name: code-example2
 
-            # required: gpu
-            import paddle
-            import paddle.nn as nn
-            import paddle.vision.transforms as T
+            >>> # doctest: +REQUIRES(env:GPU)
+            >>> import paddle
+            >>> paddle.device.set_device('gpu')
+            >>> import paddle.nn as nn
+            >>> import paddle.vision.transforms as T
 
-            def run_example_code():
-                device = paddle.set_device('gpu')
-
-                net = nn.Sequential(nn.Flatten(1), nn.Linear(784, 200), nn.Tanh(),
-                                    nn.Linear(200, 10))
-
-                model = paddle.Model(net)
-                optim = paddle.optimizer.SGD(learning_rate=1e-3, parameters=model.parameters())
-
-                amp_configs = {
-                    "level": "O1",
-                    "custom_white_list": {'conv2d'},
-                    "use_dynamic_loss_scaling": True
-                }
-                model.prepare(optim,
-                    paddle.nn.CrossEntropyLoss(),
-                    paddle.metric.Accuracy(),
-                    amp_configs=amp_configs)
-
-                transform = T.Compose([T.Transpose(), T.Normalize([127.5], [127.5])])
-                data = paddle.vision.datasets.MNIST(mode='train', transform=transform)
-                model.fit(data, epochs=2, batch_size=32, verbose=1)
-
-            # mixed precision training is only supported on GPU now.
-            if paddle.is_compiled_with_cuda():
-                run_example_code()
-
+            >>> def run_example_code():
+            ...     device = paddle.set_device('gpu')
+            ...
+            ...     net = nn.Sequential(nn.Flatten(1), nn.Linear(784, 200), nn.Tanh(),
+            ...                         nn.Linear(200, 10))
+            ...
+            ...     model = paddle.Model(net)
+            ...     optim = paddle.optimizer.SGD(learning_rate=1e-3, parameters=model.parameters())
+            ...
+            ...     amp_configs = {
+            ...         "level": "O1",
+            ...         "custom_white_list": {'conv2d'},
+            ...         "use_dynamic_loss_scaling": True
+            ...     }
+            ...     model.prepare(optim,
+            ...         paddle.nn.CrossEntropyLoss(),
+            ...         paddle.metric.Accuracy(),
+            ...         amp_configs=amp_configs)
+            ...
+            ...     transform = T.Compose([T.Transpose(), T.Normalize([127.5], [127.5])])
+            ...     data = paddle.vision.datasets.MNIST(mode='train', transform=transform)
+            ...     model.fit(data, epochs=2, batch_size=32, verbose=1)
+            ...
+            >>> # mixed precision training is only supported on GPU now.
+            >>> if paddle.is_compiled_with_cuda():
+            ...     run_example_code()
+            ...
     """
 
-    def __init__(self, network, inputs=None, labels=None):
+    mode: Literal["train", "eval", "test"]
+    network: paddle.nn.Layer
+    stop_training: bool
+
+    def __init__(
+        self,
+        network: paddle.nn.Layer,
+        inputs: Input | Sequence[Input] | dict[str, Input] | None = None,
+        labels: Input | Sequence[Input] | None = None,
+    ) -> None:
         self.mode = 'train'
         self.network = network
         self._inputs = None
@@ -1185,10 +1617,17 @@ class Model:
         # init backend
         if in_dynamic_mode():
             self._adapter = DynamicGraphAdapter(self)
+        elif in_pir_mode():
+            self._adapter = StaticPIRGraphAdapter(self)
         else:
             self._adapter = StaticGraphAdapter(self)
 
-    def train_batch(self, inputs, labels=None, update=True):
+    def train_batch(
+        self,
+        inputs: _InputBatch,
+        labels: _InputBatch | None = None,
+        update: bool = True,
+    ) -> list[float] | tuple[list[npt.NDArray[Any]], list[float]]:
         """
 
         Run one training step on one batch of data. And using `update` indicates
@@ -1214,28 +1653,29 @@ class Model:
 
             .. code-block:: python
 
-                import paddle
-                import paddle.nn as nn
-                from paddle.static import InputSpec
+                >>> import paddle
+                >>> import paddle.nn as nn
+                >>> from paddle.static import InputSpec
+                >>> paddle.seed(2023)
 
-                device = paddle.set_device('cpu') # or 'gpu'
+                >>> device = paddle.set_device('cpu') # or 'gpu'
 
-                net = nn.Sequential(
-                    nn.Linear(784, 200),
-                    nn.Tanh(),
-                    nn.Linear(200, 10))
-
-                input = InputSpec([None, 784], 'float32', 'x')
-                label = InputSpec([None, 1], 'int64', 'label')
-                model = paddle.Model(net, input, label)
-                optim = paddle.optimizer.SGD(learning_rate=1e-3,
-                    parameters=model.parameters())
-                model.prepare(optim, paddle.nn.CrossEntropyLoss())
-                data = paddle.rand((4, 784), dtype="float32")
-                label = paddle.randint(0, 10, (4, 1), dtype="int64")
-                loss = model.train_batch([data], [label])
-                print(loss)
-                # [array([2.192784], dtype=float32)]
+                >>> net = nn.Sequential(
+                ...     nn.Linear(784, 200),
+                ...     nn.Tanh(),
+                ...     nn.Linear(200, 10))
+                ...
+                >>> input = InputSpec([None, 784], 'float32', 'x')
+                >>> label = InputSpec([None, 1], 'int64', 'label')
+                >>> model = paddle.Model(net, input, label)
+                >>> optim = paddle.optimizer.SGD(learning_rate=1e-3,
+                ...     parameters=model.parameters())
+                >>> model.prepare(optim, paddle.nn.CrossEntropyLoss())
+                >>> data = paddle.rand((4, 784), dtype="float32")
+                >>> label = paddle.randint(0, 10, (4, 1), dtype="int64")
+                >>> loss = model.train_batch([data], [label])
+                >>> print(loss)
+                [array(3.0039132, dtype=float32)]
 
         """
         loss = self._adapter.train_batch(inputs, labels, update)
@@ -1244,7 +1684,9 @@ class Model:
         return loss
 
     @no_grad()
-    def eval_batch(self, inputs, labels=None):
+    def eval_batch(
+        self, inputs: _InputBatch, labels: _InputBatch | None = None
+    ) -> list[float] | tuple[list[npt.NDArray[Any]], list[float]]:
         """
 
         Run one evaluating step on a batch of data.
@@ -1267,29 +1709,31 @@ class Model:
 
             .. code-block:: python
 
-                import paddle
-                import paddle.nn as nn
-                from paddle.static import InputSpec
+                >>> import paddle
+                >>> import paddle.nn as nn
+                >>> from paddle.static import InputSpec
+                >>> paddle.seed(2023)
 
-                device = paddle.set_device('cpu') # or 'gpu'
+                >>> device = paddle.set_device('cpu') # or 'gpu'
 
-                net = nn.Sequential(
-                    nn.Linear(784, 200),
-                    nn.Tanh(),
-                    nn.Linear(200, 10))
-
-                input = InputSpec([None, 784], 'float32', 'x')
-                label = InputSpec([None, 1], 'int64', 'label')
-                model = paddle.Model(net, input, label)
-                optim = paddle.optimizer.SGD(learning_rate=1e-3,
-                    parameters=model.parameters())
-                model.prepare(optim,
-                            paddle.nn.CrossEntropyLoss(), metrics=paddle.metric.Accuracy())
-                data = paddle.rand((4, 784), dtype="float32")
-                label = paddle.randint(0, 10, (4, 1), dtype="int64")
-                loss, acc = model.eval_batch([data], [label])
-                print(loss, acc)
-                # [array([2.8825705], dtype=float32)] [0.0]
+                >>> net = nn.Sequential(
+                ...     nn.Linear(784, 200),
+                ...     nn.Tanh(),
+                ...     nn.Linear(200, 10))
+                ...
+                >>> input = InputSpec([None, 784], 'float32', 'x')
+                >>> label = InputSpec([None, 1], 'int64', 'label')
+                >>> model = paddle.Model(net, input, label)
+                >>> optim = paddle.optimizer.SGD(learning_rate=1e-3,
+                ...     parameters=model.parameters())
+                >>> model.prepare(optim,
+                ...               paddle.nn.CrossEntropyLoss(),
+                ...               metrics=paddle.metric.Accuracy())
+                >>> data = paddle.rand((4, 784), dtype="float32")
+                >>> label = paddle.randint(0, 10, (4, 1), dtype="int64")
+                >>> loss, acc = model.eval_batch([data], [label])
+                >>> print(loss, acc)
+                [array(3.0039132, dtype=float32)] [0.0]
 
         """
         loss = self._adapter.eval_batch(inputs, labels)
@@ -1298,7 +1742,7 @@ class Model:
         return loss
 
     @no_grad()
-    def predict_batch(self, inputs):
+    def predict_batch(self, inputs: _InputBatch) -> list[npt.NDArray[Any]]:
         """
 
         Run one predicting step on a batch of data.
@@ -1316,29 +1760,30 @@ class Model:
 
             .. code-block:: python
 
-                import paddle
-                import paddle.nn as nn
-                from paddle.static import InputSpec
+                >>> import paddle
+                >>> import paddle.nn as nn
+                >>> from paddle.static import InputSpec
+                >>> paddle.seed(2023)
 
-                device = paddle.set_device('cpu') # or 'gpu'
+                >>> device = paddle.set_device('cpu') # or 'gpu'
 
-                input = InputSpec([None, 784], 'float32', 'x')
-                label = InputSpec([None, 1], 'int64', 'label')
+                >>> input = InputSpec([None, 784], 'float32', 'x')
+                >>> label = InputSpec([None, 1], 'int64', 'label')
 
-                net = nn.Sequential(
-                    nn.Linear(784, 200),
-                    nn.Tanh(),
-                    nn.Linear(200, 10),
-                    nn.Softmax())
-
-                model = paddle.Model(net, input, label)
-                model.prepare()
-                data = paddle.rand((1, 784), dtype="float32")
-                out = model.predict_batch([data])
-                print(out)
-                # [array([[0.08189095, 0.16740078, 0.06889386, 0.05085445, 0.10729759,
-                #          0.02217775, 0.14518553, 0.1591538 , 0.01808308, 0.17906217]],
-                #          dtype=float32)]
+                >>> net = nn.Sequential(
+                ...     nn.Linear(784, 200),
+                ...     nn.Tanh(),
+                ...     nn.Linear(200, 10),
+                ...     nn.Softmax())
+                ...
+                >>> model = paddle.Model(net, input, label)
+                >>> model.prepare()
+                >>> data = paddle.rand((1, 784), dtype="float32")
+                >>> out = model.predict_batch([data])
+                >>> print(out)
+                [array([[0.10844935, 0.04650883, 0.11790176, 0.04962315, 0.10899059,
+                         0.08197589, 0.03125402, 0.03232312, 0.3786293 , 0.04434395]],
+                      dtype=float32)]
 
         """
         loss = self._adapter.predict_batch(inputs)
@@ -1346,11 +1791,11 @@ class Model:
             self._update_inputs()
         return loss
 
-    def save(self, path, training=True):
+    def save(self, path: str, training: bool = True) -> None:
         """
 
         This function saves parameters, optimizer information or model and
-        paramters only for inference to path. It depends on the parameter
+        parameters only for inference to path. It depends on the parameter
         `training`.
 
         If `training` is set to True, the parameters saved contain all
@@ -1377,45 +1822,34 @@ class Model:
 
             .. code-block:: python
 
-                import paddle
-                import paddle.nn as nn
-                import paddle.vision.transforms as T
-                from paddle.static import InputSpec
+                >>> # doctest: +TIMEOUT(80)
+                >>> import paddle
+                >>> import paddle.nn as nn
+                >>> import paddle.vision.transforms as T
+                >>> from paddle.static import InputSpec
+                >>> from paddle.vision.datasets import MNIST
 
-                class Mnist(nn.Layer):
-                    def __init__(self):
-                        super().__init__()
-                        self.net = nn.Sequential(
-                            nn.Flatten(1),
-                            nn.Linear(784, 200),
-                            nn.Tanh(),
-                            nn.Linear(200, 10),
-                            nn.Softmax())
+                >>> dynamic = True  # False
+                >>> # If use static graph, do not set
+                >>> if not dynamic:
+                ...     paddle.enable_static()
 
-                    def forward(self, x):
-                        return self.net(x)
+                >>> transform = T.Compose([T.Transpose(),
+                ...                        T.Normalize([127.5], [127.5])])
+                >>> train_dataset = MNIST(mode='train', transform=transform)
+                >>> train_loader = paddle.io.DataLoader(train_dataset, batch_size=64)
+                >>> val_dataset = MNIST(mode='test', transform=transform)
+                >>> val_loader = paddle.io.DataLoader(val_dataset, batch_size=64)
 
-                dynamic = True  # False
-                # if use static graph, do not set
-                if not dynamic:
-                    paddle.enable_static()
+                >>> input = InputSpec([None, 1, 28, 28], 'float32', 'image')
+                >>> label = InputSpec([None, 1], 'int64', 'label')
 
-                input = InputSpec([None, 784], 'float32', 'x')
-                label = InputSpec([None, 1], 'int64', 'label')
-                model = paddle.Model(Mnist(), input, label)
-                optim = paddle.optimizer.SGD(learning_rate=1e-3,
-                    parameters=model.parameters())
-                model.prepare(optim, paddle.nn.CrossEntropyLoss())
-
-                transform = T.Compose([
-                    T.Transpose(),
-                    T.Normalize([127.5], [127.5])
-                ])
-                data = paddle.vision.datasets.MNIST(mode='train', transform=transform)
-
-                model.fit(data, epochs=1, batch_size=32, verbose=0)
-                model.save('checkpoint/test')  # save for training
-                model.save('inference_model', False)  # save for inference
+                >>> model = paddle.Model(paddle.vision.models.LeNet(), input, label)
+                >>> optim = paddle.optimizer.Adam(learning_rate=0.001, parameters=model.parameters())
+                >>> model.prepare(optim, paddle.nn.CrossEntropyLoss(), paddle.metric.Accuracy(topk=(1, 2)))
+                >>> model.fit(train_loader, val_loader, epochs=2, verbose=0)
+                >>> model.save('checkpoint/test')  # save for training
+                >>> model.save('inference_model', False)  # save for inference
 
         """
 
@@ -1425,14 +1859,19 @@ class Model:
             else:
                 self._adapter.save(path)
 
-    def load(self, path, skip_mismatch=False, reset_optimizer=False):
+    def load(
+        self,
+        path: str,
+        skip_mismatch: bool = False,
+        reset_optimizer: bool = False,
+    ) -> None:
         """
 
         Load from files storing the model states and optimizer states. The file
         for optimizer states is not necessary if no need to restore the optimizer.
 
         NOTE: parameters are retrieved out from the file storing model states
-        accoring to their structured names.
+        according to their structured names.
 
         For fine-tuning or transfer-learning models where some of the layers have
         changed, keep parameters needed to restore have same structured names in
@@ -1459,22 +1898,22 @@ class Model:
 
             .. code-block:: python
 
-                import paddle
-                import paddle.nn as nn
-                from paddle.static import InputSpec
+                >>> import paddle
+                >>> import paddle.nn as nn
+                >>> from paddle.static import InputSpec
 
-                device = paddle.set_device('cpu')
+                >>> device = paddle.set_device('cpu')
 
-                input = InputSpec([None, 784], 'float32', 'x')
+                >>> input = InputSpec([None, 784], 'float32', 'x')
 
-                model = paddle.Model(nn.Sequential(
-                    nn.Linear(784, 200),
-                    nn.Tanh(),
-                    nn.Linear(200, 10),
-                    nn.Softmax()), input)
-
-                model.save('checkpoint/test')
-                model.load('checkpoint/test')
+                >>> model = paddle.Model(nn.Sequential(
+                ...     nn.Linear(784, 200),
+                ...     nn.Tanh(),
+                ...     nn.Linear(200, 10),
+                ...     nn.Softmax()), input)
+                ...
+                >>> model.save('checkpoint/test')
+                >>> model.load('checkpoint/test')
 
         """
 
@@ -1490,9 +1929,7 @@ class Model:
                 raise ValueError(f"{key} is not found in the providing file.")
             if list(state.shape) != list(param.shape):
                 raise ValueError(
-                    "{} receives a shape {}, but the expected shape is {}.".format(
-                        key, list(state.shape), list(param.shape)
-                    )
+                    f"{key} receives a shape {list(state.shape)}, but the expected shape is {list(param.shape)}."
                 )
             return param, state
 
@@ -1540,7 +1977,7 @@ class Model:
         else:
             return self._adapter.load(matched_param_state, optim_state)
 
-    def parameters(self, *args, **kwargs):
+    def parameters(self, *args: Any, **kwargs: Any) -> list[Tensor]:
         """
 
         Returns a list of parameters of the model.
@@ -1553,18 +1990,36 @@ class Model:
 
             .. code-block:: python
 
-                import paddle
-                import paddle.nn as nn
-                from paddle.static import InputSpec
+                >>> import paddle
+                >>> import paddle.nn as nn
+                >>> from paddle.static import InputSpec
+                >>> paddle.seed(2023)
+                >>> input = InputSpec([None, 784], 'float32', 'x')
 
-                input = InputSpec([None, 784], 'float32', 'x')
-
-                model = paddle.Model(nn.Sequential(
-                    nn.Linear(784, 200),
-                    nn.Tanh(),
-                    nn.Linear(200, 10)), input)
-
-                params = model.parameters()
+                >>> model = paddle.Model(nn.Sequential(
+                ...     nn.Linear(784, 200),
+                ...     nn.Tanh(),
+                ...     nn.Linear(200, 10)), input)
+                ...
+                >>> params = model.parameters()
+                >>> print(params)
+                [Parameter containing:
+                Tensor(shape=[784, 200], dtype=float32, place=Place(cpu), stop_gradient=False,
+                [[ 0.05713400,  0.00314646, -0.03754271, ..., -0.02529256,
+                   0.04872842, -0.06670858],
+                 ...,
+                 [ 0.06268418,  0.06550254, -0.02103353, ...,  0.06395906,
+                   0.05509177, -0.06355451]]), Parameter containing:
+                Tensor(shape=[200], dtype=float32, place=Place(cpu), stop_gradient=False,
+                [0., 0., 0., ..., 0., 0.]), Parameter containing:
+                Tensor(shape=[200, 10], dtype=float32, place=Place(cpu), stop_gradient=False,
+                [[ 0.12933084,  0.07726504,  0.05336720, ...,  0.10865459,
+                   0.06605886,  0.13684085],
+                 ...,
+                 [-0.10171061, -0.01649965, -0.13420501, ...,  0.11190581,
+                  -0.12700224,  0.02916957]]), Parameter containing:
+                Tensor(shape=[10], dtype=float32, place=Place(cpu), stop_gradient=False,
+                [0., 0., 0., 0., 0., 0., 0., 0., 0., 0.])]
 
         """
         return self._adapter.parameters()
@@ -1639,9 +2094,7 @@ class Model:
             }
             if amp_config_key_set - accepted_param_set:
                 raise ValueError(
-                    "Except for 'level', the keys of 'amp_configs' must be accepted by mixed precision APIs, but {} could not be recognized.".format(
-                        tuple(amp_config_key_set - accepted_param_set)
-                    )
+                    f"Except for 'level', the keys of 'amp_configs' must be accepted by mixed precision APIs, but {tuple(amp_config_key_set - accepted_param_set)} could not be recognized."
                 )
 
             if 'use_fp16_guard' in amp_config_key_set:
@@ -1659,11 +2112,17 @@ class Model:
             self._adapter._amp_configs[key] = amp_configs[key]
 
     def prepare(
-        self, optimizer=None, loss=None, metrics=None, amp_configs=None
-    ):
+        self,
+        optimizer: paddle.optimizer.Optimizer | None = None,
+        loss: (
+            paddle.nn.Layer | Callable[[Tensor, Tensor], Tensor] | None
+        ) = None,
+        metrics: Metric | list[Metric] | None = None,
+        amp_configs: str | dict[str, Any] | None = None,
+    ) -> None:
         """
 
-        Configures the model before runing.
+        Configures the model before running.
 
         Args:
             optimizer (Optimizer|None, optional): Optimizer must be set in training
@@ -1697,23 +2156,23 @@ class Model:
 
         """
         self._place = _get_device()
-        if isinstance(self._place, fluid.CUDAPlace):
+        if isinstance(self._place, base.CUDAPlace):
             global _parallel_context_initialized
             if (
                 paddle.distributed.ParallelEnv().nranks > 1
                 and not _parallel_context_initialized
             ):
                 if in_dynamic_mode():
-                    main_prog_seed = fluid.default_main_program().random_seed
+                    main_prog_seed = base.default_main_program().random_seed
                     startup_prog_seed = (
-                        fluid.default_startup_program().random_seed
+                        base.default_startup_program().random_seed
                     )
-                    fluid.disable_dygraph()
+                    base.disable_dygraph()
                     paddle.disable_static(self._place)
                     # enable_dygraph would create and switch to a new program,
                     # thus also copy seed to the new program
-                    fluid.default_main_program().random_seed = main_prog_seed
-                    fluid.default_startup_program().random_seed = (
+                    base.default_main_program().random_seed = main_prog_seed
+                    base.default_startup_program().random_seed = (
                         startup_prog_seed
                     )
                 else:
@@ -1740,22 +2199,22 @@ class Model:
 
     def fit(
         self,
-        train_data=None,
-        eval_data=None,
-        batch_size=1,
-        epochs=1,
-        eval_freq=1,
-        log_freq=10,
-        save_dir=None,
-        save_freq=1,
-        verbose=2,
-        drop_last=False,
-        shuffle=True,
-        num_workers=0,
-        callbacks=None,
-        accumulate_grad_batches=1,
-        num_iters=None,
-    ):
+        train_data: Dataset | DataLoader | None = None,
+        eval_data: Dataset | DataLoader | None = None,
+        batch_size: int | list[int] = 1,
+        epochs: int = 1,
+        eval_freq: int = 1,
+        log_freq: int = 10,
+        save_dir: str | None = None,
+        save_freq: int = 1,
+        verbose: int = 2,
+        drop_last: bool = False,
+        shuffle: bool = True,
+        num_workers: int = 0,
+        callbacks: Sequence[Callback] | Callback | None = None,
+        accumulate_grad_batches: int = 1,
+        num_iters: int | None = None,
+    ) -> None:
         """
 
         Trains the model for a fixed number of epochs. If `eval_data` is set,
@@ -1764,16 +2223,16 @@ class Model:
         Args:
             train_data (Dataset|DataLoader, optional): An iterable data loader is used for
                 train. An instance of paddle paddle.io.Dataset or
-                paddle.io.Dataloader is recomended. Default: None.
+                paddle.io.Dataloader is recommended. Default: None.
             eval_data (Dataset|DataLoader, optional): An iterable data loader is used for
                 evaluation at the end of epoch. If None, will not do evaluation.
                 An instance of paddle.io.Dataset or paddle.io.Dataloader
-                is recomended. Default: None.
+                is recommended. Default: None.
             batch_size (int|list, optional): The batch size of train_data and eval_data. When
                 train_data and eval_data are both the instance of Dataloader, this
                 parameter will be ignored. Default: 1.
             epochs (int, optional): The number of epochs to train the model. Default: 1.
-            eval_freq (int, optional): The frequency, in number of epochs, an evalutation
+            eval_freq (int, optional): The frequency, in number of epochs, an evaluation
                 is performed. Default: 1.
             log_freq (int, optional): The frequency, in number of steps, the training logs
                 are printed. Default: 10.
@@ -1787,17 +2246,17 @@ class Model:
                 train_data when dataset size is not divisible by the batch size.
                 When train_data is an instance of Dataloader, this parameter
                 will be ignored. Default: False.
-            shuffle (bool, optional): Whther to shuffle train_data. When train_data is
+            shuffle (bool, optional): Whether to shuffle train_data. When train_data is
                 an instance of Dataloader, this parameter will be ignored.
                 Default: True.
             num_workers (int, optional): The number of subprocess to load data, 0 for no
                 subprocess used and loading data in main process.
                 When train_data and eval_data are both the instance of
                 Dataloader, this parameter will be ignored. Default: 0.
-            callbacks (Callback|None, optional): A list of `Callback` instances to apply
+            callbacks (Sequence[Callback]|Callback|None, optional): A list of `Callback` instances to apply
                 during training. If None, :ref:`api_paddle_callbacks_ProgBarLogger` and
                 :ref:`api_paddle_callbacks_ModelCheckpoint` are automatically inserted. Default: None.
-            accumulate_grad_batches (int, optional): The number of batches to accumulate gradident
+            accumulate_grad_batches (int, optional): The number of batches to accumulate gradient
                 during training process before optimizer updates. It can mimic large batch
                 size. Default: 1.
             num_iters (int|None, optional): The number of iterations to evaluate the model.
@@ -1812,84 +2271,83 @@ class Model:
                How to make a batch is done internally.
 
             .. code-block:: python
-              :name: code-example3
+                :name: code-example3
 
-                import paddle
-                import paddle.vision.transforms as T
-                from paddle.vision.datasets import MNIST
-                from paddle.static import InputSpec
+                >>> # doctest: +TIMEOUT(80)
+                >>> import paddle
+                >>> import paddle.vision.transforms as T
+                >>> from paddle.vision.datasets import MNIST
+                >>> from paddle.static import InputSpec
 
-                dynamic = True
-                if not dynamic:
-                    paddle.enable_static()
+                >>> dynamic = True
+                >>> if not dynamic:
+                ...     paddle.enable_static()
+                ...
+                >>> transform = T.Compose([T.Transpose(),
+                ...                        T.Normalize([127.5], [127.5])])
+                >>> train_dataset = MNIST(mode='train', transform=transform)
+                >>> val_dataset = MNIST(mode='test', transform=transform)
 
-                transform = T.Compose([
-                    T.Transpose(),
-                    T.Normalize([127.5], [127.5])
-                ])
-                train_dataset = MNIST(mode='train', transform=transform)
-                val_dataset = MNIST(mode='test', transform=transform)
+                >>> input = InputSpec([None, 1, 28, 28], 'float32', 'image')
+                >>> label = InputSpec([None, 1], 'int64', 'label')
 
-                input = InputSpec([None, 1, 28, 28], 'float32', 'image')
-                label = InputSpec([None, 1], 'int64', 'label')
-
-                model = paddle.Model(
-                    paddle.vision.models.LeNet(),
-                    input, label)
-                optim = paddle.optimizer.Adam(
-                    learning_rate=0.001, parameters=model.parameters())
-                model.prepare(
-                    optim,
-                    paddle.nn.CrossEntropyLoss(),
-                    paddle.metric.Accuracy(topk=(1, 2)))
-                model.fit(train_dataset,
-                            val_dataset,
-                            epochs=2,
-                            batch_size=64,
-                            save_dir='mnist_checkpoint')
+                >>> model = paddle.Model(
+                ...     paddle.vision.models.LeNet(),
+                ...     input, label)
+                >>> optim = paddle.optimizer.Adam(
+                ...     learning_rate=0.001, parameters=model.parameters())
+                >>> model.prepare(
+                ...     optim,
+                ...     paddle.nn.CrossEntropyLoss(),
+                ...     paddle.metric.Accuracy(topk=(1, 2)))
+                >>> model.fit(train_dataset,
+                ...             val_dataset,
+                ...             epochs=2,
+                ...             batch_size=64,
+                ...             save_dir='mnist_checkpoint')
+                ...
 
             2. An example use DataLoader, batch size and shuffle is set in
                DataLoader.
 
             .. code-block:: python
-              :name: code-example4
+                :name: code-example4
 
-                import paddle
-                import paddle.vision.transforms as T
-                from paddle.vision.datasets import MNIST
-                from paddle.static import InputSpec
+                >>> # doctest: +TIMEOUT(80)
+                >>> import paddle
+                >>> import paddle.vision.transforms as T
+                >>> from paddle.vision.datasets import MNIST
+                >>> from paddle.static import InputSpec
 
-                dynamic = True
-                if not dynamic:
-                    paddle.enable_static()
+                >>> dynamic = True
+                >>> if not dynamic:
+                ...     paddle.enable_static()
+                ...
+                >>> transform = T.Compose([T.Transpose(),
+                ...                        T.Normalize([127.5], [127.5])])
+                >>> train_dataset = MNIST(mode='train', transform=transform)
+                >>> train_loader = paddle.io.DataLoader(train_dataset,
+                ...     batch_size=64)
+                >>> val_dataset = MNIST(mode='test', transform=transform)
+                >>> val_loader = paddle.io.DataLoader(val_dataset,
+                ...     batch_size=64)
+                ...
+                >>> input = InputSpec([None, 1, 28, 28], 'float32', 'image')
+                >>> label = InputSpec([None, 1], 'int64', 'label')
 
-                transform = T.Compose([
-                        T.Transpose(),
-                        T.Normalize([127.5], [127.5])
-                    ])
-                train_dataset = MNIST(mode='train', transform=transform)
-                train_loader = paddle.io.DataLoader(train_dataset,
-                    batch_size=64)
-                val_dataset = MNIST(mode='test', transform=transform)
-                val_loader = paddle.io.DataLoader(val_dataset,
-                    batch_size=64)
-
-                input = InputSpec([None, 1, 28, 28], 'float32', 'image')
-                label = InputSpec([None, 1], 'int64', 'label')
-
-                model = paddle.Model(
-                    paddle.vision.models.LeNet(), input, label)
-                optim = paddle.optimizer.Adam(
-                    learning_rate=0.001, parameters=model.parameters())
-                model.prepare(
-                    optim,
-                    paddle.nn.CrossEntropyLoss(),
-                    paddle.metric.Accuracy(topk=(1, 2)))
-                model.fit(train_loader,
-                            val_loader,
-                            epochs=2,
-                            save_dir='mnist_checkpoint')
-
+                >>> model = paddle.Model(
+                ...     paddle.vision.models.LeNet(), input, label)
+                >>> optim = paddle.optimizer.Adam(
+                ...     learning_rate=0.001, parameters=model.parameters())
+                >>> model.prepare(
+                ...     optim,
+                ...     paddle.nn.CrossEntropyLoss(),
+                ...     paddle.metric.Accuracy(topk=(1, 2)))
+                >>> model.fit(train_loader,
+                ...             val_loader,
+                ...             epochs=2,
+                ...             save_dir='mnist_checkpoint')
+                ...
         """
         assert train_data is not None, "train_data must be given!"
 
@@ -1990,21 +2448,21 @@ class Model:
 
     def evaluate(
         self,
-        eval_data,
-        batch_size=1,
-        log_freq=10,
-        verbose=2,
-        num_workers=0,
-        callbacks=None,
-        num_iters=None,
-    ):
+        eval_data: Dataset | DataLoader,
+        batch_size: int = 1,
+        log_freq: int = 10,
+        verbose: int = 2,
+        num_workers: int = 0,
+        callbacks: Sequence[Callback] | Callback | None = None,
+        num_iters: int | None = None,
+    ) -> dict[str, float | npt.NDArray[Any]]:
         """
         Evaluate the loss and metrics of the model on input dataset.
 
         Args:
             eval_data (Dataset|DataLoader): An iterable data loader is used for
                 evaluation. An instance of paddle.io.Dataset or
-                paddle.io.Dataloader is recomended.
+                paddle.io.Dataloader is recommended.
             batch_size (int, optional): The batch size of train_data and eval_data.
                 When eval_data is the instance of Dataloader, this argument will be
                 ignored. Default: 1.
@@ -2016,7 +2474,7 @@ class Model:
                 0 for no subprocess used and loading data in main process. When
                 train_data and eval_data are both the instance of Dataloader,
                 this parameter will be ignored. Default: 0.
-            callbacks (Callback|None, optional): A list of `Callback` instances to apply
+            callbacks (Sequence[Callback]|Callback|None, optional): A list of `Callback` instances to apply
                 during training. If None, `ProgBarLogger` and `ModelCheckpoint`
                 are automatically inserted. Default: None.
             num_iters (int|None, optional): The number of iterations to evaluate the model.
@@ -2028,26 +2486,25 @@ class Model:
 
         Examples:
 
-          .. code-block:: python
+            .. code-block:: python
 
-                import paddle
-                import paddle.vision.transforms as T
-                from paddle.static import InputSpec
+                >>> # doctest: +SKIP('Cause each step's acc and using time are not same when repeat running')
+                >>> import paddle
+                >>> import paddle.vision.transforms as T
+                >>> from paddle.static import InputSpec
 
-                # declarative mode
-                transform = T.Compose([
-                        T.Transpose(),
-                        T.Normalize([127.5], [127.5])
-                    ])
-                val_dataset = paddle.vision.datasets.MNIST(mode='test', transform=transform)
+                >>> # declarative mode
+                >>> transform = T.Compose([T.Transpose(),
+                ...                        T.Normalize([127.5], [127.5])])
+                >>> val_dataset = paddle.vision.datasets.MNIST(mode='test', transform=transform)
 
-                input = InputSpec([-1, 1, 28, 28], 'float32', 'image')
-                label = InputSpec([None, 1], 'int64', 'label')
-                model = paddle.Model(paddle.vision.models.LeNet(), input, label)
-                model.prepare(metrics=paddle.metric.Accuracy())
-                result = model.evaluate(val_dataset, batch_size=64)
-                print(result)
-                # {'acc': 0.0699}
+                >>> input = InputSpec([-1, 1, 28, 28], 'float32', 'image')
+                >>> label = InputSpec([None, 1], 'int64', 'label')
+                >>> model = paddle.Model(paddle.vision.models.LeNet(), input, label)
+                >>> model.prepare(metrics=paddle.metric.Accuracy())
+                >>> result = model.evaluate(val_dataset, batch_size=64)
+                >>> print(result)
+                {'acc': 0.0699}
         """
 
         if eval_data is not None and isinstance(eval_data, Dataset):
@@ -2100,6 +2557,39 @@ class Model:
 
         return eval_result
 
+    @overload
+    def predict(
+        self,
+        test_data: Dataset | DataLoader,
+        batch_size: int = ...,
+        num_workers: int = ...,
+        stack_outputs: Literal[True] = ...,
+        verbose: int = ...,
+        callbacks: Sequence[Callback] | Callback | None = ...,
+    ) -> list[npt.NDArray[Any]]: ...
+
+    @overload
+    def predict(
+        self,
+        test_data: Dataset | DataLoader,
+        batch_size: int = ...,
+        num_workers: int = ...,
+        stack_outputs: Literal[False] = ...,
+        verbose: int = ...,
+        callbacks: Sequence[Callback] | Callback | None = ...,
+    ) -> list[tuple[npt.NDArray[Any], ...]]: ...
+
+    @overload
+    def predict(
+        self,
+        test_data: Dataset | DataLoader,
+        batch_size: int = ...,
+        num_workers: int = ...,
+        stack_outputs: bool = ...,
+        verbose: int = ...,
+        callbacks: Sequence[Callback] | Callback | None = ...,
+    ) -> list[npt.NDArray[Any] | tuple[npt.NDArray[Any], ...]]: ...
+
     def predict(
         self,
         test_data,
@@ -2115,7 +2605,7 @@ class Model:
         Args:
             test_data (Dataset|DataLoader): An iterable data loader is used for
                 predict. An instance of paddle.io.Dataset or paddle.io.Dataloader
-                is recomended.
+                is recommended.
             batch_size (int, optional): The batch size of test_data. When test_data is the
                 instance of Dataloader, this argument will be ignored. Default: 1.
             num_workers (int, optional): The number of subprocess to load data, 0 for no subprocess
@@ -2125,57 +2615,55 @@ class Model:
                 field of a sample is in shape [X, Y], test_data contains N samples, predict
                 output field will be in shape [N, X, Y] if stack_output is True, and will
                 be a length N list in shape [[X, Y], [X, Y], ..., [X, Y]] if stack_outputs
-                is False. stack_outputs as False is used for LoDTensor output situation,
-                it is recommended set as True if outputs contains no LoDTensor. Default: False.
+                is False. stack_outputs as False is used for DenseTensor output situation,
+                it is recommended set as True if outputs contains no DenseTensor. Default: False.
             verbose (int, optional): The verbosity mode, should be 0, 1, or 2. 0 = silent,
                 1 = progress bar, 2 = one line per batch. Default: 1.
-            callbacks(Callback, optional): A Callback instance, Default: None.
+            callbacks(Sequence[Callback]|Callback|None, optional): A Callback instance, Default: None.
 
         Returns:
             list: output of models.
 
         Examples:
 
-          .. code-block:: python
+            .. code-block:: python
 
-                import numpy as np
-                import paddle
-                from paddle.static import InputSpec
+                >>> import numpy as np
+                >>> import paddle
+                >>> from paddle.static import InputSpec
 
-                class MnistDataset(paddle.vision.datasets.MNIST):
-                    def __init__(self, mode, return_label=True):
-                        super().__init__(mode=mode)
-                        self.return_label = return_label
+                >>> class MnistDataset(paddle.vision.datasets.MNIST):
+                ...     def __init__(self, mode, return_label=True):
+                ...         super().__init__(mode=mode)
+                ...         self.return_label = return_label
+                ...
+                ...     def __getitem__(self, idx):
+                ...         img = np.reshape(self.images[idx], [1, 28, 28])
+                ...         if self.return_label:
+                ...             return img, np.array(self.labels[idx]).astype('int64')
+                ...         return img
+                ...
+                ...     def __len__(self):
+                ...         return len(self.images)
+                ...
+                >>> test_dataset = MnistDataset(mode='test', return_label=False)
 
-                    def __getitem__(self, idx):
-                        img = np.reshape(self.images[idx], [1, 28, 28])
-                        if self.return_label:
-                            return img, np.array(self.labels[idx]).astype('int64')
-                        return img,
-
-                    def __len__(self):
-                        return len(self.images)
-
-                test_dataset = MnistDataset(mode='test', return_label=False)
-
-                # imperative mode
-                input = InputSpec([-1, 1, 28, 28], 'float32', 'image')
-                model = paddle.Model(paddle.vision.models.LeNet(), input)
-                model.prepare()
-                result = model.predict(test_dataset, batch_size=64)
-                print(len(result[0]), result[0][0].shape)
-                # 157 (64, 10)
-
-                # declarative mode
-                device = paddle.set_device('cpu')
-                paddle.enable_static()
-                input = InputSpec([-1, 1, 28, 28], 'float32', 'image')
-                model = paddle.Model(paddle.vision.models.LeNet(), input)
-                model.prepare()
-
-                result = model.predict(test_dataset, batch_size=64)
-                print(len(result[0]), result[0][0].shape)
-                # 157 (64, 10)
+                >>> # imperative mode
+                >>> input = InputSpec([-1, 1, 28, 28], 'float32', 'image')
+                >>> model = paddle.Model(paddle.vision.models.LeNet(), input)
+                >>> model.prepare()
+                >>> result = model.predict(test_dataset, batch_size=64)
+                >>> print(len(result[0]), result[0][0].shape)
+                157 (64, 10)
+                >>> # declarative mode
+                >>> device = paddle.set_device('cpu')
+                >>> paddle.enable_static()
+                >>> input = InputSpec([-1, 1, 28, 28], 'float32', 'image')
+                >>> model = paddle.Model(paddle.vision.models.LeNet(), input)
+                >>> model.prepare()
+                >>> result = model.predict(test_dataset, batch_size=64)
+                >>> print(len(result[0]), result[0][0].shape)
+                157 (64, 10)
         """
 
         if test_data is not None and isinstance(test_data, Dataset):
@@ -2217,7 +2705,7 @@ class Model:
         cbks.on_end('predict', logs)
         return outputs
 
-    def _save_inference_model(self, path):
+    def _save_inference_model(self, path: str) -> None:
         """
         Save inference model can be used in static or dynamic mode.
 
@@ -2229,7 +2717,7 @@ class Model:
         """
 
         if in_dynamic_mode():
-            with fluid.framework._dygraph_guard(None):
+            with base.framework._dygraph_guard(None):
                 layer = self.network
                 if self._input_info is None:  # No provided or inferred
                     raise RuntimeError(
@@ -2237,14 +2725,13 @@ class Model:
                     )
                 if self._is_shape_inferred:
                     warnings.warn(
-                        "'inputs' was not specified when Model initialization, so the input shape to be saved will be the shape derived from the user's actual inputs. The input shape to be saved is %s. For saving correct input shapes, please provide 'inputs' for Model initialization."
-                        % self._input_info[0]
+                        f"'inputs' was not specified when Model initialization, so the input shape to be saved will be the shape derived from the user's actual inputs. The input shape to be saved is {self._input_info[0]}. For saving correct input shapes, please provide 'inputs' for Model initialization."
                     )
 
                 paddle.jit.save(layer, path, input_spec=self._inputs)
 
         else:
-            # path check
+            # Path check
             file_prefix = os.path.basename(path)
             if file_prefix == "":
                 raise ValueError(
@@ -2266,7 +2753,10 @@ class Model:
                 prog
             ), "Model is not ready, please call `model.prepare()` first"
 
-            infer_prog = prog.clone(for_test=True)
+            if in_pir_mode():
+                infer_prog = prog
+            else:
+                infer_prog = prog.clone(for_test=True)
 
             inputs = list(self._adapter._input_vars['test'])
             endpoints = self._adapter._endpoints['test']['output']
@@ -2288,19 +2778,19 @@ class Model:
     ):
         outputs = []
         for step, data in enumerate(data_loader):
-            # data might come from different types of data_loader and have
+            # Data might come from different types of data_loader and have
             # different format, as following:
             # 1. DataLoader in static graph:
-            #    [[input1, input2, ..., label1, lable2, ...]]
+            #    [[input1, input2, ..., label1, label2, ...]]
             # 2. DataLoader in dygraph
-            #    [input1, input2, ..., label1, lable2, ...]
+            #    [input1, input2, ..., label1, label2, ...]
             # 3. custumed iterator yield concated inputs and labels:
-            #   [input1, input2, ..., label1, lable2, ...]
+            #   [input1, input2, ..., label1, label2, ...]
             # 4. custumed iterator yield separated inputs and labels:
-            #   ([input1, input2, ...], [label1, lable2, ...])
+            #   ([input1, input2, ...], [label1, label2, ...])
             # To handle all of these, flatten (nested) list to list.
             data = paddle.utils.flatten(data)
-            # LoDTensor.shape is callable, where LoDTensor comes from
+            # DenseTensor.shape is callable, where DenseTensor comes from
             # DataLoader in static graph
 
             batch_size = (
@@ -2368,40 +2858,61 @@ class Model:
             return logs, outputs
         return logs
 
-    def summary(self, input_size=None, dtype=None):
+    def summary(
+        self,
+        input_size: (
+            tuple[int, ...] | Input | list[tuple[int, ...] | Input] | None
+        ) = None,
+        dtype: _DTypeLiteral | None = None,
+    ) -> ModelSummary:
         """Prints a string summary of the network.
 
         Args:
-            input_size (tuple|InputSpec|list[tuple|InputSpec], optional): size of input tensor.
-                    if not set, input_size will get from ``self._inputs`` if network only have
-                    one input, input_size can be tuple or InputSpec. if model have multiple
-                    input, input_size must be a list which contain every input's shape.
-                    Default: None.
-            dtype (str, optional): if dtype is None, 'float32' will be used, Default: None.
+            input_size (tuple|InputSpec|list[tuple|InputSpec], optional): Size of input tensor.
+                if not set, input_size will get from ``self._inputs`` if network only have
+                one input, input_size can be tuple or InputSpec. if model have multiple
+                input, input_size must be a list which contain every input's shape. Default: None.
+            dtype (str, optional): If dtype is None, 'float32' will be used, Default: None.
 
         Returns:
-            Dict: a summary of the network including total params and total trainable params.
+            Dict: A summary of the network including total params and total trainable params.
 
         Examples:
             .. code-block:: python
 
-                import paddle
-                from paddle.static import InputSpec
+                >>> import paddle
+                >>> from paddle.static import InputSpec
 
-                input = InputSpec([None, 1, 28, 28], 'float32', 'image')
-                label = InputSpec([None, 1], 'int64', 'label')
-
-                model = paddle.Model(paddle.vision.models.LeNet(),
-                    input, label)
-                optim = paddle.optimizer.Adam(
-                    learning_rate=0.001, parameters=model.parameters())
-                model.prepare(
-                    optim,
-                    paddle.nn.CrossEntropyLoss())
-
-                params_info = model.summary()
-                print(params_info)
-                # {'total_params': 61610, 'trainable_params': 61610}
+                >>> input = InputSpec([None, 1, 28, 28], 'float32', 'image')
+                >>> label = InputSpec([None, 1], 'int64', 'label')
+                >>> model = paddle.Model(paddle.vision.models.LeNet(), input, label)
+                >>> optim = paddle.optimizer.Adam(learning_rate=0.001, parameters=model.parameters())
+                >>> model.prepare(optim, paddle.nn.CrossEntropyLoss())
+                >>> params_info = model.summary()
+                >>> print(params_info)
+                ---------------------------------------------------------------------------
+                Layer (type)       Input Shape          Output Shape         Param #
+                ===========================================================================
+                  Conv2D-1       [[1, 1, 28, 28]]      [1, 6, 28, 28]          60
+                    ReLU-1        [[1, 6, 28, 28]]      [1, 6, 28, 28]           0
+                  MaxPool2D-1     [[1, 6, 28, 28]]      [1, 6, 14, 14]           0
+                  Conv2D-2       [[1, 6, 14, 14]]     [1, 16, 10, 10]         2,416
+                    ReLU-2       [[1, 16, 10, 10]]     [1, 16, 10, 10]           0
+                  MaxPool2D-2    [[1, 16, 10, 10]]      [1, 16, 5, 5]            0
+                  Linear-1          [[1, 400]]            [1, 120]           48,120
+                  Linear-2          [[1, 120]]            [1, 84]            10,164
+                  Linear-3          [[1, 84]]             [1, 10]              850
+                ===========================================================================
+                Total params: 61,610
+                Trainable params: 61,610
+                Non-trainable params: 0
+                ---------------------------------------------------------------------------
+                Input size (MB): 0.00
+                Forward/backward pass size (MB): 0.11
+                Params size (MB): 0.24
+                Estimated Total Size (MB): 0.35
+                ---------------------------------------------------------------------------
+                {'total_params': 61610, 'trainable_params': 61610}
 
         """
         assert (
@@ -2445,15 +2956,13 @@ class Model:
             ]
         else:
             out_specs = to_list(specs)
-        # Note: checks each element has specificed `name`.
+        # Note: checks each element has specified `name`.
         if out_specs is not None:
             for i, spec in enumerate(out_specs):
                 assert isinstance(spec, Input)
                 if spec.name is None:
                     raise ValueError(
-                        "Requires Input[{}].name != None, but receive `None` with {}.".format(
-                            i, spec
-                        )
+                        f"Requires Input[{i}].name != None, but receive `None` with {spec}."
                     )
 
         return out_specs

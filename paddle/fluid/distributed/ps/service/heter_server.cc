@@ -14,12 +14,11 @@
 
 #include "paddle/fluid/distributed/ps/service/heter_server.h"
 
-#include "paddle/fluid/string/split.h"
+#include "paddle/utils/string/split.h"
 
-namespace paddle {
-namespace distributed {
-// DEFINE_string(cert_path, "./cert.pem", "cert.pem path");
-// DEFINE_string(key_path, "./key.pem", "key.pem path");
+namespace paddle::distributed {
+// PD_DEFINE_string(cert_path, "./cert.pem", "cert.pem path");
+// PD_DEFINE_string(key_path, "./key.pem", "key.pem path");
 std::shared_ptr<HeterServer> HeterServer::s_instance_ = nullptr;
 std::mutex HeterServer::mtx_;
 
@@ -28,16 +27,16 @@ void HeterServer::RegisterServiceHandler(std::string message_name,
   service_.RegisterServiceHandler(message_name, func);
 }
 
-void HeterServer::StartHeterService(bool neeed_encrypt) {
+void HeterServer::StartHeterService(bool need_encrypt) {
   server_.AddService(&service_, brpc::SERVER_DOESNT_OWN_SERVICE);
   brpc::ServerOptions options;
-  if (neeed_encrypt) {
+  if (need_encrypt) {
     options.mutable_ssl_options()->default_cert.certificate = "/cert.pem";
     options.mutable_ssl_options()->default_cert.private_key = "/key.pem";
   }
   if (server_.Start(endpoint_.c_str(), &options) != 0) {
     VLOG(0) << "HeterServer start fail. Try again.";
-    auto ip_port = paddle::string::Split(endpoint_, ':');
+    auto ip_port = ::paddle::string::Split(endpoint_, ':');
     std::string ip = ip_port[0];
     int port = std::stoi(ip_port[1]);
     std::string int_ip_port = GetIntTypeEndpoint(ip, port);
@@ -63,16 +62,16 @@ void HeterServer::StartHeterService(bool neeed_encrypt) {
   VLOG(4) << "start service done";
 }
 
-void HeterServer::StartHeterInterService(bool neeed_encrypt) {
+void HeterServer::StartHeterInterService(bool need_encrypt) {
   server_inter_.AddService(&service_, brpc::SERVER_DOESNT_OWN_SERVICE);
   brpc::ServerOptions options;
-  if (neeed_encrypt) {
+  if (need_encrypt) {
     options.mutable_ssl_options()->default_cert.certificate = "/cert.pem";
     options.mutable_ssl_options()->default_cert.private_key = "/key.pem";
   }
   if (server_inter_.Start(endpoint_inter_.c_str(), &options) != 0) {
     VLOG(4) << "switch inter server start fail. Try again.";
-    auto ip_port = paddle::string::Split(endpoint_inter_, ':');
+    auto ip_port = ::paddle::string::Split(endpoint_inter_, ':');
     std::string ip = ip_port[0];
     int port = std::stoi(ip_port[1]);
     std::string int_ip_port = GetIntTypeEndpoint(ip, port);
@@ -99,7 +98,7 @@ void HeterServer::StartHeterInterService(bool neeed_encrypt) {
   VLOG(4) << "start service done";
 }
 
-void HeterServer::SetFanin(const int& fan_in) { service_.SetFanin(fan_in); }
+void HeterServer::SetFanIn(const int& fan_in) { service_.SetFanIn(fan_in); }
 
 void HeterServer::WaitServerReady() {
   std::unique_lock<std::mutex> lock(this->mutex_ready_);
@@ -113,7 +112,7 @@ int SendAndRecvVariableHandler::SaveInSwitchWithShard(
   VLOG(4) << "entering SaveInSwitchWithShard";
   int32_t group_id = request->group_id();
   if (group_id >= FLAGS_heter_world_size) {
-    LOG(ERROR) << "group id exceed maxmium";
+    LOG(ERROR) << "group id exceed maximum";
   }
   auto& local_shard = _local_shards[group_id];
   auto& request_io_buffer = cntl->request_attachment();
@@ -169,8 +168,8 @@ int SendAndRecvVariableHandler::SaveInSwitchWithScope(
     PsResponseMessage* response,
     brpc::Controller* cntl) {
   VLOG(4) << "entering SaveInSwitchWithScope";
-  platform::DeviceContextPool& pool = platform::DeviceContextPool::Instance();
-  platform::CPUPlace cpu_place;
+  phi::DeviceContextPool& pool = phi::DeviceContextPool::Instance();
+  phi::CPUPlace cpu_place;
   auto& cpu_dev_ctx = *pool.Get(cpu_place);
   auto message_name = request->message_name();
   VLOG(4) << "message_name in heter server: " << message_name;
@@ -211,8 +210,8 @@ int SendAndRecvVariableHandler::QueryInSwitchWithScope(
   if (!local_scope) {
     LOG(INFO) << "local_scope is null";
   }
-  platform::DeviceContextPool& pool = platform::DeviceContextPool::Instance();
-  platform::CPUPlace cpu_place;
+  phi::DeviceContextPool& pool = phi::DeviceContextPool::Instance();
+  phi::CPUPlace cpu_place;
   auto& cpu_dev_ctx = *pool.Get(cpu_place);
 
   // get req message_name & req_var_names
@@ -245,7 +244,7 @@ int SendAndRecvVariableHandler::QueryInSwitchWithScope(
     }
     butil::IOBuf temp_iobuf;
     if (var_ptr->IsType<phi::DenseTensor>()) {
-      SerializeLodTensor(var_ptr, cpu_dev_ctx, send_var_msg, &temp_iobuf);
+      SerializeDenseTensor(var_ptr, cpu_dev_ctx, send_var_msg, &temp_iobuf);
     } else if (var_ptr->IsType<phi::SelectedRows>()) {
       SerializeSelectedRows(var_ptr, cpu_dev_ctx, send_var_msg, &temp_iobuf);
     }
@@ -258,5 +257,4 @@ int SendAndRecvVariableHandler::QueryInSwitchWithScope(
   VLOG(4) << "heter server QueryInSwitchWithScope done";
   return 0;
 }
-}  // end namespace distributed
-}  // namespace paddle
+}  // namespace paddle::distributed

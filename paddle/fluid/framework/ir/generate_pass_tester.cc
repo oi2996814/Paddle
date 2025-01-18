@@ -25,15 +25,14 @@ REGISTER_GENERATE_PASS(generate_fc_fuse) {
       VLOG(3) << "exec lambda func.";
       auto mul = OP_(mul)({{"X", x}, {"Y", y}}).Out("Out");
       auto ewadd = OP_(elementwise_add)({{"X", mul}, {"Y", z}}).Out("Out");
-      if (with_relu) {
+      if (with_relu) {  // NOLINT
         return OP_(relu)({"X", ewadd}).Out("Out");
       } else {
         return ewadd;
       }
     };
     // replace
-    SUBGRAPH_(replace) = [subgraph = &replace, with_relu](
-                             VAR_(x), VAR_(y), VAR_(z)) {
+    SUBGRAPH_(replace) = [subgraph = &replace](VAR_(x), VAR_(y), VAR_(z)) {
       auto& fc = OP_(fc)({{"Input", x}, {"W", y}, {"Bias", z}});
       return fc.Out("Out");
     };
@@ -113,28 +112,28 @@ TEST(GeneratePass, generate_fc_fuse) {
 
   std::unique_ptr<ir::Graph> graph(new ir::Graph(layers.main_program()));
   auto pass = PassRegistry::Instance().Get("generate_fc_fuse");
-  int num_nodes_before = graph->Nodes().size();
+  int num_nodes_before = static_cast<int>(graph->Nodes().size());
   int num_mul_nodes_before = GetNumOpNodes(graph, "mul");
   VLOG(3) << DebugString(graph);
 
   graph.reset(pass->Apply(graph.release()));
-  int num_nodes_after = graph->Nodes().size();
+  int num_nodes_after = static_cast<int>(graph->Nodes().size());
   int num_fc_nodes_after = GetNumOpNodes(graph, "fc");
   VLOG(3) << DebugString(graph);
 
   PADDLE_ENFORCE_EQ(num_nodes_before,
                     num_nodes_after + 6,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "num_nodes_before=%d, num_nodes_after=%d.",
                         num_nodes_before,
                         num_nodes_after));
   PADDLE_ENFORCE_EQ(num_fc_nodes_after,
                     2,
-                    platform::errors::InvalidArgument("num_fc_nodes_after=%d.",
-                                                      num_fc_nodes_after));
+                    common::errors::InvalidArgument("num_fc_nodes_after=%d.",
+                                                    num_fc_nodes_after));
   PADDLE_ENFORCE_EQ(num_mul_nodes_before,
                     num_fc_nodes_after,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "num_mul_nodes_before=%d, num_fc_nodes_after=%d.",
                         num_mul_nodes_before,
                         num_fc_nodes_after));
@@ -154,28 +153,28 @@ TEST(GeneratePass, generate_multi_add_to_addn) {
 
   std::unique_ptr<ir::Graph> graph(new ir::Graph(layers.main_program()));
   auto pass = PassRegistry::Instance().Get("generate_multi_add_to_addn");
-  int num_nodes_before = graph->Nodes().size();
+  int num_nodes_before = static_cast<int>(graph->Nodes().size());
   int num_add_nodes_before = GetNumOpNodes(graph, "elementwise_add");
   VLOG(3) << DebugString(graph);
 
   graph.reset(pass->Apply(graph.release()));
-  int num_nodes_after = graph->Nodes().size();
+  int num_nodes_after = static_cast<int>(graph->Nodes().size());
   int num_addn_nodes_after = GetNumOpNodes(graph, "sum");
   VLOG(3) << DebugString(graph);
 
   PADDLE_ENFORCE_EQ(num_nodes_before,
                     num_nodes_after + 2,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "num_nodes_before=%d, num_nodes_after=%d.",
                         num_nodes_before,
                         num_nodes_after));
   PADDLE_ENFORCE_EQ(num_addn_nodes_after,
                     1,
-                    platform::errors::InvalidArgument(
-                        "num_addn_nodes_after=%d.", num_addn_nodes_after));
+                    common::errors::InvalidArgument("num_addn_nodes_after=%d.",
+                                                    num_addn_nodes_after));
   PADDLE_ENFORCE_EQ(num_add_nodes_before,
                     num_addn_nodes_after + 1,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "num_add_nodes_before=%d, num_addn_nodes_after=%d.",
                         num_add_nodes_before,
                         num_addn_nodes_after));
@@ -195,29 +194,29 @@ TEST(GeneratePass, generate_combine_matmul) {
 
   std::unique_ptr<ir::Graph> graph(new ir::Graph(layers.main_program()));
   auto pass = PassRegistry::Instance().Get("generate_combine_matmul");
-  int num_nodes_before = graph->Nodes().size();
+  int num_nodes_before = static_cast<int>(graph->Nodes().size());
   int num_matmul_nodes_before = GetNumOpNodes(graph, "matmul");
   VLOG(3) << DebugString(graph);
 
   graph.reset(pass->Apply(graph.release()));
-  int num_nodes_after = graph->Nodes().size();
+  int num_nodes_after = static_cast<int>(graph->Nodes().size());
   int num_matmul_nodes_after = GetNumOpNodes(graph, "matmul");
   VLOG(3) << DebugString(graph);
 
   PADDLE_ENFORCE_EQ(num_nodes_before,
                     num_nodes_after - 4,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "num_nodes_before=%d, num_nodes_after=%d.",
                         num_nodes_before,
                         num_nodes_after));
   PADDLE_ENFORCE_EQ(num_matmul_nodes_after,
                     1,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "num_matmul_nodes_after=%d.", num_matmul_nodes_after));
   PADDLE_ENFORCE_EQ(
       num_matmul_nodes_before,
       num_matmul_nodes_after + 1,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "num_matmul_nodes_before=%d, num_matmul_nodes_after=%d.",
           num_matmul_nodes_before,
           num_matmul_nodes_after));

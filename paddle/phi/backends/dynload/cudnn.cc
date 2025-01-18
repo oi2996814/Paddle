@@ -16,8 +16,7 @@ limitations under the License. */
 
 #include "paddle/phi/core/enforce.h"
 
-namespace phi {
-namespace dynload {
+namespace phi::dynload {
 
 std::once_flag cudnn_dso_flag;
 void* cudnn_dso_handle = nullptr;
@@ -50,6 +49,18 @@ CUDNN_DNN_ROUTINE_EACH_R8(DEFINE_WRAP);
 CUDNN_DNN_ROUTINE_EACH_FRONTEND(DEFINE_WRAP);
 #endif
 
+#ifdef CUDNN_DNN_ROUTINE_EACH_REMOVED_IN_E9
+CUDNN_DNN_ROUTINE_EACH_REMOVED_IN_E9(DEFINE_WRAP);
+#endif
+
+#ifdef CUDNN_DNN_ROUTINE_EACH_AFTER_TWO_R7_REMOVED_IN_E9
+CUDNN_DNN_ROUTINE_EACH_AFTER_TWO_R7_REMOVED_IN_E9(DEFINE_WRAP);
+#endif
+
+#ifdef CUDNN_DNN_ROUTINE_EACH_R9
+CUDNN_DNN_ROUTINE_EACH_R9(DEFINE_WRAP);
+#endif
+
 bool HasCUDNN() {
   std::call_once(cudnn_dso_flag,
                  []() { cudnn_dso_handle = GetCUDNNDsoHandle(); });
@@ -59,10 +70,9 @@ bool HasCUDNN() {
 void EnforceCUDNNLoaded(const char* fn_name) {
   PADDLE_ENFORCE_NOT_NULL(
       cudnn_dso_handle,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "Cannot load cudnn shared library. Cannot invoke method %s.",
           fn_name));
 }
 
-}  // namespace dynload
-}  // namespace phi
+}  // namespace phi::dynload

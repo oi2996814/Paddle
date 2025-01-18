@@ -29,7 +29,7 @@
 #include "paddle/fluid/distributed/ps/table/accessor.h"
 #include "paddle/fluid/distributed/ps/table/common_table.h"
 #include "paddle/fluid/distributed/ps/table/depends/feature_value.h"
-#include "paddle/fluid/string/string_helper.h"
+#include "paddle/utils/string/string_helper.h"
 
 #define PSERVER_SAVE_SUFFIX ".shard"
 
@@ -68,6 +68,9 @@ class MemorySparseTable : public Table {
   int32_t Load(const std::string& path, const std::string& param) override;
 
   int32_t Save(const std::string& path, const std::string& param) override;
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_PSCORE)
+  int32_t Save_v2(const std::string& path, const std::string& param) override;
+#endif
 
   int32_t SaveCache(
       const std::string& path,
@@ -133,6 +136,7 @@ class MemorySparseTable : public Table {
   std::unique_ptr<shard_type[]> _local_shards_new;
   std::unique_ptr<shard_type[]> _local_shards_patch_model;
   std::thread _save_patch_model_thread;
+  bool _use_gpu_graph = false;
 };
 
 }  // namespace distributed

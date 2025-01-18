@@ -15,11 +15,12 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
+from utils import dygraph_guard, static_guard
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 
 class TestUnStackOpBase(OpTest):
@@ -41,7 +42,9 @@ class TestUnStackOpBase(OpTest):
         self.initDefaultParameters()
         self.initParameters()
         self.op_type = 'unstack'
+        self.prim_op_type = "comp"
         self.python_api = paddle.unstack
+        self.public_python_api = paddle.unstack
         self.x = np.random.random(size=self.input_dim).astype(self.dtype)
 
         outs = np.split(self.x, self.input_dim[self.axis], self.axis)
@@ -60,10 +63,12 @@ class TestUnStackOpBase(OpTest):
         self.attrs = {'axis': self.axis, 'num': self.input_dim[self.axis]}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_prim_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X'], self.get_y_names())
+        self.check_grad(
+            ['X'], self.get_y_names(), check_pir=True, check_prim_pir=True
+        )
 
 
 class TestUnStackFP16Op(TestUnStackOpBase):
@@ -115,6 +120,54 @@ class TestStackOp6(TestUnStackOpBase):
         self.axis = 2
 
 
+class TestStackOp3_Complex64(TestStackOp3):
+    def initParameters(self):
+        self.dtype = np.complex64
+        self.axis = -1
+
+
+class TestStackOp4_complex64(TestStackOp4):
+    def initParameters(self):
+        self.dtype = np.complex64
+        self.axis = -3
+
+
+class TestStackOp5_complex64(TestStackOp5):
+    def initParameters(self):
+        self.dtype = np.complex64
+        self.axis = 1
+
+
+class TestStackOp6_complex64(TestStackOp6):
+    def initParameters(self):
+        self.dtype = np.complex64
+        self.axis = 2
+
+
+class TestStackOp3_Complex128(TestStackOp3):
+    def initParameters(self):
+        self.dtype = np.complex128
+        self.axis = -1
+
+
+class TestStackOp4_complex128(TestStackOp4):
+    def initParameters(self):
+        self.dtype = np.complex128
+        self.axis = -3
+
+
+class TestStackOp5_complex128(TestStackOp5):
+    def initParameters(self):
+        self.dtype = np.complex128
+        self.axis = 1
+
+
+class TestStackOp6_complex128(TestStackOp6):
+    def initParameters(self):
+        self.dtype = np.complex128
+        self.axis = 2
+
+
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
@@ -139,7 +192,9 @@ class TestUnStackBF16Op(OpTest):
         self.initDefaultParameters()
         self.initParameters()
         self.op_type = 'unstack'
+        self.prim_op_type = "comp"
         self.python_api = paddle.unstack
+        self.public_python_api = paddle.unstack
         self.x = np.random.random(size=self.input_dim).astype(np.float32)
         outs = np.split(self.x, self.input_dim[self.axis], self.axis)
         new_shape = list(self.input_dim)
@@ -164,10 +219,10 @@ class TestUnStackBF16Op(OpTest):
 
     def test_check_output(self):
         place = core.CUDAPlace(0)
-        self.check_output_with_place(place)
+        self.check_output_with_place(place, check_pir=True, check_prim_pir=True)
 
     def test_check_grad(self):
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             x = paddle.to_tensor(self.inputs['X'])
             x.stop_gradient = False
             y = paddle.unstack(
@@ -181,17 +236,35 @@ class TestUnStackBF16Op(OpTest):
 
 
 class TestUnstackZeroInputOp(unittest.TestCase):
+
     def unstack_zero_input_static(self):
         paddle.enable_static()
 
-        array = np.array([], dtype=np.float32)
-        x = paddle.to_tensor(np.reshape(array, [0]), dtype='float32')
-        paddle.unstack(x, axis=1)
+        dtypes = ['float32', 'complex64', 'complex128']
+        for dtype in dtypes:
+            prog = paddle.static.Program()
+            startup_prog = paddle.static.Program()
+            with paddle.static.program_guard(prog, startup_prog):
+                data = np.random.random([0]).astype(dtype)
+                if dtype == 'complex64' or dtype == 'complex128':
+                    data = (
+                        np.random.random([0]) + 1j * np.random.random([0])
+                    ).astype(dtype)
+                x = paddle.static.data(shape=[0], dtype=dtype, name='x')
+                paddle.unstack(x, axis=1)
 
     def unstack_zero_input_dynamic(self):
-        array = np.array([], dtype=np.float32)
-        x = paddle.to_tensor(np.reshape(array, [0]), dtype='float32')
-        paddle.unstack(x, axis=1)
+        paddle.disable_static()
+        dtypes = ['float32', 'complex64', 'complex128']
+        for dtype in dtypes:
+            with base.dygraph.guard():
+                data = np.random.random([0]).astype(dtype)
+                if dtype == 'complex64' or dtype == 'complex128':
+                    data = (
+                        np.random.random([0]) + 1j * np.random.random([0])
+                    ).astype(dtype)
+                x = paddle.to_tensor(data)
+                paddle.unstack(x, axis=1)
 
     def test_type_error(self):
         paddle.disable_static()
@@ -200,6 +273,67 @@ class TestUnstackZeroInputOp(unittest.TestCase):
         self.assertRaises(ValueError, self.unstack_zero_input_static)
 
         paddle.disable_static()
+
+
+class TestUnstackEmptyTensorInput(unittest.TestCase):
+    def _get_places(self):
+        places = [paddle.base.CPUPlace()]
+        if paddle.is_compiled_with_cuda():
+            places.append(paddle.base.CUDAPlace(0))
+        return places
+
+    def _generate_empty_tensor(self, shape):
+        return np.empty(shape)
+
+    def _test_unstack_with_shapes(self, shape, axis, place=None):
+        empty_tensor = self._generate_empty_tensor(shape)
+
+        # NOTE: Use `numpy.unstack` if you are using NumPy version 2.1.0 or later.
+        # out_ref = np.unstack(empty_tensor, axis)
+        out_ref = tuple(np.moveaxis(empty_tensor, axis, 0))
+
+        if place is None:  # Dygraph mode
+            tensor = paddle.to_tensor(empty_tensor)
+            result = paddle.unstack(tensor, axis=axis)
+        else:  # Static mode
+            with paddle.static.program_guard(paddle.static.Program()):
+                data_tensor = paddle.static.data(
+                    shape=shape, dtype='float64', name='x'
+                )
+                result = paddle.unstack(data_tensor, axis=axis)
+                exe = paddle.base.Executor(place=place)
+                feed_dict = {'x': empty_tensor}
+                result = exe.run(
+                    paddle.static.default_main_program(),
+                    feed=feed_dict,
+                    fetch_list=result,
+                )
+
+        # Assert the number of unstacked tensors
+        self.assertEqual(len(out_ref), len(result))
+        # Assert the shape of each unstacked tensor
+        for ref, res in zip(out_ref, result):
+            np.testing.assert_array_equal(ref.shape, res.shape)
+
+    def test_unstack_with_dygraph_empty_tensor_input(self):
+        with dygraph_guard():
+            self._test_unstack_with_shapes((0,), axis=0)
+            self._test_unstack_with_shapes((5, 0), axis=1)
+            self._test_unstack_with_shapes((5, 0, 10), axis=2)
+            self._test_unstack_with_shapes((7, 11, 0), axis=1)
+            self._test_unstack_with_shapes((0, 11, 22), axis=-2)
+
+    def _test_unstack_with_static_empty_tensor_input(self, place):
+        with static_guard():
+            self._test_unstack_with_shapes((0,), axis=0, place=place)
+            self._test_unstack_with_shapes((5, 0), axis=1, place=place)
+            self._test_unstack_with_shapes((5, 0, 10), axis=2, place=place)
+            self._test_unstack_with_shapes((7, 11, 0), axis=1, place=place)
+            self._test_unstack_with_shapes((0, 11, 22), axis=-2, place=place)
+
+    def test_unstack_with_static_empty_tensor_input(self):
+        for place in self._get_places():
+            self._test_unstack_with_static_empty_tensor_input(place)
 
 
 if __name__ == '__main__':

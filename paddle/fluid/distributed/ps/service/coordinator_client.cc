@@ -20,16 +20,15 @@
 
 #include "paddle/fluid/distributed/ps/service/brpc_ps_client.h"
 #include "paddle/fluid/framework/archive.h"
-#include "paddle/fluid/string/split.h"
+#include "paddle/utils/string/split.h"
 
 static const int MIN_PORT = 8500;
 static const int MAX_PORT = 65535;
 
-namespace paddle {
-namespace distributed {
+namespace paddle::distributed {
 
-DEFINE_uint64(total_fl_client_size, 100, "supported total fl client size");
-DEFINE_uint32(coordinator_wait_all_clients_max_time, 60, "uint32: s");
+PD_DEFINE_uint64(total_fl_client_size, 100, "supported total fl client size");
+PD_DEFINE_uint32(coordinator_wait_all_clients_max_time, 60, "uint32: s");
 
 void CoordinatorService::FLService(
     ::google::protobuf::RpcController* controller,
@@ -44,7 +43,7 @@ void CoordinatorService::FLService(
   uint32_t from_client_id = request->client_id();
   VLOG(0) << "fl-ps > recv from client id: " << from_client_id
           << ", msg_type: " << msg_type;
-  // TODO(ziyoujiyi): find is not thread safe, beacuse of RB_Tree traversal
+  // TODO(ziyoujiyi): find is not thread safe, because of RB_Tree traversal
   auto itr = _service_handle_map.find(msg_type);
   if (itr == _service_handle_map.end()) {
     LOG(ERROR) << "fl-ps > unknown flClient2Coordinator msg type: " << msg_type;
@@ -62,10 +61,10 @@ int32_t CoordinatorClient::Initialize(
     const std::vector<std::string>& trainer_endpoints) {
   brpc::ChannelOptions options;
   options.protocol = "baidu_std";
-  options.timeout_ms = paddle::distributed::FLAGS_pserver_timeout_ms;
+  options.timeout_ms = ::paddle::distributed::FLAGS_pserver_timeout_ms;
   options.connection_type = "pooled";
   options.connect_timeout_ms =
-      paddle::distributed::FLAGS_pserver_connect_timeout_ms;
+      ::paddle::distributed::FLAGS_pserver_connect_timeout_ms;
   options.max_retry = 3;
 
   std::string server_ip_port;
@@ -109,7 +108,7 @@ int32_t CoordinatorClient::Initialize(
   }
   for (size_t i = 0; i < trainer_endpoints.size(); i++) {
     std::vector<std::string> addr =
-        paddle::string::Split(trainer_endpoints[i], ':');
+        ::paddle::string::Split(trainer_endpoints[i], ':');
     fl_client_list[i].ip = addr[0];
     fl_client_list[i].port = std::stol(addr[1]);
     fl_client_list[i].rank = i;  // TO CHECK
@@ -152,7 +151,7 @@ int32_t CoordinatorClient::StartClientService() {
     LOG(ERROR) << "fl-ps > coordinator server endpoint not set";
     return -1;
   }
-  auto addr = paddle::string::Split(_endpoint, ':');
+  auto addr = ::paddle::string::Split(_endpoint, ':');
   std::string ip = addr[0];
   std::string port = addr[1];
   std::string rank = addr[2];
@@ -201,5 +200,4 @@ void CoordinatorClient::SendFLStrategy(const uint32_t& client_id) {
   return;
 }
 
-}  // namespace distributed
-}  // namespace paddle
+}  // namespace paddle::distributed

@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import os
 import unittest
 from functools import partial
-from typing import List
 
 import numpy as np
 from program_config import ProgramConfig, TensorConfig
@@ -60,13 +61,14 @@ class TrtConvertGatherNdTest_dim_4_1(TrtLayerAutoScanTest):
                     ),
                 },
                 outputs=["output_data"],
+                no_cast_list=["index_data"],
             )
 
             yield program_config
 
     def sample_predictor_configs(
         self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
+    ) -> tuple[paddle_infer.Config, list[int], float]:
         def generate_dynamic_shape(attrs):
             self.dynamic_shape.min_input_shape = {
                 "input_data": [2, 32, 64, 64],
@@ -154,13 +156,14 @@ class TrtConvertGatherNdTest_dim_4_1_2(TrtLayerAutoScanTest):
                 "index_data": TensorConfig(data_gen=partial(generate_input2)),
             },
             outputs=["output_data"],
+            no_cast_list=["index_data"],
         )
 
         yield program_config
 
     def sample_predictor_configs(
         self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
+    ) -> tuple[paddle_infer.Config, list[int], float]:
         def generate_dynamic_shape(attrs):
             self.dynamic_shape.min_input_shape = {
                 "input_data": [2, 32, 64, 64],
@@ -248,13 +251,14 @@ class TrtConvertGatherNdTest_dim_4_2(TrtLayerAutoScanTest):
                 "index_data": TensorConfig(data_gen=partial(generate_input2)),
             },
             outputs=["output_data"],
+            no_cast_list=["index_data"],
         )
 
         yield program_config
 
     def sample_predictor_configs(
         self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
+    ) -> tuple[paddle_infer.Config, list[int], float]:
         def generate_dynamic_shape(attrs):
             self.dynamic_shape.min_input_shape = {
                 "input_data": [2, 32, 64, 64],
@@ -342,13 +346,14 @@ class TrtConvertGatherNdTest_dim_4_3(TrtLayerAutoScanTest):
                 "index_data": TensorConfig(data_gen=partial(generate_input2)),
             },
             outputs=["output_data"],
+            no_cast_list=["index_data"],
         )
 
         yield program_config
 
     def sample_predictor_configs(
         self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
+    ) -> tuple[paddle_infer.Config, list[int], float]:
         def generate_dynamic_shape(attrs):
             self.dynamic_shape.min_input_shape = {
                 "input_data": [2, 32, 64, 64],
@@ -436,13 +441,14 @@ class TrtConvertGatherNdTest_dim_2_2(TrtLayerAutoScanTest):
                 "index_data": TensorConfig(data_gen=partial(generate_input2)),
             },
             outputs=["output_data"],
+            no_cast_list=["index_data"],
         )
 
         yield program_config
 
     def sample_predictor_configs(
         self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
+    ) -> tuple[paddle_infer.Config, list[int], float]:
         def generate_dynamic_shape(attrs):
             self.dynamic_shape.min_input_shape = {
                 "input_data": [2, 32],
@@ -532,13 +538,14 @@ class TrtConvertGatherNdTest_dim_3_3(TrtLayerAutoScanTest):
                 "index_data": TensorConfig(data_gen=partial(generate_input2)),
             },
             outputs=["output_data"],
+            no_cast_list=["index_data"],
         )
 
         yield program_config
 
     def sample_predictor_configs(
         self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
+    ) -> tuple[paddle_infer.Config, list[int], float]:
         def generate_dynamic_shape(attrs):
             self.dynamic_shape.min_input_shape = {
                 "input_data": [16, 32, 256],

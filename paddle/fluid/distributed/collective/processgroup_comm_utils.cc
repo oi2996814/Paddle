@@ -21,8 +21,7 @@
 #include "paddle/fluid/distributed/collective/process_group_custom.h"
 #endif
 
-namespace phi {
-namespace detail {
+namespace phi::detail {
 
 // FIXME(paddle-dev): Since the singleton of ProcessGroup in fluid is used in
 // SyncBN, the fluid symbol will be dependent on external hardware access.
@@ -51,10 +50,10 @@ ccl::CCLComm GetCCLComm(const Place& place, int global_gid) {
 #else
     return nullptr;
 #endif
-  } else if (place.GetType() == phi::AllocationType::CUSTOM) {
+  } else if (place.GetType() == phi::AllocationType::CUSTOM) {  // NOLINT
 #if defined(PADDLE_WITH_CUSTOM_DEVICE)
-    return static_cast<paddle::distributed::ProcessGroupCustom*>(pg)
-        ->CustomCCLComm(place);
+    return static_cast<paddle::distributed::ProcessGroupCustom*>(pg)->XCCLComm(
+        place);
 #else
     return nullptr;
 #endif
@@ -63,5 +62,4 @@ ccl::CCLComm GetCCLComm(const Place& place, int global_gid) {
   }
 }
 
-}  // namespace detail
-}  // namespace phi
+}  // namespace phi::detail

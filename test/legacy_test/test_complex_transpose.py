@@ -12,20 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
 
 import paddle
-import paddle.fluid.dygraph as dg
-from paddle import fluid
+import paddle.base.dygraph as dg
+from paddle import base
 
 
 class TestComplexTransposeLayer(unittest.TestCase):
     def setUp(self):
         self._dtypes = ["float32", "float64"]
-        self._places = [paddle.CPUPlace()]
-        if fluid.core.is_compiled_with_cuda():
+        self._places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            self._places.append(paddle.CPUPlace())
+        if base.core.is_compiled_with_cuda():
             self._places.append(paddle.CUDAPlace(0))
 
     def test_transpose_by_complex_api(self):
@@ -37,7 +44,7 @@ class TestComplexTransposeLayer(unittest.TestCase):
             np_trans = np.transpose(data, perm)
             for place in self._places:
                 with dg.guard(place):
-                    var = dg.to_variable(data)
+                    var = paddle.to_tensor(data)
                     trans = paddle.transpose(var, perm=perm)
                 np.testing.assert_allclose(trans.numpy(), np_trans, rtol=1e-05)
 

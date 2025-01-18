@@ -16,8 +16,7 @@ limitations under the License. */
 
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 void OpProtoAndCheckerMaker::Validate() {
   validated_ = true;
@@ -46,7 +45,7 @@ void OpProtoAndCheckerMaker::CheckNoDuplicatedInOutAttrs() {
     PADDLE_ENFORCE_EQ(
         names.count(name),
         0,
-        platform::errors::AlreadyExists("Attribute [%s] is duplicated.", name));
+        common::errors::AlreadyExists("Attribute [%s] is duplicated.", name));
     names.insert(name);
   };
   for (auto& attr : proto_->attrs()) {
@@ -118,5 +117,4 @@ void OpProtoAndCheckerMaker::operator()(proto::OpProto* proto,
   Validate();
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

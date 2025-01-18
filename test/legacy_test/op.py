@@ -14,8 +14,8 @@
 
 import numpy as np
 
-from paddle.fluid import core
-from paddle.fluid.proto import framework_pb2
+from paddle.base import core
+from paddle.base.proto import framework_pb2
 
 
 # NOTE: this is added to support creating a Scalar message
@@ -90,8 +90,7 @@ class OpDescCreationMethod:
 
             if not input_parameter.duplicable and len(input_arguments) > 1:
                 raise ValueError(
-                    "Input %s expects only one input, but %d are given."
-                    % (input_parameter.name, len(input_arguments))
+                    f"Input {input_parameter.name} expects only one input, but {len(input_arguments)} are given."
                 )
 
             ipt = op_desc.inputs.add()
@@ -105,8 +104,7 @@ class OpDescCreationMethod:
 
             if not output_parameter.duplicable and len(output_arguments) > 1:
                 raise ValueError(
-                    "Output %s expects only one output, but %d are given."
-                    % (output_parameter.name, len(output_arguments))
+                    f"Output {output_parameter.name} expects only one output, but {len(output_arguments)} are given."
                 )
 
             out = op_desc.outputs.add()
@@ -163,13 +161,13 @@ class OpDescCreationMethod:
                         new_attr.scalars.MergeFrom(item)
                 else:
                     raise NotImplementedError(
-                        "A not supported attribute type: %s." % (str(attr.type))
+                        f"A not supported attribute type: {attr.type}."
                     )
-        for attr_name, defalut_val in self.__extra_attrs__.items():
+        for attr_name, default_val in self.__extra_attrs__.items():
             user_defined_attr = kwargs.get(attr_name, None)
             if user_defined_attr is not None:
                 attr_type = int(
-                    core.get_attrtibute_type(op_desc.type, attr_name)
+                    core.get_attribute_type(op_desc.type, attr_name)
                 )
                 new_attr = op_desc.attrs.add()
                 new_attr.name = attr_name
@@ -212,7 +210,7 @@ class OpDescCreationMethod:
                         new_attr.scalars.MergeFrom(item)
                 else:
                     raise NotImplementedError(
-                        "A not supported attribute type: %s." % (str(attr_type))
+                        f"A not supported attribute type: {attr_type}."
                     )
 
         return op_desc
@@ -273,15 +271,15 @@ class OperatorFactory:
         if "type" in kwargs:
             if len(args) != 0:
                 raise ValueError(
-                    "Except the argument \"type\","
-                    "all of the other arguments should be keyword arguments."
+                    'Except the argument "type",'
+                    'all of the other arguments should be keyword arguments.'
                 )
             t = kwargs.pop("type")
         else:
             if len(args) != 1:
                 raise ValueError(
-                    "Except the argument \"type\","
-                    "all of the other arguments should be keyword arguments."
+                    'Except the argument "type",'
+                    'all of the other arguments should be keyword arguments.'
                 )
             t = args[0]
 
@@ -292,7 +290,7 @@ class OperatorFactory:
 
     def get_op_info(self, t):
         if t not in self.op_methods:
-            raise ValueError("The operator: %s is not registered." % t)
+            raise ValueError(f"The operator: {t} is not registered.")
         return self.op_methods.get(t)
 
     def get_op_input_names(self, type):

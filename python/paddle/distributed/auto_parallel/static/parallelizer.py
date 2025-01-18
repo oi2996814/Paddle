@@ -45,7 +45,7 @@ from .process_group import (
     get_world_process_group,
 )
 from .reshard import Resharder
-from .utils import SerialProgramInfo, make_data_unshard, set_grad_var_shape
+from .utils import SerialProgramInfo, make_data_unshard
 
 _logger = get_logger(logging.INFO)
 
@@ -260,8 +260,6 @@ class AutoParallelizer:
             dist_main_prog, dist_startup_prog, dist_params_grads
         )
 
-        set_grad_var_shape(dist_main_prog, self._dist_context)
-
         make_data_unshard(dist_main_prog, dist_startup_prog, self._dist_context)
 
         resharder = Resharder(
@@ -336,7 +334,7 @@ class AutoParallelizer:
             # serialize the dist context by planner
             if dist_context is not None:
                 logging.info("Start serialize searched dist attr")
-                cwd = pathlib.Path().resolve()
+                cwd = pathlib.Path().cwd()
                 searched_dist_context_path = os.path.join(
                     cwd, f"searched_dist_context_{time.time()}.pkl"
                 )
@@ -352,16 +350,16 @@ class AutoParallelizer:
                     tensors_dist_attr[key] = dist_tensor.dist_attr
                 saved_dist_context["ops_dist_attr"] = ops_dist_attr
                 saved_dist_context["tensors_dist_attr"] = tensors_dist_attr
-                saved_dist_context[
-                    "process_meshes"
-                ] = dist_context._process_meshes
+                saved_dist_context["process_meshes"] = (
+                    dist_context._process_meshes
+                )
                 with open(
                     searched_dist_context_path, "wb"
                 ) as dist_context_file:
                     pickle.dump(saved_dist_context, dist_context_file)
-                    os.environ[
-                        'PADDLE_SEARCHED_DIST_CONTEXT_PATH'
-                    ] = searched_dist_context_path
+                    os.environ['PADDLE_SEARCHED_DIST_CONTEXT_PATH'] = (
+                        searched_dist_context_path
+                    )
                     logging.info(
                         f"End serialize searched dist attr to {searched_dist_context_path}"
                     )
@@ -411,11 +409,12 @@ class AutoParallelizer:
                 + " "
                 + original_cmd_args
             )
-            new_cmd = (
-                [sys.executable, "-u"]
-                + coverage_args
-                + shlex.split(new_cmd_args)
-            )
+            new_cmd = [
+                sys.executable,
+                "-u",
+                *coverage_args,
+                *shlex.split(new_cmd_args),
+            ]
             new_process = subprocess.Popen(new_cmd)
             new_process.wait()
             assert (

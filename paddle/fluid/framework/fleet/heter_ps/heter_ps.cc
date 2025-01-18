@@ -17,8 +17,7 @@ limitations under the License. */
 
 #ifdef PADDLE_WITH_HETERPS
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 HeterPsBase* HeterPsBase::get_instance(
     size_t capacity,
@@ -40,6 +39,9 @@ HeterPsBase* HeterPsBase::get_instance(
           capacity, resource, *gpu_accessor);
     } else if (optimizer_type == 4) {
       return new HeterPs<CommonFeatureValueAccessor, SparseAdamSharedOptimizer>(
+          capacity, resource, *gpu_accessor);
+    } else if (optimizer_type == 5) {
+      return new HeterPs<CommonFeatureValueAccessor, SparseAdagradV2Optimizer>(
           capacity, resource, *gpu_accessor);
     }
   } else {
@@ -104,9 +106,7 @@ void HeterPs<GPUAccessor, GPUOptimizer>::push_sparse(int num,
                                                      float* d_grads,
                                                      size_t len) {
   comm_->push_sparse(num, d_keys, d_grads, len);
-  // comm_->push_sparse_multi_node(num, d_keys, d_grads, len, opt_);
 }
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace paddle::framework
 #endif

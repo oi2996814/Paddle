@@ -15,15 +15,15 @@
 #include "paddle/fluid/eager/accumulation/accumulation_node.h"
 
 #include "glog/logging.h"
+#include "paddle/common/errors.h"
 #include "paddle/fluid/eager/api/generated/eager_generated/forwards/dygraph_functions.h"
 #include "paddle/fluid/eager/eager_tensor.h"
 #include "paddle/fluid/eager/utils.h"
 #include "paddle/fluid/imperative/gradient_accumulator.h"
-#include "paddle/fluid/platform/device_context.h"
 #include "paddle/fluid/platform/enforce.h"
-#include "paddle/fluid/platform/errors.h"
 #include "paddle/phi/api/all.h"
 #include "paddle/phi/core/dense_tensor.h"
+#include "paddle/phi/core/platform/device_context.h"
 #include "paddle/phi/core/sparse_coo_tensor.h"
 
 namespace egr {
@@ -65,8 +65,12 @@ static void CopyOrAddTensor(paddle::Tensor* tensor,
                 *reinterpret_cast<phi::DenseTensor*>(tensor->impl().get()),
                 *reinterpret_cast<phi::DenseTensor*>(t.impl().get()),
                 reinterpret_cast<phi::DenseTensor*>(tensor->impl().get()));
-          } else {
+          } else if (t.initialized() && tensor->initialized()) {
             paddle::imperative::TensorAdd<paddle::Tensor>(t, tensor);
+          } else {
+            PADDLE_THROW(common::errors::PreconditionNotMet(
+                "DenseTensor 't' and 'tensor' should be "
+                "both initialized when accumulating gradient."));
           }
         } else {
           // TODO(jiabin): Support Other TensorBase later
@@ -113,6 +117,24 @@ static void CopyOrAddTensor(paddle::Tensor* tensor,
                                                           &tensor_values);
           }
         }
+      } else if (LIKELY(t.is_dist_tensor())) {
+        PADDLE_ENFORCE(
+            tensor->is_dist_tensor(),
+            common::errors::Fatal("A DistTensor can only do gradient "
+                                  "merge with another DistTensor."));
+        PADDLE_ENFORCE(
+            !t.is_custom_device(),
+            common::errors::Fatal("DistTensor doesn't support custom device."));
+        auto t_dist =
+            std::dynamic_pointer_cast<phi::distributed::DistTensor>(t.impl());
+        paddle::Tensor t_values(
+            std::make_shared<phi::DenseTensor>(t_dist->value()));
+        auto tensor_dist =
+            std::dynamic_pointer_cast<phi::distributed::DistTensor>(
+                tensor->impl());
+        paddle::Tensor tensor_values(
+            std::make_shared<phi::DenseTensor>(tensor_dist->value()));
+        paddle::imperative::TensorAdd<paddle::Tensor>(t_values, &tensor_values);
       } else {
         // TODO(jiabin): Support Other TensorBase later
         // TODO(zhanlve): Replace SelectedRowsAddTensor with
@@ -138,12 +160,12 @@ GradNodeAccumulation::operator()(
     bool is_new_grad) {
   VLOG(3) << "Running AD API Grad: GradNodeAccumulation";
   PADDLE_ENFORCE(grads.size() == 1,
-                 paddle::platform::errors::Fatal(
+                 common::errors::Fatal(
                      "GradNodeAccumulation should take exactly 1 grad tensor"
                      "However received: %d slot.",
                      grads.size()));
   PADDLE_ENFORCE(grads[0].size() == 1,
-                 paddle::platform::errors::Fatal(
+                 common::errors::Fatal(
                      "GradNodeAccumulation should take exactly 1 grad tensor"
                      "However received: %d in slot %d .",
                      grads[0].size(),
@@ -160,7 +182,8 @@ GradNodeAccumulation::operator()(
 
   if (!weak_grad_.expired() && !is_new_grad) {
     auto grad = weak_grad_.lock();
-    if (grad_out.defined() && grad_out.initialized()) {
+    if (grad_out.defined() &&
+        (grad_out.is_dist_tensor() || grad_out.has_allocation())) {
       CopyOrAddTensor(grad.get(), grad_out, is_fake_empty_);
     }
     // else { do nothing since there is no valid value in grad out tensor }
@@ -171,19 +194,23 @@ GradNodeAccumulation::operator()(
   if (ReduceHooksRegistered()) {
     ApplyReduceHooks();
   }
+
   VLOG(3) << "Finish AD API Grad: GradNodeAccumulation";
   if (VLOG_IS_ON(4)) {
     const char* INPUT_PRINT_TEMPLATE = "{ Input: [%s], Output: [%s] } ";
 
     std::string input_str = "";
     std::string output_str = "";
+
     const char* TENSOR_OUT_GRAD_TEMPLATE = "(grads[0][0], [%s]), ";
     std::string input_out_grad_str = paddle::string::Sprintf(
         TENSOR_OUT_GRAD_TEMPLATE, egr::EagerUtils::TensorStr(grads[0][0]));
+    input_str += input_out_grad_str;
     const char* TENSOR_X_GRAD_TEMPLATE = "(grad_out, [%s]), ";
     std::string output_x_grad_str = paddle::string::Sprintf(
         TENSOR_X_GRAD_TEMPLATE, egr::EagerUtils::TensorStr(grad_out));
     output_str += output_x_grad_str;
+    VLOG(6) << "gradnode_ptr = " << this;
     VLOG(4) << paddle::string::Sprintf(
         INPUT_PRINT_TEMPLATE, input_str, output_str);
   }

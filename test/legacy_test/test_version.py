@@ -15,7 +15,8 @@
 import re
 import unittest
 
-import paddle.version as fluid_version
+import paddle
+import paddle.version as base_version
 
 
 class VersionTest(unittest.TestCase):
@@ -29,24 +30,30 @@ class VersionTest(unittest.TestCase):
 
     def test_check_output(self):
         # check commit format
-        self.assertTrue(re.match(self._commit_regex, fluid_version.commit))
-        self.assertTrue(isinstance(fluid_version.istaged, bool))
+        self.assertTrue(re.match(self._commit_regex, base_version.commit))
+        self.assertTrue(isinstance(base_version.is_tagged, bool))
 
         # check version format
-        if fluid_version.istaged:
-            self.assertTrue(re.match(self._major_regex, fluid_version.major))
-            self.assertTrue(re.match(self._minor_regex, fluid_version.minor))
-            self.assertTrue(re.match(self._patch_regex, fluid_version.patch))
-            self.assertTrue(re.match(self._rc_regex, fluid_version.rc))
+        if base_version.is_tagged:
+            self.assertTrue(re.match(self._major_regex, base_version.major))
+            self.assertTrue(re.match(self._minor_regex, base_version.minor))
+            self.assertTrue(re.match(self._patch_regex, base_version.patch))
+            self.assertTrue(re.match(self._rc_regex, base_version.rc))
             self.assertTrue(
-                re.match(self._version_regex, fluid_version.full_version)
+                re.match(self._version_regex, base_version.full_version)
             )
         else:
-            self.assertEqual(fluid_version.major, "0")
-            self.assertEqual(fluid_version.minor, "0")
-            self.assertEqual(fluid_version.patch, "0")
-            self.assertEqual(fluid_version.rc, "0")
-            self.assertEqual(fluid_version.full_version, "0.0.0")
+            self.assertEqual(base_version.major, "0")
+            self.assertEqual(base_version.minor, "0")
+            self.assertEqual(base_version.patch, "0")
+            self.assertEqual(base_version.rc, "0")
+            self.assertEqual(base_version.full_version, "0.0.0")
+
+        if paddle.is_compiled_with_cuda():
+            self.assertTrue(isinstance(base_version.cuda(), str))
+            self.assertTrue(isinstance(base_version.cuda_archs(), list))
+        else:
+            self.assertEqual(base_version.cuda(), "False")
 
 
 if __name__ == '__main__':

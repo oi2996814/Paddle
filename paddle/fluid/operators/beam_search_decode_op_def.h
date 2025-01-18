@@ -17,17 +17,17 @@ limitations under the License. */
 #include <memory>
 #include <vector>
 
+#include "paddle/fluid/framework/dense_tensor_array.h"
 #include "paddle/fluid/framework/lod_tensor.h"
-#include "paddle/fluid/framework/lod_tensor_array.h"
 #include "paddle/fluid/platform/enforce.h"
 
 namespace paddle {
 namespace operators {
-using LoDTensorArray = framework::LoDTensorArray;
+using TensorArray = phi::TensorArray;
 
 // all the lod have 2 levels.
 // The first is source level, the second is sentence level.
-// source level describe how many prefixes (branchs) for each source sentece
+// source level describe how many prefixes (branches) for each source sentence
 // (beam). sentence level describe how these candidates belong to the prefixes.
 const size_t kSourceLevel = 0;
 const size_t kSentenceLevel = 1;
@@ -48,7 +48,7 @@ struct BeamSearchDecoder {
 
   /**
    * convert the result sentence_vector for each source sentence into two
-   * LodTensor.
+   * DenseTensor.
    * One is all candidate sentences with word id, one is all candidate sentences
    * with word score.
    * Param:
@@ -58,7 +58,7 @@ struct BeamSearchDecoder {
    *  reverse: whether ids of sentence in sentence_vector_list is reversed
    *  sort_by_score: whether to sort hypotheses of each sentence by scores.
    */
-  void ConvertSentenceVectorToLodTensor(
+  void ConvertSentenceVectorToDenseTensor(
       std::vector<SentenceVector<T>> sentence_vector_list,
       phi::DenseTensor* id_tensor,
       phi::DenseTensor* score_tensor,
@@ -67,10 +67,10 @@ struct BeamSearchDecoder {
 
   /**
    * Gather the hypotheses for each source sentence by backtrace though the
-   * LoDTensorArray step_ids whose lods reserve the path in the tree.
+   * phi::TensorArray step_ids whose lods reserve the path in the tree.
    */
-  void Backtrace(const LoDTensorArray& step_ids,
-                 const LoDTensorArray& step_scores,
+  void Backtrace(const phi::TensorArray& step_ids,
+                 const phi::TensorArray& step_scores,
                  phi::DenseTensor* id_tensor,
                  phi::DenseTensor* score_tensor) const;
 
@@ -79,7 +79,7 @@ struct BeamSearchDecoder {
 };
 
 template <typename T>
-void BeamSearchDecoder<T>::ConvertSentenceVectorToLodTensor(
+void BeamSearchDecoder<T>::ConvertSentenceVectorToDenseTensor(
     std::vector<SentenceVector<T>> sentence_vector_list,
     phi::DenseTensor* id_tensor,
     phi::DenseTensor* score_tensor,
@@ -90,7 +90,7 @@ void BeamSearchDecoder<T>::ConvertSentenceVectorToLodTensor(
   PADDLE_ENFORCE_NE(
       src_num,
       0,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "src_num is the sequence number of the first decoding step"
           ", indicating by Input(Ids)[0].lod[0].size."
           "src_num has wrong value."
@@ -135,39 +135,38 @@ void BeamSearchDecoder<T>::ConvertSentenceVectorToLodTensor(
                                sentence_vector_list[src_idx].size());
   }
 
-  auto cpu_place = std::unique_ptr<paddle::platform::CPUPlace>(
-      new paddle::platform::CPUPlace());
+  auto cpu_place = std::unique_ptr<phi::CPUPlace>(new phi::CPUPlace());
   phi::CPUContext cpu_ctx(*cpu_place);
 
-  framework::LoD lod;
+  phi::LegacyLoD lod;
   lod.push_back(source_level_lod);
   lod.push_back(sentence_level_lod);
 
   id_tensor->set_lod(lod);
   id_tensor->Resize({static_cast<int64_t>(id_data.size())});
-  id_tensor->mutable_data<int64_t>(paddle::platform::CPUPlace());
+  id_tensor->mutable_data<int64_t>(phi::CPUPlace());
   framework::TensorFromVector<int64_t>(id_data, cpu_ctx, id_tensor);
 
   score_tensor->set_lod(lod);
   score_tensor->Resize({static_cast<int64_t>(score_data.size())});
-  score_tensor->mutable_data<T>(paddle::platform::CPUPlace());
+  score_tensor->mutable_data<T>(phi::CPUPlace());
   framework::TensorFromVector<T>(score_data, cpu_ctx, score_tensor);
 }
 
 template <typename T>
-void BeamSearchDecoder<T>::Backtrace(const LoDTensorArray& step_ids,
-                                     const LoDTensorArray& step_scores,
+void BeamSearchDecoder<T>::Backtrace(const phi::TensorArray& step_ids,
+                                     const phi::TensorArray& step_scores,
                                      phi::DenseTensor* id_tensor,
                                      phi::DenseTensor* score_tensor) const {
   PADDLE_ENFORCE_NE(
       step_ids.empty(),
       true,
-      platform::errors::InvalidArgument("Input(Ids) should not be empty."
-                                        "But the Input(Ids) is empty."));
+      common::errors::InvalidArgument("Input(Ids) should not be empty."
+                                      "But the Input(Ids) is empty."));
   PADDLE_ENFORCE_EQ(
       step_ids.size(),
       step_scores.size(),
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The size of Input(Ids) and Input(Scores) should be "
           "the same. But the size of Input(Ids) and Input(Scores) "
           "are not equal."));
@@ -232,7 +231,7 @@ void BeamSearchDecoder<T>::Backtrace(const LoDTensorArray& step_ids,
     }
   }
 
-  ConvertSentenceVectorToLodTensor(
+  ConvertSentenceVectorToDenseTensor(
       sentence_vector_list, id_tensor, score_tensor, true, true);
 }
 

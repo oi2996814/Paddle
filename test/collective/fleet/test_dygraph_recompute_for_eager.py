@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import random
 import unittest
 
 import numpy as np
 
 import paddle
+from paddle.base.framework import EagerParamBase
 from paddle.distributed.fleet.utils import recompute
 
 
@@ -54,6 +56,8 @@ class Model(paddle.nn.Layer):
         if pos is None:
             return self.block(x)
         else:
+            if isinstance(pos, tuple):
+                pos = pos[0]
             return self.block(x) + pos
 
 
@@ -70,12 +74,15 @@ class Naive_fc_net(paddle.nn.Layer):
         segments=1,
         use_raw_recompute=False,
         recompute_kwargs={},
+        raise_value_error=False,
+        recompute_use_kwargs_as_inputs=False,
     ):
         super().__init__()
         self.recompute_blocks = recompute_blocks
         self.recompute_kwargs = recompute_kwargs
         self.use_fleet_sq = use_fleet_sq
         self.use_raw_recompute = use_raw_recompute
+        self.raise_value_error = raise_value_error
         self.segments = segments
 
         self.runfunc0 = get_fc_block(0, input_size, is_last=False)
@@ -109,6 +116,7 @@ class Naive_fc_net(paddle.nn.Layer):
                     self.runfunc2, self.runfunc3, self.runfunc4
                 ),
             ]
+        self.recompute_use_kwargs_as_inputs = recompute_use_kwargs_as_inputs
 
     def forward(self, inputs):
         if self.use_fleet_sq and not self.use_raw_recompute:
@@ -120,13 +128,25 @@ class Naive_fc_net(paddle.nn.Layer):
             inputs = recompute(self.layers[0], inputs)
             return self.layers[1](inputs)
 
+        recompute_kwargs = copy.deepcopy(self.recompute_kwargs)
+
+        pos = (
+            recompute_kwargs.pop("pos", None)
+            if not self.raise_value_error
+            else None
+        )
         for i in range(len(self.layers)):
             if i in self.recompute_blocks:
-                inputs = recompute(
-                    self.layers[i], inputs, **self.recompute_kwargs
-                )
+                if self.recompute_use_kwargs_as_inputs:
+                    inputs = recompute(
+                        self.layers[i], pos=pos, x=inputs, **recompute_kwargs
+                    )
+                else:
+                    inputs = recompute(
+                        self.layers[i], inputs, pos, **recompute_kwargs
+                    )
             else:
-                inputs = self.layers[i](inputs)
+                inputs = self.layers[i](inputs, pos)
 
         return inputs
 
@@ -134,11 +154,13 @@ class Naive_fc_net(paddle.nn.Layer):
 def run_model(
     recompute_block=[],
     recompute_kwargs={},
+    raise_value_error=False,
     use_fleet_sq=False,
     use_raw_recompute=False,
     segments=1,
     enable_autocast=False,
     pure_fp16=False,
+    recompute_use_kwargs_as_inputs=False,
 ):
     gen = paddle.seed(10)
     gen.manual_seed(10)
@@ -153,6 +175,8 @@ def run_model(
         use_raw_recompute=use_raw_recompute,
         segments=segments,
         recompute_kwargs=recompute_kwargs,
+        raise_value_error=raise_value_error,
+        recompute_use_kwargs_as_inputs=recompute_use_kwargs_as_inputs,
     )
 
     if pure_fp16:
@@ -164,7 +188,7 @@ def run_model(
     )
 
     if enable_autocast:
-        scaler = paddle.amp.GradScaler()
+        scaler = paddle.amp.GradScaler(init_loss_scaling=4096)
 
     loss_ = []
     param_ = []
@@ -193,7 +217,12 @@ def run_model(
 
 
 class TestRecompute(unittest.TestCase):
-    def test_base_case(self, enable_autocast=False, pure_fp16=False):
+    def test_base_case(
+        self,
+        enable_autocast=False,
+        pure_fp16=False,
+        recompute_use_kwargs_as_inputs=False,
+    ):
         def check_identical(loss_ref, param_ref, grad_ref, loss, param, grad):
             self.assertEqual(loss_ref, loss)
             self.assertEqual(param_ref, param)
@@ -216,6 +245,7 @@ class TestRecompute(unittest.TestCase):
                 enable_autocast=enable_autocast,
                 pure_fp16=pure_fp16,
                 recompute_kwargs={"use_reentrant": flag},
+                recompute_use_kwargs_as_inputs=recompute_use_kwargs_as_inputs,
             )
             check_identical(loss_ref, param_ref, grad_ref, loss, param, grad)
 
@@ -225,6 +255,7 @@ class TestRecompute(unittest.TestCase):
                 enable_autocast=enable_autocast,
                 pure_fp16=pure_fp16,
                 recompute_kwargs={"use_reentrant": flag},
+                recompute_use_kwargs_as_inputs=recompute_use_kwargs_as_inputs,
             )
             check_identical(loss_ref, param_ref, grad_ref, loss, param, grad)
 
@@ -234,6 +265,7 @@ class TestRecompute(unittest.TestCase):
                 enable_autocast=enable_autocast,
                 pure_fp16=pure_fp16,
                 recompute_kwargs={"use_reentrant": flag},
+                recompute_use_kwargs_as_inputs=recompute_use_kwargs_as_inputs,
             )
             check_identical(loss_ref, param_ref, grad_ref, loss, param, grad)
 
@@ -243,6 +275,7 @@ class TestRecompute(unittest.TestCase):
                 enable_autocast=enable_autocast,
                 pure_fp16=pure_fp16,
                 recompute_kwargs={"use_reentrant": flag},
+                recompute_use_kwargs_as_inputs=recompute_use_kwargs_as_inputs,
             )
             check_identical(loss_ref, param_ref, grad_ref, loss, param, grad)
 
@@ -253,6 +286,7 @@ class TestRecompute(unittest.TestCase):
                 enable_autocast=enable_autocast,
                 pure_fp16=pure_fp16,
                 recompute_kwargs={"use_reentrant": flag},
+                recompute_use_kwargs_as_inputs=recompute_use_kwargs_as_inputs,
             )
             check_identical(loss_ref, param_ref, grad_ref, loss, param, grad)
 
@@ -276,39 +310,107 @@ class TestRecompute(unittest.TestCase):
 
     def test_fc_net_with_dropout(self):
         self.test_base_case()
+        self.test_base_case(recompute_use_kwargs_as_inputs=True)
 
     def test_fc_net_without_restore_rng(self):
         for flag in [True, False]:
-            loss_ref, param_ref, grad_ref = run_model(
-                recompute_block=[2],
-                recompute_kwargs={
-                    "preserve_rng_state": False,
-                    "use_reentrant": flag,
-                },
-                enable_autocast=True,
-            )
+            for recompute_use_kwargs_as_inputs in [True, False]:
+                loss_ref, param_ref, grad_ref = run_model(
+                    recompute_block=[2],
+                    recompute_kwargs={
+                        "preserve_rng_state": False,
+                        "use_reentrant": flag,
+                    },
+                    enable_autocast=True,
+                    recompute_use_kwargs_as_inputs=recompute_use_kwargs_as_inputs,
+                )
 
     def test_fc_net_with_amp(self):
         self.test_base_case(enable_autocast=True)
+        self.test_base_case(
+            enable_autocast=True, recompute_use_kwargs_as_inputs=True
+        )
 
     def test_fc_net_with_fp16(self):
         self.test_base_case(enable_autocast=True, pure_fp16=True)
+        self.test_base_case(
+            enable_autocast=True,
+            pure_fp16=True,
+            recompute_use_kwargs_as_inputs=True,
+        )
 
     def test_recompute_kwargs(self):
-        paddle.set_device("gpu")
+        paddle.set_device(
+            "xpu" if paddle.base.core.is_compiled_with_xpu() else "gpu"
+        )
         pos = paddle.randn(shape=[10, 10], dtype="float32")
         pos.stop_gradient = False
 
         kwargs = {"pos": pos, "use_reentrant": True}
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             loss_ref, param_ref, grad_ref = run_model(
-                recompute_block=[2], recompute_kwargs=kwargs
+                recompute_block=[2],
+                recompute_kwargs=kwargs,
+                raise_value_error=True,
             )
 
         kwargs = {"pos": pos, "use_reentrant": False}
         loss_ref, param_ref, grad_ref = run_model(
             recompute_block=[2], recompute_kwargs=kwargs
         )
+
+    def test_recompute_inputs_with_param(self):
+        for flag in [True, False]:
+            for recompute_use_kwargs_as_inputs in [True, False]:
+                pos = paddle.randn(shape=[10, 10], dtype="float32")
+                new_pos = EagerParamBase(
+                    shape=pos.shape, dtype=pos.dtype, name=pos.name
+                )
+                pos._share_buffer_to(new_pos)
+                new_pos.stop_gradient = False
+
+                loss, param, grad = run_model(
+                    recompute_block=[2, 4],
+                    recompute_kwargs={"pos": new_pos, "use_reentrant": flag},
+                    recompute_use_kwargs_as_inputs=recompute_use_kwargs_as_inputs,
+                )
+
+                loss_ref, param_ref, grad_ref = run_model(
+                    recompute_block=[1, 2, 3],
+                    recompute_kwargs={"pos": new_pos, "use_reentrant": flag},
+                    recompute_use_kwargs_as_inputs=recompute_use_kwargs_as_inputs,
+                )
+
+                self.assertEqual(loss_ref, loss)
+                self.assertEqual(param_ref, param)
+                self.assertEqual(grad_ref, grad)
+
+    def test_recompute_inputs_with_tuple(self):
+        for flag in [True, False]:
+            for recompute_use_kwargs_as_inputs in [True, False]:
+                pos = paddle.randn(shape=[10, 10], dtype="float32")
+                new_pos = EagerParamBase(
+                    shape=pos.shape, dtype=pos.dtype, name=pos.name
+                )
+                pos._share_buffer_to(new_pos)
+                pos.stop_gradient = False
+                new_pos.stop_gradient = False
+
+                loss, param, grad = run_model(
+                    recompute_block=[2, 4],
+                    recompute_kwargs={"pos": (pos,), "use_reentrant": flag},
+                    recompute_use_kwargs_as_inputs=recompute_use_kwargs_as_inputs,
+                )
+
+                loss_ref, param_ref, grad_ref = run_model(
+                    recompute_block=[1, 2, 3],
+                    recompute_kwargs={"pos": (new_pos,), "use_reentrant": flag},
+                    recompute_use_kwargs_as_inputs=recompute_use_kwargs_as_inputs,
+                )
+
+                self.assertEqual(loss_ref, loss)
+                self.assertEqual(param_ref, param)
+                self.assertEqual(grad_ref, grad)
 
 
 if __name__ == '__main__':

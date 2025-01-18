@@ -12,7 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ...fluid import framework
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from ...base import framework
+
+if TYPE_CHECKING:
+    from types import TracebackType
+
 
 __all__ = ["LazyGuard"]
 
@@ -98,19 +106,19 @@ class LazyGuard:
 
         .. code-block:: python
 
-            from paddle import LazyGuard
-            from paddle.nn import Linear
+            >>> from paddle import LazyGuard
+            >>> from paddle.nn import Linear
 
-            with LazyGuard():
-                # w and b are initialized lazily and have no memory.
-                net = Linear(10, 10)
-
-            for param in net.parameters():
-                # Initialize param and allocate memory explicitly.
-                param.initialize()
+            >>> with LazyGuard():
+            ...     # w and b are initialized lazily and have no memory.
+            ...     net = Linear(10, 10)
+            ...
+            >>> for param in net.parameters():
+            ...     # Initialize param and allocate memory explicitly.
+            ...     param.initialize()
     """
 
-    def __enter__(self):
+    def __enter__(self) -> None:
         """
         Construct instance from class_obj by Lazy Initializing parameters.
 
@@ -118,16 +126,21 @@ class LazyGuard:
 
             .. code-block:: python
 
-                from paddle import LazyGuard
-                from paddle.nn import Linear
+                >>> from paddle import LazyGuard
+                >>> from paddle.nn import Linear
 
-                with LazyGuard():
-                    fc = LazyInit(Linear)(10, 10)
-
-                for param in fc.parameters():
-                    param.initialize()
+                >>> with LazyGuard():
+                ...     fc = LazyInit(Linear)(10, 10)
+                ...
+                >>> for param in fc.parameters():
+                ...     param.initialize()
         """
         lazy_init_helper().enable()
 
-    def __exit__(self, *args, **kwargs):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         lazy_init_helper().disable()

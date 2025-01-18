@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
 from op import Operator
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core, in_pir_mode
 
 
 def create_selected_rows_and_tensor(
@@ -56,7 +57,7 @@ class TestBase(unittest.TestCase):
     ):
         np.random.seed(5)  # fix seed
 
-        self.scope = fluid.global_scope()
+        self.scope = base.global_scope()
         self.place = place
 
         self.param_name = "param"
@@ -224,19 +225,25 @@ class TestRmspropOp(TestBase):
             )
 
     def test_rmsprop(self):
-        places = [core.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(core.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(core.CUDAPlace(0))
 
         size = (128, 320)
         for place in places:
             for centered in [False, True]:
-                with fluid.scope_guard(core.Scope()):
+                with base.scope_guard(core.Scope()):
                     self.check_with_place(
                         place, is_sparse=False, centered=centered, size=size
                     )
 
-                with fluid.scope_guard(core.Scope()):
+                with base.scope_guard(core.Scope()):
                     self.check_with_place(
                         place,
                         is_sparse=True,
@@ -245,7 +252,7 @@ class TestRmspropOp(TestBase):
                         size=size,
                     )
 
-                with fluid.scope_guard(core.Scope()):
+                with base.scope_guard(core.Scope()):
                     self.check_with_place(
                         place,
                         is_sparse=True,
@@ -274,12 +281,15 @@ class TestRMSPropV2(unittest.TestCase):
 
     def test_rmsprop(self):
         paddle.enable_static()
-        place = fluid.CPUPlace()
-        main = fluid.Program()
-        with fluid.program_guard(main):
+        place = base.CPUPlace()
+        main = paddle.static.Program()
+        startup = paddle.static.Program()
+        with paddle.static.program_guard(main, startup):
             x = paddle.static.data(name='x', shape=[-1, 13], dtype='float32')
             y = paddle.static.data(name='y', shape=[-1, 1], dtype='float32')
-            y_predict = paddle.static.nn.fc(x, size=1)
+            y_predict = paddle.nn.Linear(
+                in_features=x.shape[-1], out_features=1
+            )(x)
             cost = paddle.nn.functional.square_error_cost(
                 input=y_predict, label=y
             )
@@ -292,9 +302,9 @@ class TestRMSPropV2(unittest.TestCase):
             train_reader = paddle.batch(
                 paddle.dataset.uci_housing.train(), batch_size=1
             )
-            feeder = fluid.DataFeeder(place=place, feed_list=[x, y])
-            exe = fluid.Executor(place)
-            exe.run(fluid.default_startup_program())
+            feeder = base.DataFeeder(place=place, feed_list=[x, y])
+            exe = base.Executor(place)
+            exe.run(startup)
             for data in train_reader():
                 exe.run(main, feed=feeder.feed(data), fetch_list=fetch_list)
 
@@ -333,6 +343,24 @@ class TestRMSPropV2(unittest.TestCase):
             )
 
 
+class TestRMSPropV2WeightDecay(unittest.TestCase):
+    def test_weight_decay_int(self):
+        paddle.disable_static()
+        value = np.arange(26).reshape(2, 13).astype("float32")
+        a = paddle.to_tensor(value)
+        linear = paddle.nn.Linear(13, 5)
+        # This can be any optimizer supported by dygraph.
+        adam = paddle.optimizer.RMSProp(
+            learning_rate=0.01,
+            parameters=linear.parameters(),
+            weight_decay=1,
+        )
+        out = linear(a)
+        out.backward()
+        adam.step()
+        adam.clear_gradients()
+
+
 class TestRMSPropV2Group(TestRMSPropV2):
     def test_rmsprop_dygraph(self):
         paddle.disable_static()
@@ -356,7 +384,7 @@ class TestRMSPropV2Group(TestRMSPropV2):
         adam.clear_gradients()
 
 
-class TestRMSOpMultiPrecison(unittest.TestCase):
+class TestRMSOpMultiPrecision(unittest.TestCase):
     def _test_rms_op_dygraph_place_amp(self, place, use_amp=False):
         import paddle
 
@@ -398,7 +426,13 @@ class TestRMSOpMultiPrecison(unittest.TestCase):
     def _get_places(self):
         import paddle
 
-        places = ['cpu']
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.is_compiled_with_cuda()
+        ):
+            places.append('cpu')
         if paddle.is_compiled_with_cuda():
             places.append('gpu')
         return places
@@ -448,19 +482,35 @@ class TestRMSPropMultiPrecision2_0(unittest.TestCase):
         exe = paddle.static.Executor('gpu')
         train_program = paddle.static.Program()
         startup_program = paddle.static.Program()
-        optimizer = paddle.optimizer.RMSProp(0.1)
-        optimizer._multi_precision = mp
 
-        if use_amp:
-            optimizer = paddle.static.amp.decorate(
-                optimizer,
-                init_loss_scaling=128.0,
-                use_dynamic_loss_scaling=True,
-                use_pure_fp16=True,
-                use_fp16_guard=False,
-            )
         with paddle.static.program_guard(train_program, startup_program):
-            if use_amp:
+            if in_pir_mode():
+                optimizer = paddle.optimizer.RMSProp(0.1)
+                optimizer._multi_precision = mp
+                linear = paddle.nn.Linear(2, 2)
+
+                if mp:
+                    linear, optimizer = paddle.amp.decorate(
+                        models=linear,
+                        optimizers=optimizer,
+                        level='O2',
+                        dtype='float16',
+                    )
+            else:
+                optimizer = paddle.optimizer.RMSProp(0.1)
+                optimizer._multi_precision = mp
+                linear = paddle.nn.Linear(2, 2)
+
+                if mp:
+                    optimizer = paddle.static.amp.decorate(
+                        optimizer,
+                        init_loss_scaling=128.0,
+                        use_dynamic_loss_scaling=True,
+                        use_pure_fp16=True,
+                        use_fp16_guard=False,
+                    )
+
+            if mp:
                 data = paddle.static.data(
                     shape=[2, 2], name='X', dtype='float16'
                 )
@@ -468,25 +518,100 @@ class TestRMSPropMultiPrecision2_0(unittest.TestCase):
                 data = paddle.static.data(
                     shape=[2, 2], name='X', dtype='float32'
                 )
-            hidden = paddle.static.nn.fc(x=data, size=10)
-            loss = paddle.mean(hidden)
-            optimizer.minimize(loss)
-        exe.run(startup_program)
+            if in_pir_mode():
+                if mp:
+                    with paddle.amp.auto_cast(
+                        level='O2', dtype='float16', use_promote=True
+                    ):
+                        hidden = linear(data)
+                else:
+                    hidden = linear(data)
+                loss = paddle.mean(hidden)
+                optimizer.minimize(loss)
+            else:
+                hidden = paddle.static.nn.fc(x=data, size=10)
+                loss = paddle.mean(hidden)
+                optimizer.minimize(loss)
+                if mp:
+                    optimizer.amp_init(
+                        place=paddle.CUDAPlace(0),
+                        scope=paddle.static.global_scope(),
+                    )
+                    x = np.random.random(size=(2, 2)).astype('float16')
+                else:
+                    x = np.random.random(size=(2, 2)).astype('float32')
 
-        if use_amp:
+        if mp:
             optimizer.amp_init(
                 place=paddle.CUDAPlace(0), scope=paddle.static.global_scope()
             )
             x = np.random.random(size=(2, 2)).astype('float16')
         else:
             x = np.random.random(size=(2, 2)).astype('float32')
+
+        exe.run(startup_program)
         out = []
         for idx in range(5):
-            (loss_data,) = exe.run(
-                train_program, feed={"X": x}, fetch_list=[loss.name]
-            )
+            if in_pir_mode():
+                (loss_data,) = exe.run(
+                    train_program, feed={"X": x}, fetch_list=[loss]
+                )
+            else:
+                (loss_data,) = exe.run(
+                    train_program, feed={"X": x}, fetch_list=[loss.name]
+                )
             out.append(loss_data)
         return out
+
+    def pir_rmsprop_mp(self, mp, use_amp):
+        with paddle.pir_utils.IrGuard():
+            paddle.seed(100)
+            np.random.seed(100)
+            exe = paddle.static.Executor('gpu')
+            train_program = paddle.static.Program()
+            startup_program = paddle.static.Program()
+            optimizer = paddle.optimizer.RMSProp(0.1)
+            optimizer._multi_precision = mp
+
+            if use_amp:
+                optimizer = paddle.static.amp.decorate(
+                    optimizer,
+                    init_loss_scaling=128.0,
+                    use_dynamic_loss_scaling=True,
+                    use_pure_fp16=True,
+                    use_fp16_guard=False,
+                )
+            with paddle.static.program_guard(train_program, startup_program):
+                if use_amp:
+                    data = paddle.static.data(
+                        shape=[2, 2], name='X', dtype='float16'
+                    )
+                else:
+                    data = paddle.static.data(
+                        shape=[2, 2], name='X', dtype='float32'
+                    )
+                hidden = paddle.nn.Linear(
+                    in_features=data.shape[-1], out_features=10
+                )(data)
+                loss = paddle.mean(hidden)
+                optimizer.minimize(loss)
+            exe.run(startup_program)
+
+            if use_amp:
+                optimizer.amp_init(
+                    place=paddle.CUDAPlace(0),
+                    scope=paddle.static.global_scope(),
+                )
+                x = np.random.random(size=(2, 2)).astype('float16')
+            else:
+                x = np.random.random(size=(2, 2)).astype('float32')
+            out = []
+            for idx in range(5):
+                (loss_data,) = exe.run(
+                    train_program, feed={"X": x}, fetch_list=[loss]
+                )
+                out.append(loss_data)
+            return out
 
     def test_main(self):
         if not paddle.is_compiled_with_cuda():
@@ -519,6 +644,16 @@ class TestRMSPropMultiPrecision2_0(unittest.TestCase):
                 rtol=1e-05,
                 atol=0.1,
             )
+        # NOT support amp training "Test pir mode"
+        # output1_pir = self.pir_rmsprop_mp(use_amp=True, mp=True)
+        # output2_pir = self.pir_rmsprop_mp(use_amp=False, mp=False)
+        # for idx in range(len(output1_pir)):
+        #     np.testing.assert_allclose(
+        #         output1_pir[idx].astype('float32'),
+        #         output2_pir[idx].astype('float32'),
+        #         rtol=1e-05,
+        #         atol=0.1,
+        #     )
 
 
 if __name__ == "__main__":

@@ -17,8 +17,8 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle import fluid, nn
-from paddle.fluid import core
+from paddle import base, nn
+from paddle.base import core
 
 
 class SimpleNet(nn.Layer):
@@ -475,7 +475,7 @@ class TestTensorRegisterHook(unittest.TestCase):
         # after changed by hook: 8.0
 
         # TODO(wuweilong): enable this case when DoubleGrad in eager mode is ready
-        if fluid.in_dygraph_mode():
+        if base.in_dygraph_mode():
             pass
         else:
             z.backward()
@@ -520,7 +520,8 @@ class TestTensorRegisterHook(unittest.TestCase):
     def test_register_hook_in_dy2static_mode(self):
         net = SimpleNetForStatic(self.in_size, self.out_size)
         jit_net = paddle.jit.to_static(
-            net, input_spec=[paddle.static.InputSpec([None, self.in_size])]
+            net,
+            input_spec=[paddle.static.InputSpec([None, self.in_size])],
         )
 
         data = np.random.uniform(size=[self.batch_size, self.in_size]).astype(
@@ -589,7 +590,7 @@ class TestTensorRegisterBackwardHook(unittest.TestCase):
             x._register_backward_hook(global_void_hook)
 
 
-class TestRegsiterBackwardFinalHook(unittest.TestCase):
+class TestRegisterBackwardFinalHook(unittest.TestCase):
     def setUp(self):
         self.devices = ["cpu"]
         if paddle.is_compiled_with_cuda():

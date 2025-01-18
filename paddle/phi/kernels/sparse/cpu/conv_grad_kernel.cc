@@ -19,8 +19,7 @@ limitations under the License. */
 #include "paddle/phi/kernels/funcs/math_function.h"
 #include "paddle/phi/kernels/sparse/cpu/conv.h"
 
-namespace phi {
-namespace sparse {
+namespace phi::sparse {
 
 // rulebook:
 //[
@@ -28,7 +27,7 @@ namespace sparse {
 //  [in_i],
 //  [out_i],
 //]
-// x_grad = out_grad * transpose(kenrel)
+// x_grad = out_grad * transpose(kernel)
 // kernel_grad = transpose(x) * out_grad
 template <typename T, typename IntT = int>
 void Conv3dCooGradCPUKernel(const CPUContext& dev_ctx,
@@ -49,10 +48,12 @@ void Conv3dCooGradCPUKernel(const CPUContext& dev_ctx,
   const auto& kernel_dims = kernel.dims();
   const bool is2D = kernel_dims.size() == 4 ? true : false;
   const int kernel_size =
-      is2D ? kernel_dims[0] * kernel_dims[1]
-           : kernel_dims[0] * kernel_dims[1] * kernel_dims[2];
-  const int in_channels = is2D ? kernel_dims[2] : kernel_dims[3];
-  const int out_channels = is2D ? kernel_dims[3] : kernel_dims[4];
+      static_cast<int>(is2D ? kernel_dims[0] * kernel_dims[1]
+                            : kernel_dims[0] * kernel_dims[1] * kernel_dims[2]);
+  const int in_channels =
+      static_cast<int>(is2D ? kernel_dims[2] : kernel_dims[3]);
+  const int out_channels =
+      static_cast<int>(is2D ? kernel_dims[3] : kernel_dims[4]);
 
   int rulebook_len = 0;
   const IntT* rulebook_ptr = phi::funcs::sparse::GetRulebookPtr<IntT>(
@@ -213,8 +214,7 @@ void Conv3dCooGradKernel(const Context& dev_ctx,
                                           kernel_grad);
       }));
 }
-}  // namespace sparse
-}  // namespace phi
+}  // namespace phi::sparse
 
 PD_REGISTER_KERNEL(conv3d_coo_grad,
                    CPU,

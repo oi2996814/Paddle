@@ -247,7 +247,7 @@ void Reshape2MatmulXPUFusePass::FuseReshape2Matmul(ir::Graph* graph) const {
 
 void Reshape2MatmulXPUFusePass::ApplyImpl(ir::Graph* graph) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, platform::errors::PreconditionNotMet("graph should not be null."));
+      graph, common::errors::PreconditionNotMet("graph should not be null."));
   Init(name_scope_, graph);
 
   FuseReshape2Matmul(graph);
@@ -286,9 +286,6 @@ void MapMatmulV2ToMatmulXPUPass::MapMatmulV2ToMatmul(ir::Graph* graph) const {
     desc.SetAttr("transpose_X", matmul_v2->Op()->GetAttr("trans_x"));
     desc.SetAttr("transpose_Y", matmul_v2->Op()->GetAttr("trans_y"));
     desc.SetAttr("alpha", 1.0f);
-    if (matmul_v2->Op()->HasAttr("use_mkldnn")) {
-      desc.SetAttr("use_mkldnn", matmul_v2->Op()->GetAttr("use_mkldnn"));
-    }
     auto matmul_node = graph->CreateOpNode(&desc);
     IR_NODE_LINK_TO(matmul_x, matmul_node);
     IR_NODE_LINK_TO(matmul_y, matmul_node);
@@ -303,7 +300,7 @@ void MapMatmulV2ToMatmulXPUPass::MapMatmulV2ToMatmul(ir::Graph* graph) const {
 
 void MapMatmulV2ToMatmulXPUPass::ApplyImpl(ir::Graph* graph) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, platform::errors::PreconditionNotMet("graph should not be null."));
+      graph, common::errors::PreconditionNotMet("graph should not be null."));
   Init(name_scope_, graph);
 
   MapMatmulV2ToMatmul(graph);
@@ -356,7 +353,7 @@ void Squeeze2MatmulXPUFusePass::FuseSqueeze2Matmul(ir::Graph* graph) const {
 
 void Squeeze2MatmulXPUFusePass::ApplyImpl(ir::Graph* graph) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, platform::errors::PreconditionNotMet("graph should not be null."));
+      graph, common::errors::PreconditionNotMet("graph should not be null."));
   Init(name_scope_, graph);
 
   FuseSqueeze2Matmul(graph);

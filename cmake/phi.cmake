@@ -64,11 +64,6 @@ function(generate_unify_header DIR_NAME)
       endif()
     endif()
   endforeach()
-  if(DEFINED REDUCE_INFERENCE_LIB_SIZE)
-    if(${kernel_name} MATCHES ".*_grad")
-      continue()
-    endif()
-  endif()
   # append header into extension.h
   string(REPLACE "${PADDLE_SOURCE_DIR}\/" "" header_file "${header_file}")
   file(APPEND ${phi_extension_header_file} "#include \"${header_file}\"\n")
@@ -86,6 +81,11 @@ function(kernel_declare TARGET_LIST)
         "(PD_REGISTER_KERNEL|PD_REGISTER_KERNEL_FOR_ALL_DTYPE|PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE|PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE_EXCEPT_CUSTOM)\\([ \t\r\n]*[a-z0-9_]*,[[ \\\t\r\n\/]*[a-z0-9_]*]?[ \\\t\r\n]*[a-zA-Z_]*,[ \\\t\r\n]*[A-Z_]*"
         first_registry
         "${kernel_impl}")
+    if(DEFINED REDUCE_INFERENCE_LIB_SIZE)
+      if("${first_registry}" MATCHES ".*_grad,.*")
+        continue()
+      endif()
+    endif()
     set(kernel_declare_id "")
     while(NOT first_registry STREQUAL "")
       string(REPLACE "${first_registry}" "" kernel_impl "${kernel_impl}")
@@ -119,7 +119,7 @@ function(kernel_declare TARGET_LIST)
             is_all_backend
             "${first_registry}")
         if(NOT is_all_backend STREQUAL "")
-          # parse the registerd kernel message
+          # parse the registered kernel message
           string(
             REPLACE "PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE_EXCEPT_CUSTOM("
                     "" kernel_msg "${first_registry}")
@@ -131,7 +131,7 @@ function(kernel_declare TARGET_LIST)
               is_all_backend
               "${first_registry}")
 
-          # parse the registerd kernel message
+          # parse the registered kernel message
           string(REPLACE "PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE(" ""
                          kernel_msg "${first_registry}")
         endif()
@@ -170,55 +170,6 @@ function(kernel_declare TARGET_LIST)
       file(APPEND ${kernel_declare_file} "${kernel_declare_id}\n")
     endif()
   endforeach()
-endfunction()
-
-function(append_op_util_declare TARGET)
-  file(READ ${TARGET} target_content)
-  string(REGEX MATCH "(PD_REGISTER_ARG_MAPPING_FN)\\([ \t\r\n]*[a-z0-9_]*"
-               util_registrar "${target_content}")
-  if(NOT ${util_registrar} EQUAL "")
-    string(REPLACE "PD_REGISTER_ARG_MAPPING_FN" "PD_DECLARE_ARG_MAPPING_FN"
-                   util_declare "${util_registrar}")
-    string(APPEND util_declare ");\n")
-    file(APPEND ${op_utils_header} "${util_declare}")
-  endif()
-endfunction()
-
-function(append_op_kernel_map_declare TARGET)
-  file(READ ${TARGET} target_content)
-  string(
-    REGEX
-      MATCH
-      "(PD_REGISTER_BASE_KERNEL_NAME)\\([ \t\r\n]*[a-z0-9_]*,[ \\\t\r\n]*[a-z0-9_]*"
-      kernel_mapping_registrar
-      "${target_content}")
-  if(NOT ${kernel_mapping_registrar} EQUAL "")
-    string(REPLACE "PD_REGISTER_BASE_KERNEL_NAME" "PD_DECLARE_BASE_KERNEL_NAME"
-                   kernel_mapping_declare "${kernel_mapping_registrar}")
-    string(APPEND kernel_mapping_declare ");\n")
-    file(APPEND ${op_utils_header} "${kernel_mapping_declare}")
-  endif()
-endfunction()
-
-function(register_op_utils TARGET_NAME)
-  set(utils_srcs)
-  set(options "")
-  set(oneValueArgs "")
-  set(multiValueArgs EXCLUDES DEPS)
-  cmake_parse_arguments(register_op_utils "${options}" "${oneValueArgs}"
-                        "${multiValueArgs}" ${ARGN})
-
-  file(GLOB SIGNATURES "${PADDLE_SOURCE_DIR}/paddle/phi/ops/compat/*_sig.cc")
-  foreach(target ${SIGNATURES})
-    append_op_util_declare(${target})
-    append_op_kernel_map_declare(${target})
-    list(APPEND utils_srcs ${target})
-  endforeach()
-
-  cc_library(
-    ${TARGET_NAME}
-    SRCS ${utils_srcs}
-    DEPS ${register_op_utils_DEPS})
 endfunction()
 
 function(prune_declaration_h)

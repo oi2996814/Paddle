@@ -113,8 +113,8 @@ void ProcessGroupMPI::InitOneTimeMPI() {
     PADDLE_ENFORCE_EQ(
         mpi_thread_support < MPI_THREAD_SERIALIZED,
         false,
-        platform::errors::InvalidArgument("MPI supports the number of threads "
-                                          "less than MPI_THREAD_SERIALIZED. "));
+        common::errors::InvalidArgument("MPI supports the number of threads "
+                                        "less than MPI_THREAD_SERIALIZED. "));
 
     std::atexit(ProcessGroupMPI::ExitMPI);
   });
@@ -159,7 +159,7 @@ std::shared_ptr<ProcessGroupMPI> ProcessGroupMPI::CreateProcessGroupMPI(
       PADDLE_ENFORCE_EQ(
           rank < 0 || size < 0,
           false,
-          platform::errors::InvalidArgument("get world_size or rank failed!"));
+          common::errors::InvalidArgument("get world_size or rank failed!"));
     }
   }
 
@@ -180,7 +180,7 @@ ProcessGroupMPI::ProcessGroupMPI(int rank, int size, MPI_Comm pg_comm, int gid)
   PADDLE_ENFORCE_EQ(
       pg_comm == MPI_COMM_NULL,
       false,
-      platform::errors::InvalidArgument("Error! mpi comm is MPI_COMM_NULL!"));
+      common::errors::InvalidArgument("Error! mpi comm is MPI_COMM_NULL!"));
 
   worker_thread = std::thread(&ProcessGroupMPI::workLoop, this);
 }
@@ -228,6 +228,7 @@ void ProcessGroupMPI::workLoop() {
 std::shared_ptr<ProcessGroup::Task> ProcessGroupMPI::Enqueue(
     std::unique_ptr<TaskEntry> entry,
     const std::vector<phi::DenseTensor>& inputs) {
+  CheckTensorContiguous(inputs);
   auto task = std::make_shared<MPITask>(entry->dst_, inputs);
   std::unique_lock<std::mutex> lock(pg_mutex);
   queue_.push_back(std::make_tuple(std::move(entry), task));
@@ -240,6 +241,9 @@ std::shared_ptr<ProcessGroup::Task> ProcessGroupMPI::Broadcast(
     std::vector<phi::DenseTensor>& in_tensors,
     std::vector<phi::DenseTensor>& out_tensors,
     const BroadcastOptions& opts) {
+  CheckTensorContiguous(in_tensors);
+  CheckTensorContiguous(out_tensors);
+
   mpi::CheckValidInputs(in_tensors);
   const auto places = GetPlaceList(in_tensors);
 
@@ -263,6 +267,8 @@ std::shared_ptr<ProcessGroup::Task> ProcessGroupMPI::AllReduce(
     std::vector<phi::DenseTensor>& in_tensors,
     std::vector<phi::DenseTensor>& out_tensors,
     const AllreduceOptions& opts) {
+  CheckTensorContiguous(in_tensors);
+
   mpi::CheckValidInputs(in_tensors);
 
   std::function<void(std::unique_ptr<TaskEntry>&)> runFunc =
@@ -296,6 +302,8 @@ std::shared_ptr<ProcessGroup::Task> ProcessGroupMPI::Barrier(
 // NOTE: MPI_send tag set gid_
 std::shared_ptr<ProcessGroup::Task> ProcessGroupMPI::Send(
     std::vector<phi::DenseTensor>& tensors, int dst_rank) {
+  CheckTensorContiguous(tensors);
+
   mpi::CheckValidInputs(tensors);
 
   auto& tensor = tensors[0];
@@ -317,6 +325,7 @@ std::shared_ptr<ProcessGroup::Task> ProcessGroupMPI::Send(
 
 std::shared_ptr<ProcessGroup::Task> ProcessGroupMPI::Recv(
     std::vector<phi::DenseTensor>& tensors, int src_rank) {
+  CheckTensorContiguous(tensors);
   mpi::CheckValidInputs(tensors);
 
   auto& tensor = tensors[0];
@@ -339,12 +348,15 @@ std::shared_ptr<ProcessGroup::Task> ProcessGroupMPI::Recv(
 std::shared_ptr<ProcessGroup::Task> ProcessGroupMPI::AllGather(
     std::vector<phi::DenseTensor>& in_tensors,
     std::vector<phi::DenseTensor>& out_tensors) {
+  CheckTensorContiguous(in_tensors);
+  CheckTensorContiguous(out_tensors);
+
   mpi::CheckValidInputs(in_tensors);
 
-  PADDLE_ENFORCE_EQ(out_tensors.size() == 1,
-                    true,
-                    platform::errors::InvalidArgument(
-                        "MPI only support a single tensor op."));
+  PADDLE_ENFORCE_EQ(
+      out_tensors.size() == 1,
+      true,
+      common::errors::InvalidArgument("MPI only support a single tensor op."));
 
   std::function<void(std::unique_ptr<TaskEntry>&)> runFunc =
       [this](std::unique_ptr<TaskEntry>& entry) {
@@ -370,13 +382,16 @@ std::shared_ptr<ProcessGroup::Task> ProcessGroupMPI::AllGather(
 std::shared_ptr<ProcessGroup::Task> ProcessGroupMPI::AllToAll(
     std::vector<phi::DenseTensor>& in_tensors,
     std::vector<phi::DenseTensor>& out_tensors) {
+  CheckTensorContiguous(in_tensors);
+  CheckTensorContiguous(out_tensors);
+
   mpi::CheckValidInputs(in_tensors);
   mpi::CheckValidInputs(out_tensors);
 
   PADDLE_ENFORCE_EQ(in_tensors[0].numel() == out_tensors[0].numel() &&
                         in_tensors[0].dtype() == out_tensors[0].dtype(),
                     true,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "MPI AlltoAll: input and output are not equal in "
                         "size or data type."));
 
@@ -403,6 +418,9 @@ std::shared_ptr<ProcessGroup::Task> ProcessGroupMPI::Reduce(
     std::vector<phi::DenseTensor>& tensors,
     std::vector<phi::DenseTensor>& out_tensors,
     const ReduceOptions& opts) {
+  CheckTensorContiguous(tensors);
+  CheckTensorContiguous(out_tensors);
+
   mpi::CheckValidInputs(tensors);
 
   std::function<void(std::unique_ptr<TaskEntry>&)> runFunc =
@@ -430,6 +448,9 @@ std::shared_ptr<ProcessGroup::Task> ProcessGroupMPI::Scatter(
     std::vector<phi::DenseTensor>& in_tensors,
     std::vector<phi::DenseTensor>& out_tensors,
     const ScatterOptions& opts) {
+  CheckTensorContiguous(in_tensors);
+  CheckTensorContiguous(out_tensors);
+
   mpi::CheckValidInputs(in_tensors);
 
   std::function<void(std::unique_ptr<TaskEntry>&)> runFunc =

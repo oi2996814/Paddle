@@ -15,11 +15,12 @@
 import os
 
 os.environ["WITH_DISTRIBUTE"] = "ON"
+os.environ['FLAGS_enable_pir_api'] = '0'
 
 import unittest
 
 import paddle
-from paddle import fluid
+from paddle import base
 from paddle.distributed import fleet
 from paddle.distributed.fleet.base import role_maker
 
@@ -74,14 +75,12 @@ class TestPSPassWithBow(unittest.TestCase):
         is_sparse = True
 
         # query
-        q = paddle.static.data(
-            name="1", shape=[-1, 1], dtype="int64", lod_level=1
-        )
+        q = paddle.static.data(name="1", shape=[-1, 1], dtype="int64")
         # embedding
         q_emb = paddle.static.nn.sparse_embedding(
             input=q,
             size=[dict_dim, emb_dim],
-            param_attr=fluid.ParamAttr(
+            param_attr=base.ParamAttr(
                 initializer=paddle.nn.initializer.Constant(value=0.01),
                 name="__emb__",
                 learning_rate=emb_lr,
@@ -97,7 +96,7 @@ class TestPSPassWithBow(unittest.TestCase):
         q_fc = paddle.static.nn.fc(
             x=q_ss,
             size=hid_dim,
-            weight_attr=fluid.ParamAttr(
+            weight_attr=base.ParamAttr(
                 initializer=paddle.nn.initializer.Constant(value=0.01),
                 name="__q_fc__",
                 learning_rate=base_lr,
@@ -106,14 +105,12 @@ class TestPSPassWithBow(unittest.TestCase):
         # label data
         label = paddle.static.data(name="label", shape=[-1, 1], dtype="int64")
         # pt
-        pt = paddle.static.data(
-            name="2", shape=[-1, 1], dtype="int64", lod_level=1
-        )
+        pt = paddle.static.data(name="2", shape=[-1, 1], dtype="int64")
         # embedding
         pt_emb = paddle.static.nn.sparse_embedding(
             input=pt,
             size=[dict_dim, emb_dim],
-            param_attr=fluid.ParamAttr(
+            param_attr=base.ParamAttr(
                 initializer=paddle.nn.initializer.Constant(value=0.01),
                 name="__emb__",
                 learning_rate=emb_lr,
@@ -129,22 +126,20 @@ class TestPSPassWithBow(unittest.TestCase):
         pt_fc = paddle.static.nn.fc(
             x=pt_ss,
             size=hid_dim,
-            weight_attr=fluid.ParamAttr(
+            weight_attr=base.ParamAttr(
                 initializer=paddle.nn.initializer.Constant(value=0.01),
                 name="__fc__",
                 learning_rate=base_lr,
             ),
-            bias_attr=fluid.ParamAttr(name="__fc_b__"),
+            bias_attr=base.ParamAttr(name="__fc_b__"),
         )
         # nt
-        nt = paddle.static.data(
-            name="3", shape=[-1, 1], dtype="int64", lod_level=1
-        )
+        nt = paddle.static.data(name="3", shape=[-1, 1], dtype="int64")
         # embedding
         nt_emb = paddle.static.nn.sparse_embedding(
             input=nt,
             size=[dict_dim, emb_dim],
-            param_attr=fluid.ParamAttr(
+            param_attr=base.ParamAttr(
                 initializer=paddle.nn.initializer.Constant(value=0.01),
                 name="__emb__",
                 learning_rate=emb_lr,
@@ -160,12 +155,12 @@ class TestPSPassWithBow(unittest.TestCase):
         nt_fc = paddle.static.nn.fc(
             x=nt_ss,
             size=hid_dim,
-            weight_attr=fluid.ParamAttr(
+            weight_attr=base.ParamAttr(
                 initializer=paddle.nn.initializer.Constant(value=0.01),
                 name="__fc__",
                 learning_rate=base_lr,
             ),
-            bias_attr=fluid.ParamAttr(name="__fc_b__"),
+            bias_attr=base.ParamAttr(name="__fc_b__"),
         )
         cos_q_pt = paddle.nn.functional.cosine_similarity(q_fc, pt_fc)
         cos_q_nt = paddle.nn.functional.cosine_similarity(q_fc, nt_fc)
@@ -182,9 +177,9 @@ class TestPSPassWithBow(unittest.TestCase):
         os.environ["PADDLE_PORT"] = "36001"
         os.environ["PADDLE_TRAINER_ID"] = "0"
         os.environ["PADDLE_TRAINERS_NUM"] = "2"
-        os.environ[
-            "PADDLE_PSERVERS_IP_PORT_LIST"
-        ] = "127.0.0.1:36001,127.0.0.2:36001"
+        os.environ["PADDLE_PSERVERS_IP_PORT_LIST"] = (
+            "127.0.0.1:36001,127.0.0.2:36001"
+        )
         os.environ["TRAINING_ROLE"] = "PSERVER"
 
         role = role_maker.PaddleCloudRoleMaker()

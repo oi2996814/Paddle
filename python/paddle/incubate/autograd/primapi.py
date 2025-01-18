@@ -12,17 +12,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import logging
 import typing
+from typing import TYPE_CHECKING, TypeVar
 
 import paddle
-from paddle.fluid import backward, core, framework
-from paddle.fluid.core import prim_config
+from paddle.base import backward, core, framework
+from paddle.base.core import prim_config
 from paddle.incubate.autograd import primx, utils
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from paddle import Tensor
+    from paddle.base.framework import Block
+
+    _TensorOrTensorsT = TypeVar("_TensorOrTensorsT", Tensor, Sequence[Tensor])
 
 
 @framework.static_only
-def forward_grad(outputs, inputs, grad_inputs=None):
+def forward_grad(
+    outputs: _TensorOrTensorsT,
+    inputs: _TensorOrTensorsT,
+    grad_inputs: _TensorOrTensorsT | None = None,
+) -> _TensorOrTensorsT:
     """Forward mode of automatic differentiation.
 
     Note:
@@ -42,29 +57,30 @@ def forward_grad(outputs, inputs, grad_inputs=None):
 
         .. code-block:: python
 
-            import numpy as np
-            import paddle
+            >>> # doctest: +SKIP('Transform NOT has linearize')
+            >>> import numpy as np
+            >>> import paddle
 
-            paddle.enable_static()
-            paddle.incubate.autograd.enable_prim()
+            >>> paddle.enable_static()
+            >>> paddle.incubate.autograd.enable_prim()
 
-            startup_program = paddle.static.Program()
-            main_program = paddle.static.Program()
+            >>> startup_program = paddle.static.Program()
+            >>> main_program = paddle.static.Program()
 
-            with paddle.static.program_guard(main_program, startup_program):
-                x = paddle.static.data('x', shape=[1], dtype='float32')
-                y = x * x
-                y_grad = paddle.incubate.autograd.forward_grad(y, x)
-                paddle.incubate.autograd.prim2orig()
+            >>> with paddle.static.program_guard(main_program, startup_program):
+            ...     x = paddle.static.data('x', shape=[1], dtype='float32')
+            ...     y = x * x
+            ...     y_grad = paddle.incubate.autograd.forward_grad(y, x)
+            ...     paddle.incubate.autograd.prim2orig()
+            ...
+            >>> exe = paddle.static.Executor()
+            >>> exe.run(startup_program)
+            >>> y_grad = exe.run(main_program, feed={'x': np.array([2.]).astype('float32')}, fetch_list=[y_grad])
+            >>> print(y_grad)
+            [array([4.], dtype=float32)]
 
-            exe = paddle.static.Executor()
-            exe.run(startup_program)
-            y_grad = exe.run(main_program, feed={'x': np.array([2.]).astype('float32')}, fetch_list=[y_grad])
-            print(y_grad)
-            # [array([4.], dtype=float32)]
-
-            paddle.incubate.autograd.disable_prim()
-            paddle.disable_static()
+            >>> paddle.incubate.autograd.disable_prim()
+            >>> paddle.disable_static()
     """
     if not utils.prim_enabled():
         raise RuntimeError(
@@ -72,15 +88,19 @@ def forward_grad(outputs, inputs, grad_inputs=None):
             'operators, use enable_prim to turn it on.'
         )
 
-    if not isinstance(outputs, (framework.Variable, typing.Sequence)):
+    if not isinstance(
+        outputs, (framework.Variable, typing.Sequence, paddle.pir.Value)
+    ):
         raise TypeError(
-            f'Expected outputs is Tensor|Sequence[Tesnor], '
+            f'Expected outputs is Tensor|Sequence[Tensor], '
             f'but got {type(outputs)}.'
         )
 
-    if not isinstance(inputs, (framework.Variable, typing.Sequence)):
+    if not isinstance(
+        inputs, (framework.Variable, typing.Sequence, paddle.pir.Value)
+    ):
         raise TypeError(
-            f'Expected inputs is Tensor|Sequence[Tesnor], '
+            f'Expected inputs is Tensor|Sequence[Tensor], '
             f'but got {type(inputs)}.'
         )
 
@@ -101,11 +121,19 @@ def forward_grad(outputs, inputs, grad_inputs=None):
     ad = primx.Transform(ys[0].block)
     _, ys_dot = ad.linearize(xs, ys, xs_dot)
 
-    return ys_dot[0] if isinstance(outputs, framework.Variable) else ys_dot
+    return (
+        ys_dot[0]
+        if isinstance(outputs, (framework.Variable, paddle.pir.Value))
+        else ys_dot
+    )
 
 
 @framework.static_only
-def grad(outputs, inputs, grad_outputs=None):
+def grad(
+    outputs: _TensorOrTensorsT,
+    inputs: _TensorOrTensorsT,
+    grad_outputs: _TensorOrTensorsT | None = None,
+) -> _TensorOrTensorsT:
     """Reverse mode of automatic differentiation.
 
     Note:
@@ -125,37 +153,38 @@ def grad(outputs, inputs, grad_outputs=None):
 
         .. code-block:: python
 
-            import numpy as np
-            import paddle
+            >>> # doctest: +SKIP('Transform NOT has linearize')
+            >>> import numpy as np
+            >>> import paddle
 
-            paddle.enable_static()
-            paddle.incubate.autograd.enable_prim()
+            >>> paddle.enable_static()
+            >>> paddle.incubate.autograd.enable_prim()
 
-            startup_program = paddle.static.Program()
-            main_program = paddle.static.Program()
-            with paddle.static.program_guard(main_program, startup_program):
-                x = paddle.static.data('x', shape=[1], dtype='float32')
-                x.stop_gradients = False
-                y = x * x
-                x_grad = paddle.incubate.autograd.grad(y, x)
-                paddle.incubate.autograd.prim2orig()
+            >>> startup_program = paddle.static.Program()
+            >>> main_program = paddle.static.Program()
+            >>> with paddle.static.program_guard(main_program, startup_program):
+            ...     x = paddle.static.data('x', shape=[1], dtype='float32')
+            ...     x.stop_gradients = False
+            ...     y = x * x
+            ...     x_grad = paddle.incubate.autograd.grad(y, x)
+            ...     paddle.incubate.autograd.prim2orig()
+            ...
+            >>> exe = paddle.static.Executor()
+            >>> exe.run(startup_program)
+            >>> x_grad = exe.run(main_program, feed={'x': np.array([2.]).astype('float32')}, fetch_list=[x_grad])
+            >>> print(x_grad)
+            [array([4.], dtype=float32)]
 
-            exe = paddle.static.Executor()
-            exe.run(startup_program)
-            x_grad = exe.run(main_program, feed={'x': np.array([2.]).astype('float32')}, fetch_list=[x_grad])
-            print(x_grad)
-            # [array([4.], dtype=float32)]
-
-            paddle.incubate.autograd.disable_prim()
-            paddle.disable_static()
+            >>> paddle.incubate.autograd.disable_prim()
+            >>> paddle.disable_static()
     """
     if not utils.prim_enabled():
         grad_inputs = backward.gradients(outputs, inputs, grad_outputs)
-        # backward.gradients returns a list though the inputs is a signle Tensor.
+        # backward.gradients returns a list though the inputs is a single Tensor.
         # The follow code snippet fixes the problem by return the first element
-        # of grad_inputs when the inputs is a signle Tensor.
+        # of grad_inputs when the inputs is a single Tensor.
         if (
-            isinstance(inputs, framework.Variable)
+            isinstance(inputs, (framework.Variable, paddle.pir.Value))
             and isinstance(grad_inputs, typing.Sequence)
             and len(grad_inputs) > 0
         ):
@@ -163,15 +192,19 @@ def grad(outputs, inputs, grad_outputs=None):
         else:
             return grad_inputs
 
-    if not isinstance(outputs, (framework.Variable, typing.Sequence)):
+    if not isinstance(
+        outputs, (framework.Variable, typing.Sequence, paddle.pir.Value)
+    ):
         raise TypeError(
-            f'Expected outputs is Tensor|Sequence[Tesnor], '
+            f'Expected outputs is Tensor|Sequence[Tensor], '
             f'but got {type(outputs)}.'
         )
 
-    if not isinstance(inputs, (framework.Variable, typing.Sequence)):
+    if not isinstance(
+        inputs, (framework.Variable, typing.Sequence, paddle.pir.Value)
+    ):
         raise TypeError(
-            f'Expected inputs is Tensor|Sequence[Tesnor], '
+            f'Expected inputs is Tensor|Sequence[Tensor], '
             f'but got {type(inputs)}.'
         )
 
@@ -213,17 +246,21 @@ def grad(outputs, inputs, grad_outputs=None):
     ad.erase_ops(sorted(op_indexes))
     ad.erase_dots(xs_dot)
 
-    return xs_bar[0] if isinstance(inputs, framework.Variable) else xs_bar
+    return (
+        xs_bar[0]
+        if isinstance(inputs, (framework.Variable, paddle.pir.Value))
+        else xs_bar
+    )
 
 
 @framework.static_only
 def to_prim(
-    blocks,
-    blacklist=frozenset(),
-    whitelist=frozenset(),
-    start_idx=-1,
-    backward_length=-1,
-):
+    blocks: Block | Sequence[Block],
+    blacklist: set[str] | frozenset[str] = frozenset(),
+    whitelist: set[str] | frozenset[str] = frozenset(),
+    start_idx: int = -1,
+    backward_length: int = -1,
+) -> None:
     """Search nonbasic ops which have be registered composite rules and replace them with primitive ops.
     The operators in blacklist will be excluded from program when lowering into primitives, and only the
     operators in whitelist will be lowering. The priority of blacklist is higher than whitelist, it means
@@ -240,12 +277,12 @@ def to_prim(
     """
     if not core._is_fwd_prim_enabled():
         return
-    if isinstance(blocks, paddle.fluid.framework.Block):
+    if isinstance(blocks, paddle.base.framework.Block):
         logging.info("Atomize composite op to primitive ops begin.")
         main_program = blocks.program
     elif isinstance(blocks, typing.Sequence):
         for item in blocks:
-            if not isinstance(item, paddle.fluid.framework.Block):
+            if not isinstance(item, paddle.base.framework.Block):
                 raise TypeError(
                     f"Expect block or sequence of blocks, but sequence contains {type(item)}."
                 )
@@ -256,17 +293,17 @@ def to_prim(
         )
     if not isinstance(blacklist, (set, frozenset)):
         raise TypeError(
-            f'Expected type of blacklisst is set|frozenset, but got {type(blacklist)}.'
+            f'Expected type of blacklist is set|frozenset, but got {type(blacklist)}.'
         )
     if not isinstance(whitelist, (set, frozenset)):
         raise TypeError(
-            f'Expected type of whiltelist is set|frozenset, but got {type(whitelist)}.'
+            f'Expected type of whitelist is set|frozenset, but got {type(whitelist)}.'
         )
 
     blacklist = prim_config["forward_blacklist"] | blacklist
 
     with framework.program_guard(main_program):
-        print("Lowering composite forward ops begin...", flush=True)
+        logging.info("Lowering composite forward ops begin...")
 
         if len(blacklist) > 0 and len(whitelist) > 0:
             filter_ = lambda x: x.type in whitelist and x.type not in blacklist
@@ -283,6 +320,4 @@ def to_prim(
             backward_length=backward_length,
         )
         replace_ops = prim_config["composite_ops_record"]
-        print(
-            f"Lowering composite forward ops finish: {replace_ops}", flush=True
-        )
+        logging.info(f"Lowering composite forward ops finish: {replace_ops}")

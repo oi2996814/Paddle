@@ -38,20 +38,20 @@ struct OneHotV2OpFunctor {
     auto* p_in_data = in_->data<InT>();
     auto numel = in_->numel();
     auto* p_out_data = ctx_.template Alloc<OutT>(out_);
-    funcs::set_constant(ctx_, out_, 0.0);
+    funcs::set_constant(ctx_, out_, static_cast<OutT>(0.0));
 
     for (int i = 0; i < numel; ++i) {
       PADDLE_ENFORCE_GE(
           p_in_data[i],
           0,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Illegal index value, Input(input) value should be at least 0, "
               "but received input (%d) less than 0",
               p_in_data[i]));
       PADDLE_ENFORCE_LT(
           p_in_data[i],
           depth_,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Illegal index value, Input(input) value should be less than "
               "Input(depth), "
               "but received input (%d) not less than depth (%d)",
@@ -77,20 +77,20 @@ void OneHotKernel(const Context& dev_ctx,
   auto* p_in_data = x.data<T>();
   auto numel = x.numel();
   auto* p_out_data = dev_ctx.template Alloc<float>(out);
-  funcs::set_constant(dev_ctx, out, 0.0);
+  funcs::set_constant(dev_ctx, out, 0.0f);
 
   for (int i = 0; i < numel; ++i) {
     PADDLE_ENFORCE_GE(
         p_in_data[i],
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Illegal index value, Input(input) value should be at least 0, "
             "but received input (%d) less than 0",
             p_in_data[i]));
     PADDLE_ENFORCE_LT(
         p_in_data[i],
         depth_v,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Illegal index value, Input(input) value should be less than "
             "Input(depth), "
             "but received input (%d) not less than depth (%d)",

@@ -19,10 +19,10 @@ import numpy as np
 
 import paddle
 from paddle import _legacy_C_ops
-from paddle.fluid import backward, core, framework, unique_name
-from paddle.fluid.data_feeder import check_type
-from paddle.fluid.dygraph.base import switch_to_static_graph
-from paddle.fluid.framework import OpProtoHolder
+from paddle.base import backward, core, framework, unique_name
+from paddle.base.data_feeder import check_type
+from paddle.base.dygraph.base import switch_to_static_graph
+from paddle.base.framework import OpProtoHolder
 from paddle.framework import in_dynamic_mode
 from paddle.jit.dy2static.partial_program import (
     LazyInitialized,
@@ -51,7 +51,7 @@ def _load_program_desc(model_file_path):
     program_desc = core.ProgramDesc(program_desc_str)
     if not core._is_program_version_supported(program_desc._version()):
         raise ValueError(
-            "Unsupported program version: %d\n" % program_desc._version()
+            f"Unsupported program version: {program_desc._version()}\n"
         )
     return program_desc
 
@@ -251,9 +251,9 @@ def _rename_var_program_desc(program_desc, include=None, exclude=None):
             dict_rename_var_old_new[var_name] = double_grad_rename_dict[
                 var_name
             ]
-            dict_rename_var_new_old[
-                double_grad_rename_dict[var_name]
-            ] = var_name
+            dict_rename_var_new_old[double_grad_rename_dict[var_name]] = (
+                var_name
+            )
 
     # Rename on program desc
     for b_idx in range(program_desc.num_blocks()):
@@ -336,7 +336,6 @@ class _ProgramHolder:
         # input, output, persistable, double_grads var info
         self._input_descs = []
         self._output_descs = []
-        self._double_grad_descs = []
         self._persistable_names = []
         self._grad_var_names = {}
 
@@ -347,15 +346,11 @@ class _ProgramHolder:
         self._suffix_varname_dict = None
         # forward program
         self._infer_program_desc = self._preprocess(program_desc)
-        # forward + backward program
-        self._train_program_desc = self._append_backward_desc(
-            self._infer_program_desc
-        )
 
     # forward:
     @switch_to_static_graph
     def _create_forward_train_program(self):
-        whole_program = _build_program_by_desc(self._train_program_desc)
+        whole_program = _build_program_by_desc(self.train_program)
         end_op_index = self._infer_program_desc.block(0).op_size()
         if end_op_index > 0:
             return add_build_strategy_for(whole_program, 0, end_op_index)
@@ -369,7 +364,7 @@ class _ProgramHolder:
     # backward
     @switch_to_static_graph
     def _create_backward_train_program(self):
-        whole_program = _build_program_by_desc(self._train_program_desc)
+        whole_program = _build_program_by_desc(self.train_program)
         start_op_index = self._infer_program_desc.block(0).op_size() + len(
             self._output_descs
         )
@@ -389,9 +384,9 @@ class _ProgramHolder:
     def infer_program(self):
         return self._infer_program_desc
 
-    @property
+    @LazyInitialized
     def train_program(self):
-        return self._train_program_desc
+        return self._append_backward_desc(self._infer_program_desc)
 
     @property
     def forward_program(self):
@@ -412,10 +407,6 @@ class _ProgramHolder:
     @property
     def persistable_names(self):
         return self._persistable_names
-
-    @property
-    def double_grad_descs(self):
-        return self._double_grad_descs
 
     @property
     def scope(self):
@@ -469,12 +460,6 @@ class _ProgramHolder:
         for op_idx in reversed(ops_to_remove):
             root_block._remove_op(op_idx, op_idx + 1)
 
-        for i in range(program_desc.num_blocks()):
-            block_desc = program_desc.block(i)
-            for var_desc in block_desc.all_vars():
-                if "@GRAD" in var_desc.name():
-                    self._double_grad_descs.append(var_desc)
-
         # 2. Input processing, reverse feed vars
         self._input_descs.reverse()
 
@@ -516,6 +501,11 @@ class _ProgramHolder:
 
     @switch_to_static_graph
     def _append_scale_to_output(self, program):
+        # 0. scale don't support bool output, we skip append scale for it
+        for out_desc in self._output_descs:
+            if out_desc.dtype() == paddle.bool:
+                return
+
         # 1. append scale & save var
         scale_output_vars = []
         with framework.program_guard(program):
@@ -555,7 +545,7 @@ class _ProgramHolder:
                                 ".".join(["reserve_space", 'tmp'])
                             ),
                             dtype=block.var(op.input("X")[0]).dtype,
-                            type=core.VarDesc.VarType.LOD_TENSOR,
+                            type=core.VarDesc.VarType.DENSE_TENSOR,
                             persistable=False,
                             stop_gradient=True,
                         )
@@ -583,7 +573,7 @@ class _ProgramHolder:
                                         ]
                                     )
                                 ),
-                                type=core.VarDesc.VarType.LOD_TENSOR,
+                                type=core.VarDesc.VarType.DENSE_TENSOR,
                                 persistable=False,
                                 stop_gradient=True,
                             )
@@ -648,7 +638,7 @@ class _ProgramHolder:
 #   The variable/parameter of the dynamic graph is not in the scope, so before the op
 #   executes the program internally, create persistent variables with the
 #   same name as feed, parameters, and fetch in the scope, and share the
-#   LoDTensor of the op input.
+#   DenseTensor of the op input.
 #
 # 2. Forward and Backward Separation:
 #   Because the dynamic graph op performs the forward and backward separately,
@@ -898,11 +888,11 @@ def _valid_vars(vars):
 def _run_dygraph(instance, input, program_holder):
     # 1. prepare inputs, outputs, attrs
     input_vars = []
+    input_var_names = []
     for i, value in enumerate(input):
         if not isinstance(value, (np.ndarray, core.eager.Tensor)):
             raise TypeError(
-                "The type of input in TranslatedLayer must be numpy array or Variable(Tensor), but received %s."
-                % type(value)
+                f"The type of input in TranslatedLayer must be numpy array or Variable(Tensor), but received {type(value)}."
             )
         # NOTE: In order to unify the API, firstly convert the input to Tensor
         if isinstance(value, np.ndarray):
@@ -918,6 +908,7 @@ def _run_dygraph(instance, input, program_holder):
             # NOTE: we changed var name here,
             # but it may be an important name set by user
             var.name = program_holder.input_descs[i].name()
+        input_var_names.append(var.name)
         input_vars.append(var)
     if instance._input_args_names is None:
         instance._input_args_names = [
@@ -933,8 +924,7 @@ def _run_dygraph(instance, input, program_holder):
             persistable_vars.append(instance._buffers[dy_var_name])
         else:
             raise ValueError(
-                "The persistable variable %s does not exist in current TranslatedLayer."
-                % var_name
+                f"The persistable variable {var_name} does not exist in current TranslatedLayer."
             )
 
     output_vars = []
@@ -950,17 +940,6 @@ def _run_dygraph(instance, input, program_holder):
 
     # hold forward variables
     tmp_scope_vec = [program_holder.scope]
-
-    double_grad_vars = []
-    for var_desc in program_holder.double_grad_descs:
-        var = core.eager.Tensor(
-            dtype=var_desc.dtype(),
-            dims=var_desc.shape(),
-            name=var_desc.name(),
-            type=var_desc.type(),
-            persistable=False,
-        )
-        double_grad_vars.append(var)
 
     # 2. run program by op
     trace_program = (
@@ -986,6 +965,8 @@ def _run_dygraph(instance, input, program_holder):
         instance._is_test,
         'program_id',
         paddle.utils._hash_with_id(trace_program, instance),
+        'x_names',
+        input_var_names,
     ]
     if not instance._is_test:
         attrs.extend(
@@ -1006,27 +987,31 @@ def _run_dygraph(instance, input, program_holder):
             (
                 'forward_global_block',
                 forward_program.block(0),
-                'backward_global_block',
-                program_holder.backward_program.block(0),
             )
         )
+        if not instance._is_test:
+            attrs.extend(
+                (
+                    'backward_global_block',
+                    program_holder.backward_program.block(0),
+                )
+            )
 
     _legacy_C_ops.run_program(
         _valid_vars(input_vars),
         _valid_vars(persistable_vars),
         _valid_vars(output_vars),
         tmp_scope_vec,
-        _valid_vars(double_grad_vars),
         None,
         *attrs,
     )
 
     # NOTE: [ why need set param's gradient type here ]
     # if user set sparse gradient mode, the param's gradient
-    # will be SelectedRows, not LoDTensor. But tracer will just
-    # set param grad Tensor by forward Tensor(LoDTensor)
+    # will be SelectedRows, not DenseTensor. But tracer will just
+    # set param grad Tensor by forward Tensor(DenseTensor)
     # If we don't change grad_var type here, RunProgramOp need
-    # transform SelectedRows to LoDTensor forcibly, it may not
+    # transform SelectedRows to DenseTensor forcibly, it may not
     # be user wanted result.
     for persistable_var in persistable_vars:
         grad_var_name = persistable_var.name + core.grad_var_suffix()
@@ -1051,7 +1036,6 @@ def _run_static_graph(input, program_holder, trace_program):
         trace_program, exclude=param_var_names
     )
     trace_program.flush()
-    output_names = [var.name() for var in program_holder.output_descs]
     # append blocks from 'trace_program'
     _append_block(
         main_program,
@@ -1124,9 +1108,7 @@ def _append_block(
     input_names = [inp.name for inp in input_variables]
     if len(name_inp_desc) != len(input_names):
         raise ValueError(
-            "The number of input is invalid, expected {}, but received {}.".format(
-                len(name_inp_desc), len(input_names)
-            )
+            f"The number of input is invalid, expected {len(name_inp_desc)}, but received {len(input_names)}."
         )
     for i, out_name in enumerate(name_inp_desc):
         if dict_rename_var_old_new:
@@ -1265,8 +1247,8 @@ def append_var_from_block_desc_static(
             var_type = var_desc.type()
             if var_type in [
                 core.VarDesc.VarType.SELECTED_ROWS,
-                core.VarDesc.VarType.LOD_TENSOR,
-                core.VarDesc.VarType.LOD_TENSOR_ARRAY,
+                core.VarDesc.VarType.DENSE_TENSOR,
+                core.VarDesc.VarType.DENSE_TENSOR_ARRAY,
             ]:
                 data_type = var_desc.dtype()
                 var_shape = var_desc.shape()
@@ -1274,8 +1256,8 @@ def append_var_from_block_desc_static(
                 data_type = None
                 var_shape = None
             if var_type in [
-                core.VarDesc.VarType.LOD_TENSOR,
-                core.VarDesc.VarType.LOD_TENSOR_ARRAY,
+                core.VarDesc.VarType.DENSE_TENSOR,
+                core.VarDesc.VarType.DENSE_TENSOR_ARRAY,
             ]:
                 lod_level = var_desc.lod_level()
             else:
@@ -1312,7 +1294,7 @@ class TranslatedLayer(layers.Layer):
     Examples:
         .. code-block:: python
 
-            >>> # doctest: +SKIP
+            >>> # doctest: +SKIP('`paddle.jit.to_static` can not run in xdoctest')
             >>> import numpy as np
             >>> import paddle
             >>> import paddle.nn as nn
@@ -1326,7 +1308,7 @@ class TranslatedLayer(layers.Layer):
             >>> CLASS_NUM = 10
 
             >>> # define a random dataset
-            >>> class RandomDataset(paddle.io.Dataset):
+            >>> class RandomDataset(paddle.io.Dataset): # type: ignore[type-arg]
             ...     def __init__(self, num_samples):
             ...         self.num_samples = num_samples
             ...
@@ -1411,13 +1393,13 @@ class TranslatedLayer(layers.Layer):
 
         # NOTE(chenweihang): [ why not use var name directly? ]
         # When add parameter or buffer to Layer by follow apis,
-        # the variable name can't contain `.`, beccause which may cause
+        # the variable name can't contain `.`, because which may cause
         # AttributeError when access the newly added parameter or buffer
         # in the form of `self.**.**``, but the EagerParamBase or BarBase
         # name contains `.` originally, such as `linear_0.w_0`, so here
         # need to generate new var name for each var
         self._persistable_var_name_dict = {}
-        # the TranslatedLayer object holded var names count started from 0
+        # the TranslatedLayer object held var names count started from 0
         with unique_name.guard():
             for name, var in persistable_vars.items():
                 if isinstance(var, framework.EagerParamBase):
@@ -1442,7 +1424,7 @@ class TranslatedLayer(layers.Layer):
         # 0. dir and filename check
         model_path = os.path.normpath(model_path)
         if not os.path.isdir(model_path):
-            raise ValueError("There is no directory named '%s'" % model_path)
+            raise ValueError(f"There is no directory named '{model_path}'")
         model_filename = None
         params_filename = None
         if configs is not None:
@@ -1513,7 +1495,7 @@ class TranslatedLayer(layers.Layer):
         Gets translated program of specified method.
 
         Args:
-            - method_name (string): mehtod name corresponding to the program
+            - method_name (string): method name corresponding to the program
                 to be obtained. Default: 'forward'.
 
         Returns:
@@ -1522,7 +1504,7 @@ class TranslatedLayer(layers.Layer):
         Examples:
             .. code-block:: python
 
-                >>> # doctest: +SKIP
+                >>> # doctest: +SKIP('`paddle.jit.to_static` can not run in xdoctest')
                 >>> import numpy as np
                 >>> import paddle
                 >>> from paddle import nn
@@ -1536,7 +1518,7 @@ class TranslatedLayer(layers.Layer):
                 >>> CLASS_NUM = 10
 
                 >>> # define a random dataset
-                >>> class RandomDataset(paddle.io.Dataset):
+                >>> class RandomDataset(paddle.io.Dataset): # type: ignore[type-arg]
                 ...     def __init__(self, num_samples):
                 ...         self.num_samples = num_samples
                 ...
@@ -1607,8 +1589,7 @@ class TranslatedLayer(layers.Layer):
         program_holder = self._program_holder_dict.get(method_name, None)
         if program_holder is None:
             raise ValueError(
-                "The method `%s` does not exist in loaded TranslatedLayer."
-                % method_name
+                f"The method `{method_name}` does not exist in loaded TranslatedLayer."
             )
         return program_holder
 

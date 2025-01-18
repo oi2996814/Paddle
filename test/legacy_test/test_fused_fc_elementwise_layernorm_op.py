@@ -12,14 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
+
+sys.path.append("../deprecated/legacy_test")
 from test_fc_op import MatrixGenerate, fc_refer
 from test_layer_norm_op import _reference_layer_norm_naive
 
-from paddle.fluid import core
+from paddle.base import core
 
 np.random.random(123)
 

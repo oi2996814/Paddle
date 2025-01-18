@@ -15,11 +15,11 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 
 def coalesce_tensor_eager_api(
@@ -59,7 +59,7 @@ class TestAllocContinuousSpace(OpTest):
     def setUp(self):
         self.python_api = coalesce_tensor_eager_api
         self.op_type = "coalesce_tensor"
-        self.dtype, self.fluid_dtype = self.init_dtype()
+        self.dtype, self.base_dtype = self.init_dtype()
         self.attrs = self.init_attr()
         self.Inputs = self.init_input()
         self.Outputs, self.FusedOutput = self.init_output(
@@ -86,7 +86,7 @@ class TestAllocContinuousSpace(OpTest):
             "copy_data": True,
             "set_constant": False,
             "constant": 0.0,
-            "dtype": self.fluid_dtype,
+            "dtype": self.base_dtype,
         }
 
     def init_output(self, input_list, set_constant, constant):
@@ -114,31 +114,34 @@ class TestAllocContinuousSpace(OpTest):
         return outputs, coalesce_tensor_var
 
     def verify_output(self, place):
-        with fluid.dygraph.base.guard(place=place):
+        with base.dygraph.base.guard(place=place):
             tensor_input = [
-                fluid.dygraph.base.to_variable(value=data[1])
-                for data in self.inputs["Input"]
+                paddle.to_tensor(data[1]) for data in self.inputs["Input"]
             ]
             eager_outputs, eager_fused_output = coalesce_tensor_eager_api(
                 tensor_input,
                 datatype=self.attrs["dtype"],
-                copy_data=self.attrs["copy_data"]
-                if "copy_data" in self.attrs
-                else False,
-                set_constant=self.attrs["set_constant"]
-                if "set_constant" in self.attrs
-                else False,
+                copy_data=(
+                    self.attrs["copy_data"]
+                    if "copy_data" in self.attrs
+                    else False
+                ),
+                set_constant=(
+                    self.attrs["set_constant"]
+                    if "set_constant" in self.attrs
+                    else False
+                ),
                 persist_output=False,
-                constant=self.attrs["constant"]
-                if "constant" in self.attrs
-                else 0.0,
+                constant=(
+                    self.attrs["constant"] if "constant" in self.attrs else 0.0
+                ),
                 use_align=True,
                 align_size=-1,
-                user_defined_size_of_dtype=self.attrs[
-                    "user_defined_size_of_dtype"
-                ]
-                if "user_defined_size_of_dtype" in self.attrs
-                else -1,
+                user_defined_size_of_dtype=(
+                    self.attrs["user_defined_size_of_dtype"]
+                    if "user_defined_size_of_dtype" in self.attrs
+                    else -1
+                ),
                 concated_shapes=[],
                 concated_ranks=[],
             )
@@ -177,7 +180,7 @@ class TestAllocContinuousSpace2(TestAllocContinuousSpace):
             "copy_data": False,
             "set_constant": True,
             "constant": 0.5,
-            "dtype": self.fluid_dtype,
+            "dtype": self.base_dtype,
             "user_defined_size_of_dtype": 2,
         }
 

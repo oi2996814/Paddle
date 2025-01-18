@@ -34,7 +34,7 @@ void NllLossGradKernel(const Context& dev_ctx,
       label_type == phi::DataType::INT32 || label_type == phi::DataType::INT64;
   PADDLE_ENFORCE_EQ(label_type_match,
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Input(Label) holds the wrong type, it holds %s, but "
                         "desires to be %s or %s",
                         label_type,
@@ -45,7 +45,7 @@ void NllLossGradKernel(const Context& dev_ctx,
   auto d_x_data = dev_ctx.template Alloc<XPUType>(d_x);
 
   auto d_x_dims = d_x->dims();
-  std::vector<int64_t> d_x_shape = phi::vectorize<int64_t>(d_x_dims);
+  std::vector<int64_t> d_x_shape = common::vectorize<int64_t>(d_x_dims);
 
   auto weight_data =
       weight.get_ptr() ? weight.get_ptr()->data<float>() : nullptr;

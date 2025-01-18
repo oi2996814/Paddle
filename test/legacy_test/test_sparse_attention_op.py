@@ -18,12 +18,12 @@ import re
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 import paddle
 import paddle.nn.functional as F
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 
 def get_cuda_version():
@@ -192,6 +192,14 @@ def init_csr_format(batch_size, num_heads, rows, blocksize):
     return offset, columns
 
 
+def api_wrapper(
+    q, k, v, offset, columns, key_padding_mask=None, attn_mask=None
+):
+    return paddle._C_ops.sparse_attention(
+        q, k, v, offset, columns, key_padding_mask, attn_mask
+    )
+
+
 @unittest.skipIf(
     not core.is_compiled_with_cuda() or get_cuda_version() < 11030,
     "core is not compiled with CUDA and cuda version need larger than or equal to 11.3",
@@ -207,6 +215,8 @@ class TestSparseAttentionOp(OpTest):
         paddle.enable_static()
         self.config()
         self.op_type = "sparse_attention"
+        self.python_api = api_wrapper
+        self.python_out_sig = ['Out']
         self.place = paddle.CUDAPlace(0)
         self.q = np.random.random(self.shape).astype(self.dtype)
         self.k = np.random.random(self.shape).astype(self.dtype)
@@ -372,7 +382,7 @@ class TestSparseAttentionAPI(unittest.TestCase):
             key_padding_mask_np = key_padding_mask_np.astype(self.dtype)
             attn_mask_np = attn_mask_np.astype(self.dtype)
 
-            exe = fluid.Executor(self.place)
+            exe = base.Executor(self.place)
             if self.use_mask:
                 fetches_result = exe.run(
                     feed={
@@ -438,7 +448,7 @@ class TestSparseAttentionAPI(unittest.TestCase):
         paddle_key = paddle.to_tensor(key, place=self.place)
         paddle_value = paddle.to_tensor(value, place=self.place)
         paddle_offset = paddle.to_tensor(offset, place=self.place)
-        paddle_colunmns = paddle.to_tensor(columns, place=self.place)
+        paddle_columns = paddle.to_tensor(columns, place=self.place)
         paddle_kp_mask = paddle.to_tensor(key_padding_mask, place=self.place)
         paddle_attn_mask = paddle.to_tensor(attn_mask, place=self.place)
 
@@ -448,7 +458,7 @@ class TestSparseAttentionAPI(unittest.TestCase):
                 paddle_key,
                 paddle_value,
                 paddle_offset,
-                paddle_colunmns,
+                paddle_columns,
                 key_padding_mask=paddle_kp_mask,
                 attn_mask=paddle_attn_mask,
             )
@@ -469,7 +479,7 @@ class TestSparseAttentionAPI(unittest.TestCase):
                 paddle_key,
                 paddle_value,
                 paddle_offset,
-                paddle_colunmns,
+                paddle_columns,
             )
 
             numpy_result, __, __ = ref_batch_sparse_attention(

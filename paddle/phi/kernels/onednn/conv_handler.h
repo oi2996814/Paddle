@@ -1,4 +1,4 @@
-// Copyright (c) 2022 PaddlePaddle Authors. All Rights Reserved.
+// Copyright (c) 2024 PaddlePaddle Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,10 +14,10 @@
 
 #pragma once
 
+#include "paddle/common/macros.h"
 #include "paddle/phi/backends/onednn/onednn_helper.h"
 #include "paddle/phi/backends/onednn/onednn_reuse.h"
 #include "paddle/phi/core/expect.h"
-#include "paddle/phi/core/macros.h"
 #include "paddle/phi/core/tensor_utils.h"
 #include "paddle/phi/kernels/cpu/conv_util.h"
 
@@ -68,12 +68,12 @@ class ConvOneDNNHandlerT
             onednn_engine,
             cpu_place,
             funcs::CreateKey(
-                dev_ctx, phi::vectorize(input->dims()), unique_name)) {
+                dev_ctx, common::vectorize(input->dims()), unique_name)) {
     if (unlikely(!this->isCached())) {
       PADDLE_ENFORCE_EQ(
           input->layout(),
           DataLayout::ONEDNN,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The input tensor's layout should be %d, but got %d.",
               DataLayout::ONEDNN,
               input->layout()));
@@ -81,7 +81,7 @@ class ConvOneDNNHandlerT
       PADDLE_ENFORCE_EQ(
           filter->layout(),
           DataLayout::ONEDNN,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The Filter tensor's layout should be %d, but got %d.",
               DataLayout::ONEDNN,
               filter->layout()));
@@ -89,14 +89,14 @@ class ConvOneDNNHandlerT
       PADDLE_ENFORCE_GE(
           input->dims().size(),
           4,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Input must be with 4 or 5 dimensions, i.e. NCHW or "
               "NCDHW, but got dimension = %d .",
               input->dims().size()));
       PADDLE_ENFORCE_LE(
           input->dims().size(),
           5,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Input must be with 4 or 5 dimensions, i.e. NCHW or "
               "NCDHW, but got dimension = %d .",
               input->dims().size()));
@@ -104,14 +104,14 @@ class ConvOneDNNHandlerT
       PADDLE_ENFORCE_GE(
           filter->dims().size(),
           4,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Filter must be with 4 or 5 dimensions, i.e. OIHW or "
               "OIDHW, but got dimension = %d .",
               filter->dims().size()));
       PADDLE_ENFORCE_LE(
           filter->dims().size(),
           5,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Filter must be with 4 or 5 dimensions, i.e. OIHW or "
               "OIDHW, but got dimension = %d .",
               filter->dims().size()));
@@ -120,24 +120,43 @@ class ConvOneDNNHandlerT
         PADDLE_ENFORCE_EQ(
             bias->layout(),
             DataLayout::ONEDNN,
-            phi::errors::InvalidArgument(
+            common::errors::InvalidArgument(
                 "The Bias tensor's layout should be %d, but got %d.",
                 DataLayout::ONEDNN,
                 bias->layout()));
 
-        PADDLE_ENFORCE_EQ(
-            bias->dims().size(),
-            1,
-            phi::errors::InvalidArgument("Bias must only have 1 dimension, "
-                                         "i.e. X, but got dimension = %d .",
-                                         bias->dims().size()));
+        auto bias_shape = common::vectorize(bias->dims());
+        auto output_shape = common::vectorize(output->dims());
+        // layout of bias is always NCHW/NCDHW, so channel is always at 1st dim
+        if (bias_shape.size() != 1) {
+          PADDLE_ENFORCE_EQ(
+              bias_shape[1],
+              output_shape[1],
+              common::errors::InvalidArgument(
+                  "Bias must only have 1 dimension or only bias_dims[1] == "
+                  "output_dims[1] i.e. [X] or [1, X, 1, 1], but got dimension "
+                  "== %d and failed",
+                  bias->dims().size()));
+          for (size_t i = 0; i < bias_shape.size(); i++) {
+            if (i == 1) continue;
+            PADDLE_ENFORCE_EQ(
+                bias_shape[i],
+                1,
+                common::errors::InvalidArgument(
+                    "Bias with multiply dimensions must only have 1 dimension "
+                    "> 1, i.e. [1, X, 1, 1], but got %d-th dimension == %d .",
+                    i,
+                    bias_shape[i]));
+          }
+        }
       }
       const auto input_dims = input->dims();
-      const auto data_dims = phi::slice_ddim(input_dims, 2, input_dims.size());
+      const auto data_dims =
+          common::slice_ddim(input_dims, 2, input_dims.size());
       const auto filter_dims = filter->dims();
       const auto filter_data_dims =
-          phi::slice_ddim(filter_dims, 2, filter_dims.size());
-      const auto ksize = phi::vectorize(filter_data_dims);
+          common::slice_ddim(filter_dims, 2, filter_dims.size());
+      const auto ksize = common::vectorize(filter_data_dims);
       std::vector<int64_t> strides(begin(strides_in), end(strides_in));
       std::vector<int64_t> paddings(begin(paddings_in), end(paddings_in));
       std::vector<int64_t> dilations(begin(dilations_in), end(dilations_in));
@@ -148,12 +167,12 @@ class ConvOneDNNHandlerT
             return i - 1;
           });
 
-      const auto src_tz = phi::vectorize(input->dims());
+      const auto src_tz = common::vectorize(input->dims());
 
-      auto weights_tz = phi::vectorize(filter->dims());
+      auto weights_tz = common::vectorize(filter->dims());
       funcs::GetGroupConvWeightsTz(weights_tz, groups);
 
-      const auto dst_tz = phi::vectorize(output->dims());
+      const auto dst_tz = common::vectorize(output->dims());
 
       const dnnl::memory::dims stride_dims = strides;
       const auto onednn_paddings = funcs::ToOneDNNPadding(paddings);
@@ -180,7 +199,9 @@ class ConvOneDNNHandlerT
         weights_md = funcs::OneDNNMemDesc(
             weights_tz, data_type, funcs::OneDNNMemoryFormat::any);
       }
-
+      if (input->dims().size() == 4 && input->dims()[1] <= 4) {
+        chosen_memory_format = funcs::OneDNNMemoryFormat::nhwc;
+      }
       const auto dst_md = funcs::OneDNNMemDesc(
           dst_tz, funcs::OneDNNGetDataType<T_out>(), chosen_memory_format);
       const auto fwd_prop_kind = dnnl::prop_kind::forward_inference;
@@ -191,7 +212,8 @@ class ConvOneDNNHandlerT
                                                              fuse_activation);
 
       if (bias) {
-        auto bias_tz = phi::vectorize(bias->dims());
+        auto bias_tz = common::vectorize(bias->dims());
+        if (bias_tz.size() > 1) bias_tz = {bias_tz[1]};
         dnnl::memory::desc bias_md =
             funcs::OneDNNMemDesc(bias_tz,
                                  dnnl::memory::data_type::f32,
@@ -249,12 +271,12 @@ class ConvOneDNNHandlerT
             dev_ctx.GetEngine(),
             cpu_place,
             funcs::CreateKey(
-                dev_ctx, phi::vectorize(in->dims()), unique_name)) {
+                dev_ctx, common::vectorize(in->dims()), unique_name)) {
     if (unlikely(!this->isBwdCached())) {
       PADDLE_ENFORCE_EQ(
           in->layout(),
           DataLayout::ONEDNN,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The input tensor's layout should be %d, but got %d.",
               DataLayout::ONEDNN,
               in->layout()));
@@ -262,7 +284,7 @@ class ConvOneDNNHandlerT
       PADDLE_ENFORCE_EQ(
           filter->layout(),
           DataLayout::ONEDNN,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The filter tensor's layout should be %d, but got %d.",
               DataLayout::ONEDNN,
               filter->layout()));
@@ -270,7 +292,7 @@ class ConvOneDNNHandlerT
       PADDLE_ENFORCE_EQ(
           out_grad->layout(),
           DataLayout::ONEDNN,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The output_grad tensor's layout should be %d, but got %d.",
               DataLayout::ONEDNN,
               out_grad->layout()));
@@ -278,7 +300,7 @@ class ConvOneDNNHandlerT
       PADDLE_ENFORCE_EQ(
           is_test,
           false,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "is_test attribute should be set to False in training phase."));
 
       std::vector<int64_t> strides(begin(strides_in), end(strides_in));
@@ -286,21 +308,21 @@ class ConvOneDNNHandlerT
       std::vector<int64_t> dilations(begin(dilations_in), end(dilations_in));
 
       auto input_dims = in->dims();
-      auto data_dims = phi::slice_ddim(input_dims, 2, input_dims.size());
+      auto data_dims = common::slice_ddim(input_dims, 2, input_dims.size());
       auto filter_dims = filter->dims();
       auto filter_data_dims =
-          phi::slice_ddim(filter_dims, 2, filter_dims.size());
-      auto ksize = phi::vectorize(filter_data_dims);
+          common::slice_ddim(filter_dims, 2, filter_dims.size());
+      auto ksize = common::vectorize(filter_data_dims);
 
       UpdatePaddingAndDilation(
           &paddings, &dilations, padding_algorithm, data_dims, strides, ksize);
 
-      auto src_tz = phi::vectorize(in->dims());
-      auto weights_tz = phi::vectorize(filter->dims());
+      auto src_tz = common::vectorize(in->dims());
+      auto weights_tz = common::vectorize(filter->dims());
 
       int g = std::max(groups, 1);
       funcs::GetGroupConvWeightsTz(weights_tz, g);
-      auto dst_tz = phi::vectorize(out_grad->dims());
+      auto dst_tz = common::vectorize(out_grad->dims());
 
       /* create memory descriptor for conv backward without specified format
        * ('any') which lets a primitive (conv backward in this case) choose
@@ -333,7 +355,7 @@ class ConvOneDNNHandlerT
       // Recreating FWD PD. For training there are no post ops in convolution
       dnnl::primitive_attr conv_attr;
       if (bias) {
-        auto bias_tz = phi::vectorize(bias->dims());
+        auto bias_tz = common::vectorize(bias->dims());
         dnnl::memory::desc bias_md =
             funcs::OneDNNMemDesc(bias_tz,
                                  dnnl::memory::data_type::f32,
@@ -441,7 +463,7 @@ class ConvOneDNNHandlerT
   AcquireWeightsMemoryWithReorderFromDataPrimitive(
       const phi::DenseTensor* filter, const int groups, const bool is_conv3d) {
     const K* filter_data = filter->data<K>();
-    auto weights_tz = phi::vectorize(filter->dims());
+    auto weights_tz = common::vectorize(filter->dims());
     funcs::GetGroupConvWeightsTz(weights_tz, groups);
 
     auto user_src_md =
@@ -536,7 +558,7 @@ class ConvOneDNNHandlerT
       return weights_mem_p;
     } else if (is_test) {
       const K* filter_data = filter->data<K>();
-      auto weights_tz = phi::vectorize(filter->dims());
+      auto weights_tz = common::vectorize(filter->dims());
       funcs::GetGroupConvWeightsTz(weights_tz, groups);
 
       auto user_src_md =
@@ -554,7 +576,7 @@ class ConvOneDNNHandlerT
                                             mask);
     } else {
       const T* filter_data = filter->data<T>();
-      auto weights_tz = phi::vectorize(filter->dims());
+      auto weights_tz = common::vectorize(filter->dims());
       funcs::GetGroupConvWeightsTz(weights_tz, groups);
 
       auto user_src_md =
@@ -591,8 +613,16 @@ class ConvOneDNNHandlerT
       }
       const K_Bias* bias_data = bias->data<K_Bias>();
 
+      dnnl::memory::desc bias_md = bias->mem_desc();
+      auto bias_tz = common::vectorize(bias->dims());
+      if (bias_tz.size() > 1) {
+        bias_tz = {bias_tz[1]};
+        bias_md = funcs::OneDNNMemDesc(bias_tz,
+                                       dnnl::memory::data_type::f32,
+                                       funcs::OneDNNMemoryFormat::x);
+      }
       return this->AcquireMemoryWithReorder(
-          bias->mem_desc(),
+          bias_md,
           this->fwd_pd_->bias_desc(),
           funcs::to_void_cast<K_Bias>(bias_data),
           "@bias_mem_p",

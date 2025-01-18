@@ -36,8 +36,8 @@
 #include "paddle/fluid/framework/tensor.h"
 #include "paddle/fluid/framework/variable.h"
 #include "paddle/fluid/framework/variable_helper.h"
-#include "paddle/fluid/platform/device_context.h"
 #include "paddle/fluid/platform/init.h"
+#include "paddle/phi/core/platform/device_context.h"
 
 using AtomicVectorSizeT = std::vector<std::atomic<size_t>>;
 
@@ -48,7 +48,7 @@ namespace interpreter {
 class AsyncWorkQueue {
  public:
   AsyncWorkQueue(size_t host_num_threads,
-                 size_t deivce_num_threads,
+                 size_t device_num_threads,
                  EventsWaiter* waiter);
 
   // void WaitEmpty() { queue_group_->WaitQueueGroupEmpty(); }
@@ -69,6 +69,8 @@ class AsyncWorkQueue {
 bool IsCommunicationOp(const OperatorBase* op);
 
 bool IsCommunicationOp(const Instruction& instr);
+
+bool IsCommunicationOp(const ::pir::Operation* op);
 
 bool IsCpuOp(const Instruction& instr);
 
@@ -95,37 +97,53 @@ bool IsSupportedHeterPlace(const phi::Place& place);
 void AddFetch(const std::vector<std::string>& fetch_names,
               framework::BlockDesc* block);
 
-void BuildOpFuncList(const platform::Place& place,
+void BuildOpFuncList(const phi::Place& place,
                      const framework::BlockDesc& block,
                      const std::set<std::string>& skip_gc_vars,
                      std::vector<OpFuncNode>* vec_func_list,
                      VariableScope* scope,
                      const ExecutionConfig& execution_config,
+                     const std::vector<HookFunc>& input_hookfuncs,
+                     const std::vector<HookFunc>& output_hookfuncs,
                      bool use_local_scope = true,
                      bool static_build = false);
-
-void BuildOpFuncList(
-    const platform::Place& place,
-    ::ir::Block* block,
-    std::vector<OpFuncNode>* vec_func_list,
-    framework::Scope* scope,
-    framework::Scope* local_scope,
-    const std::unordered_map<::ir::Value, std::string>& value_2_name_map,
-    const ExecutionConfig& execution_config);
 
 void BuildVariableScope(const framework::BlockDesc& block,
                         const ExecutionConfig& execution_config,
                         VariableScope* var_scope);
+void BuildId2VarName(const std::map<std::string, int>& var_name_2_id,
+                     std::unordered_map<int, std::string>* id_2_var_name);
 
-void LogDeviceMemoryStats(const platform::Place& place);
+void LogDeviceMemoryStats(const phi::Place& place, const std::string& op_name);
 
 void SetDeviceCommContext(framework::OperatorBase* operator_base,
-                          platform::DeviceContext* dev_ctx);
+                          phi::DeviceContext* dev_ctx);
 
-void SetDeviceCommContext(::ir::Operation* op,
-                          platform::DeviceContext* dev_ctx);
+void SetDeviceCommContext(::pir::Operation* op, phi::DeviceContext* dev_ctx);
 
 std::unordered_set<std::string> GetSpecialOpNames();
+
+const paddle::framework::Variable* GetVariableByName(
+    const std::string& var_name,
+    const std::unordered_map<const paddle::framework::Variable*, std::string>&
+        variable_2_var_name);
+
+std::vector<std::string> GetOriginInputNames(const std::string& op_name);
+
+std::vector<std::string> GetOriginOutputNames(const std::string& op_name);
+
+void PrintValuesAndVariables(
+    const pir::Block& block,
+    const std::unordered_map<pir::Value, std::string>& value_2_var_name,
+    const std::unordered_map<const paddle::framework::Variable*, std::string>&
+        variable_2_var_name);
+
+const std::vector<std::string> GetInstructionCallStack(
+    const std::string& type, const pir::AttributeMap& attrs);
+
+std::unordered_map<std::string, std::set<std::string>> GetNoNeedBufferValues(
+    const std::unordered_map<std::string, std::shared_ptr<::pir::Program>>&
+        type_to_ir_program);
 }  // namespace interpreter
 }  // namespace framework
 }  // namespace paddle

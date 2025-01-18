@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 from scipy import special
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 np.random.seed(42)
 paddle.seed(42)
@@ -44,11 +45,18 @@ class Testi1API(unittest.TestCase):
 
     def setUp(self):
         self.x = np.array(self.DATA).astype(self.DTYPE)
-        self.place = [paddle.CPUPlace()]
+        self.place = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.place.append(paddle.CPUPlace())
         if core.is_compiled_with_cuda():
             self.place.append(paddle.CUDAPlace(0))
 
     def test_api_static(self):
+
         def run(place):
             paddle.enable_static()
             with paddle.static.program_guard(paddle.static.Program()):
@@ -120,7 +128,7 @@ class TestI1Op(OpTest):
 
     # 测试前向输出结果
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     # 测试反向梯度输出
     def test_check_grad(self):
@@ -133,6 +141,7 @@ class TestI1Op(OpTest):
                     1 / self.case.size,
                 )
             ],
+            check_pir=True,
         )
 
     def init_config(self):

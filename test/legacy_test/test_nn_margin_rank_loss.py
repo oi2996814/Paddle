@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
-from paddle.static import Program, program_guard
+from paddle import base
+from paddle.base import core
+from paddle.base.framework import in_pir_mode
 
 
 def calc_margin_rank_loss(x, y, label, margin=0.0, reduction='none'):
@@ -42,7 +43,12 @@ def create_test_case(margin, reduction):
                 "float64"
             )
             self.places = []
-            self.places.append(fluid.CPUPlace())
+            if (
+                os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+                in ['1', 'true', 'on']
+                or not core.is_compiled_with_cuda()
+            ):
+                self.places.append(base.CPUPlace())
             if core.is_compiled_with_cuda():
                 self.places.append(paddle.CUDAPlace(0))
 
@@ -55,7 +61,9 @@ def create_test_case(margin, reduction):
                 margin=margin,
                 reduction=reduction,
             )
-            with program_guard(Program(), Program()):
+            with paddle.static.program_guard(
+                paddle.static.Program(), paddle.static.Program()
+            ):
                 x = paddle.static.data(
                     name="x", shape=[10, 10], dtype="float64"
                 )
@@ -88,7 +96,9 @@ def create_test_case(margin, reduction):
                 margin=margin,
                 reduction=reduction,
             )
-            with program_guard(Program(), Program()):
+            with paddle.static.program_guard(
+                paddle.static.Program(), paddle.static.Program()
+            ):
                 x = paddle.static.data(
                     name="x", shape=[10, 10], dtype="float64"
                 )
@@ -112,7 +122,8 @@ def create_test_case(margin, reduction):
                     fetch_list=[result],
                 )
                 np.testing.assert_allclose(result_numpy, expected, rtol=1e-05)
-                self.assertTrue('loss' in result.name)
+                if not in_pir_mode():
+                    self.assertTrue('loss' in result.name)
 
         def run_dynamic_functional_api(self, place):
             paddle.disable_static(place)

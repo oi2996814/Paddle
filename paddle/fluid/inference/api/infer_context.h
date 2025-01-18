@@ -18,6 +18,7 @@
 #ifdef PADDLE_WITH_XPU
 #include "paddle/phi/backends/xpu/xpu_l3_strategy.h"
 #endif
+#include <unordered_set>
 
 namespace paddle {
 
@@ -69,6 +70,19 @@ class InferXPUContext : public phi::XPUContext {
 
   void L3CacheAutotune();
 
+  void SetConvAutotuneInfo(std::string conv_autotune_file,
+                           int conv_autotune_level,
+                           bool conv_autotune_file_writeback,
+                           const phi::Place& place);
+
+  void SetFcAutotuneInfo(std::string fc_autotune_file,
+                         int fc_autotune_level,
+                         bool fc_autotune_file_writeback,
+                         const phi::Place& place);
+  void SetContextOption(const char* name, const char* value);
+
+  void SetOutHolder(phi::Allocation* holder);
+
  private:
   size_t l3_size_{0};
   void* l3_ptr_{nullptr};
@@ -80,6 +94,8 @@ class InferXPUContext : public phi::XPUContext {
   mutable std::unordered_map<phi::Allocation*,
                              std::pair<phi::Allocation*, bool>>
       holder_map_;
+
+  mutable std::unordered_set<phi::Allocation*> output_holder_set_;
   phi::XPUL3Planner l3_plan_;
 };
 #endif

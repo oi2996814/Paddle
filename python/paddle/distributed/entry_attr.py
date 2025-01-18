@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 __all__ = []
 
@@ -22,29 +23,33 @@ class EntryAttr:
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
+            >>> paddle.enable_static()
 
-            sparse_feature_dim = 1024
-            embedding_size = 64
+            >>> sparse_feature_dim = 1024
+            >>> embedding_size = 64
 
-            entry = paddle.distributed.ProbabilityEntry(0.1)
+            >>> entry = paddle.distributed.ProbabilityEntry(0.1)
 
-            input = paddle.static.data(name='ins', shape=[1], dtype='int64')
+            >>> input = paddle.static.data(name='ins', shape=[1], dtype='int64')
 
-            emb = paddle.static.nn.sparse_embedding((
-                input=input,
-                size=[sparse_feature_dim, embedding_size],
-                is_test=False,
-                entry=entry,
-                param_attr=paddle.ParamAttr(name="SparseFeatFactors",
-                                           initializer=paddle.nn.initializer.Uniform()))
+            >>> emb = paddle.static.nn.sparse_embedding(
+            ...     input=input,
+            ...     size=[sparse_feature_dim, embedding_size],
+            ...     is_test=False,
+            ...     entry=entry,
+            ...     param_attr=paddle.ParamAttr(
+            ...         name="SparseFeatFactors",
+            ...         initializer=paddle.nn.initializer.Uniform()
+            ...     )
+            ... )
 
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._name = None
 
-    def _to_attr(self):
+    def _to_attr(self) -> str:
         """
         Returns the attributes of this parameter.
 
@@ -59,27 +64,31 @@ class ProbabilityEntry(EntryAttr):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
+            >>> paddle.enable_static()
 
-            sparse_feature_dim = 1024
-            embedding_size = 64
+            >>> sparse_feature_dim = 1024
+            >>> embedding_size = 64
 
-            entry = paddle.distributed.ProbabilityEntry(0.1)
+            >>> entry = paddle.distributed.ProbabilityEntry(0.1)
 
-            input = paddle.static.data(name='ins', shape=[1], dtype='int64')
+            >>> input = paddle.static.data(name='ins', shape=[1], dtype='int64')
 
-            emb = paddle.static.nn.sparse_embedding((
-                input=input,
-                size=[sparse_feature_dim, embedding_size],
-                is_test=False,
-                entry=entry,
-                param_attr=paddle.ParamAttr(name="SparseFeatFactors",
-                                           initializer=paddle.nn.initializer.Uniform()))
+            >>> emb = paddle.static.nn.sparse_embedding(
+            ...     input=input,
+            ...     size=[sparse_feature_dim, embedding_size],
+            ...     is_test=False,
+            ...     entry=entry,
+            ...     param_attr=paddle.ParamAttr(
+            ...         name="SparseFeatFactors",
+            ...         initializer=paddle.nn.initializer.Uniform()
+            ...     )
+            ... )
 
 
     """
 
-    def __init__(self, probability):
+    def __init__(self, probability: float) -> None:
         super().__init__()
 
         if not isinstance(probability, float):
@@ -91,7 +100,7 @@ class ProbabilityEntry(EntryAttr):
         self._name = "probability_entry"
         self._probability = probability
 
-    def _to_attr(self):
+    def _to_attr(self) -> str:
         return ":".join([self._name, str(self._probability)])
 
 
@@ -100,26 +109,30 @@ class CountFilterEntry(EntryAttr):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
+            >>> paddle.enable_static()
 
-            sparse_feature_dim = 1024
-            embedding_size = 64
+            >>> sparse_feature_dim = 1024
+            >>> embedding_size = 64
 
-            entry = paddle.distributed.CountFilterEntry(10)
+            >>> entry = paddle.distributed.CountFilterEntry(10)
 
-            input = paddle.static.data(name='ins', shape=[1], dtype='int64')
+            >>> input = paddle.static.data(name='ins', shape=[1], dtype='int64')
 
-            emb = paddle.static.nn.sparse_embedding((
-                input=input,
-                size=[sparse_feature_dim, embedding_size],
-                is_test=False,
-                entry=entry,
-                param_attr=paddle.ParamAttr(name="SparseFeatFactors",
-                                           initializer=paddle.nn.initializer.Uniform()))
+            >>> emb = paddle.static.nn.sparse_embedding(
+            ...     input=input,
+            ...     size=[sparse_feature_dim, embedding_size],
+            ...     is_test=False,
+            ...     entry=entry,
+            ...     param_attr=paddle.ParamAttr(
+            ...         name="SparseFeatFactors",
+            ...         initializer=paddle.nn.initializer.Uniform()
+            ...     )
+            ... )
 
     """
 
-    def __init__(self, count_filter):
+    def __init__(self, count_filter: int) -> None:
         super().__init__()
 
         if not isinstance(count_filter, int):
@@ -135,7 +148,7 @@ class CountFilterEntry(EntryAttr):
         self._name = "count_filter_entry"
         self._count_filter = count_filter
 
-    def _to_attr(self):
+    def _to_attr(self) -> str:
         return ":".join([self._name, str(self._count_filter)])
 
 
@@ -144,30 +157,33 @@ class ShowClickEntry(EntryAttr):
     Examples:
         .. code-block:: python
 
-            import paddle
-            paddle.enable_static()
+            >>> import paddle
+            >>> paddle.enable_static()
 
-            sparse_feature_dim = 1024
-            embedding_size = 64
+            >>> sparse_feature_dim = 1024
+            >>> embedding_size = 64
 
-            shows = paddle.static.data(name='show', shape=[1], dtype='int64')
-            clicks = paddle.static.data(name='click', shape=[1], dtype='int64')
-            input = paddle.static.data(name='ins', shape=[1], dtype='int64')
+            >>> shows = paddle.static.data(name='show', shape=[1], dtype='int64')
+            >>> clicks = paddle.static.data(name='click', shape=[1], dtype='int64')
+            >>> input = paddle.static.data(name='ins', shape=[1], dtype='int64')
 
-            entry = paddle.distributed.ShowClickEntry("show", "click")
+            >>> entry = paddle.distributed.ShowClickEntry("show", "click")
 
-            emb = paddle.static.nn.sparse_embedding(
-                input=input,
-                size=[sparse_feature_dim, embedding_size],
-                is_test=False,
-                entry=entry,
-                param_attr=paddle.ParamAttr(name="SparseFeatFactors",
-                                           initializer=paddle.nn.initializer.Uniform()))
+            >>> emb = paddle.static.nn.sparse_embedding(
+            ...     input=input,
+            ...     size=[sparse_feature_dim, embedding_size],
+            ...     is_test=False,
+            ...     entry=entry,
+            ...     param_attr=paddle.ParamAttr(
+            ...         name="SparseFeatFactors",
+            ...         initializer=paddle.nn.initializer.Uniform()
+            ...     )
+            ... )
 
 
     """
 
-    def __init__(self, show_name, click_name):
+    def __init__(self, show_name: str, click_name: str) -> None:
         super().__init__()
 
         if not isinstance(show_name, str) or not isinstance(click_name, str):
@@ -177,5 +193,5 @@ class ShowClickEntry(EntryAttr):
         self._show_name = show_name
         self._click_name = click_name
 
-    def _to_attr(self):
+    def _to_attr(self) -> str:
         return ":".join([self._name, self._show_name, self._click_name])

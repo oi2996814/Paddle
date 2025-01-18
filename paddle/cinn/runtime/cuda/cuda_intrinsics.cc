@@ -17,7 +17,6 @@
 #include "paddle/cinn/backends/function_prototype.h"
 #include "paddle/cinn/common/cas.h"
 #include "paddle/cinn/runtime/cuda/cuda_util.h"
-#include "paddle/cinn/runtime/custom_function.h"
 
 CINN_REGISTER_HELPER(cuda_intrinsics) {
   auto target = cinn::common::DefaultNVGPUTarget();
@@ -426,6 +425,32 @@ CINN_REGISTER_HELPER(cuda_intrinsics) {
 }
 
 CINN_REGISTER_HELPER(cinn_cuda_host_api) {
+  using cinn::runtime::cuda::cinn_get_value_in_cuda_kernel_args;
+  REGISTER_EXTERN_FUNC_HELPER(cinn_get_value_in_cuda_kernel_args,
+                              cinn::common::DefaultHostTarget())
+      .SetRetType<int64_t>()
+      .AddInputType<void *>()  // args
+      .AddInputType<int>()     // index
+      .End();
+
+  using cinn::runtime::cuda::cinn_get_item_in_cuda_kernel_args;
+  REGISTER_EXTERN_FUNC_HELPER(cinn_get_item_in_cuda_kernel_args,
+                              cinn::common::DefaultHostTarget())
+      .SetRetType<void *>()
+      .AddInputType<void *>()  // args
+      .AddInputType<int>()     // index
+      .End();
+
+  using cinn::runtime::cuda::infer_shape_set_value;
+  REGISTER_EXTERN_FUNC_HELPER(infer_shape_set_value,
+                              cinn::common::DefaultHostTarget())
+      .SetRetType<void>()
+      .AddInputType<int>()
+      .AddInputType<int>()
+      .AddInputType<int64_t>()
+      .AddInputType<int64_t **>()
+      .End();
+
   using cinn::runtime::cuda::cinn_call_cuda_kernel;
   REGISTER_EXTERN_FUNC_HELPER(cinn_call_cuda_kernel,
                               cinn::common::DefaultHostTarget())
@@ -439,6 +464,7 @@ CINN_REGISTER_HELPER(cinn_cuda_host_api) {
       .AddInputType<int>()     // block_x
       .AddInputType<int>()     // block_y
       .AddInputType<int>()     // block_z
+      .AddInputType<int>()     // shared_mem
       .AddInputType<void *>()  // stream
       .End();
 
@@ -565,19 +591,6 @@ CINN_REGISTER_HELPER(cinn_cuda_host_api) {
       .AddInputType<bool>()    // upper
       .AddInputType<bool>()    // transpose_a
       .AddInputType<bool>()    // unit_diagonal
-      .AddInputType<void *>()  // stream
-      .End();
-
-  // TODO(thisjiang): change msg type from 'int' to 'std::string' when custom
-  // call support 'std::string' type
-  using cinn::runtime::cuda::cinn_assert_true_nvgpu;
-  REGISTER_EXTERN_FUNC_HELPER(cinn_assert_true_nvgpu,
-                              cinn::common::DefaultNVGPUTarget())
-      .SetRetType<void>()
-      .AddInputType<void *>()  // v_args
-      .AddInputType<int>()     // num_args
-      .AddInputType<int>()     // msg
-      .AddInputType<bool>()    // only_warning
       .AddInputType<void *>()  // stream
       .End();
 

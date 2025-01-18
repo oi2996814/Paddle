@@ -31,7 +31,7 @@ void StackGradKernel(const Context& ctx,
   PADDLE_ENFORCE_EQ(
       split_dim,
       x_grad.size(),
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Output x_grad's size should be equal to the split_dim, but"
           " received split_dim is:%d x_grad's size is:%d.",
           split_dim,
@@ -46,12 +46,15 @@ PD_REGISTER_KERNEL(stack_grad,
                    GPU,
                    ALL_LAYOUT,
                    phi::StackGradKernel,
+                   bool,
                    float,
                    double,
-                   bool,
-                   int64_t,
                    int,
-                   uint8_t,
                    int8_t,
+                   int64_t,
+                   uint8_t,
+                   int16_t,
                    phi::dtype::float16,
-                   phi::dtype::bfloat16) {}
+                   phi::dtype::bfloat16,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}

@@ -17,7 +17,7 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 
 class ApiMinimumTest(unittest.TestCase):
@@ -119,3 +119,7 @@ class ApiMinimumTest(unittest.TestCase):
         res = paddle.minimum(b, c)
         res = res.numpy()
         np.testing.assert_allclose(res, self.np_expected4, rtol=1e-05)
+
+
+if __name__ == '__main__':
+    unittest.main()

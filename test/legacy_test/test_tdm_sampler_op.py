@@ -15,11 +15,11 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, paddle_static_guard
+from op_test import OpTest, paddle_static_guard
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 from paddle.incubate.layers.nn import tdm_sampler
 
 
@@ -74,13 +74,13 @@ class TestTDMSamplerOp(OpTest):
         self.layer_sample_nums = [1 + i for i in self.neg_samples_num_list]
 
         layer_node_num_list = [len(i) for i in self.tree_layer]
-        tree_layer_offset_lod = [0]
+        tree_layer_offset = [0]
         tree_layer_flat = []
         node_nums = 0
         for layer_idx, layer_node in enumerate(layer_node_num_list):
             tree_layer_flat += self.tree_layer[layer_idx]
             node_nums += layer_node
-            tree_layer_offset_lod.append(node_nums)
+            tree_layer_offset.append(node_nums)
 
         travel_np = np.array(self.tree_travel).astype(self.tree_dtype)
         layer_np = np.array(tree_layer_flat).astype(self.tree_dtype)
@@ -97,7 +97,7 @@ class TestTDMSamplerOp(OpTest):
         self.attrs = {
             'neg_samples_num_list': self.neg_samples_num_list,
             'output_positive': True,
-            'layer_offset_lod': tree_layer_offset_lod,
+            'layer_offset': tree_layer_offset,
             'seed': 0,
             'dtype': type_dict[self.out_dtype],
         }
@@ -155,26 +155,14 @@ class TestTDMSamplerOp(OpTest):
                 if sampling_res_list[0] != 0:
                     assert len(set(sampling_res_list)) == len(
                         sampling_res_list
-                    ), "len(set(sampling_res_list)): {}, len(sampling_res_list): {} , sample_res: {}, label_res:{}, mask_res: {}".format(
-                        len(set(sampling_res_list)),
-                        len(sampling_res_list),
-                        sampling_res,
-                        label_sampling_res,
-                        mask_sampling_res,
-                    )
+                    ), f"len(set(sampling_res_list)): {len(set(sampling_res_list))}, len(sampling_res_list): {len(sampling_res_list)} , sample_res: {sampling_res}, label_res:{label_sampling_res}, mask_res: {mask_sampling_res}"
                 # check legal
                 layer_node = self.tree_layer[layer_idx]
                 layer_node.append(0)
                 for sample in sampling_res_list:
                     assert (
                         sample in layer_node
-                    ), "sample: {}, layer_node: {} , sample_res: {}, label_res: {}, mask_res:{}".format(
-                        sample,
-                        layer_node,
-                        sampling_res,
-                        label_sampling_res,
-                        mask_sampling_res,
-                    )
+                    ), f"sample: {sample}, layer_node: {layer_node} , sample_res: {sampling_res}, label_res: {label_sampling_res}, mask_res:{mask_sampling_res}"
 
                 # check label
                 label_flag = 1
@@ -185,9 +173,7 @@ class TestTDMSamplerOp(OpTest):
                 padding_index = np.where(sampling_res == 0)
                 assert not np.sum(
                     mask_sampling_res[padding_index]
-                ), "np.sum(mask_sampling_res[padding_index]): {} ".format(
-                    np.sum(mask_sampling_res[padding_index])
-                )
+                ), f"np.sum(mask_sampling_res[padding_index]): {np.sum(mask_sampling_res[padding_index])} "
                 start_offset = end_offset
             # check travel legal
             assert (
@@ -268,9 +254,7 @@ class TestCase7(TestTDMSamplerOp):
 class TestTDMSamplerShape(unittest.TestCase):
     def test_shape(self):
         with paddle_static_guard():
-            x = paddle.static.data(
-                name='x', shape=[-1, 1], dtype='int32', lod_level=1
-            )
+            x = paddle.static.data(name='x', shape=[-1, 1], dtype='int32')
             tdm_tree_travel = create_tdm_travel()
             tdm_tree_layer = create_tdm_layer()
             layer_node_num_list = [len(i) for i in tdm_tree_layer]
@@ -290,10 +274,10 @@ class TestTDMSamplerShape(unittest.TestCase):
                 neg_samples_num_list,
                 layer_node_num_list,
                 leaf_node_num,
-                tree_travel_attr=fluid.ParamAttr(
+                tree_travel_attr=base.ParamAttr(
                     initializer=paddle.nn.initializer.Assign(travel_array)
                 ),
-                tree_layer_attr=fluid.ParamAttr(
+                tree_layer_attr=base.ParamAttr(
                     initializer=paddle.nn.initializer.Assign(layer_array)
                 ),
                 output_positive=True,
@@ -303,9 +287,9 @@ class TestTDMSamplerShape(unittest.TestCase):
                 dtype='int32',
             )
 
-            place = fluid.CPUPlace()
-            exe = fluid.Executor(place=place)
-            exe.run(fluid.default_startup_program())
+            place = base.CPUPlace()
+            exe = base.Executor(place=place)
+            exe.run(base.default_startup_program())
 
             feed = {
                 'x': np.array(

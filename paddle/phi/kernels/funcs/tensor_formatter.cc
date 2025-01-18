@@ -65,8 +65,8 @@ std::string TensorFormatter::Format(const phi::DenseTensor& print_tensor,
 
   if (print_tensor_lod_) {
     log_stream << "  - lod: {";
-    const phi::LoD& lod = print_tensor.lod();
-    for (auto level : lod) {
+    const phi::LegacyLoD& lod = print_tensor.lod();
+    for (auto const& level : lod) {
       log_stream << "{";
       bool is_first = true;
       for (auto i : level) {
@@ -107,6 +107,14 @@ std::string TensorFormatter::Format(const phi::DenseTensor& print_tensor,
     FormatData<int64_t>(print_tensor, log_stream);
   } else if (dtype == phi::DataType::BOOL) {
     FormatData<bool>(print_tensor, log_stream);
+  } else if (dtype == phi::DataType::FLOAT16) {
+    FormatData<phi::dtype::float16>(print_tensor, log_stream);
+  } else if (dtype == phi::DataType::BFLOAT16) {
+    FormatData<phi::dtype::bfloat16>(print_tensor, log_stream);
+  } else if (dtype == phi::DataType::FLOAT8_E4M3FN) {
+    FormatData<phi::dtype::float8_e4m3fn>(print_tensor, log_stream);
+  } else if (dtype == phi::DataType::FLOAT8_E5M2) {
+    FormatData<phi::dtype::float8_e5m2>(print_tensor, log_stream);
   } else {
     log_stream << "  - data: unprintable type: " << dtype << std::endl;
   }
@@ -137,7 +145,7 @@ void TensorFormatter::FormatData(const phi::DenseTensor& print_tensor,
   if (print_size > 0) {
     log_stream << data[0];
     for (int64_t i = 1; i < print_size; ++i) {
-      log_stream << " " << data[i];
+      log_stream << " " << static_cast<float>(data[i]);
     }
   }
   log_stream << "]" << std::endl;
@@ -152,6 +160,10 @@ template void TensorFormatter::FormatData<double>(
 template void TensorFormatter::FormatData<int>(
     const phi::DenseTensor& print_tensor, std::stringstream& log_stream);
 template void TensorFormatter::FormatData<int64_t>(
+    const phi::DenseTensor& print_tensor, std::stringstream& log_stream);
+template void TensorFormatter::FormatData<phi::dtype::float16>(
+    const phi::DenseTensor& print_tensor, std::stringstream& log_stream);
+template void TensorFormatter::FormatData<phi::dtype::bfloat16>(
     const phi::DenseTensor& print_tensor, std::stringstream& log_stream);
 
 }  // namespace funcs

@@ -15,10 +15,19 @@ limitations under the License. */
 #pragma once
 
 #include "paddle/phi/api/include/tensor.h"
+#include "paddle/phi/core/distributed/type_defs.h"
 #include "paddle/phi/core/kernel_factory.h"
 #include "paddle/phi/core/selected_rows.h"
 #include "paddle/phi/core/sparse_coo_tensor.h"
 #include "paddle/phi/core/sparse_csr_tensor.h"
+
+namespace phi {
+class DeviceContext;
+namespace distributed {
+class DistTensor;
+class TensorDistAttr;
+}  // namespace distributed
+}  // namespace phi
 
 namespace paddle {
 namespace experimental {
@@ -55,7 +64,7 @@ class TransformFlag {
   // trans_data_type_ can be setted by api[data_transform->support_trans_dtype]
   // in the yaml file.
   // trans_data_type_ only affect the non complex types,
-  // the complex is always transferd, except stop_transform_ is true.
+  // the complex is always transfered, except stop_transform_ is true.
   bool trans_data_type_ = false;
 
   // trans_backend_ and trans_layout_ are true defaultly,
@@ -148,6 +157,13 @@ void TransDataBackend(const phi::SelectedRows* tensor,
 phi::DenseTensor Trans2Contiguous(const phi::DenseTensor& tensor);
 
 void CheckAndTrans2Contiguous(phi::DenseTensor* tensor);
+
+phi::DenseTensor CheckAndTrans2NewContiguousTensor(
+    const phi::DenseTensor& tensor);
+
+std::vector<phi::DenseTensor> CheckAndTrans2NewContiguousTensor(
+    const std::vector<phi::DenseTensor>& tensor);
+
 inline bool NeedTransformPlace(const phi::Place& src_place,
                                const Backend& target,
                                const TransformFlag& transform_flag) {
@@ -158,12 +174,134 @@ inline bool NeedTransformPlace(const phi::Place& src_place,
   if (!transform_flag.need_trans_backend()) {
     return false;
   }
+
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
   bool ret = src_place.GetType() == AllocationType::GPUPINNED ||
              (target != Backend::ALL_BACKEND &&
               phi::TransToPhiBackend(src_place) !=
                   (target != Backend::GPUDNN ? target : Backend::GPU));
+#elif defined(PADDLE_WITH_XPU)
+  bool ret = target != Backend::ALL_BACKEND &&
+             phi::TransToPhiBackend(src_place) != target;
+#elif defined(PADDLE_WITH_IPU)
+  bool ret = target != Backend::ALL_BACKEND &&
+             phi::TransToPhiBackend(src_place) != target;
+#elif defined(PADDLE_WITH_CUSTOM_DEVICE)
+  bool ret = target != Backend::ALL_BACKEND;
+  if (target == Backend::CUSTOM) {
+    ret = ret && !is_custom_place(src_place);
+  } else {
+    ret = ret && phi::TransToPhiBackend(src_place) != target;
+  }
+#else
+  bool ret = false;
+#endif
+
+#ifdef PADDLE_WITH_DNNL
+  if (target == Backend::ONEDNN) {
+    ret = src_place.GetType() != AllocationType::CPU;
+  }
+#endif
   return ret;
 }
+
+/* ------------------ for auto parallel ----------------------- */
+
+std::shared_ptr<phi::distributed::DistTensor> ReshardApiInputToKernelInput(
+    phi::DeviceContext* dev_ctx,
+    const Tensor& tensor,
+    const phi::distributed::ArgDistAttr& dist_attr,
+    const std::string& arg_name = "");
+
+std::vector<std::shared_ptr<phi::distributed::DistTensor>>
+ReshardApiInputToKernelInput(phi::DeviceContext* dev_ctx,
+                             const std::vector<Tensor>& tensor,
+                             const phi::distributed::ArgDistAttr& dist_attr,
+                             const std::string& arg_name = "");
+
+paddle::optional<std::shared_ptr<phi::distributed::DistTensor>>
+ReshardApiInputToKernelInput(phi::DeviceContext* dev_ctx,
+                             const paddle::optional<Tensor>& tensor,
+                             const phi::distributed::ArgDistAttr& dist_attr,
+                             const std::string& arg_name = "");
+
+paddle::optional<std::vector<std::shared_ptr<phi::distributed::DistTensor>>>
+ReshardApiInputToKernelInput(
+    phi::DeviceContext* dev_ctx,
+    const paddle::optional<std::vector<Tensor>>& tensors,
+    const phi::distributed::ArgDistAttr& dist_attr,
+    const std::string& arg_name = "");
+
+void SetInplaceOutputCorrectDistAttr(
+    phi::DeviceContext* dev_ctx,
+    Tensor& tensor,  // NOLINT
+    const phi::distributed::TensorDistAttr& dist_attr,
+    bool use_general_spmd_rule = true);
+
+void SetInplaceOutputCorrectDistAttr(
+    phi::DeviceContext* dev_ctx,
+    Tensor& tensor,  // NOLINT
+    const phi::distributed::ArgDistAttr& dist_attr,
+    bool use_general_spmd_rule = true);
+
+void SetInplaceOutputCorrectDistAttr(
+    phi::DeviceContext* dev_ctx,
+    std::vector<Tensor>& tensors,  // NOLINT
+    const std::vector<phi::distributed::TensorDistAttr>& dist_attr,
+    bool use_general_spmd_rule = true);
+
+void SetInplaceOutputCorrectDistAttr(
+    phi::DeviceContext* dev_ctx,
+    std::vector<Tensor>& tensors,  // NOLINT
+    const phi::distributed::ArgDistAttr& dist_attr,
+    bool use_general_spmd_rule = true);
+
+void ReshardOutputPartialAxisToReplicated(
+    phi::DeviceContext* dev_ctx, phi::distributed::DistTensor* out_tensor);
+
+void ReshardKernelOutputToApiOutput(
+    phi::DeviceContext* dev_ctx,
+    const std::shared_ptr<phi::distributed::DistTensor>& src_tensor,
+    Tensor* dst_tensor,
+    const std::string& arg_name = "");
+
+void ReshardKernelOutputToApiOutput(
+    phi::DeviceContext* dev_ctx,
+    const std::vector<std::shared_ptr<phi::distributed::DistTensor>>&
+        src_tensors,
+    const std::vector<Tensor*>& dst_tensors,
+    const std::string& arg_name = "");
+
+std::shared_ptr<phi::distributed::DistTensor> PrepareDataForDistTensor(
+    std::shared_ptr<phi::distributed::DistTensor> input,
+    const phi::TensorArgDef& target_args_def,
+    const TransformFlag& transform_flag,
+    bool is_stride_kernel);
+
+std::vector<std::shared_ptr<phi::distributed::DistTensor>>
+PrepareDataForDistTensor(
+    std::vector<std::shared_ptr<phi::distributed::DistTensor>> input,
+    const phi::TensorArgDef& target_args_def,
+    const TransformFlag& transform_flag,
+    bool is_stride_kernel);
+
+paddle::optional<std::shared_ptr<phi::distributed::DistTensor>>
+PrepareDataForDistTensor(
+    paddle::optional<std::shared_ptr<phi::distributed::DistTensor>> input,
+    const phi::TensorArgDef& target_args_def,
+    const TransformFlag& transform_flag,
+    bool is_stride_kernel);
+
+paddle::optional<std::vector<std::shared_ptr<phi::distributed::DistTensor>>>
+PrepareDataForDistTensor(
+    paddle::optional<std::vector<std::shared_ptr<phi::distributed::DistTensor>>>
+        input,
+    const phi::TensorArgDef& target_args_def,
+    const TransformFlag& transform_flag,
+    bool is_stride_kernel);
+
+std::string ReshardDebugInfo(const phi::distributed::DistTensor& src_tensor,
+                             const phi::distributed::TensorDistAttr& dist_attr);
 
 }  // namespace experimental
 }  // namespace paddle

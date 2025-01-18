@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import paddle
 from paddle.distributed.fleet.meta_optimizers.common import OP_ROLE_KEY, OpRole
 
 __all__ = []
@@ -32,8 +33,8 @@ class GradientClipHelper:
         prune: square, reduce_sum, elementwise_mul
         keep: sum, sqrt, elementwise_max, elementwise_div
         """
-        deperated_vars = set()
-        deperate_op_idx = set()
+        deprecated_vars = set()
+        deprecate_op_idx = set()
         reversed_x_paramname = []
         global_norm_sum_op_idx = -1
         for idx, op in enumerate(block.ops):
@@ -42,10 +43,10 @@ class GradientClipHelper:
             if op.type == "sum":
                 global_norm_sum_op_idx = idx
                 continue
-            deperate_op = False
+            deprecate_op = False
             for input_name in op.desc.input_arg_names():
-                if input_name in deperated_vars:
-                    deperate_op = True
+                if input_name in deprecated_vars:
+                    deprecate_op = True
                 # TODO (JZ-LIANG) revise this for uniform mixed parallelism
                 if "@MERGED" in input_name:
                     param_name = input_name.strip("@GRAD@MERGED")
@@ -54,34 +55,34 @@ class GradientClipHelper:
                 if shard.is_param(param_name) and not shard.has_param(
                     param_name
                 ):
-                    deperate_op = True
+                    deprecate_op = True
                 elif shard.is_param(param_name):
                     reversed_x_paramname.append(param_name)
 
-            if deperate_op:
-                deperate_op_idx.add(idx)
+            if deprecate_op:
+                deprecate_op_idx.add(idx)
                 for output_name in op.desc.output_arg_names():
                     if output_name not in op.desc.input_arg_names():
-                        deperated_vars.add(output_name)
+                        deprecated_vars.add(output_name)
 
         # NOTE(wangxi): If only have 2 sharding, and 1 param.
-        # sharding 0 will not deperated_vars, will return, only
+        # sharding 0 will not deprecated_vars, will return, only
         # sharding 1 will insert allreduce, then hang.
-        if not deperated_vars and global_norm_sum_op_idx == -1:
+        if not deprecated_vars and global_norm_sum_op_idx == -1:
             # got no gradient_clip op
             return
 
         for idx, op in reversed(list(enumerate(block.ops))):
             if not self._is_gradient_clip_op(op):
                 continue
-            if idx in deperate_op_idx:
+            if idx in deprecate_op_idx:
                 block._remove_op(idx, sync=False)
                 continue
             if op.type == "sum":
                 reversed_inputs = []
                 global_norm_sum_op_idx = idx
                 for input_name in op.desc.input_arg_names():
-                    if input_name not in deperated_vars:
+                    if input_name not in deprecated_vars:
                         reversed_inputs.append(input_name)
 
                 op.desc.set_input("X", reversed_inputs)
@@ -119,13 +120,13 @@ class GradientClipHelper:
                     # this allreduce should not overlap with calc and should be scheduled in calc stream
                     block._insert_op_without_sync(
                         idx + idx_offset,
-                        type='c_allreduce_sum',
-                        inputs={'X': sum_res},
-                        outputs={'Out': sum_res},
+                        type='all_reduce',
+                        inputs={'x': sum_res},
+                        outputs={'out': sum_res},
                         attrs={
                             'ring_id': ring_id,
                             'op_namescope': "/gradient_clip_model_parallelism",
-                            'use_calc_stream': True,
+                            'reduce_type': paddle.distributed.ReduceOp.Sum,
                             OP_ROLE_KEY: OpRole.Optimize,
                         },
                     )
@@ -142,13 +143,10 @@ class GradientClipHelper:
         )
         assert (
             to_check_param == should_check_param
-        ), "amp check_finite_and_unscale \
-        checking miss [{}] and got unexpected [{}]".format(
-            should_check_param - to_check_param,
-            to_check_param - should_check_param,
-        )
+        ), f"amp check_finite_and_unscale \
+        checking miss [{should_check_param - to_check_param}] and got unexpected [{to_check_param - should_check_param}]"
 
-        for var_name in deperated_vars:
+        for var_name in deprecated_vars:
             block._remove_var(var_name, sync=False)
         block._sync_with_cpp()
         return

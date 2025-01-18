@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 
 class LinalgPinvTestCase(unittest.TestCase):
@@ -26,7 +27,13 @@ class LinalgPinvTestCase(unittest.TestCase):
         self.init_config()
         self.generate_input()
         self.generate_output()
-        self.places = [paddle.CPUPlace()]
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.places.append(paddle.CPUPlace())
         if core.is_compiled_with_cuda():
             self.places.append(paddle.CUDAPlace(0))
 
@@ -63,11 +70,19 @@ class LinalgPinvTestCase(unittest.TestCase):
 
     def test_static(self):
         paddle.enable_static()
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for place in places:
-            with fluid.program_guard(fluid.Program(), fluid.Program()):
+            with paddle.static.program_guard(
+                paddle.static.Program(), paddle.static.Program()
+            ):
                 x = paddle.static.data(
                     name="input",
                     shape=self._input_shape,
@@ -76,9 +91,8 @@ class LinalgPinvTestCase(unittest.TestCase):
                 out = paddle.linalg.pinv(
                     x, rcond=self.rcond, hermitian=self.hermitian
                 )
-                exe = fluid.Executor(place)
+                exe = paddle.static.Executor(place)
                 fetches = exe.run(
-                    fluid.default_main_program(),
                     feed={"input": self._input_data},
                     fetch_list=[out],
                 )

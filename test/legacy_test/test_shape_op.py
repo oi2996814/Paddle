@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
 from op import Operator
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 
 class TestShapeOp(OpTest):
@@ -36,7 +37,7 @@ class TestShapeOp(OpTest):
         self.dtype = np.float32
 
     def test_check_output(self):
-        self.check_output(check_cinn=True)
+        self.check_output(check_cinn=True, check_pir=True)
 
 
 class case1(TestShapeOp):
@@ -71,7 +72,13 @@ class case2Fp16(TestShapeOp):
 
 class TestShapeWithSelectedRows(unittest.TestCase):
     def get_places(self):
-        places = [core.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(core.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(core.CUDAPlace(0))
         return places
@@ -125,7 +132,7 @@ class TestShapeOpBf16(OpTest):
 
     def test_check_output(self):
         place = core.CUDAPlace(0)
-        self.check_output_with_place(place, check_cinn=True)
+        self.check_output_with_place(place, check_cinn=True, check_pir=True)
 
 
 class case1Bf16(TestShapeOpBf16):

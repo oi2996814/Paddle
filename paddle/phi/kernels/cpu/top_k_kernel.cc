@@ -89,14 +89,14 @@ static void FullTopK(Type input_height,
             });
         // the nth-element will get the unorder elements, sort the element
         if (sorted) {
-          std::sort(col_vec.begin(),
-                    col_vec.begin() + k - 1,
-                    [&largest](const std::pair<T, Type>& l,
-                               const std::pair<T, Type>& r) {
-                      return (std::isnan(static_cast<double>(l.first)) &&
-                              !std::isnan(static_cast<double>(r.first))) ||
-                             (l.first > r.first);
-                    });
+          std::sort(
+              col_vec.begin(),
+              col_vec.begin() + k - 1,
+              [](const std::pair<T, Type>& l, const std::pair<T, Type>& r) {
+                return (std::isnan(static_cast<double>(l.first)) &&
+                        !std::isnan(static_cast<double>(r.first))) ||
+                       (l.first > r.first);
+              });
         }
       } else {
         std::nth_element(
@@ -144,10 +144,10 @@ void TopkKernel(const Context& dev_ctx,
   if (in_dims.size() == 0) {
     phi::Copy<Context>(dev_ctx, x, dev_ctx.GetPlace(), false, out);
     dev_ctx.template Alloc<int64_t>(indices);
-    phi::funcs::set_constant(dev_ctx, indices, 0.0);
+    phi::funcs::set_constant(dev_ctx, indices, static_cast<int64_t>(0));
     return;
   }
-  // axis < 0, cacluate the real axis
+  // axis < 0, calculate the real axis
   if (axis < 0) {
     axis += in_dims.size();
   }
@@ -161,7 +161,7 @@ void TopkKernel(const Context& dev_ctx,
 
   if (k_scalar.FromTensor()) {
     auto out_dims = out->dims();
-    // accroding to axis to set K value in the dim
+    // according to axis to set K value in the dim
     out_dims[axis] = k;
     out->Resize(out_dims);
     indices->Resize(out_dims);
@@ -172,7 +172,7 @@ void TopkKernel(const Context& dev_ctx,
   const auto& out_dims = out->dims();
   if (axis + 1 == in_dims.size()) {
     const int64_t& input_height =
-        phi::product(phi::slice_ddim(in_dims, 0, in_dims.size() - 1));
+        common::product(common::slice_ddim(in_dims, 0, in_dims.size() - 1));
     const int64_t& input_width = in_dims[in_dims.size() - 1];
     FullTopK<T, int64_t>(input_height,
                          input_width,
@@ -184,7 +184,7 @@ void TopkKernel(const Context& dev_ctx,
                          largest,
                          sorted);
   } else {
-    // if the topk dims is not last dim, will tranpose and do topk
+    // if the topk dims is not last dim, will transpose and do topk
     std::vector<int> trans;
     for (int i = 0; i < axis; i++) {
       trans.emplace_back(i);
@@ -198,24 +198,24 @@ void TopkKernel(const Context& dev_ctx,
     // get the trans input_dims, out_dims
     phi::DDim trans_dims(in_dims);
     phi::DDim trans_out_dims(out->dims());
-    for (size_t i = 0; i < trans.size(); i++) {
+    for (int i = 0; i < static_cast<int>(trans.size()); i++) {
       trans_dims[i] = in_dims[trans[i]];
     }
-    for (size_t i = 0; i < trans.size(); i++) {
+    for (int i = 0; i < static_cast<int>(trans.size()); i++) {
       trans_out_dims[i] = out_dims[trans[i]];
     }
 
     DenseTensor trans_inp;
     trans_inp.Resize(trans_dims);
     dev_ctx.template Alloc<T>(&trans_inp);
-    int ndims = trans.size();
+    int ndims = static_cast<int>(trans.size());
 
     // transpose the input value
     funcs::TransCompute<phi::CPUContext, T>(
         ndims, dev_ctx, *input, &trans_inp, trans);
 
-    const int64_t input_height =
-        phi::product(phi::slice_ddim(trans_dims, 0, trans_dims.size() - 1));
+    const int64_t input_height = common::product(
+        common::slice_ddim(trans_dims, 0, trans_dims.size() - 1));
     const int64_t input_width = trans_dims[trans_dims.size() - 1];
 
     // Allocate the temp tensor to the save the topk indices, values
@@ -244,9 +244,36 @@ void TopkKernel(const Context& dev_ctx,
   }
 }
 
+template <typename T, typename Context>
+void TopkV1Kernel(const Context& dev_ctx,
+                  const DenseTensor& x,
+                  const Scalar& k_scalar,
+                  DenseTensor* out,
+                  DenseTensor* indices) {
+  TopkKernel<T, Context>(dev_ctx, x, k_scalar, -1, true, true, out, indices);
+}
 }  // namespace phi
 
-PD_REGISTER_KERNEL(
-    topk, CPU, ALL_LAYOUT, phi::TopkKernel, float, double, int32_t, int64_t) {
+PD_REGISTER_KERNEL(topk,
+                   CPU,
+                   ALL_LAYOUT,
+                   phi::TopkKernel,
+                   float,
+                   double,
+                   int32_t,
+                   int64_t,
+                   phi::dtype::float16) {
+  kernel->OutputAt(1).SetDataType(phi::DataType::INT64);
+}
+
+PD_REGISTER_KERNEL(topk_v1,
+                   CPU,
+                   ALL_LAYOUT,
+                   phi::TopkV1Kernel,
+                   float,
+                   double,
+                   int32_t,
+                   int64_t,
+                   phi::dtype::float16) {
   kernel->OutputAt(1).SetDataType(phi::DataType::INT64);
 }

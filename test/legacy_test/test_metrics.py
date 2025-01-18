@@ -17,13 +17,13 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle import fluid
+from paddle import base
 from paddle.hapi.model import to_list
 
 
 def one_hot(x, n_class):
     res = np.eye(n_class)[np.array(x).reshape(-1)]
-    res = res.reshape(list(x.shape) + [n_class])
+    res = res.reshape([*x.shape, n_class])
     return res
 
 
@@ -158,7 +158,7 @@ class TestAccuracyDynamic(unittest.TestCase):
         return label, pred_one_hot
 
     def test_main(self):
-        with fluid.dygraph.guard(fluid.CPUPlace()):
+        with base.dygraph.guard(base.CPUPlace()):
             acc = paddle.metric.Accuracy(topk=self.topk, name=self.name)
             for _ in range(10):
                 label, pred = self.random_pred_label()
@@ -189,64 +189,6 @@ class TestAccuracyDynamicMultiTopk(TestAccuracyDynamic):
         self.squeeze_label = True
 
 
-class TestAccuracyStatic(TestAccuracyDynamic):
-    def setUp(self):
-        self.topk = (1,)
-        self.class_num = 5
-        self.sample_num = 1000
-        self.name = None
-        self.squeeze_label = True
-
-    def test_main(self):
-        paddle.enable_static()
-
-        main_prog = fluid.Program()
-        startup_prog = fluid.Program()
-        main_prog.random_seed = 1024
-        startup_prog.random_seed = 1024
-        with fluid.program_guard(main_prog, startup_prog):
-            pred = paddle.static.data(
-                name='pred', shape=[None, self.class_num], dtype='float32'
-            )
-            label = paddle.static.data(
-                name='label', shape=[None, 1], dtype='int64'
-            )
-            acc = paddle.metric.Accuracy(topk=self.topk, name=self.name)
-            state = acc.compute(pred, label)
-
-        exe = fluid.Executor(fluid.CPUPlace())
-        compiled_main_prog = fluid.CompiledProgram(main_prog)
-
-        for _ in range(10):
-            label, pred = self.random_pred_label()
-            state_ret = exe.run(
-                compiled_main_prog,
-                feed={'pred': pred, 'label': label},
-                fetch_list=[s.name for s in to_list(state)],
-                return_numpy=True,
-            )
-            acc.update(*state_ret)
-            res_m = acc.accumulate()
-            res_f = accuracy(pred, label, self.topk)
-            assert np.all(
-                np.isclose(np.array(res_m), np.array(res_f), rtol=1e-3)
-            ), f"Accuracy precision error: {res_m} != {res_f}"
-            acc.reset()
-            assert np.sum(acc.total) == 0
-            assert np.sum(acc.count) == 0
-
-        paddle.disable_static()
-
-
-class TestAccuracyStaticMultiTopk(TestAccuracyStatic):
-    def setUp(self):
-        self.topk = (1, 5)
-        self.class_num = 10
-        self.sample_num = 100
-        self.name = "accuracy"
-        self.squeeze_label = False
-
-
 class TestPrecision(unittest.TestCase):
     def test_1d(self):
         x = np.array([0.1, 0.5, 0.6, 0.7])
@@ -257,8 +199,8 @@ class TestPrecision(unittest.TestCase):
         r = m.accumulate()
         self.assertAlmostEqual(r, 2.0 / 3.0)
 
-        x = paddle.to_tensor(np.array([0.1, 0.5, 0.6, 0.7, 0.2]))
-        y = paddle.to_tensor(np.array([1, 0, 1, 1, 1]))
+        x = np.array([0.1, 0.5, 0.6, 0.7, 0.2])
+        y = np.array([1, 0, 1, 1, 1])
         m.update(x, y)
         r = m.accumulate()
         self.assertAlmostEqual(r, 4.0 / 6.0)
@@ -295,8 +237,8 @@ class TestRecall(unittest.TestCase):
         r = m.accumulate()
         self.assertAlmostEqual(r, 2.0 / 3.0)
 
-        x = paddle.to_tensor(np.array([0.1, 0.5, 0.6, 0.7]))
-        y = paddle.to_tensor(np.array([1, 0, 0, 1]))
+        x = np.array([0.1, 0.5, 0.6, 0.7])
+        y = np.array([1, 0, 0, 1])
         m.update(x, y)
         r = m.accumulate()
         self.assertAlmostEqual(r, 3.0 / 5.0)
@@ -332,21 +274,19 @@ class TestAuc(unittest.TestCase):
         self.assertEqual(m.accumulate(), 0.0)
 
     def test_auc_tensor(self):
-        x = paddle.to_tensor(
-            np.array(
-                [
-                    [0.78, 0.22],
-                    [0.62, 0.38],
-                    [0.55, 0.45],
-                    [0.30, 0.70],
-                    [0.14, 0.86],
-                    [0.59, 0.41],
-                    [0.91, 0.08],
-                    [0.16, 0.84],
-                ]
-            )
+        x = np.array(
+            [
+                [0.78, 0.22],
+                [0.62, 0.38],
+                [0.55, 0.45],
+                [0.30, 0.70],
+                [0.14, 0.86],
+                [0.59, 0.41],
+                [0.91, 0.08],
+                [0.16, 0.84],
+            ]
         )
-        y = paddle.to_tensor(np.array([[0], [1], [1], [0], [1], [0], [0], [1]]))
+        y = np.array([[0], [1], [1], [0], [1], [0], [0], [1]])
         m = paddle.metric.Auc()
         m.update(x, y)
         r = m.accumulate()

@@ -12,21 +12,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The set of ops that support fp16 calculation and are considered numerically-
-# safe and performance-critical. These ops are always converted to fp16.
-FP16_WHITE_LIST = {
+# The set of ops that support fp16 and bf16 calculation and are considered numerically-
+# safe and performance-critical. These ops are always converted to fp16 or bf16.
+
+from __future__ import annotations
+
+WHITE_LIST = {
     'conv2d',
     'einsum',
     'matmul',
     'matmul_v2',
     'max_pool2d_with_index',
     'mul',
+    'fused_gemm_epilogue',
+    "fused_rotary_position_embedding",
+    "flash_attn",
+}
+
+# The set of ops that support fp16, and bf16 was unsupported.
+ONLY_FP16_WHITE_LIST = {
     'fake_quantize_dequantize_abs_max',
     'fake_quantize_dequantize_moving_average_abs_max',
-    'fused_gemm_epilogue',
     'fused_attention',
     'fused_feedforward',
 }
+
+FP16_WHITE_LIST = WHITE_LIST | ONLY_FP16_WHITE_LIST
 
 # The set of ops that support fp16 calculation and are considered numerically-
 # dangerous and whose effects may also be observed in downstream ops.
@@ -38,7 +49,6 @@ FP16_BLACK_LIST = {
     'cosh',
     'atanh',
     'tanh_shrink',
-    'cos_sim',
     'erfinv',
     'exp',
     'expm1',
@@ -68,6 +78,7 @@ FP16_BLACK_LIST = {
     'softmax_with_cross_entropy',
     'sigmoid_cross_entropy_with_logits',
     'c_softmax_with_cross_entropy',
+    'c_softmax_with_multi_label_cross_entropy',
     'cross_entropy',
     'cross_entropy2',
     'nll_loss',
@@ -90,12 +101,12 @@ EXTRA_BLACK_LIST = {
     'scatter',
 }
 
-BF16_WHITE_LIST = {'conv2d', 'einsum', 'matmul_v2'}
-BF16_BLACK_LIST = set()
+BF16_WHITE_LIST = WHITE_LIST
+BF16_BLACK_LIST = FP16_BLACK_LIST
 
 
 # At OD level, ops in WHITE_LIST will use FP16/BF16 and the others will use FP32.
-def white_list():
+def white_list() -> dict[str, dict[str, set[str]]]:
     white_list = {
         "float16": {
             "OD": FP16_WHITE_LIST,
@@ -111,7 +122,7 @@ def white_list():
     return white_list
 
 
-def black_list():
+def black_list() -> dict[str, dict[str, set[str]]]:
     black_list = {
         "float16": {
             "OD": set(),

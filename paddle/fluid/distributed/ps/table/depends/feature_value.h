@@ -14,10 +14,11 @@
 
 #pragma once
 
-#include <mct/hash-map.hpp>
 #include <vector>
 
-#include "gflags/gflags.h"
+#include <mct/hash-map.hpp>
+
+#include "paddle/common/flags.h"
 #include "paddle/fluid/distributed/common/chunk_allocator.h"
 
 namespace paddle {

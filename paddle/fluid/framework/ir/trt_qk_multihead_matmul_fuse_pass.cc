@@ -22,10 +22,7 @@
 #endif
 #include "paddle/phi/kernels/funcs/blas/blas.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
-namespace patterns {
+namespace paddle::framework::ir::patterns {
 
 //       input_qk   input_v
 //       |q     |k      v
@@ -51,7 +48,7 @@ namespace patterns {
 //
 // -> fused to
 //
-//   input_qk intput_v
+//   input_qk input_v
 //           |
 //     qk_multihead_matmul
 //           |
@@ -249,7 +246,8 @@ PDNode* TrtQKMultiHeadMatmulPattern::operator()() {
   return reshape2_qkv_out_var;
 }
 
-}  // namespace patterns
+}  // namespace paddle::framework::ir::patterns
+namespace paddle::framework::ir {
 
 int TrtQkMultiHeadMatmulFusePass::BuildQkFusion(Graph* graph,
                                                 const std::string& name_scope,
@@ -261,7 +259,7 @@ int TrtQkMultiHeadMatmulFusePass::BuildQkFusion(Graph* graph,
   patterns::TrtQKMultiHeadMatmulPattern multihead_pattern(pattern, name_scope);
 
   multihead_pattern();
-  auto fuse_creater = [&](Node* input0,
+  auto fuse_creator = [&](Node* input0,
                           Node* input1,
                           Node* mul0,
                           Node* mul1,
@@ -284,7 +282,7 @@ int TrtQkMultiHeadMatmulFusePass::BuildQkFusion(Graph* graph,
                           Node* scale_out) {
     // get Device context
     auto* dev_ctx = static_cast<phi::CPUContext*>(
-        platform::DeviceContextPool::Instance().Get(platform::CPUPlace()));
+        phi::DeviceContextPool::Instance().Get(phi::CPUPlace()));
 
     auto scale_attr = PADDLE_GET_CONST(float, scale->Op()->GetAttr("scale"));
 
@@ -310,7 +308,7 @@ int TrtQkMultiHeadMatmulFusePass::BuildQkFusion(Graph* graph,
     int hidden_out = wq_tensor->dims()[1];
     int head_size = hidden_out / head_number;
     if (abs(scale_attr - 1.0f / sqrt(static_cast<float>(head_size))) > 1e-5) {
-      VLOG(3) << "scale of muilthead matmul do not fit the requirement of "
+      VLOG(3) << "scale of multi-head matmul do not fit the requirement of "
                  "qk attention plugin, Stop fusing.";
       return;
     }
@@ -324,8 +322,8 @@ int TrtQkMultiHeadMatmulFusePass::BuildQkFusion(Graph* graph,
 
     // combined_w_dims = [in,2,out]
     auto combined_w_qk_dims =
-        phi::make_ddim({wq_tensor->dims()[0], 2, wq_tensor->dims()[1]});
-    auto combined_bias_dims = phi::make_ddim({2, bq_tensor->dims()[0]});
+        common::make_ddim({wq_tensor->dims()[0], 2, wq_tensor->dims()[1]});
+    auto combined_bias_dims = common::make_ddim({2, bq_tensor->dims()[0]});
 
     VLOG(3) << "trt qk attention trt wq_dim in:" << wq_tensor->dims()[0]
             << "trt qk attention trt wk_dim out:" << wq_tensor->dims()[1];
@@ -483,7 +481,7 @@ int TrtQkMultiHeadMatmulFusePass::BuildQkFusion(Graph* graph,
     GET_IR_NODE_FROM_SUBGRAPH(
         transpose2_qkv_out, transpose2_qkv_out, multihead_pattern);
 
-    fuse_creater(input0,
+    fuse_creator(input0,
                  input1,
                  mul0,
                  mul1,
@@ -575,9 +573,7 @@ void TrtQkMultiHeadMatmulFusePass::ApplyImpl(Graph* graph) const {
   AddStatis(fusion_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(trt_qk_multihead_matmul_fuse_pass,
               paddle::framework::ir::TrtQkMultiHeadMatmulFusePass);

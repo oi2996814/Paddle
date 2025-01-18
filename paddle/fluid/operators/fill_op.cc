@@ -12,8 +12,10 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include "paddle/fluid/operators/fill_op.h"
-
+#include <algorithm>
+#include <vector>
+#include "paddle/fluid/framework/convert_utils.h"
+#include "paddle/fluid/framework/data_type.h"
 #include "paddle/fluid/framework/op_registry.h"
 
 namespace paddle {
@@ -47,7 +49,7 @@ class FillOp : public framework::OperatorWithKernel {
   void InferShape(framework::InferShapeContext* context) const override {
     OP_INOUT_CHECK(context->HasOutput("Out"), "Output", "Out", "Fill");
     auto& shape = context->Attrs().Get<std::vector<int>>("shape");
-    context->SetOutputDim("Out", phi::make_ddim(shape));
+    context->SetOutputDim("Out", common::make_ddim(shape));
   }
 
  protected:
@@ -78,9 +80,3 @@ REGISTER_OPERATOR(
     ops::FillOpVarTypeInference,
     paddle::framework::EmptyGradOpMaker<paddle::framework::OpDesc>,
     paddle::framework::EmptyGradOpMaker<paddle::imperative::OpBase>);
-REGISTER_OP_CPU_KERNEL(fill,
-                       ops::FillKernel<float>,
-                       ops::FillKernel<double>,
-                       ops::FillKernel<int64_t>,
-                       ops::FillKernel<int>,
-                       ops::FillKernel<paddle::platform::float16>);

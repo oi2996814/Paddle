@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 import paddle
-from paddle.fluid.framework import Program, program_guard
+from paddle.base.framework import Program, program_guard
 
 
 class TestGatherTreeOp(OpTest):
@@ -36,7 +36,7 @@ class TestGatherTreeOp(OpTest):
         self.outputs = {'Out': self.backtrace(ids, parents)}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     @staticmethod
     def backtrace(ids, parents):
@@ -55,6 +55,7 @@ class TestGatherTreeOp(OpTest):
 
 
 class TestGatherTreeOpAPI(unittest.TestCase):
+
     def test_case(self):
         paddle.enable_static()
         ids = paddle.static.data(name='ids', shape=[5, 2, 2], dtype='int64')
@@ -77,6 +78,7 @@ class TestGatherTreeOpAPI(unittest.TestCase):
 
 
 class TestGatherTreeOpError(unittest.TestCase):
+
     def test_errors(self):
         paddle.enable_static()
         with program_guard(Program(), Program()):
@@ -98,6 +100,18 @@ class TestGatherTreeOpError(unittest.TestCase):
                 paddle.nn.functional.gather_tree(ids, np_parents)
 
             self.assertRaises(TypeError, test_Variable_parents)
+
+        paddle.disable_static()
+
+
+class TestGatherTreeOpErrorForOthers(unittest.TestCase):
+    def test_errors(self):
+        paddle.enable_static()
+        with program_guard(Program(), Program()):
+            ids = paddle.static.data(name='ids', shape=[5, 2, 2], dtype='int64')
+            parents = paddle.static.data(
+                name='parents', shape=[5, 2, 2], dtype='int64'
+            )
 
             def test_type_ids():
                 # dtype must be int32 or int64

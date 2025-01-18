@@ -14,20 +14,20 @@
 
 #include "paddle/phi/backends/device_base.h"
 
-#include "gflags/gflags.h"
 #include "glog/logging.h"
+#include "paddle/common/flags.h"
 #include "paddle/phi/core/enforce.h"
 
-DECLARE_double(fraction_of_gpu_memory_to_use);
-DECLARE_uint64(initial_gpu_memory_in_mb);
-DECLARE_uint64(reallocate_gpu_memory_in_mb);
+PD_DECLARE_double(fraction_of_gpu_memory_to_use);
+PD_DECLARE_uint64(initial_gpu_memory_in_mb);
+PD_DECLARE_uint64(reallocate_gpu_memory_in_mb);
 
 constexpr static float fraction_reserve_gpu_memory = 0.05f;
 
 namespace phi {
 
-#define INTERFACE_UNIMPLEMENT              \
-  PADDLE_THROW(phi::errors::Unimplemented( \
+#define INTERFACE_UNIMPLEMENT                 \
+  PADDLE_THROW(common::errors::Unimplemented( \
       "%s is not implemented on %s device.", __func__, Type()));
 
 // info
@@ -208,19 +208,19 @@ size_t DeviceInterface::AllocSize(size_t dev_id, bool realloc) {
   size_t available_to_alloc = AvailableAllocSize(dev_id);
   PADDLE_ENFORCE_GT(available_to_alloc,
                     0,
-                    phi::errors::ResourceExhausted(
+                    common::errors::ResourceExhausted(
                         "Not enough available %s memory.", Type()));
   // If FLAGS_initial_gpu_memory_in_mb is 0, then initial memory will be
   // allocated by fraction
   size_t flag_mb = realloc ? FLAGS_reallocate_gpu_memory_in_mb
                            : FLAGS_initial_gpu_memory_in_mb;
   size_t alloc_bytes =
-      (flag_mb > 0ul
-           ? flag_mb << 20
-           : available_to_alloc * FLAGS_fraction_of_gpu_memory_to_use);
+      (flag_mb > 0ul ? flag_mb << 20
+                     : available_to_alloc *
+                           FLAGS_fraction_of_gpu_memory_to_use);  // NOLINT
   PADDLE_ENFORCE_GE(available_to_alloc,
                     alloc_bytes,
-                    phi::errors::ResourceExhausted(
+                    common::errors::ResourceExhausted(
                         "Not enough available %s memory.", Type()));
   return alloc_bytes;
 }
@@ -229,15 +229,12 @@ size_t DeviceInterface::AvailableAllocSize(size_t dev_id) {
   size_t total = 0;
   size_t available = 0;
   MemoryStats(dev_id, &total, &available);
-  size_t reserving =
-      static_cast<size_t>(fraction_reserve_gpu_memory * available);
   // If available size is less than minimum chunk size, no usable memory exists
-  size_t available_to_alloc = available - reserving;
   size_t min_chunk_size = GetMinChunkSize(dev_id);
-  if (available_to_alloc < min_chunk_size) {
-    available_to_alloc = 0;
+  if (available < min_chunk_size) {
+    available = 0;
   }
-  return available_to_alloc;
+  return available;
 }
 
 size_t DeviceInterface::GetInitAllocSize(size_t dev_id) {
@@ -270,6 +267,10 @@ size_t DeviceInterface::GetExtraPaddingSize(size_t dev_id) {
   return 0;
 }
 
+void DeviceInterface::CCLCommName(ccl::CCLComm ccl_comm, char* comm_name) {
+  INTERFACE_UNIMPLEMENT;
+}
+
 void DeviceInterface::CCLDestroyComm(ccl::CCLComm ccl_comm) {
   INTERFACE_UNIMPLEMENT;
 }
@@ -287,7 +288,7 @@ void DeviceInterface::CCLGetUniqueId(ccl::CCLRootId* root_id) {
 
 void DeviceInterface::CCLBroadcast(void* data,
                                    size_t num,
-                                   ccl::CCLDataType data_type,
+                                   phi::DataType data_type,
                                    size_t root,
                                    const ccl::CCLComm& ccl_comm,
                                    const stream::Stream& stream) {
@@ -297,7 +298,7 @@ void DeviceInterface::CCLBroadcast(void* data,
 void DeviceInterface::CCLAllReduce(void* in_data,
                                    void* out_data,
                                    size_t num,
-                                   ccl::CCLDataType data_type,
+                                   phi::DataType data_type,
                                    ccl::CCLReduceOp reduce_op,
                                    const ccl::CCLComm& ccl_comm,
                                    const stream::Stream& stream) {
@@ -307,7 +308,7 @@ void DeviceInterface::CCLAllReduce(void* in_data,
 void DeviceInterface::CCLReduce(void* in_data,
                                 void* out_data,
                                 size_t num,
-                                ccl::CCLDataType data_type,
+                                phi::DataType data_type,
                                 ccl::CCLReduceOp reduce_op,
                                 size_t root_id,
                                 const ccl::CCLComm& ccl_comm,
@@ -318,7 +319,7 @@ void DeviceInterface::CCLReduce(void* in_data,
 void DeviceInterface::CCLAllGather(void* in_data,
                                    void* out_data,
                                    size_t num,
-                                   ccl::CCLDataType data_type,
+                                   phi::DataType data_type,
                                    const ccl::CCLComm& ccl_comm,
                                    const stream::Stream& stream) {
   INTERFACE_UNIMPLEMENT;
@@ -327,7 +328,7 @@ void DeviceInterface::CCLAllGather(void* in_data,
 void DeviceInterface::CCLReduceScatter(void* in_data,
                                        void* out_data,
                                        size_t num,
-                                       ccl::CCLDataType data_type,
+                                       phi::DataType data_type,
                                        ccl::CCLReduceOp op,
                                        const ccl::CCLComm& ccl_comm,
                                        const stream::Stream& stream) {
@@ -340,7 +341,7 @@ void DeviceInterface::CCLGroupEnd() { INTERFACE_UNIMPLEMENT; }
 
 void DeviceInterface::CCLSend(void* sendbuf,
                               size_t num,
-                              ccl::CCLDataType data_type,
+                              phi::DataType data_type,
                               size_t dst_rank,
                               const ccl::CCLComm& ccl_comm,
                               const stream::Stream& stream) {
@@ -349,7 +350,7 @@ void DeviceInterface::CCLSend(void* sendbuf,
 
 void DeviceInterface::CCLRecv(void* recvbuf,
                               size_t num,
-                              ccl::CCLDataType data_type,
+                              phi::DataType data_type,
                               size_t src_rank,
                               const ccl::CCLComm& ccl_comm,
                               const stream::Stream& stream) {
@@ -358,10 +359,10 @@ void DeviceInterface::CCLRecv(void* recvbuf,
 
 void DeviceInterface::CCLAllToAll(const void** send_buf,
                                   const size_t* send_count,
-                                  const ccl::CCLDataType* send_dtype,
+                                  const phi::DataType* send_dtype,
                                   void** recv_buf,
                                   const size_t* recv_count,
-                                  const ccl::CCLDataType* recv_dtype,
+                                  const phi::DataType* recv_dtype,
                                   size_t rank,
                                   size_t nranks,
                                   const ccl::CCLComm& comm,

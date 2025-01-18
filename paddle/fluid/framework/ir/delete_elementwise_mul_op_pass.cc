@@ -23,16 +23,11 @@ namespace phi {
 class DenseTensor;
 }  // namespace phi
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Scope;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 
-namespace paddle {
-namespace framework {
-namespace ir {
-namespace patterns {
+namespace paddle::framework::ir::patterns {
 
 struct FillMulPattern : public PatternBase {
   FillMulPattern(PDPattern* pattern, const std::string& name_scope);
@@ -68,7 +63,8 @@ FillMulPattern::FillMulPattern(PDPattern* pattern,
   mul->LinksFrom({fill_out, mul_in}).LinksTo({mul_out});
 }
 
-}  // namespace patterns
+}  // namespace paddle::framework::ir::patterns
+namespace paddle::framework::ir {
 
 /*
 Delete "elementwise" if one of inputs is "1".
@@ -83,7 +79,7 @@ class DeleteElementwiseMulOpPass : public FusePassBase {
 
 void DeleteElementwiseMulOpPass::ApplyImpl(ir::Graph* graph) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, platform::errors::PreconditionNotMet("graph should not be null."));
+      graph, common::errors::PreconditionNotMet("graph should not be null."));
   Init(name_scope_, graph);
   GraphPatternDetector gpd;
   patterns::FillMulPattern pattern(gpd.mutable_pattern(), name_scope_);
@@ -114,9 +110,7 @@ void DeleteElementwiseMulOpPass::ApplyImpl(ir::Graph* graph) const {
   AddStatis(found_subgraph_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(delete_elementwise_mul_op_pass,
               paddle::framework::ir::DeleteElementwiseMulOpPass);

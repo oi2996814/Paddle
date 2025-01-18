@@ -44,14 +44,14 @@ nvinfer1::Dims SplitPlugin::getOutputDimensions(
     int index, const nvinfer1::Dims* input_dims, int num_inputs) TRT_NOEXCEPT {
   PADDLE_ENFORCE_EQ(num_inputs,
                     1,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Invalid number of inputs of split TRT plugin. "
                         "Expected 1, received %d.",
                         num_inputs));
   PADDLE_ENFORCE_LT(
       index,
       this->getNbOutputs(),
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Index of output should be less than the total number of outputs in "
           "split TensorRT plugin. Received index = %d >= total outputs = %d",
           index,
@@ -73,7 +73,7 @@ void SplitPlugin::shareData(const SplitPlugin* another) {
 int SplitPlugin::initialize() TRT_NOEXCEPT {
   PADDLE_ENFORCE_LE(axis_,
                     nvinfer1::Dims::MAX_DIMS,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Axis dimension exceeds max dimension in TensorRT. "
                         "Received axis = %d > MAX_DIMS = %d",
                         axis_,
@@ -142,7 +142,7 @@ int SplitPlugin::enqueue(int batchSize,
                          void* workspace,
                          cudaStream_t stream) TRT_NOEXCEPT {
 #endif
-  // this two thrust variables decalared here , not with in .h
+  // this two thrust variables declared here , not with in .h
   // to avoid compiling error in cuda 11.6
   thrust::device_vector<int> d_segment_offsets = segment_offsets_;
   thrust::device_vector<float*> d_output_ptrs;
@@ -198,13 +198,13 @@ nvinfer1::DimsExprs SplitPluginDynamic::getOutputDimensions(
     nvinfer1::IExprBuilder& expr_builder) TRT_NOEXCEPT {
   PADDLE_ENFORCE_EQ(nb_inputs,
                     1,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The Split plugin should be only one input."));
   PADDLE_ENFORCE_LT(output_index,
                     output_length_.size(),
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "When GetOutputDimensions, the index(%d) should not "
-                        "greater the num(%d) of the outpus.",
+                        "greater the num(%d) of the outputs.",
                         output_index,
                         output_length_.size()));
 
@@ -221,16 +221,16 @@ bool SplitPluginDynamic::supportsFormatCombination(
     int nb_outputs) TRT_NOEXCEPT {
   PADDLE_ENFORCE_NOT_NULL(
       in_out,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The input of split plugin should not be nullptr."));
 
   PADDLE_ENFORCE_LT(
       pos,
       nb_inputs + nb_outputs,
-      platform::errors::InvalidArgument("The pos(%d) should be less than the "
-                                        "num(%d) of the input and the output.",
-                                        pos,
-                                        nb_inputs + nb_outputs));
+      common::errors::InvalidArgument("The pos(%d) should be less than the "
+                                      "num(%d) of the input and the output.",
+                                      pos,
+                                      nb_inputs + nb_outputs));
   (in_out && pos < (nb_inputs + nb_outputs));
 
   const nvinfer1::PluginTensorDesc& in = in_out[pos];

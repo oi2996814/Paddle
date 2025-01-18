@@ -16,11 +16,11 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, skip_check_grad_ci
+from op_test import OpTest, skip_check_grad_ci
 from op_test_xpu import XPUOpTest
 
 import paddle
-from paddle import fluid
+from paddle import base
 
 paddle.enable_static()
 
@@ -36,8 +36,8 @@ class TestElementwiseAddOp(XPUOpTest):
         self.init_axis()
         self.init_max_relative_error()
         self.inputs = {
-            'X': OpTest.np_dtype_to_fluid_dtype(self.x),
-            'Y': OpTest.np_dtype_to_fluid_dtype(self.y),
+            'X': OpTest.np_dtype_to_base_dtype(self.x),
+            'Y': OpTest.np_dtype_to_base_dtype(self.y),
         }
         self.attrs = {'axis': self.axis, 'use_mkldnn': self.use_mkldnn}
         self.outputs = {'Out': self.out}
@@ -57,7 +57,7 @@ class TestElementwiseAddOp(XPUOpTest):
                 max_relative_error=self.max_relative_error,
             )
 
-    def test_check_grad_ingore_x(self):
+    def test_check_grad_ignore_x(self):
         if paddle.is_compiled_with_xpu():
             place = paddle.XPUPlace(0)
             self.check_grad_with_place(
@@ -68,7 +68,7 @@ class TestElementwiseAddOp(XPUOpTest):
                 max_relative_error=self.max_relative_error,
             )
 
-    def test_check_grad_ingore_y(self):
+    def test_check_grad_ignore_y(self):
         if paddle.is_compiled_with_xpu():
             place = paddle.XPUPlace(0)
             self.check_grad_with_place(
@@ -308,15 +308,16 @@ class TestElementwiseAddOp_xsize_lessthan_ysize_add(TestElementwiseAddOp):
 )
 class TestAddOp(unittest.TestCase):
     def test_name(self):
-        with fluid.program_guard(fluid.Program()):
+        with base.program_guard(base.Program()):
             x = paddle.static.data(name="x", shape=[2, 3], dtype="float32")
             y = paddle.static.data(name='y', shape=[2, 3], dtype='float32')
 
             y_1 = paddle.add(x, y, name='add_res')
-            self.assertEqual(('add_res' in y_1.name), True)
+            if not paddle.framework.use_pir_api():
+                self.assertEqual(('add_res' in y_1.name), True)
 
     def test_declarative(self):
-        with fluid.program_guard(fluid.Program()):
+        with base.program_guard(base.Program()):
 
             def gen_data():
                 return {
@@ -328,18 +329,18 @@ class TestAddOp(unittest.TestCase):
             y = paddle.static.data(name="y", shape=[3], dtype='float32')
             z = paddle.add(x, y)
 
-            place = fluid.XPUPlace(0)
-            exe = fluid.Executor(place)
-            z_value = exe.run(feed=gen_data(), fetch_list=[z.name])
+            place = base.XPUPlace(0)
+            exe = base.Executor(place)
+            z_value = exe.run(feed=gen_data(), fetch_list=[z])
             z_expected = np.array([3.0, 8.0, 6.0])
             self.assertEqual((z_value == z_expected).all(), True)
 
     def test_dygraph(self):
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             np_x = np.array([2, 3, 4]).astype('float32')
             np_y = np.array([1, 5, 2]).astype('float32')
-            x = fluid.dygraph.to_variable(np_x)
-            y = fluid.dygraph.to_variable(np_y)
+            x = paddle.to_tensor(np_x)
+            y = paddle.to_tensor(np_y)
             z = paddle.add(x, y)
             np_z = z.numpy()
             z_expected = np.array([3.0, 8.0, 6.0])

@@ -74,7 +74,7 @@ def _get_optimizer_input_shape(op_type, varkey, orig_shape, param_shape):
         pass
     else:
         raise ValueError(
-            "Not supported optimizer for distributed training: %s" % op_type
+            f"Not supported optimizer for distributed training: {op_type}"
         )
     return orig_shape
 
@@ -431,7 +431,7 @@ def add_optimizer_pass(program, config):
         if config.is_sync_mode() and trainers > 1:
             vars2merge = []
             for i in range(trainers):
-                per_trainer_name = "%s.trainer_%d" % (merged_var_name, i)
+                per_trainer_name = f"{merged_var_name}.trainer_{i}"
                 per_trainer_var = pserver_block.create_var(
                     name=per_trainer_name,
                     persistable=False,
@@ -445,7 +445,7 @@ def add_optimizer_pass(program, config):
                 type="sum",
                 inputs={"X": vars2merge},
                 outputs={"Out": merged_var},
-                attrs={"use_mkldnn": False},
+                attrs={},
             )
             optimize_block.append_op(
                 type="scale",
@@ -787,7 +787,6 @@ def large_scale_sparse_pass(program, main_program, config, is_startup=False):
             persistable=False,
             dtype="int64",
             shape=[1, 1],
-            lod_level=0,
         )
 
         # insert grad split to ids and tensor op
@@ -896,7 +895,7 @@ def large_scale_sparse_pass(program, main_program, config, is_startup=False):
             entry_attr = get_entry_attr(param)
 
             if fuse:
-                # remove origin optimzier op
+                # remove origin optimizer op
                 opt_block._remove_op(opt_idx)
 
             # training/infer
@@ -904,7 +903,7 @@ def large_scale_sparse_pass(program, main_program, config, is_startup=False):
             names_str = ",".join(value_names)
             dims_str = ",".join([str(dim) for dim in value_dims])
             ids_name = f"kSparseIDs@{param}"
-            cached_str = ",".join(acture_names + [ids_name])
+            cached_str = ",".join([*acture_names, ids_name])
             init_attr_str = get_initializer_attrs(acture_names)
 
             meta_str = ":".join(
@@ -1084,7 +1083,7 @@ def add_geo_optimizer_pass(program, config):
         pserver_block = per_opt_block.program.global_block()
         param = pserver_block.vars[var_name]
 
-        delta_var_name = "%s.delta" % (param.name)
+        delta_var_name = f"{param.name}.delta"
         origin_varname = _orig_varname(param.name)
 
         if origin_varname in sparse_tablenames:

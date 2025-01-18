@@ -17,8 +17,7 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle.base import core
 from paddle.incubate.nn.functional import fused_dropout_add
 from paddle.incubate.nn.layer.fused_dropout_add import FusedDropoutAdd
 
@@ -101,9 +100,7 @@ def create_test_class(parent, dtype, mode, training, p, seed):
             self.mode = mode
             self.seed = seed
 
-    cls_name = "{}_{}_{}_{}_{}_{}".format(
-        parent.__name__, dtype, mode, str(training), str(p), str(seed)
-    )
+    cls_name = f"{parent.__name__}_{dtype}_{mode}_{training}_{p}_{seed}"
     TestFusedDropoutAddCase.__name__ = cls_name
     globals()[cls_name] = TestFusedDropoutAddCase
 
@@ -152,7 +149,7 @@ class TestFusedDropoutAddStatic(unittest.TestCase):
 
             outs = fused_dropout_add(xs, ys, p=0.5, training=True)
 
-            exe = fluid.Executor(self.place)
+            exe = paddle.static.Executor(self.place)
             out_s = exe.run(
                 feed={
                     "xs": x_data.astype('float16'),

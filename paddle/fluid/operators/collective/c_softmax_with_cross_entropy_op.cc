@@ -12,10 +12,11 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include "paddle/fluid/operators/collective/c_softmax_with_cross_entropy_op.h"
+#include "paddle/fluid/framework/data_type.h"
+#include "paddle/fluid/framework/lod_tensor.h"
+#include "paddle/fluid/framework/op_registry.h"
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class CSoftmaxWithCrossEntropyOp : public framework::OperatorWithKernel {
  public:
@@ -46,18 +47,19 @@ class CSoftmaxWithCrossEntropyOp : public framework::OperatorWithKernel {
         if (ctx->IsRuntime() || (logits_dims[i] > 0 && labels_dims[i] > 0)) {
           PADDLE_ENFORCE_EQ(logits_dims[i],
                             labels_dims[i],
-                            platform::errors::InvalidArgument(
+                            common::errors::InvalidArgument(
                                 "Input(Logits) and Input(Label) should in "
                                 "same shape in dimensions except axis."));
         }
       }
     }
 
-    PADDLE_ENFORCE_EQ(
+    PADDLE_ENFORCE_GE(
         labels_dims[logits_rank - 1],
         1UL,
-        platform::errors::InvalidArgument(
-            "the last dimension of Input(Label) should be 1."
+        common::errors::InvalidArgument(
+            "the last dimension of Input(Label) should be greater than or "
+            "equal to 1."
             "But received: the last dimension of Input(Label) is [%d],"
             "the last dimension is [%d]",
             labels_dims[logits_rank - 1],
@@ -132,20 +134,20 @@ class CSoftmaxWithCrossEntropyOpGrad : public framework::OperatorWithKernel {
   void InferShape(framework::InferShapeContext* ctx) const override {
     PADDLE_ENFORCE_EQ(ctx->HasInput(framework::GradVarName("Loss")),
                       true,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Input(Loss@Grad) should not be null."));
-    PADDLE_ENFORCE_EQ(ctx->HasInput("Softmax"),
-                      true,
-                      platform::errors::InvalidArgument(
-                          "Input(Softmax) should be not null."));
+    PADDLE_ENFORCE_EQ(
+        ctx->HasInput("Softmax"),
+        true,
+        common::errors::InvalidArgument("Input(Softmax) should be not null."));
     PADDLE_ENFORCE_EQ(
         ctx->HasInput("Label"),
         true,
-        platform::errors::InvalidArgument("Input(Label) should be not null."));
+        common::errors::InvalidArgument("Input(Label) should be not null."));
 
     PADDLE_ENFORCE_EQ(ctx->HasOutput(framework::GradVarName("Logits")),
                       true,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Output(Logits@Grad) should be not null."));
 
     ctx->SetOutputDim(framework::GradVarName("Logits"),
@@ -185,11 +187,9 @@ DECLARE_INPLACE_OP_INFERER(CSoftmaxWithCrossEntropyInplaceInferer,
 DECLARE_INPLACE_OP_INFERER(CSoftmaxWithCrossEntropyGradInplaceInferer,
                            {"Softmax", framework::GradVarName("Logits")});
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
-namespace plat = paddle::platform;
 
 REGISTER_OPERATOR(
     c_softmax_with_cross_entropy,
@@ -202,11 +202,3 @@ REGISTER_OPERATOR(
 REGISTER_OPERATOR(c_softmax_with_cross_entropy_grad,
                   ops::CSoftmaxWithCrossEntropyOpGrad,
                   ops::CSoftmaxWithCrossEntropyGradInplaceInferer);
-
-PD_REGISTER_STRUCT_KERNEL(c_softmax_with_cross_entropy,
-                          CPU,
-                          ALL_LAYOUT,
-                          ops::CSoftmaxWithCrossEntropyOpCPUKernel,
-                          float,
-                          double,
-                          plat::float16) {}

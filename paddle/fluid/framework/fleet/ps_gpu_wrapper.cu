@@ -21,8 +21,8 @@ limitations under the License. */
 #include "paddle/fluid/framework/fleet/heter_ps/optimizer_conf.h"
 #include "paddle/fluid/framework/fleet/ps_gpu_wrapper.h"
 #include "paddle/fluid/framework/lod_tensor.h"
-#include "paddle/fluid/platform/device/gpu/gpu_info.h"
 #include "paddle/phi/backends/gpu/gpu_primitives.h"
+#include "paddle/phi/core/platform/device/gpu/gpu_info.h"
 
 namespace paddle {
 namespace framework {
@@ -84,14 +84,16 @@ __global__ void PushCopy(FeaturePushValue* dest,
 
 PSGPUWrapper::~PSGPUWrapper() { delete HeterPs_; }
 
-void PSGPUWrapper::CopyKeys(const paddle::platform::Place& place,
+void PSGPUWrapper::CopyKeys(const phi::Place& place,
                             uint64_t** origin_keys,
                             uint64_t* total_keys,
                             const int64_t* gpu_len,
                             int slot_num,
                             int total_len) {
+  int device_id = place.GetDeviceId();
+  platform::CUDADeviceGuard guard(device_id);
   auto stream = dynamic_cast<phi::GPUContext*>(
-                    platform::DeviceContextPool::Instance().Get(place))
+                    phi::DeviceContextPool::Instance().Get(place))
                     ->stream();
   CopyKeysKernel<<<(total_len + 1024 - 1) / 1024, 1024, 0, stream>>>(
       origin_keys, total_keys, gpu_len, slot_num, total_len);
@@ -121,15 +123,17 @@ __global__ void CopyKeysKernel2(const int total_len,
   }
 }
 
-void PSGPUWrapper::CopyKeys(const paddle::platform::Place& place,
+void PSGPUWrapper::CopyKeys(const phi::Place& place,
                             uint64_t** origin_keys,
                             uint64_t* total_keys,
                             const int64_t* slot_lens,
                             int slot_num,
                             int total_len,
                             int* key2slot) {
+  int device_id = place.GetDeviceId();
+  platform::CUDADeviceGuard guard(device_id);
   auto stream = dynamic_cast<phi::GPUContext*>(
-                    platform::DeviceContextPool::Instance().Get(place))
+                    phi::DeviceContextPool::Instance().Get(place))
                     ->stream();
   CopyKeysKernel2<<<CUDA_BLOCK(total_len), stream>>>(
       total_len, origin_keys, total_keys, slot_num, slot_lens, key2slot);
@@ -182,6 +186,6 @@ void PSGPUWrapper::SetEmbedxSGD(float mf_create_thresholds,
                                    feature_learning_rate);
 }
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace framework
+}  // namespace paddle
 #endif

@@ -14,8 +14,8 @@ limitations under the License. */
 
 #pragma once
 #ifdef PADDLE_WITH_HETERPS
-
 #include <google/protobuf/text_format.h>
+#include <stdlib.h>
 #include <atomic>
 #include <ctime>
 #include <map>
@@ -36,7 +36,7 @@ limitations under the License. */
 #include "paddle/fluid/distributed/ps/thirdparty/round_robin.h"
 #include "paddle/fluid/framework/channel.h"
 #include "paddle/fluid/framework/fleet/heter_context.h"
-#if defined(PADDLE_WITH_PSCORE) && defined(PADDLE_WITH_GPU_GRAPH)
+#if defined(PADDLE_WITH_PSCORE) && defined(PADDLE_WITH_HETERPS)
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
 #endif
 #include "paddle/fluid/framework/fleet/heter_ps/heter_ps_base.h"
@@ -44,31 +44,32 @@ limitations under the License. */
 #include "paddle/fluid/framework/heter_util.h"
 #ifdef PADDLE_WITH_CUDA
 #include "paddle/fluid/framework/fleet/heter_ps/mem_pool.h"
-#include "paddle/fluid/platform/device/gpu/gpu_info.h"
-#include "paddle/fluid/platform/dynload/nccl.h"
+#include "paddle/phi/backends/dynload/nccl.h"
+#include "paddle/phi/core/platform/device/gpu/gpu_info.h"
 #endif
 #ifdef PADDLE_WITH_XPU_KP
-#include "paddle/fluid/platform/device/xpu/enforce_xpu.h"
+#include "paddle/phi/backends/xpu/enforce_xpu.h"
 #endif
+#include "paddle/common/macros.h"  // for DISABLE_COPY_AND_ASSIGN
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/framework/tensor.h"
 #include "paddle/fluid/framework/variable_helper.h"
-#include "paddle/fluid/platform/macros.h"  // for DISABLE_COPY_AND_ASSIGN
-#include "paddle/fluid/platform/place.h"
+#include "paddle/phi/common/place.h"
 #ifdef PADDLE_WITH_PSCORE
 #include "paddle/fluid/distributed/ps/table/accessor.h"
 #include "paddle/fluid/distributed/ps/table/ctr_dymf_accessor.h"
 #include "paddle/fluid/distributed/ps/wrapper/fleet.h"
 #include "paddle/fluid/distributed/the_one_ps.pb.h"
+#include "paddle/phi/backends/dynload/afs_api.h"
 #endif
 #ifdef PADDLE_WITH_PSLIB
 #include "afs_api.h"            // NOLINT
 #include "downpour_accessor.h"  // NOLINT
 #endif
+#include "paddle/common/flags.h"
 #include "paddle/fluid/framework/fleet/heter_ps/log_patch.h"
-#include "paddle/phi/core/flags.h"
 
-PHI_DECLARE_int32(gpugraph_storage_mode);
+COMMON_DECLARE_int32(gpugraph_storage_mode);
 
 namespace paddle {
 namespace framework {
@@ -102,6 +103,112 @@ class AfsWrapper {
 };
 #endif
 
+#ifdef PADDLE_WITH_PSCORE
+class AfsWrapper {
+ public:
+  AfsWrapper() {}
+  const AfsAPIWrapperHandle& GetAfsWrapper() const { return handle_; }
+
+  ~AfsWrapper() {
+    if (handle_ != nullptr) {
+      phi::dynload::destroyAfsAPIWrapper(handle_);
+    }
+  }
+
+  int Init(const std::string& fs_name,
+           const std::string& fs_user,
+           const std::string& pass_wd,
+           const std::string& conf) {
+    if (handle_ == nullptr) {
+      handle_ = phi::dynload::createAfsAPIWrapper();
+    }
+    int ret = phi::dynload::afs_init(handle_,
+                                     fs_name.c_str(),
+                                     fs_user.c_str(),
+                                     pass_wd.c_str(),
+                                     conf.c_str());
+    VLOG(1) << "AfsWrapper Init" << handle_ << " ret: " << ret
+            << "  fs_name :" << fs_name << "  fs_user :" << fs_user
+            << "  pass_wd :" << pass_wd << "  conf :" << conf;
+    return ret;
+  }
+
+  AfsWriterHandle OpenWriter(const std::string& filename) {
+    return phi::dynload::afs_open_writer(handle_, filename.c_str());
+  }
+
+  AfsReaderHandle OpenReader(const std::string& filename) {
+    return phi::dynload::afs_open_reader(handle_, filename.c_str());
+  }
+
+  void CloseReader(AfsReaderHandle reader_handle) {
+    phi::dynload::afs_close_reader(handle_, reader_handle);
+  }
+
+  void CloseWriter(AfsWriterHandle writer_handle) {
+    phi::dynload::afs_close_writer(handle_, writer_handle);
+  }
+
+  int Touchz(const std::string& path) {
+    return phi::dynload::afs_touchz(handle_, path.c_str());
+  }
+
+  int Mv(const std::string& old_path, const std::string& dest_path) {
+    return phi::dynload::afs_mv(handle_, old_path.c_str(), dest_path.c_str());
+  }
+
+  int Remove(const std::string& path) {
+    return phi::dynload::afs_remove(handle_, path.c_str());
+  }
+
+  int Mkdir(const std::string& path) {
+    return phi::dynload::afs_mkdir(handle_, path.c_str());
+  }
+
+  int DownloadFile(const std::string& local_file, const std::string& afs_file) {
+    return phi::dynload::afs_download_file(
+        handle_, local_file.c_str(), afs_file.c_str());
+  }
+
+  int UploadFile(const std::string& local_file, const std::string& afs_file) {
+    return phi::dynload::afs_upload_file(
+        handle_, local_file.c_str(), afs_file.c_str());
+  }
+
+  std::vector<std::string> List(const std::string& path) {
+    size_t list_size = 0;
+    char** lists = phi::dynload::afs_list(handle_, path.c_str(), &list_size);
+    std::vector<std::string> ret_lists(list_size);
+    for (size_t i = 0; i < list_size; i++) {
+      ret_lists[i] = std::string(lists[i]);
+    }
+
+    for (size_t i = 0; i < list_size; i++) {
+      phi::dynload::afs_free(reinterpret_cast<void*>(lists[i]));
+    }
+    phi::dynload::afs_free(reinterpret_cast<void*>(lists));
+    return ret_lists;
+  }
+
+  std::string Cat(const std::string& path) {
+    size_t file_len = 0;
+    char* ret = phi::dynload::afs_cat(handle_, path.c_str(), &file_len);
+    auto ret_str = std::string(ret, file_len);
+    phi::dynload::afs_free(reinterpret_cast<void*>(ret));
+    return ret_str;
+  }
+
+  int Exist(const std::string& path) {
+    int ret = phi::dynload::afs_exist(handle_, path.c_str());
+    VLOG(1) << "AfsWrapper Exist " << ret << " path: " << path;
+    return ret;
+  }
+
+ private:
+  AfsAPIWrapperHandle handle_ = nullptr;
+};
+#endif
+
 struct task_info {
   std::shared_ptr<char> build_values;
   size_t offset;
@@ -120,8 +227,7 @@ class PSGPUWrapper {
      * @Brief get data
      */
     template <typename T>
-    T* mutable_data(const size_t total_bytes,
-                    const paddle::platform::Place& place) {
+    T* mutable_data(const size_t total_bytes, const phi::Place& place) {
       if (buf_ == nullptr) {
         buf_ = memory::AllocShared(place, total_bytes);
       } else if (buf_->size() < total_bytes) {
@@ -169,33 +275,33 @@ class PSGPUWrapper {
     sleep_seconds_before_fail_exit_ = 300;
   }
 
-  void PullSparse(const paddle::platform::Place& place,
+  void PullSparse(const phi::Place& place,
                   const int table_id,
                   const std::vector<const uint64_t*>& keys,
                   const std::vector<float*>& values,
                   const std::vector<int64_t>& slot_lengths,
                   const std::vector<int>& slot_dim,
                   const int hidden_size);
-  void PullSparse(const paddle::platform::Place& place,
+  void PullSparse(const phi::Place& place,
                   const int table_id,
                   const std::vector<const uint64_t*>& keys,
                   const std::vector<float*>& values,
                   const std::vector<int64_t>& slot_lengths,
                   const int hidden_size);
-  void PushSparseGrad(const paddle::platform::Place& place,
+  void PushSparseGrad(const phi::Place& place,
                       const int table_id,
                       const std::vector<const uint64_t*>& keys,
                       const std::vector<const float*>& grad_values,
                       const std::vector<int64_t>& slot_lengths,
                       const int hidden_size,
                       const int batch_size);
-  void CopyKeys(const paddle::platform::Place& place,
+  void CopyKeys(const phi::Place& place,
                 uint64_t** origin_keys,
                 uint64_t* total_keys,
                 const int64_t* gpu_len,
                 int slot_num,
                 int total_len);
-  void CopyKeys(const paddle::platform::Place& place,
+  void CopyKeys(const phi::Place& place,
                 uint64_t** origin_keys,
                 uint64_t* total_keys,
                 const int64_t* gpu_len,
@@ -209,6 +315,7 @@ class PSGPUWrapper {
   void PreBuildTask(std::shared_ptr<HeterContext> gpu_task,
                     Dataset* dataset_for_pull);
   void BuildPull(std::shared_ptr<HeterContext> gpu_task);
+  void PartitionKey(std::shared_ptr<HeterContext> gpu_task);
   void PrepareGPUTask(std::shared_ptr<HeterContext> gpu_task);
   void LoadIntoMemory(bool is_shuffle);
   void BeginPass();
@@ -219,15 +326,19 @@ class PSGPUWrapper {
   void SparseTableToHbm();
   void HbmToSparseTable();
   void start_build_thread();
-  void pre_build_thread();
+  void AddSparseKeys();
   void build_pull_thread();
   void build_task();
   void DumpToMem();
   void MergePull(std::shared_ptr<HeterContext> gpu_task);
+  void MergeKeys(std::shared_ptr<HeterContext> gpu_task);
   void FilterPull(std::shared_ptr<HeterContext> gpu_task,
                   const int shard_id,
                   const int dim_id);
-  // set mode
+  void FilterKey(std::shared_ptr<HeterContext> gpu_task,
+                 const int shard_id,
+                 const int dim_id);
+  // set infer mode
   void SetMode(bool infer_mode) {
     infer_mode_ = infer_mode;
     if (HeterPs_ != NULL) {
@@ -236,25 +347,30 @@ class PSGPUWrapper {
     VLOG(0) << "set infer mode=" << infer_mode;
   }
 
+  // set sage mode
+  void SetSage(bool sage_mode) {
+    sage_mode_ = sage_mode;
+    VLOG(0) << "set sage mode=" << sage_mode;
+  }
+
   void Finalize() {
     VLOG(3) << "PSGPUWrapper Begin Finalize.";
     if (s_instance_ == nullptr) {
       return;
     }
-#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
-    if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::WHOLE_HBM) {
-      this->EndPass();
+#if defined(PADDLE_WITH_PSCORE) && defined(PADDLE_WITH_HETERPS)
+    if (gpu_graph_mode_) {
+      if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::WHOLE_HBM) {
+        this->EndPass();
+      }
     }
 #endif
     for (size_t i = 0; i < hbm_pools_.size(); i++) {
       delete hbm_pools_[i];
     }
-    data_ready_channel_->Close();
     buildcpu_ready_channel_->Close();
     buildpull_ready_channel_->Close();
     running_ = false;
-    VLOG(3) << "begin stop pre_build_threads_";
-    pre_build_threads_.join();
     VLOG(3) << "begin stop buildpull_threads_";
     buildpull_threads_.join();
     s_instance_ = nullptr;
@@ -274,6 +390,22 @@ class PSGPUWrapper {
     if (s_instance_ != NULL && is_initialized_ == false) {
       VLOG(3) << "PSGPUWrapper Begin InitializeGPU";
       is_initialized_ = true;
+#if defined(PADDLE_WITH_PSCORE) && defined(PADDLE_WITH_HETERPS) && \
+    defined(PADDLE_WITH_NCCL)
+      const char* launch_mode = std::getenv("NCCL_LAUNCH_MODE");
+      if (launch_mode != nullptr) {
+        if (std::string(launch_mode) == "PARALLEL") {
+          PADDLE_THROW(common::errors::Unavailable(
+              "on heterps-mode you must export NCCL_LAUNCH_MODE=GROUP for no "
+              "hang, but received [%s]",
+              launch_mode));
+        }
+      } else {
+        PADDLE_THROW(
+            common::errors::Unavailable("on heterps-mode you must export "
+                                        "NCCL_LAUNCH_MODE=GROUP for no hang"));
+      }
+#endif
       resource_ = std::make_shared<HeterPsResource>(dev_ids);
       resource_->enable_p2p();
       keys_tensor.resize(resource_->total_device());
@@ -291,7 +423,7 @@ class PSGPUWrapper {
       }
 #else
       PADDLE_THROW(
-          platform::errors::Unavailable("heter ps need compile with GLOO"));
+          common::errors::Unavailable("heter ps need compile with GLOO"));
 #endif
 #ifdef PADDLE_WITH_CUDA
       if (multi_node_) {
@@ -299,46 +431,44 @@ class PSGPUWrapper {
         // init inner comm
         inner_comms_.resize(dev_size);
         inter_ncclids_.resize(dev_size);
-        platform::dynload::ncclCommInitAll(
+        phi::dynload::ncclCommInitAll(
             &(inner_comms_[0]), dev_size, &dev_ids[0]);
 // init inter comm
 #ifdef PADDLE_WITH_GLOO
         inter_comms_.resize(dev_size);
         if (gloo->Rank() == 0) {
           for (int i = 0; i < dev_size; ++i) {
-            platform::dynload::ncclGetUniqueId(&inter_ncclids_[i]);
+            phi::dynload::ncclGetUniqueId(&inter_ncclids_[i]);
           }
         }
 
         PADDLE_ENFORCE_EQ(
             gloo->IsInitialized(),
             true,
-            platform::errors::PreconditionNotMet(
+            common::errors::PreconditionNotMet(
                 "You must initialize the gloo environment first to use it."));
         gloo::BroadcastOptions opts(gloo->GetContext());
         opts.setOutput(&inter_ncclids_[0], dev_size);
         opts.setRoot(0);
         gloo::broadcast(opts);
 
-        PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclGroupStart());
+        PADDLE_ENFORCE_GPU_SUCCESS(phi::dynload::ncclGroupStart());
         for (int i = 0; i < dev_size; ++i) {
           platform::CUDADeviceGuard guard(dev_ids[i]);
-          platform::dynload::ncclCommInitRank(
+          phi::dynload::ncclCommInitRank(
               &inter_comms_[i], gloo->Size(), inter_ncclids_[i], gloo->Rank());
         }
-        PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclGroupEnd());
+        PADDLE_ENFORCE_GPU_SUCCESS(phi::dynload::ncclGroupEnd());
 
         rank_id_ = gloo->Rank();
         node_size_ = gloo->Size();
 #else
         PADDLE_THROW(
-            platform::errors::Unavailable("heter ps need compile with GLOO"));
+            common::errors::Unavailable("heter ps need compile with GLOO"));
 #endif
       }
 #endif
       heter_devices_ = dev_ids;
-      data_ready_channel_->Open();
-      data_ready_channel_->SetCapacity(3);
       buildcpu_ready_channel_->Open();
       buildcpu_ready_channel_->SetCapacity(3);
       buildpull_ready_channel_->Open();
@@ -433,6 +563,13 @@ class PSGPUWrapper {
       config[prefix + "ada_epsilon"] = sgd_param.adam().ada_epsilon();
       config[prefix + "min_bound"] = sgd_param.adam().weight_bounds()[0];
       config[prefix + "max_bound"] = sgd_param.adam().weight_bounds()[1];
+    } else if (optimizer_name == "SparseAdaGradV2SGDRule") {
+      config[prefix + "optimizer_type"] = 5;
+      config[prefix + "learning_rate"] = sgd_param.adagrad().learning_rate();
+      config[prefix + "initial_range"] = sgd_param.adagrad().initial_range();
+      config[prefix + "initial_g2sum"] = sgd_param.adagrad().initial_g2sum();
+      config[prefix + "min_bound"] = sgd_param.adagrad().weight_bounds()[0];
+      config[prefix + "max_bound"] = sgd_param.adagrad().weight_bounds()[1];
     }
   }
 
@@ -441,6 +578,24 @@ class PSGPUWrapper {
     google::protobuf::TextFormat::ParseFromString(dist_desc, &ps_param);
     auto sparse_table =
         ps_param.server_param().downpour_server_param().downpour_table_param(0);
+    // set build thread_num and shard_num
+    thread_keys_thread_num_ = sparse_table.shard_num();
+    thread_keys_shard_num_ = sparse_table.shard_num();
+    VLOG(0) << "ps_gpu build phase thread_num:" << thread_keys_thread_num_
+            << " shard_num:" << thread_keys_shard_num_;
+
+    pull_thread_pool_.resize(thread_keys_shard_num_);
+    for (size_t i = 0; i < pull_thread_pool_.size(); i++) {
+      pull_thread_pool_[i].reset(new ::ThreadPool(1));
+    }
+    hbm_thread_pool_.resize(device_num_);
+    for (size_t i = 0; i < hbm_thread_pool_.size(); i++) {
+      hbm_thread_pool_[i].reset(new ::ThreadPool(1));
+    }
+    cpu_work_pool_.resize(device_num_);
+    for (size_t i = 0; i < cpu_work_pool_.size(); i++) {
+      cpu_work_pool_[i].reset(new ::ThreadPool(cpu_device_thread_num_));
+    }
 
     auto sparse_table_accessor = sparse_table.accessor();
     auto sparse_table_accessor_parameter =
@@ -464,7 +619,6 @@ class PSGPUWrapper {
       add_sparse_optimizer(
           config, sparse_table_accessor.embedx_sgd_param(), "mf_");
     }
-    config["sparse_shard_num"] = sparse_table.shard_num();
 
     fleet_config_ = config;
     GlobalAccessorFactory::GetInstance().Init(accessor_class_);
@@ -513,6 +667,15 @@ class PSGPUWrapper {
       if (sgd_param.adam().weight_bounds_size() == 2) {
         config[prefix + "min_bound"] = sgd_param.adam().weight_bounds()[0];
         config[prefix + "max_bound"] = sgd_param.adam().weight_bounds()[1];
+      }
+    } else if (optimizer_name == "adagrad_v2") {
+      config[prefix + "optimizer_type"] = 5;
+      config[prefix + "learning_rate"] = sgd_param.adagrad().learning_rate();
+      config[prefix + "initial_range"] = sgd_param.adagrad().initial_range();
+      config[prefix + "initial_g2sum"] = sgd_param.adagrad().initial_g2sum();
+      if (sgd_param.adagrad().weight_bounds_size() == 2) {
+        config[prefix + "min_bound"] = sgd_param.adagrad().weight_bounds()[0];
+        config[prefix + "max_bound"] = sgd_param.adagrad().weight_bounds()[1];
       }
     }
   }
@@ -645,28 +808,6 @@ class PSGPUWrapper {
 #endif
 
   void InitializeGPUServer(std::unordered_map<std::string, float> config) {
-    // set build thread_num and shard_num
-    int sparse_shard_num = (config.find("sparse_shard_num") == config.end())
-                               ? 37
-                               : config["sparse_shard_num"];
-    thread_keys_thread_num_ = sparse_shard_num;
-    thread_keys_shard_num_ = sparse_shard_num;
-    VLOG(1) << "ps_gpu build phase thread_num:" << thread_keys_thread_num_
-            << " shard_num:" << thread_keys_shard_num_;
-
-    pull_thread_pool_.resize(thread_keys_shard_num_);
-    for (size_t i = 0; i < pull_thread_pool_.size(); i++) {
-      pull_thread_pool_[i].reset(new ::ThreadPool(1));
-    }
-    hbm_thread_pool_.resize(device_num_);
-    for (size_t i = 0; i < hbm_thread_pool_.size(); i++) {
-      hbm_thread_pool_[i].reset(new ::ThreadPool(1));
-    }
-    cpu_work_pool_.resize(device_num_);
-    for (size_t i = 0; i < cpu_work_pool_.size(); i++) {
-      cpu_work_pool_[i].reset(new ::ThreadPool(cpu_device_thread_num_));
-    }
-
     float nonclk_coeff = (config.find("nonclk_coeff") == config.end())
                              ? 1.0
                              : config["nonclk_coeff"];
@@ -794,9 +935,18 @@ class PSGPUWrapper {
     slot_vector_ = slot_vector;
     VLOG(0) << "slot_vector size is " << slot_vector_.size();
   }
-  void SetPullFeatureSlotNum(int slot_num) {
-    slot_num_for_pull_feature_ = slot_num;
-    VLOG(0) << "slot_num_for_pull_feature_ is " << slot_num_for_pull_feature_;
+  void SetPullFeatureSlotNum(int sparse_slot_num, int float_slot_num) {
+    slot_num_for_pull_feature_ = sparse_slot_num;
+    float_slot_num_ = float_slot_num;
+#if defined(PADDLE_WITH_PSCORE) && defined(PADDLE_WITH_HETERPS)
+    if (gpu_graph_mode_) {
+      auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+      gpu_graph_ptr->set_feature_info(slot_num_for_pull_feature_,
+                                      float_slot_num_);
+    }
+#endif
+    VLOG(0) << "slot_num_for_pull_feature_ is " << slot_num_for_pull_feature_
+            << ", float_slot_num is " << float_slot_num_;
   }
   void SetSlotOffsetVector(const std::vector<int>& slot_offset_vector) {
     slot_offset_vector_ = slot_offset_vector;
@@ -896,9 +1046,57 @@ class PSGPUWrapper {
                   const std::string& conf);
 #endif
 
+#ifdef PADDLE_WITH_PSCORE
+  AfsReaderHandle OpenReader(const std::string& filename) {
+    return afs_handle_.OpenReader(filename);
+  }
+
+  AfsWriterHandle OpenWriter(const std::string& filename) {
+    return afs_handle_.OpenWriter(filename);
+  }
+
+  void CloseReader(AfsReaderHandle handle) { afs_handle_.CloseReader(handle); }
+
+  void CloseWriter(AfsWriterHandle handle) { afs_handle_.CloseWriter(handle); }
+
+  int AfsRead(AfsReaderHandle handle, char* buf, int len) {
+    return phi::dynload::afs_reader_read(handle, buf, len);
+  }
+
+  int AfsWrite(AfsWriterHandle handle,
+               const char* data,
+               size_t len,
+               bool direct) {
+    return phi::dynload::afs_writer_write(handle, data, len, direct);
+  }
+
+  int AfsWrite(AfsWriterHandle handle,
+               const uint64_t k,
+               const std::vector<float>& value) {
+    return phi::dynload::afs_writer_write_v2(
+        handle, k, value.data(), value.size());
+  }
+
+  void InitAfsApi(const std::string& fs_name,
+                  const std::string& fs_user,
+                  const std::string& pass_wd,
+                  const std::string& conf);
+#endif
   // for node rank
   int PartitionKeyForRank(const uint64_t& key) {
-    return ((key / device_num_) % node_size_);
+    return static_cast<int>((key / device_num_) % node_size_);
+  }
+  // is key for self rank
+  bool IsKeyForSelfRank(const uint64_t& key) {
+    return (static_cast<int>((key / device_num_) % node_size_) == rank_id_);
+  }
+  // rank id
+  int GetRankId(void) { return rank_id_; }
+  // rank size
+  int GetRankNum(void) { return node_size_; }
+  // rank id
+  int GetNCCLRankId(const int& device_id) {
+    return (rank_id_ * device_num_ + device_id);
   }
 
  private:
@@ -908,12 +1106,15 @@ class PSGPUWrapper {
 #ifdef PADDLE_WITH_PSLIB
   paddle::ps::AfsApiWrapper afs_handler_;
 #endif
+#ifdef PADDLE_WITH_PSCORE
+  AfsWrapper afs_handle_;
+#endif
   std::unordered_map<
       uint64_t,
       std::vector<std::unordered_map<uint64_t, std::vector<float>>>>
       local_tables_;
   HeterPsBase* HeterPs_ = NULL;
-  // std::vector<LoDTensor> keys_tensor;  // Cache for pull_sparse
+  // std::vector<DenseTensor> keys_tensor;  // Cache for pull_sparse
   std::vector<phi::DenseTensor> keys_tensor;  // Cache for pull_sparse
   std::shared_ptr<HeterPsResource> resource_;
   int32_t sleep_seconds_before_fail_exit_;
@@ -926,6 +1127,7 @@ class PSGPUWrapper {
   int multi_mf_dim_{0};
   int max_mf_dim_{0};
   int slot_num_for_pull_feature_{0};
+  int float_slot_num_{0};
   size_t val_type_size_{0};
   size_t grad_type_size_{0};
   size_t pull_type_size_{0};
@@ -936,8 +1138,8 @@ class PSGPUWrapper {
   double time_4 = 0.0;
 
   int multi_node_{0};
-  int rank_id_;
-  int node_size_;
+  int rank_id_ = 0;
+  int node_size_ = 1;
   int device_num_ = 8;
   uint64_t table_id_;
   int gpu_graph_mode_ = 0;
@@ -978,13 +1180,9 @@ class PSGPUWrapper {
 #ifdef PADDLE_WITH_CUDA
   std::vector<MemoryPool*> mem_pools_;
   std::vector<HBMMemoryPoolFix*> hbm_pools_;  // in multi mfdim, one table need
-                                              // hbm pools of totol dims number
+                                              // hbm pools of total dims number
 #endif
 
-  std::shared_ptr<paddle::framework::ChannelObject<
-      std::pair<std::shared_ptr<HeterContext>, Dataset*>>>
-      data_ready_channel_ = paddle::framework::MakeChannel<
-          std::pair<std::shared_ptr<HeterContext>, Dataset*>>();
   std::shared_ptr<
       paddle::framework::ChannelObject<std::shared_ptr<HeterContext>>>
       buildcpu_ready_channel_ =
@@ -996,7 +1194,6 @@ class PSGPUWrapper {
   std::vector<std::shared_ptr<paddle::framework::ChannelObject<task_info>>>
       cpu_reday_channels_;
   std::shared_ptr<HeterContext> current_task_ = nullptr;
-  std::thread pre_build_threads_;
   std::thread buildpull_threads_;
   bool running_ = false;
   std::vector<std::shared_ptr<::ThreadPool>> pull_thread_pool_;
@@ -1007,12 +1204,14 @@ class PSGPUWrapper {
   uint64_t grad_push_count_ = 0;
   // infer mode
   bool infer_mode_ = false;
+  // sage mode
+  bool sage_mode_ = false;
   size_t cpu_device_thread_num_ = 16;
 
  protected:
   static bool is_initialized_;
 };
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace framework
+}  // namespace paddle
 #endif

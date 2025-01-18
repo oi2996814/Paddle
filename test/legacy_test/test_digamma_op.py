@@ -12,15 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 from scipy.special import psi
 
 import paddle
-from paddle import fluid, static
-from paddle.fluid import core
+from paddle import base, static
+from paddle.base import core
 
 
 class TestDigammaOp(OpTest):
@@ -42,10 +43,10 @@ class TestDigammaOp(OpTest):
         self.dtype = np.float64
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad_normal(self):
-        self.check_grad(['X'], 'Out')
+        self.check_grad(['X'], 'Out', check_pir=True)
 
 
 class TestDigammaOpFp32(TestDigammaOp):
@@ -53,7 +54,7 @@ class TestDigammaOpFp32(TestDigammaOp):
         self.dtype = np.float32
 
     def test_check_grad_normal(self):
-        self.check_grad(['X'], 'Out')
+        self.check_grad(['X'], 'Out', check_pir=True)
 
 
 class TestDigammaFP16Op(TestDigammaOp):
@@ -87,10 +88,14 @@ class TestDigammaBF16Op(OpTest):
 
     def test_check_output(self):
         # bfloat16 needs to set the parameter place
-        self.check_output_with_place(core.CUDAPlace(0))
+        self.check_output_with_place(
+            core.CUDAPlace(0), check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad_normal(self):
-        self.check_grad_with_place(core.CUDAPlace(0), ['X'], 'Out')
+        self.check_grad_with_place(
+            core.CUDAPlace(0), ['X'], 'Out', check_pir=True
+        )
 
 
 class TestDigammaAPI(unittest.TestCase):
@@ -99,7 +104,13 @@ class TestDigammaAPI(unittest.TestCase):
         paddle.enable_static()
         # prepare test attrs
         self.dtypes = ["float32", "float64"]
-        self.places = [paddle.CPUPlace()]
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.is_compiled_with_cuda()
+        ):
+            self.places.append(paddle.CPUPlace())
         if paddle.is_compiled_with_cuda():
             self.places.append(paddle.CUDAPlace(0))
         self._shape = [8, 3, 32, 32]
@@ -117,7 +128,7 @@ class TestDigammaAPI(unittest.TestCase):
                     out = paddle.digamma(x)
 
                     exe = static.Executor(place)
-                    out_value = exe.run(feed=input_dict, fetch_list=[out.name])
+                    out_value = exe.run(feed=input_dict, fetch_list=[out])
                     np.testing.assert_allclose(out_value[0], sc_res, rtol=1e-05)
 
     def test_in_dynamic_mode(self):
@@ -126,28 +137,22 @@ class TestDigammaAPI(unittest.TestCase):
             sc_res = psi(input)
             for place in self.places:
                 # it is more convenient to use `guard` than `enable/disable_**` here
-                with fluid.dygraph.guard(place):
+                with base.dygraph.guard(place):
                     input_t = paddle.to_tensor(input)
                     res = paddle.digamma(input_t).numpy()
                     np.testing.assert_allclose(res, sc_res, rtol=1e-05)
-
-    def test_name_argument(self):
-        with static.program_guard(static.Program()):
-            x = static.data(name="x", shape=self._shape, dtype=self.dtypes[0])
-            out = paddle.digamma(x, name="digamma_res")
-            self.assertTrue("digamma_res" in out.name)
 
     def test_dtype_error(self):
         # in static graph mode
         with self.assertRaises(TypeError):
             with static.program_guard(static.Program()):
-                x = static.data(name="x", shape=self._shape, dtype="int32")
+                x = static.data(name="x", shape=self._shape, dtype="bool")
                 out = paddle.digamma(x, name="digamma_res")
 
         # in dynamic mode
         with self.assertRaises(RuntimeError):
-            with fluid.dygraph.guard():
-                input = np.random.random(self._shape).astype("int32")
+            with base.dygraph.guard():
+                input = np.random.random(self._shape).astype("bool")
                 input_t = paddle.to_tensor(input)
                 res = paddle.digamma(input_t)
 

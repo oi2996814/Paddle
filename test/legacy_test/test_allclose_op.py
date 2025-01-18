@@ -15,10 +15,11 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
+from utils import dygraph_guard, static_guard
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 
 class TestAllcloseOp(OpTest):
@@ -32,14 +33,18 @@ class TestAllcloseOp(OpTest):
     def setUp(self):
         self.set_args()
         self.op_type = "allclose"
+        self.prim_op_type = "comp"
         self.python_api = paddle.allclose
+        self.public_python_api = paddle.allclose
         self.inputs = {
             'Input': self.input,
             'Other': self.other,
+        }
+        self.attrs = {
             "Rtol": self.rtol,
             "Atol": self.atol,
+            'equal_nan': self.equal_nan,
         }
-        self.attrs = {'equal_nan': self.equal_nan}
         self.outputs = {
             'Out': np.array(
                 np.allclose(
@@ -53,7 +58,7 @@ class TestAllcloseOp(OpTest):
         }
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_prim_pir=True)
 
 
 class TestAllcloseOpException(TestAllcloseOp):
@@ -61,28 +66,28 @@ class TestAllcloseOpException(TestAllcloseOp):
         def test_rtol_num():
             self.inputs['Rtol'] = np.array([1e-05, 1e-05]).astype("float64")
             self.inputs['Atol'] = np.array([1e-08]).astype("float64")
-            self.check_output()
+            self.check_output(check_pir=True)
 
         self.assertRaises(ValueError, test_rtol_num)
 
         def test_rtol_type():
             self.inputs['Rtol'] = np.array([5]).astype("int32")
             self.inputs['Atol'] = np.array([1e-08]).astype("float64")
-            self.check_output()
+            self.check_output(check_pir=True)
 
         self.assertRaises(ValueError, test_rtol_type)
 
         def test_atol_num():
             self.inputs['Rtol'] = np.array([1e-05]).astype("float64")
             self.inputs['Atol'] = np.array([1e-08, 1e-08]).astype("float64")
-            self.check_output()
+            self.check_output(check_pir=True)
 
         self.assertRaises(ValueError, test_atol_num)
 
         def test_atol_type():
             self.inputs['Rtol'] = np.array([1e-05]).astype("float64")
             self.inputs['Atol'] = np.array([8]).astype("int32")
-            self.check_output()
+            self.check_output(check_pir=True)
 
         self.assertRaises(ValueError, test_atol_type)
 
@@ -133,7 +138,9 @@ class TestAllcloseError(unittest.TestCase):
             with paddle.static.program_guard(
                 paddle.static.Program(), paddle.static.Program()
             ):
-                x = paddle.static.data(name='x', shape=[10, 10], dtype='int32')
+                x = paddle.static.data(
+                    name='x', shape=[10, 10], dtype='complex32'
+                )
                 y = paddle.static.data(
                     name='y', shape=[10, 10], dtype='float64'
                 )
@@ -148,7 +155,9 @@ class TestAllcloseError(unittest.TestCase):
                 x = paddle.static.data(
                     name='x', shape=[10, 10], dtype='float64'
                 )
-                y = paddle.static.data(name='y', shape=[10, 10], dtype='int32')
+                y = paddle.static.data(
+                    name='y', shape=[10, 10], dtype='complex32'
+                )
                 result = paddle.allclose(x, y)
 
         self.assertRaises(TypeError, test_y_dtype)
@@ -174,14 +183,19 @@ class TestAllcloseError(unittest.TestCase):
 
 
 class TestAllcloseOpFp16(unittest.TestCase):
+
     def test_fp16(self):
-        x_data = np.random.rand(10, 10).astype('float16')
-        y_data = np.random.rand(10, 10).astype('float16')
-        with paddle.static.program_guard(paddle.static.Program()):
-            x = paddle.static.data(shape=[10, 10], name='x', dtype='float16')
-            y = paddle.static.data(shape=[10, 10], name='x', dtype='float16')
-            out = paddle.allclose(x, y, rtol=1e-05, atol=1e-08)
-            if core.is_compiled_with_cuda():
+        if core.is_compiled_with_cuda():
+            x_data = np.random.rand(10, 10).astype('float16')
+            y_data = np.random.rand(10, 10).astype('float16')
+            with paddle.static.program_guard(paddle.static.Program()):
+                x = paddle.static.data(
+                    shape=[10, 10], name='x', dtype='float16'
+                )
+                y = paddle.static.data(
+                    shape=[10, 10], name='y', dtype='float16'
+                )
+                out = paddle.allclose(x, y, rtol=1e-05, atol=1e-08)
                 place = paddle.CUDAPlace(0)
                 exe = paddle.static.Executor(place)
                 exe.run(paddle.static.default_startup_program())
@@ -200,7 +214,7 @@ class TestAllcloseOpFloat16(TestAllcloseOp):
         if core.is_compiled_with_cuda():
             place = core.CUDAPlace(0)
             if core.is_float16_supported(place):
-                self.check_output_with_place(place)
+                self.check_output_with_place(place, check_pir=True)
 
 
 class TestAllcloseOpFloat32(TestAllcloseOp):
@@ -216,9 +230,231 @@ class TestAllcloseOpFloat64(TestAllcloseOp):
     def set_args(self):
         self.input = np.array([10.1]).astype("float64")
         self.other = np.array([10]).astype("float64")
-        self.rtol = np.array([0.01]).astype("float64")
+        self.rtol = np.array([0.001]).astype("float64")
         self.atol = np.array([0]).astype("float64")
         self.equal_nan = False
+
+
+class TestAllcloseOpBool(unittest.TestCase):
+    def test_close_True(self):
+        places = [paddle.CPUPlace()]
+        if core.is_compiled_with_cuda():
+            places.append(paddle.CUDAPlace(0))
+        for place in places:
+            with dygraph_guard():
+                # absolute(a−b)≤(atol+rtol×absolute(b))
+                self.input = np.array([1]).astype("bool")
+                self.other = np.array([1]).astype("bool")
+                self.rtol = np.array([0.0]).astype("float32")
+                self.atol = np.array([0.0]).astype("float32")
+                self.equal_nan = False
+                input = paddle.to_tensor(self.input, place=place)
+                other = paddle.to_tensor(self.other, place=place)
+                self.assertEqual(
+                    paddle.allclose(
+                        input, other, self.rtol, self.atol, self.equal_nan
+                    ).item(),
+                    True,
+                )
+
+            with static_guard():
+                with paddle.static.program_guard(paddle.static.Program()):
+                    x = paddle.static.data(shape=[1], name='x', dtype='bool')
+                    y = paddle.static.data(shape=[1], name='y', dtype='bool')
+                    out = paddle.allclose(
+                        x, y, self.rtol.item(), self.atol.item(), self.equal_nan
+                    )
+                    exe = paddle.static.Executor(place)
+                    exe.run(paddle.static.default_startup_program())
+                    out = exe.run(
+                        feed={'x': self.input, 'y': self.other},
+                        fetch_list=[out],
+                    )
+                    self.assertEqual(out[0], True)
+
+    def test_close_False(self):
+        places = [paddle.CPUPlace()]
+        if core.is_compiled_with_cuda():
+            places.append(paddle.CUDAPlace(0))
+        for place in places:
+            with dygraph_guard():
+                # absolute(a−b)≤(atol+rtol×absolute(b))
+                self.input = np.array([0]).astype("bool")
+                self.other = np.array([1]).astype("bool")
+                self.rtol = np.array([0.0]).astype("float32")
+                self.atol = np.array([0.0]).astype("float32")
+                self.equal_nan = False
+                input = paddle.to_tensor(self.input, place=place)
+                other = paddle.to_tensor(self.other, place=place)
+                self.assertEqual(
+                    paddle.allclose(
+                        input, other, self.rtol, self.atol, self.equal_nan
+                    ).item(),
+                    False,
+                )
+
+            with static_guard():
+                with paddle.static.program_guard(paddle.static.Program()):
+                    x = paddle.static.data(shape=[1], name='x', dtype='bool')
+                    y = paddle.static.data(shape=[1], name='y', dtype='bool')
+                    out = paddle.allclose(
+                        x, y, self.rtol.item(), self.atol.item(), self.equal_nan
+                    )
+                    exe = paddle.static.Executor(place)
+                    exe.run(paddle.static.default_startup_program())
+                    out = exe.run(
+                        feed={'x': self.input, 'y': self.other},
+                        fetch_list=[out],
+                    )
+                    self.assertEqual(out[0], False)
+
+
+class TestAllcloseOpInt32(unittest.TestCase):
+    def test_close_True(self):
+        places = [paddle.CPUPlace()]
+        if core.is_compiled_with_cuda():
+            places.append(paddle.CUDAPlace(0))
+        for place in places:
+            with dygraph_guard():
+                # absolute(a−b)≤(atol+rtol×absolute(b))
+                self.input = np.array([100]).astype("int32")
+                self.other = np.array([1]).astype("int32")
+                self.rtol = np.array([50.0]).astype("float32")
+                self.atol = np.array([49]).astype("float32")
+                self.equal_nan = False
+                input = paddle.to_tensor(self.input, place=place)
+                other = paddle.to_tensor(self.other, place=place)
+                self.assertEqual(
+                    paddle.allclose(
+                        input, other, self.rtol, self.atol, self.equal_nan
+                    ).item(),
+                    True,
+                )
+
+            with static_guard():
+                with paddle.static.program_guard(paddle.static.Program()):
+                    x = paddle.static.data(shape=[1], name='x', dtype='int32')
+                    y = paddle.static.data(shape=[1], name='y', dtype='int32')
+                    out = paddle.allclose(
+                        x, y, self.rtol.item(), self.atol.item(), self.equal_nan
+                    )
+                    exe = paddle.static.Executor(place)
+                    exe.run(paddle.static.default_startup_program())
+                    out = exe.run(
+                        feed={'x': self.input, 'y': self.other},
+                        fetch_list=[out],
+                    )
+                    self.assertEqual(out[0], True)
+
+    def test_close_False(self):
+        places = [paddle.CPUPlace()]
+        if core.is_compiled_with_cuda():
+            places.append(paddle.CUDAPlace(0))
+        for place in places:
+            with dygraph_guard():
+                # absolute(a−b)≤(atol+rtol×absolute(b))
+                self.input = np.array([100]).astype("int32")
+                self.other = np.array([1]).astype("int32")
+                self.rtol = np.array([50.0]).astype("float32")
+                self.atol = np.array([48]).astype("float32")
+                self.equal_nan = False
+                input = paddle.to_tensor(self.input, place=place)
+                other = paddle.to_tensor(self.other, place=place)
+                self.assertEqual(
+                    paddle.allclose(
+                        input, other, self.rtol, self.atol, self.equal_nan
+                    ).item(),
+                    False,
+                )
+
+            with static_guard():
+                with paddle.static.program_guard(paddle.static.Program()):
+                    x = paddle.static.data(shape=[1], name='x', dtype='int32')
+                    y = paddle.static.data(shape=[1], name='y', dtype='int32')
+                    out = paddle.allclose(
+                        x, y, self.rtol.item(), self.atol.item(), self.equal_nan
+                    )
+                    exe = paddle.static.Executor(place)
+                    exe.run(paddle.static.default_startup_program())
+                    out = exe.run(
+                        feed={'x': self.input, 'y': self.other},
+                        fetch_list=[out],
+                    )
+                    self.assertEqual(out[0], False)
+
+
+class TestAllcloseOpInt64(unittest.TestCase):
+    def test_close_True(self):
+        places = [paddle.CPUPlace()]
+        if core.is_compiled_with_cuda():
+            places.append(paddle.CUDAPlace(0))
+        for place in places:
+            with dygraph_guard():
+                # absolute(a−b)≤(atol+rtol×absolute(b))
+                self.input = np.array([100]).astype("int64")
+                self.other = np.array([1]).astype("int64")
+                self.rtol = np.array([50.0]).astype("float64")
+                self.atol = np.array([49]).astype("float64")
+                self.equal_nan = False
+                input = paddle.to_tensor(self.input, place=place)
+                other = paddle.to_tensor(self.other, place=place)
+                self.assertEqual(
+                    paddle.allclose(
+                        input, other, self.rtol, self.atol, self.equal_nan
+                    ).item(),
+                    True,
+                )
+
+            with static_guard():
+                with paddle.static.program_guard(paddle.static.Program()):
+                    x = paddle.static.data(shape=[1], name='x', dtype='int64')
+                    y = paddle.static.data(shape=[1], name='y', dtype='int64')
+                    out = paddle.allclose(
+                        x, y, self.rtol.item(), self.atol.item(), self.equal_nan
+                    )
+                    exe = paddle.static.Executor(place)
+                    exe.run(paddle.static.default_startup_program())
+                    out = exe.run(
+                        feed={'x': self.input, 'y': self.other},
+                        fetch_list=[out],
+                    )
+                    self.assertEqual(out[0], True)
+
+    def test_close_False(self):
+        places = [paddle.CPUPlace()]
+        if core.is_compiled_with_cuda():
+            places.append(paddle.CUDAPlace(0))
+        for place in places:
+            with dygraph_guard():
+                # absolute(a−b)≤(atol+rtol×absolute(b))
+                self.input = np.array([100]).astype("int64")
+                self.other = np.array([1]).astype("int64")
+                self.rtol = np.array([50.0]).astype("float64")
+                self.atol = np.array([48]).astype("float64")
+                self.equal_nan = False
+                input = paddle.to_tensor(self.input, place=place)
+                other = paddle.to_tensor(self.other, place=place)
+                self.assertEqual(
+                    paddle.allclose(
+                        input, other, self.rtol, self.atol, self.equal_nan
+                    ).item(),
+                    False,
+                )
+
+            with static_guard():
+                with paddle.static.program_guard(paddle.static.Program()):
+                    x = paddle.static.data(shape=[1], name='x', dtype='int64')
+                    y = paddle.static.data(shape=[1], name='y', dtype='int64')
+                    out = paddle.allclose(
+                        x, y, self.rtol.item(), self.atol.item(), self.equal_nan
+                    )
+                    exe = paddle.static.Executor(place)
+                    exe.run(paddle.static.default_startup_program())
+                    out = exe.run(
+                        feed={'x': self.input, 'y': self.other},
+                        fetch_list=[out],
+                    )
+                    self.assertEqual(out[0], False)
 
 
 class TestAllcloseOpLargeDimInput(TestAllcloseOp):

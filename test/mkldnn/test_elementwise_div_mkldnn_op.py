@@ -15,11 +15,11 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, OpTestTool, convert_float_to_uint16
+from op_test import OpTest, OpTestTool, convert_float_to_uint16
 
 from paddle import enable_static
-from paddle.fluid import core
-from paddle.fluid.framework import _current_expected_place
+from paddle.base import core
+from paddle.base.framework import _current_expected_place
 
 
 @OpTestTool.skip_if(
@@ -34,8 +34,8 @@ class TestMKLDNNElementwiseDivOp(OpTest):
         self.init_kernel_type()
         self.init_axis()
         self.inputs = {
-            'X': OpTest.np_dtype_to_fluid_dtype(self.x),
-            'Y': OpTest.np_dtype_to_fluid_dtype(self.y),
+            'X': OpTest.np_dtype_to_base_dtype(self.x),
+            'Y': OpTest.np_dtype_to_base_dtype(self.y),
         }
         self.attrs = {'axis': self.axis, 'use_mkldnn': self.use_mkldnn}
         self.outputs = {'Out': self.out}
@@ -46,13 +46,19 @@ class TestMKLDNNElementwiseDivOp(OpTest):
         self.out = np.divide(self.x, self.y)
 
     def test_check_grad_normal(self):
-        self.check_grad(['X', 'Y'], 'Out', None, 0.005, False, 0.02)
+        self.check_grad(
+            ['X', 'Y'], 'Out', None, 0.005, False, 0.02, check_pir_onednn=True
+        )
 
     def test_check_grad_ignore_x(self):
-        self.check_grad(['Y'], 'Out', set("X"), 0.005, False, 0.02)
+        self.check_grad(
+            ['Y'], 'Out', set("X"), 0.005, False, 0.02, check_pir_onednn=True
+        )
 
     def test_check_grad_ignore_y(self):
-        self.check_grad(['X'], 'Out', set('Y'), 0.005, False, 0.02)
+        self.check_grad(
+            ['X'], 'Out', set('Y'), 0.005, False, 0.02, check_pir_onednn=True
+        )
 
     def init_axis(self):
         self.axis = -1
@@ -64,7 +70,7 @@ class TestMKLDNNElementwiseDivOp(OpTest):
         self.dtype = np.float32
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir_onednn=True)
 
 
 class TestMKLDNNElementwiseDivOp2(TestMKLDNNElementwiseDivOp):
@@ -171,7 +177,7 @@ class TestBf16(TestMKLDNNElementwiseDivOp):
         self.out = np.divide(self.x, self.y)
 
     def test_check_output(self):
-        self.check_output_with_place(core.CPUPlace())
+        self.check_output_with_place(core.CPUPlace(), check_pir_onednn=True)
 
     def test_check_grad_normal(self):
         self.check_grad_with_place(

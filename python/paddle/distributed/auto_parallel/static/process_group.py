@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License
 
+import hashlib
 from collections import OrderedDict
 
 import paddle
@@ -61,9 +62,9 @@ def new_process_group(
     global _g_process_group_map
     if not force_new_group:
         # A key constructed from ranks is used for avoiding duplication
-        new_key = ''.join(map(str, ranks))
+        new_key = '_'.join(map(str, ranks))
         for pg_id, pg in _g_process_group_map.items():
-            cur_key = ''.join(map(str, pg.ranks))
+            cur_key = '_'.join(map(str, pg.ranks))
             if pg_id != 0 and new_key == cur_key:
                 return pg
     # If not matching the existing one, construct a new process group
@@ -159,13 +160,41 @@ class ProcessGroup:
             strategy.nrings = 1
             if core.is_compiled_with_cuda():
                 place = core.CUDAPlace(genv.device_id)
-                core.NCCLParallelContext(strategy, place).init_with_ring_id(
-                    ring_id
+                store = core.create_or_get_global_tcp_store()
+                endpoints_str = ""
+                for endpoint in strategy.trainer_endpoints:
+                    endpoints_str += endpoint
+                endpoints_str += f"ring_id:{ring_id}"
+                endpoints_str_hash = hashlib.md5(
+                    endpoints_str.encode(encoding='UTF-8')
+                ).hexdigest()
+
+                core.CommContextManager.set_device_id(genv.device_id)
+                core.CommContextManager.create_nccl_comm_context(
+                    store,
+                    str(ring_id),
+                    strategy.local_rank,
+                    strategy.nranks,
+                    endpoints_str_hash,
                 )
             elif core.is_compiled_with_xpu():
                 place = core.XPUPlace(genv.device_id)
-                core.BKCLParallelContext(strategy, place).init_with_ring_id(
-                    ring_id
+                store = core.create_or_get_global_tcp_store()
+                endpoints_str = ""
+                for endpoint in strategy.trainer_endpoints:
+                    endpoints_str += endpoint
+                endpoints_str += f"ring_id:{ring_id}"
+                endpoints_str_hash = hashlib.md5(
+                    endpoints_str.encode(encoding='UTF-8')
+                ).hexdigest()
+
+                core.CommContextManager.set_device_id(genv.device_id)
+                core.CommContextManager.create_bkcl_comm_context(
+                    store,
+                    str(ring_id),
+                    strategy.local_rank,
+                    strategy.nranks,
+                    endpoints_str_hash,
                 )
             elif genv.device_type in core.get_all_custom_device_type():
                 place = core.CustomPlace(genv.device_type, genv.device_id)
@@ -177,19 +206,15 @@ class ProcessGroup:
 
             if core.is_compiled_with_cuda():
                 paddle.set_device(
-                    'gpu:%d' % paddle.distributed.ParallelEnv().dev_id
+                    f'gpu:{paddle.distributed.ParallelEnv().dev_id}'
                 )
             elif core.is_compiled_with_xpu():
                 paddle.set_device(
-                    'xpu:%d' % paddle.distributed.ParallelEnv().dev_id
+                    f'xpu:{paddle.distributed.ParallelEnv().dev_id}'
                 )
             elif genv.device_type in core.get_all_custom_device_type():
                 paddle.set_device(
-                    '%s:%d'
-                    % (
-                        paddle.distributed.ParallelEnv().device_type,
-                        paddle.distributed.ParallelEnv().dev_id,
-                    ),
+                    f'{paddle.distributed.ParallelEnv().device_type!s}:{paddle.distributed.ParallelEnv().dev_id}'
                 )
 
             # TODO(shenliang03): This is a temporary solution to solve the problem of
@@ -204,7 +229,7 @@ class ProcessGroup:
                 alltoall_tmp = paddle.empty(
                     shape=[self.nranks, self.nranks], dtype="int32"
                 )
-                paddle._legacy_C_ops.alltoall(
+                paddle._legacy_C_ops.all_to_all(
                     alltoall_tmp, 'use_calc_stream', True, 'ring_id', ring_id
                 )
                 paddle.device.cuda.synchronize()

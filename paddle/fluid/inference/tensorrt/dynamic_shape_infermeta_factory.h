@@ -17,10 +17,9 @@
 #include <NvInfer.h>
 #include <string>
 
+#include "paddle/common/macros.h"
 #include "paddle/fluid/framework/op_desc.h"
-#include "paddle/fluid/platform/macros.h"
 #include "paddle/phi/core/enforce.h"
-#include "paddle/phi/core/macros.h"
 #include "paddle/utils/flat_hash_map.h"
 
 namespace paddle {
@@ -49,7 +48,7 @@ class DynamicMetaFnFactory {
     PADDLE_ENFORCE_NE(
         Contains(op_name),
         true,
-        phi::errors::AlreadyExists(
+        common::errors::AlreadyExists(
             "`%s` op's DynamicInferMetaFn has been registered.", op_name));
     meta_fn_map_.insert({std::move(op_name), std::move(infer_meta_fn)});
   }
@@ -59,7 +58,7 @@ class DynamicMetaFnFactory {
     PADDLE_ENFORCE_NE(
         it,
         meta_fn_map_.end(),
-        phi::errors::NotFound(
+        common::errors::NotFound(
             "`%s` op's DynamicInferMetaFn has been registered.", op_name));
     return it->second;
   }

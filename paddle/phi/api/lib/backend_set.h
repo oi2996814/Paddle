@@ -16,7 +16,7 @@ limitations under the License. */
 
 #include <ostream>
 
-#include "paddle/phi/api/ext/exception.h"
+#include "paddle/common/exception.h"
 #include "paddle/phi/common/backend.h"
 namespace paddle {
 namespace experimental {
@@ -26,7 +26,7 @@ namespace experimental {
  * and the higher backend bit has a higher priority.
  *
  * A Tensor may belong to multiple backends at the same time, such CPU and
- * MKLDNN. Only one backend value cannot
+ * OneDNN. Only one backend value cannot
  */
 class BackendSet final {
  public:

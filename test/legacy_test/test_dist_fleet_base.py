@@ -18,6 +18,8 @@ high level unit test for distribute fleet.
 
 import argparse
 import os
+
+os.environ['FLAGS_enable_pir_api'] = '0'
 import shutil
 import socket
 import subprocess
@@ -28,7 +30,7 @@ import unittest
 from contextlib import closing
 
 import paddle
-from paddle import fluid
+from paddle import base
 from paddle.distributed import fleet
 from paddle.distributed.fleet.base import role_maker
 from paddle.distributed.fleet.utils.ps_util import DistributedInfer
@@ -45,7 +47,7 @@ DIST_UT_PORT = 0
 class FleetDistRunnerBase:
     """
     run_pserver,run_trainer : after init role, using transpiler split program
-    net : implment by child class, the network of model
+    net : implement by child class, the network of model
     do training : exe run program
     """
 
@@ -129,8 +131,8 @@ class FleetDistRunnerBase:
             optimizer = paddle.optimizer.SGD(scheduler, grad_clip=grad_clip)
             """
             # learning rate decay method before 2.0
-            optimizer = fluid.optimizer.SGD(
-                learning_rate=fluid.layers.exponential_decay(
+            optimizer = base.optimizer.SGD(
+                learning_rate=base.layers.exponential_decay(
                     learning_rate=LEARNING_RATE,
                     decay_steps=500,
                     decay_rate=0.969,
@@ -160,10 +162,10 @@ class FleetDistRunnerBase:
         if self._exe is None:
             device_env = os.getenv("DEVICE", 'cpu')
             if device_env == 'cpu':
-                device = fluid.CPUPlace()
+                device = base.CPUPlace()
             elif device_env == 'gpu':
-                device = fluid.CUDAPlace(0)
-            self._exe = fluid.Executor(device)
+                device = base.CUDAPlace(0)
+            self._exe = base.Executor(device)
         return self._exe
 
     def do_dataset_training(self, fleet):
@@ -212,24 +214,16 @@ class TestFleetBase(unittest.TestCase):
 
         if DIST_UT_PORT:
             print("set begin_port:", DIST_UT_PORT)
-            self._ps_endpoints = "127.0.0.1:{},127.0.0.1:{}".format(
-                DIST_UT_PORT,
-                DIST_UT_PORT + 1,
+            self._ps_endpoints = (
+                f"127.0.0.1:{DIST_UT_PORT},127.0.0.1:{DIST_UT_PORT + 1}"
             )
-            self._tr_endpoints = "127.0.0.1:{},127.0.0.1:{}".format(
-                DIST_UT_PORT + 2,
-                DIST_UT_PORT + 3,
+            self._tr_endpoints = (
+                f"127.0.0.1:{DIST_UT_PORT + 2},127.0.0.1:{DIST_UT_PORT + 3}"
             )
             DIST_UT_PORT += 4
         else:
-            self._ps_endpoints = "127.0.0.1:{},127.0.0.1:{}".format(
-                self._find_free_port(),
-                self._find_free_port(),
-            )
-            self._tr_endpoints = "127.0.0.1:{},127.0.0.1:{}".format(
-                self._find_free_port(),
-                self._find_free_port(),
-            )
+            self._ps_endpoints = f"127.0.0.1:{self._find_free_port()},127.0.0.1:{self._find_free_port()}"
+            self._tr_endpoints = f"127.0.0.1:{self._find_free_port()},127.0.0.1:{self._find_free_port()}"
 
         self._python_interp = sys.executable
         self._geo_sgd_need_push_nums = 5
@@ -338,31 +332,9 @@ class TestFleetBase(unittest.TestCase):
             python_path += " -m coverage run --branch -p"
         env.update(envs)
 
-        tr_cmd = "{} {} --role trainer --endpoints {} --trainer_endpoints {} --current_id {{}} --trainers {} --mode {} --geo_sgd_need_push_nums {} --reader {} --gloo_path {} --test {}".format(
-            python_path,
-            model,
-            self._ps_endpoints,
-            self._tr_endpoints,
-            self._trainers,
-            self._mode,
-            self._geo_sgd_need_push_nums,
-            self._reader,
-            gloo_path,
-            self._need_test,
-        )
+        tr_cmd = f"{python_path} {model} --role trainer --endpoints {self._ps_endpoints} --trainer_endpoints {self._tr_endpoints} --current_id {{}} --trainers {self._trainers} --mode {self._mode} --geo_sgd_need_push_nums {self._geo_sgd_need_push_nums} --reader {self._reader} --gloo_path {gloo_path} --test {self._need_test}"
 
-        ps_cmd = "{} {} --role pserver --endpoints {} --trainer_endpoints {} --current_id {{}} --trainers {} --mode {} --geo_sgd_need_push_nums {} --reader {} --gloo_path {} --test {}".format(
-            python_path,
-            model,
-            self._ps_endpoints,
-            self._tr_endpoints,
-            self._trainers,
-            self._mode,
-            self._geo_sgd_need_push_nums,
-            self._reader,
-            gloo_path,
-            self._need_test,
-        )
+        ps_cmd = f"{python_path} {model} --role pserver --endpoints {self._ps_endpoints} --trainer_endpoints {self._tr_endpoints} --current_id {{}} --trainers {self._trainers} --mode {self._mode} --geo_sgd_need_push_nums {self._geo_sgd_need_push_nums} --reader {self._reader} --gloo_path {gloo_path} --test {self._need_test}"
 
         if self._model_dir:
             tr_cmd += f" --model_dir {self._model_dir}"
@@ -414,7 +386,7 @@ class TestFleetBase(unittest.TestCase):
             listen_rgx = "Fail to listen"
 
             with open(logx, "r") as rb:
-                for line in rb.readlines():
+                for line in rb:
                     if listen_rgx in line:
                         is_lf = True
                         break
@@ -423,18 +395,14 @@ class TestFleetBase(unittest.TestCase):
         def catlog(logx):
             basename = os.path.basename(logx)
             print(
-                "\n================== Error {} begin =====================".format(
-                    basename
-                )
+                f"\n================== Error {basename} begin ====================="
             )
 
             if not os.path.isfile(logx):
                 raise FileNotFoundError(f"{logx} is not a file")
             os.system(f"cat {logx}")
             print(
-                "================== Error {} end =====================\n".format(
-                    basename
-                )
+                f"================== Error {basename} end =====================\n"
             )
 
         if tr0_ret != 0 or tr1_ret != 0:

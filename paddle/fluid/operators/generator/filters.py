@@ -11,10 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import itertools
 import re
-from typing import Dict, List, Sequence
+from typing import TYPE_CHECKING
 
 from type_mapping import (
     attr_types_map,
@@ -24,10 +25,14 @@ from type_mapping import (
     input_types_map,
     opmaker_attr_types_map,
     optional_input_types_map,
+    optional_output_type_map,
     output_type_map,
     phi_attr_types_map,
     sr_output_types_map,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 def get_infer_var_type_func(op_name):
@@ -56,7 +61,7 @@ class {to_pascal_case(op_name)}InferVarType : public framework::VarTypeInference
     }} else {{
       VLOG(3) << "lookup_table_v2_grad op " << framework::GradVarName("W")
               << " is set to phi::DenseTensor";
-      ctx->SetOutputType(out_var_name, framework::proto::VarType::LOD_TENSOR);
+      ctx->SetOutputType(out_var_name, framework::proto::VarType::DENSE_TENSOR);
     }}
     ctx->SetOutputDataType(out_var_name, ctx->GetInputDataType("W"));
   }}
@@ -142,7 +147,7 @@ def assert_dense_or_sr(input_type):
     )
 
 
-def find_optinal_inputs_name(inputs):
+def find_optional_inputs_name(inputs):
     optional_inputs_name = [
         input["fluid_name"] for input in inputs if input["optional"] is True
     ]
@@ -154,7 +159,9 @@ def delete_last_underline(op_name):
 
 
 # ------------------------------ output  ----------------------------------
-def to_paddle_output_type(s):
+def to_paddle_output_type(s, optional=False):
+    if optional:
+        return optional_output_type_map[s]
     return output_type_map[s]
 
 
@@ -235,7 +242,7 @@ def to_composite_grad_opmaker_name(backward_op_name):
     return composite_grad_opmaker_name
 
 
-def to_variable_names(dict_list: List[Dict], key: str) -> List[str]:
+def to_variable_names(dict_list: list[dict], key: str) -> list[str]:
     names = []
     for var in dict_list:
         names.append(var[key])

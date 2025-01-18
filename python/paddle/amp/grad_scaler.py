@@ -11,21 +11,42 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import warnings
 from collections import defaultdict
 from enum import Enum
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    TypedDict,
+)
 
 import numpy as np
 
+import paddle
 from paddle import _C_ops, _legacy_C_ops
-from paddle.fluid import core
-from paddle.fluid.data_feeder import check_type
-from paddle.fluid.dygraph import to_variable
-from paddle.fluid.framework import _dygraph_tracer, dygraph_only
+from paddle.base import core, unique_name
+from paddle.base.data_feeder import check_type
+from paddle.base.framework import Operator, _dygraph_tracer, in_pir_mode
 from paddle.framework import in_dynamic_mode
 
 from .auto_cast import amp_global_state
+
+if TYPE_CHECKING:
+    from paddle import Tensor
+    from paddle.static.amp.decorator import OptimizerWithMixedPrecision
+    from python.paddle.optimizer.optimizer import Optimizer
+
+    class _ScaleStateDict(TypedDict):
+        scale: Tensor
+        incr_ratio: float
+        decr_ratio: float
+        incr_every_n_steps: int
+        decr_every_n_nan_or_inf: int
+        incr_count: int
+        decr_count: int
+        use_dynamic_loss_scaling: bool
 
 
 class OptimizerState(Enum):
@@ -62,60 +83,62 @@ class AmpScaler:
                                 steps with finite gradients. Default is 1000.
         decr_every_n_nan_or_inf(int, optional): Decreases loss scaling every n
                                     accumulated steps with nan or inf gradients. Default is 2.
-        use_dynamic_loss_scaling(bool, optional): Whether to use dynamic loss scaling. If False, fixed loss_scaling is used. If True, the loss scaling is updated dynamicly. Default is True.
+        use_dynamic_loss_scaling(bool, optional): Whether to use dynamic loss scaling. If False, fixed loss_scaling is used. If True, the loss scaling is updated dynamically. Default is True.
     Returns:
         An AmpScaler object.
 
     Examples:
 
-     .. code-block:: python
+        .. code-block:: python
 
-        import numpy as np
-        import paddle
+            >>> import numpy as np
+            >>> import paddle
 
-        data = np.random.uniform(-1, 1, [10, 3, 32, 32]).astype('float32')
-        model = paddle.nn.Conv2D(3, 2, 3)
-        optimizer = paddle.optimizer.SGD(
-                learning_rate=0.01, parameters=model.parameters())
-        scaler = paddle.amp.AmpScaler(init_loss_scaling=1024)
-        data = paddle.to_tensor(data)
-        with paddle.amp.amp_guard():
-            conv = model(data)
-            loss = paddle.mean(conv)
-            scaled = scaler.scale(loss)
-            scaled.backward()
-            scaler.minimize(optimizer, scaled)
+            >>> data = np.random.uniform(-1, 1, [10, 3, 32, 32]).astype('float32')
+            >>> model = paddle.nn.Conv2D(3, 2, 3)
+            >>> optimizer = paddle.optimizer.SGD(
+            ...         learning_rate=0.01, parameters=model.parameters())
+            >>> scaler = paddle.amp.AmpScaler(init_loss_scaling=1024)
+            >>> data = paddle.to_tensor(data)
+            >>> with paddle.amp.amp_guard():
+            ...     conv = model(data)
+            ...     loss = paddle.mean(conv)
+            ...     scaled = scaler.scale(loss)
+            ...     scaled.backward()
+            ...     scaler.minimize(optimizer, scaled)
     """
 
-    @dygraph_only
     def __init__(
         self,
-        enable=True,
-        init_loss_scaling=2.0**15,
-        incr_ratio=2.0,
-        decr_ratio=0.5,
-        incr_every_n_steps=1000,
-        decr_every_n_nan_or_inf=1,
-        use_dynamic_loss_scaling=True,
-    ):
-        tracer = _dygraph_tracer()
-        if not tracer:
-            raise ValueError(
-                "current_tracer is None, maybe it is not in imperative mode."
-            )
+        enable: bool = True,
+        init_loss_scaling: float = 2.0**15,
+        incr_ratio: float = 2.0,
+        decr_ratio: float = 0.5,
+        incr_every_n_steps: int = 1000,
+        decr_every_n_nan_or_inf: int = 1,
+        use_dynamic_loss_scaling: bool = True,
+    ) -> None:
+        if in_dynamic_mode():
+            tracer = _dygraph_tracer()
+            if not tracer:
+                raise ValueError(
+                    "current_tracer is None, maybe it is not in imperative mode."
+                )
 
-        if enable and not (
-            tracer._expected_place.is_gpu_place()
-            or tracer._expected_place.is_xpu_place()
-            or tracer._expected_place.is_custom_place()
-        ):
-            warnings.warn(
-                'AmpScaler can only be enabled on CUDAPlace, XPUPlace and CustomPlace, current place is %s, so it makes no effect.'
-                % tracer._expected_place
-            )
-            enable = False
+            if enable and not (
+                tracer._expected_place.is_gpu_place()
+                or tracer._expected_place.is_xpu_place()
+                or tracer._expected_place.is_custom_place()
+            ):
+                warnings.warn(
+                    f'AmpScaler can only be enabled on CUDAPlace, XPUPlace and CustomPlace, current place is {tracer._expected_place}, so it makes no effect.'
+                )
+                enable = False
 
         self._enable = enable
+        self._use_dynamic_loss_scaling = False
+        self._init_loss_scaling = 1.0
+        self._scale = None
 
         if self._enable:
             assert incr_ratio > 1.0, "The incr_ratio must be > 1.0."
@@ -130,26 +153,38 @@ class AmpScaler:
             self._decr_count = 0
             self._use_dynamic_loss_scaling = use_dynamic_loss_scaling
 
-            self._found_inf = to_variable(np.array([0]).astype(np.bool_))
-            self._temp_found_inf_value_false = to_variable(
-                np.array([0]).astype(np.bool_)
-            )
-            self._temp_found_inf_fp16 = to_variable(
-                np.array([0]).astype(np.bool_)
-            )
-            self._temp_found_inf_bf16 = to_variable(
-                np.array([0]).astype(np.bool_)
-            )
-            self._temp_found_inf_fp32 = to_variable(
-                np.array([0]).astype(np.bool_)
-            )
-            self._scale = to_variable(
-                np.array([self._init_loss_scaling]).astype(np.float32)
-            )
-            self._cache_founf_inf = None
-            self._optimizer_states = defaultdict(_refresh_optimizer_state)
+            if in_pir_mode():
+                self._scale = paddle.pir.core.create_persistable_value(
+                    dtype='float32',
+                    shape=[1],
+                    name=unique_name.generate("loss_scaling"),
+                    initializer=paddle.nn.initializer.ConstantInitializer(
+                        value=self._init_loss_scaling
+                    ),
+                )
+            else:
+                self._found_inf = paddle.to_tensor(
+                    np.array([0]).astype(np.bool_)
+                )
+                self._temp_found_inf_value_false = paddle.to_tensor(
+                    np.array([0]).astype(np.bool_)
+                )
+                self._temp_found_inf_fp16 = paddle.to_tensor(
+                    np.array([0]).astype(np.bool_)
+                )
+                self._temp_found_inf_bf16 = paddle.to_tensor(
+                    np.array([0]).astype(np.bool_)
+                )
+                self._temp_found_inf_fp32 = paddle.to_tensor(
+                    np.array([0]).astype(np.bool_)
+                )
+                self._scale = paddle.to_tensor(
+                    np.array([self._init_loss_scaling]).astype(np.float32)
+                )
+                self._cache_found_inf = None
+                self._optimizer_states = defaultdict(_refresh_optimizer_state)
 
-    def scale(self, var):
+    def scale(self, var: Tensor) -> Tensor:
         """
         Multiplies a Tensor by the scale factor and returns scaled outputs.
         If this instance of :class:`AmpScaler` is not enabled, output are returned unmodified.
@@ -163,23 +198,28 @@ class AmpScaler:
 
             .. code-block:: python
 
-                import numpy as np
-                import paddle
+                >>> import numpy as np
+                >>> import paddle
 
-                data = np.random.uniform(-1, 1, [10, 3, 32, 32]).astype('float32')
-                model = paddle.nn.Conv2D(3, 2, 3)
-                optimizer = paddle.optimizer.SGD(
-                        learning_rate=0.01, parameters=model.parameters())
-                scaler = paddle.amp.AmpScaler(init_loss_scaling=1024)
-                data = paddle.to_tensor(data)
-                with paddle.amp.amp_guard():
-                    conv = model(data)
-                    loss = paddle.mean(conv)
-                    scaled = scaler.scale(loss)
-                    scaled.backward()
-                    scaler.minimize(optimizer, scaled)
+                >>> data = np.random.uniform(-1, 1, [10, 3, 32, 32]).astype('float32')
+                >>> model = paddle.nn.Conv2D(3, 2, 3)
+                >>> optimizer = paddle.optimizer.SGD(
+                ...         learning_rate=0.01, parameters=model.parameters())
+                >>> scaler = paddle.amp.AmpScaler(init_loss_scaling=1024)
+                >>> data = paddle.to_tensor(data)
+                >>> with paddle.amp.amp_guard():
+                ...     conv = model(data)
+                ...     loss = paddle.mean(conv)
+                ...     scaled = scaler.scale(loss)
+                ...     scaled.backward()
+                ...     scaler.minimize(optimizer, scaled)
         """
-        check_type(var, "var", core.eager.Tensor, 'AmpScaler.scale()')
+        check_type(
+            var,
+            "var",
+            (paddle.Tensor, paddle.pir.Value),
+            'AmpScaler.scale()',
+        )
 
         if (
             self._enable
@@ -188,17 +228,42 @@ class AmpScaler:
         ):
             self._enable = False
             self._use_dynamic_loss_scaling = False
+            self._init_loss_scaling = 1.0
             warnings.warn(
-                'It is not recommended to use dynamic loss scaling for %s, so GradScaler is disable by default.'
-                % (amp_global_state().amp_dtype)
+                f'It is not recommended to use dynamic loss scaling for {amp_global_state().amp_dtype}, so GradScaler is disable by default.'
             )
 
-        if not self._enable:
+        if in_pir_mode():
+            if var.dtype != core.DataType.FLOAT32:
+                var = var.astype('float32')
+            if not self._use_dynamic_loss_scaling:
+                return var
+            scale_out = paddle._C_ops.multiply(var, self._scale)
+            multiply_op = scale_out.get_defining_op()
+            src_var_op = var.get_defining_op()
+            if multiply_op.dist_attr and src_var_op.dist_attr:
+                multiply_op.dist_attr = (
+                    paddle.base.libpaddle.pir.create_op_dist_attribute(
+                        multiply_op.dist_attr.process_mesh,
+                        multiply_op.dist_attr.operands(),
+                        multiply_op.dist_attr.results(),
+                        src_var_op.dist_attr.chunk_id,
+                    )
+                )
+            return scale_out
+
+        # NOTE(lizhiyu): We hack here to avoid changing the `dist_attr` of `self._scale` of 'no-calculation-rank'
+        if not self._enable or not var._is_initialized():
             return var
 
         return var * self._scale
 
-    def minimize(self, optimizer, *args, **kwargs):
+    def minimize(
+        self,
+        optimizer: Optimizer | OptimizerWithMixedPrecision,
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[list[Operator], list[tuple[Tensor, Tensor]]]:
         """
         This function is similar as `Optimizer.minimize()`, which performs parameters updating.
 
@@ -209,29 +274,52 @@ class AmpScaler:
 
         Args:
             optimizer(Optimizer):  The optimizer used to update parameters.
-            args:  Arguments, which will be forward to `optimizer.minimize()`.
+            args:  Arguments, which will be forward to `Optimizer.minimize()`.
             kwargs: Keyword arguments, which will be forward to `Optimizer.minimize()`.
 
         Examples:
 
             .. code-block:: python
 
-                import numpy as np
-                import paddle
+                >>> import numpy as np
+                >>> import paddle
 
-                data = np.random.uniform(-1, 1, [10, 3, 32, 32]).astype('float32')
-                model = paddle.nn.Conv2D(3, 2, 3)
-                optimizer = paddle.optimizer.SGD(
-                        learning_rate=0.01, parameters=model.parameters())
-                scaler = paddle.amp.AmpScaler(init_loss_scaling=1024)
-                data = paddle.to_tensor(data)
-                with paddle.amp.amp_guard():
-                    conv = model(data)
-                    loss = paddle.mean(conv)
-                    scaled = scaler.scale(loss)
-                    scaled.backward()
-                    scaler.minimize(optimizer, scaled)
+                >>> data = np.random.uniform(-1, 1, [10, 3, 32, 32]).astype('float32')
+                >>> model = paddle.nn.Conv2D(3, 2, 3)
+                >>> optimizer = paddle.optimizer.SGD(
+                ...     learning_rate=0.01,
+                ...     parameters=model.parameters()
+                ... )
+                >>> scaler = paddle.amp.AmpScaler(init_loss_scaling=1024)
+                >>> data = paddle.to_tensor(data)
+                >>> with paddle.amp.amp_guard():
+                ...     conv = model(data)
+                ...     loss = paddle.mean(conv)
+                ...     scaled = scaler.scale(loss)
+                ...     scaled.backward()
+                ...     scaler.minimize(optimizer, scaled)
         """
+
+        if in_pir_mode():
+            assert isinstance(
+                optimizer,
+                paddle.static.amp.decorator.OptimizerWithMixedPrecision,
+            )
+            optimizer._use_dynamic_loss_scaling = self._use_dynamic_loss_scaling
+            optimizer._init_loss_scaling = self._init_loss_scaling
+            optimizer._loss_scaling = self._scale
+            optimizer._scaled_loss = args[0]
+            if self._use_dynamic_loss_scaling:
+                optimizer._incr_every_n_steps = self._incr_every_n_steps
+                optimizer._decr_every_n_nan_or_inf = (
+                    self._decr_every_n_nan_or_inf
+                )
+                optimizer._incr_ratio = self._incr_ratio
+                optimizer._decr_ratio = self._decr_ratio
+                optimizer._num_good_steps = None
+                optimizer._num_bad_steps = None
+            return optimizer.minimize(*args, **kwargs)
+
         if not self._enable:
             return optimizer.minimize(*args, **kwargs)
 
@@ -246,16 +334,17 @@ class AmpScaler:
         if hasattr(optimizer, "_set_auxiliary_var"):
             optimizer._set_auxiliary_var('found_inf', self._found_inf)
             optimize_ops, params_grads = optimizer.minimize(*args, **kwargs)
-            self._cache_founf_inf = optimizer._get_auxiliary_var('found_inf')
+            # TODO: Fix to _cache_found_inf after PaddleNLP update
+            self._cache_found_inf = optimizer._get_auxiliary_var('found_inf')
         else:
             if self._found_inf:
-                self._cache_founf_inf = True
+                self._cache_found_inf = True
             else:
                 optimize_ops, params_grads = optimizer.minimize(*args, **kwargs)
-                self._cache_founf_inf = False
+                self._cache_found_inf = False
 
         if self._use_dynamic_loss_scaling:
-            # uopdate the scale
+            # update the scale
             self._update()
 
         self._optimizer_states = defaultdict(_refresh_optimizer_state)
@@ -294,15 +383,9 @@ class AmpScaler:
                 for param in group['params']:
                     if param._grad_ivar() is not None:
                         param_grads.append(param._grad_ivar())
-                        if (
-                            param._grad_ivar().dtype
-                            == core.VarDesc.VarType.FP16
-                        ):
+                        if param._grad_ivar().dtype == paddle.float16:
                             param_grads_fp16.append(param._grad_ivar())
-                        elif (
-                            param._grad_ivar().dtype
-                            == core.VarDesc.VarType.BF16
-                        ):
+                        elif param._grad_ivar().dtype == paddle.bfloat16:
                             param_grads_bf16.append(param._grad_ivar())
                         else:
                             param_grads_fp32.append(param._grad_ivar())
@@ -326,17 +409,17 @@ class AmpScaler:
                 param_grads_fp16 = [
                     param
                     for param in param_grads
-                    if param.dtype == core.VarDesc.VarType.FP16
+                    if param.dtype == paddle.float16
                 ]
                 param_grads_bf16 = [
                     param
                     for param in param_grads
-                    if param.dtype == core.VarDesc.VarType.BF16
+                    if param.dtype == paddle.bfloat16
                 ]
                 param_grads_fp32 = [
                     param
                     for param in param_grads
-                    if param.dtype == core.VarDesc.VarType.FP32
+                    if param.dtype == paddle.float32
                 ]
         self._found_inf = self._temp_found_inf_value_false
         if len(param_grads_fp16):
@@ -379,16 +462,12 @@ class AmpScaler:
         if not self._enable:
             return
 
-        if self._cache_founf_inf:
+        if self._cache_found_inf:
             self._incr_count = 0
             self._decr_count = self._decr_count + 1
             if self._decr_count == self._decr_every_n_nan_or_inf:
                 print(
-                    'Found inf or nan, current scale is: {}, decrease to: {}*{}'.format(
-                        float(self._scale),
-                        float(self._scale),
-                        float(self._decr_ratio),
-                    )
+                    f'Found inf or nan, current scale is: {float(self._scale)}, decrease to: {float(self._scale)}*{float(self._decr_ratio)}'
                 )
                 self._scale = self._scale * self._decr_ratio
                 self._decr_count = 0
@@ -401,7 +480,7 @@ class AmpScaler:
 
         return
 
-    def is_enable(self):
+    def is_enable(self) -> bool:
         """
         Enable loss scaling or not.
 
@@ -410,25 +489,25 @@ class AmpScaler:
         """
         return self._enable
 
-    def is_use_dynamic_loss_scaling(self):
+    def is_use_dynamic_loss_scaling(self) -> bool:
         """
         Whether to use dynamic loss scaling.
 
         Returns:
-            bool: if fixed loss_scaling is used return False, if the loss scaling is updated dynamicly return true.
+            bool: if fixed loss_scaling is used return False, if the loss scaling is updated dynamically return true.
         """
         return self._use_dynamic_loss_scaling
 
-    def get_init_loss_scaling(self):
+    def get_init_loss_scaling(self) -> float:
         """
         Return the initial loss scaling factor.
 
-        Reurns:
+        Returns:
             float:  the initial loss scaling factor.
         """
         return self._init_loss_scaling
 
-    def set_init_loss_scaling(self, new_init_loss_scaling):
+    def set_init_loss_scaling(self, new_init_loss_scaling: int) -> None:
         """
         Set the initial loss scaling factor by `new_init_loss_scaling`.
 
@@ -436,20 +515,20 @@ class AmpScaler:
             new_init_loss_scaling(int):  The new_init_loss_scaling used to update initial loss scaling factor.s
         """
         self._init_loss_scaling = new_init_loss_scaling
-        self._scale = to_variable(
+        self._scale = paddle.to_tensor(
             np.array([self._init_loss_scaling]).astype(np.float32)
         )
 
-    def get_incr_ratio(self):
+    def get_incr_ratio(self) -> float:
         """
         Return the multiplier to use when increasing the loss scaling.
 
-        Reurns:
+        Returns:
             float:  the multiplier to use when increasing the loss scaling.
         """
         return self._incr_ratio
 
-    def set_incr_ratio(self, new_incr_ratio):
+    def set_incr_ratio(self, new_incr_ratio: float) -> None:
         """
         Set the multiplier to use when increasing the loss scaling by `new_incr_ratio`, `new_incr_ratio` should > 1.0.
 
@@ -459,16 +538,16 @@ class AmpScaler:
         assert new_incr_ratio > 1.0, "The new_incr_ratio must be > 1.0."
         self._incr_ratio = new_incr_ratio
 
-    def get_decr_ratio(self):
+    def get_decr_ratio(self) -> float:
         """
         Get the less-than-one-multiplier to use when decreasing the loss scaling.
 
-        Reurns:
+        Returns:
             float:  the less-than-one-multiplier to use when decreasing the loss scaling.
         """
         return self._decr_ratio
 
-    def set_decr_ratio(self, new_decr_ratio):
+    def set_decr_ratio(self, new_decr_ratio: float) -> None:
         """
         Set the less-than-one-multiplier to use when decreasing the loss scaling by `new_incr_ratio`, `new_decr_ratio` should < 1.0.
 
@@ -478,16 +557,16 @@ class AmpScaler:
         assert new_decr_ratio < 1.0, "The new_decr_ratio must be < 1.0."
         self._decr_ratio = new_decr_ratio
 
-    def get_incr_every_n_steps(self):
+    def get_incr_every_n_steps(self) -> int:
         """
         Return the num `n`, `n` represent increases loss scaling every `n` consecutive steps with finite gradients.
 
-        Reurns:
+        Returns:
             int:  the num `n`, `n` represent increases loss scaling every `n` consecutive steps with finite gradients.
         """
         return self._incr_every_n_steps
 
-    def set_incr_every_n_steps(self, new_incr_every_n_steps):
+    def set_incr_every_n_steps(self, new_incr_every_n_steps: int) -> None:
         """
         Set the num `n` by `new_incr_every_n_steps`, `n` represent increases loss scaling every `n` consecutive steps with finite gradients.
 
@@ -496,16 +575,18 @@ class AmpScaler:
         """
         self._incr_every_n_steps = new_incr_every_n_steps
 
-    def get_decr_every_n_nan_or_inf(self):
+    def get_decr_every_n_nan_or_inf(self) -> int:
         """
         Return the num `n`, `n` represent decreases loss scaling every `n` accumulated steps with nan or inf gradients.
 
-        Reurns:
+        Returns:
             int:  the num `n`, `n` represent decreases loss scaling every `n` accumulated steps with nan or inf gradients.
         """
         return self._decr_every_n_nan_or_inf
 
-    def set_decr_every_n_nan_or_inf(self, new_decr_every_n_nan_or_inf):
+    def set_decr_every_n_nan_or_inf(
+        self, new_decr_every_n_nan_or_inf: int
+    ) -> None:
         """
         Set the num `n` by `new_decr_every_n_nan_or_inf`, `n` represent decreases loss scaling every `n` accumulated steps with nan or inf gradients.
 
@@ -514,11 +595,11 @@ class AmpScaler:
         """
         self._decr_every_n_nan_or_inf = new_decr_every_n_nan_or_inf
 
-    def state_dict(self):
+    def state_dict(self) -> _ScaleStateDict:
         """
         Returns the state of the scaler as a `dict`, If this instance is not enabled, returns an empty dict.
 
-        Reurns:
+        Returns:
             A dict of scaler includes:
             scale (tensor): The loss scaling factor.
             incr_ratio(float): The multiplier to use when increasing the loss scaling.
@@ -527,7 +608,7 @@ class AmpScaler:
             decr_every_n_nan_or_inf(int): Decreases loss scaling every n accumulated steps with nan or inf gradients.
             incr_count(int): The number of recent consecutive unskipped steps.
             decr_count(int): The number of recent consecutive skipped steps.
-            use_dynamic_loss_scaling(bool): Whether to use dynamic loss scaling. If False, fixed loss_scaling is used. If True, the loss scaling is updated dynamicly. Default is True.
+            use_dynamic_loss_scaling(bool): Whether to use dynamic loss scaling. If False, fixed loss_scaling is used. If True, the loss scaling is updated dynamically. Default is True.
         """
         return (
             {
@@ -544,12 +625,12 @@ class AmpScaler:
             else {}
         )
 
-    def load_state_dict(self, state_dict):
+    def load_state_dict(self, state_dict: _ScaleStateDict) -> None:
         """
         Loads the scaler state.
 
         Args:
-           state_dict(dict): scaler state.  Should be an object returned from a call to `AmpScaler.state_dict()`.
+           state_dict(dict): scaler state. Should be an object returned from a call to `AmpScaler.state_dict()`.
         """
         if not self._enable:
             return
@@ -561,7 +642,7 @@ class AmpScaler:
             )
 
         self._init_loss_scaling = state_dict["scale"][0]
-        self._scale = to_variable(
+        self._scale = paddle.to_tensor(
             np.array([self._init_loss_scaling]).astype(np.float32)
         )
         self._incr_ratio = state_dict["incr_ratio"]
@@ -600,7 +681,7 @@ class GradScaler(AmpScaler):
                                 steps with finite gradients. Default is 2000.
         decr_every_n_nan_or_inf(int, optional): Decreases loss scaling every n
                                     accumulated steps with nan or inf gradients. Default is 1.
-        use_dynamic_loss_scaling(bool, optional): Whether to use dynamic loss scaling. If False, fixed loss_scaling is used. If True, the loss scaling is updated dynamicly. Default is True.
+        use_dynamic_loss_scaling(bool, optional): Whether to use dynamic loss scaling. If False, fixed loss_scaling is used. If True, the loss scaling is updated dynamically. Default is True.
     Returns:
         An GradScaler object.
 
@@ -608,33 +689,33 @@ class GradScaler(AmpScaler):
 
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            model = paddle.nn.Conv2D(3, 2, 3, bias_attr=True)
-            optimizer = paddle.optimizer.SGD(learning_rate=0.01, parameters=model.parameters())
-            scaler = paddle.amp.GradScaler(init_loss_scaling=1024)
-            data = paddle.rand([10, 3, 32, 32])
+            >>> model = paddle.nn.Conv2D(3, 2, 3, bias_attr=True)
+            >>> optimizer = paddle.optimizer.SGD(learning_rate=0.01, parameters=model.parameters())
+            >>> scaler = paddle.amp.GradScaler(init_loss_scaling=1024)
+            >>> data = paddle.rand([10, 3, 32, 32])
 
-            with paddle.amp.auto_cast():
-                conv = model(data)
-                loss = paddle.mean(conv)
+            >>> with paddle.amp.auto_cast():
+            ...     conv = model(data)
+            ...     loss = paddle.mean(conv)
 
-            scaled = scaler.scale(loss)  # scale the loss
-            scaled.backward()            # do backward
-            scaler.minimize(optimizer, scaled)  # update parameters
-            optimizer.clear_grad()
+            >>> scaled = scaler.scale(loss)  # scale the loss
+            >>> scaled.backward()            # do backward
+            >>> scaler.minimize(optimizer, scaled)  # update parameters
+            >>> optimizer.clear_grad()
     """
 
     def __init__(
         self,
-        enable=True,
-        init_loss_scaling=2.0**16,
-        incr_ratio=2.0,
-        decr_ratio=0.5,
-        incr_every_n_steps=2000,
-        decr_every_n_nan_or_inf=1,
-        use_dynamic_loss_scaling=True,
-    ):
+        enable: bool = True,
+        init_loss_scaling: float = 2.0**16,
+        incr_ratio: float = 2.0,
+        decr_ratio: float = 0.5,
+        incr_every_n_steps: int = 2000,
+        decr_every_n_nan_or_inf: int = 1,
+        use_dynamic_loss_scaling: bool = True,
+    ) -> None:
         super().__init__(
             enable,
             init_loss_scaling,
@@ -645,7 +726,7 @@ class GradScaler(AmpScaler):
             use_dynamic_loss_scaling,
         )
 
-    def scale(self, var):
+    def scale(self, var: Tensor) -> Tensor:
         """
         Multiplies a Tensor by the scale factor and returns scaled outputs.
         If this instance of :class:`GradScaler` is not enabled, output are returned unmodified.
@@ -659,25 +740,30 @@ class GradScaler(AmpScaler):
 
             .. code-block:: python
 
-                import paddle
+                >>> import paddle
 
-                model = paddle.nn.Conv2D(3, 2, 3, bias_attr=True)
-                optimizer = paddle.optimizer.SGD(learning_rate=0.01, parameters=model.parameters())
-                scaler = paddle.amp.GradScaler(init_loss_scaling=1024)
-                data = paddle.rand([10, 3, 32, 32])
+                >>> model = paddle.nn.Conv2D(3, 2, 3, bias_attr=True)
+                >>> optimizer = paddle.optimizer.SGD(learning_rate=0.01, parameters=model.parameters())
+                >>> scaler = paddle.amp.GradScaler(init_loss_scaling=1024)
+                >>> data = paddle.rand([10, 3, 32, 32])
 
-                with paddle.amp.auto_cast():
-                    conv = model(data)
-                    loss = paddle.mean(conv)
+                >>> with paddle.amp.auto_cast():
+                ...     conv = model(data)
+                ...     loss = paddle.mean(conv)
 
-                scaled = scaler.scale(loss)  # scale the loss
-                scaled.backward()            # do backward
-                scaler.minimize(optimizer, scaled)  # update parameters
-                optimizer.clear_grad()
+                >>> scaled = scaler.scale(loss)  # scale the loss
+                >>> scaled.backward()            # do backward
+                >>> scaler.minimize(optimizer, scaled)  # update parameters
+                >>> optimizer.clear_grad()
         """
         return super().scale(var)
 
-    def minimize(self, optimizer, *args, **kwargs):
+    def minimize(
+        self,
+        optimizer: Optimizer | OptimizerWithMixedPrecision,
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[list[Operator], list[tuple[Tensor, Tensor]]]:
         """
         This function is similar as `optimizer.minimize()`, which performs parameters updating.
 
@@ -695,25 +781,25 @@ class GradScaler(AmpScaler):
 
             .. code-block:: python
 
-                import paddle
+                >>> import paddle
 
-                model = paddle.nn.Conv2D(3, 2, 3, bias_attr=True)
-                optimizer = paddle.optimizer.SGD(learning_rate=0.01, parameters=model.parameters())
-                scaler = paddle.amp.GradScaler(init_loss_scaling=1024)
-                data = paddle.rand([10, 3, 32, 32])
+                >>> model = paddle.nn.Conv2D(3, 2, 3, bias_attr=True)
+                >>> optimizer = paddle.optimizer.SGD(learning_rate=0.01, parameters=model.parameters())
+                >>> scaler = paddle.amp.GradScaler(init_loss_scaling=1024)
+                >>> data = paddle.rand([10, 3, 32, 32])
 
-                with paddle.amp.auto_cast():
-                    conv = model(data)
-                    loss = paddle.mean(conv)
+                >>> with paddle.amp.auto_cast():
+                ...     conv = model(data)
+                ...     loss = paddle.mean(conv)
 
-                scaled = scaler.scale(loss)  # scale the loss
-                scaled.backward()            # do backward
-                scaler.minimize(optimizer, scaled)  # update parameters
-                optimizer.clear_grad()
+                >>> scaled = scaler.scale(loss)  # scale the loss
+                >>> scaled.backward()            # do backward
+                >>> scaler.minimize(optimizer, scaled)  # update parameters
+                >>> optimizer.clear_grad()
         """
         return super().minimize(optimizer, *args, **kwargs)
 
-    def step(self, optimizer):
+    def step(self, optimizer: Optimizer) -> None:
         """
         This function is similar as `optimizer.step()`, which performs parameters updating.
 
@@ -727,21 +813,22 @@ class GradScaler(AmpScaler):
 
             .. code-block:: python
 
-                # required: gpu
-                import paddle
+                >>> # doctest: +REQUIRES(env:GPU)
+                >>> import paddle
+                >>> paddle.device.set_device('gpu')
 
-                model = paddle.nn.Conv2D(3, 2, 3, bias_attr=True)
-                optimizer = paddle.optimizer.SGD(learning_rate=0.01, parameters=model.parameters())
-                scaler = paddle.amp.GradScaler(init_loss_scaling=1024)
-                data = paddle.rand([10, 3, 32, 32])
-                with paddle.amp.auto_cast():
-                    conv = model(data)
-                    loss = paddle.mean(conv)
-                scaled = scaler.scale(loss)  # scale the loss
-                scaled.backward()            # do backward
-                scaler.step(optimizer)       # update parameters
-                scaler.update()              # update the loss scaling ratio
-                optimizer.clear_grad()
+                >>> model = paddle.nn.Conv2D(3, 2, 3, bias_attr=True)
+                >>> optimizer = paddle.optimizer.SGD(learning_rate=0.01, parameters=model.parameters())
+                >>> scaler = paddle.amp.GradScaler(init_loss_scaling=1024)
+                >>> data = paddle.rand([10, 3, 32, 32])
+                >>> with paddle.amp.auto_cast():
+                ...     conv = model(data)
+                ...     loss = paddle.mean(conv)
+                >>> scaled = scaler.scale(loss)  # scale the loss
+                >>> scaled.backward()            # do backward
+                >>> scaler.step(optimizer)       # update parameters
+                >>> scaler.update()              # update the loss scaling ratio
+                >>> optimizer.clear_grad()
         """
         if not self._enable:
             return optimizer.step()
@@ -759,20 +846,20 @@ class GradScaler(AmpScaler):
         if hasattr(optimizer, "_set_auxiliary_var"):
             optimizer._set_auxiliary_var('found_inf', self._found_inf)
             optimizer.step()
-            self._cache_founf_inf = optimizer._get_auxiliary_var('found_inf')
+            self._cache_found_inf = optimizer._get_auxiliary_var('found_inf')
         else:
             if self._found_inf:
-                self._cache_founf_inf = True
+                self._cache_found_inf = True
             else:
                 optimizer.step()
-                self._cache_founf_inf = False
+                self._cache_found_inf = False
 
         optimizer_state["state"] = OptimizerState.STEPPED
 
         if not self._use_dynamic_loss_scaling:
             self._optimizer_states = defaultdict(_refresh_optimizer_state)
 
-    def update(self):
+    def update(self) -> None:
         """
         Updates the loss_scaling.
 
@@ -780,21 +867,22 @@ class GradScaler(AmpScaler):
 
             .. code-block:: python
 
-                # required: gpu
-                import paddle
+                >>> # doctest: +REQUIRES(env:GPU)
+                >>> import paddle
 
-                model = paddle.nn.Conv2D(3, 2, 3, bias_attr=True)
-                optimizer = paddle.optimizer.SGD(learning_rate=0.01, parameters=model.parameters())
-                scaler = paddle.amp.GradScaler(init_loss_scaling=1024)
-                data = paddle.rand([10, 3, 32, 32])
-                with paddle.amp.auto_cast():
-                    conv = model(data)
-                    loss = paddle.mean(conv)
-                scaled = scaler.scale(loss)     # scale the loss
-                scaled.backward()               # do backward
-                scaler.step(optimizer)          # update parameters
-                scaler.update()                 # update the loss scaling ratio
-                optimizer.clear_grad()
+                >>> paddle.device.set_device('gpu')
+                >>> model = paddle.nn.Conv2D(3, 2, 3, bias_attr=True)
+                >>> optimizer = paddle.optimizer.SGD(learning_rate=0.01, parameters=model.parameters())
+                >>> scaler = paddle.amp.GradScaler(init_loss_scaling=1024)
+                >>> data = paddle.rand([10, 3, 32, 32])
+                >>> with paddle.amp.auto_cast():
+                ...     conv = model(data)
+                ...     loss = paddle.mean(conv)
+                >>> scaled = scaler.scale(loss)     # scale the loss
+                >>> scaled.backward()               # do backward
+                >>> scaler.step(optimizer)          # update parameters
+                >>> scaler.update()                 # update the loss scaling ratio
+                >>> optimizer.clear_grad()
         """
         if not self._enable:
             return
@@ -818,26 +906,27 @@ class GradScaler(AmpScaler):
 
             .. code-block:: python
 
-                # required: gpu
-                import paddle
+                >>> # doctest: +REQUIRES(env:GPU)
+                >>> import paddle
 
-                model = paddle.nn.Conv2D(3, 2, 3, bias_attr=True)
-                optimizer = paddle.optimizer.SGD(learning_rate=0.01, parameters=model.parameters())
-                scaler = paddle.amp.GradScaler(init_loss_scaling=1024)
-                data = paddle.rand([10, 3, 32, 32])
-                with paddle.amp.auto_cast():
-                    conv = model(data)
-                    loss = paddle.mean(conv)
-                scaled = scaler.scale(loss)  # scale the loss
-                scaled.backward()            # do backward
-                scaler.unscale_(optimizer)    # unscale the parameter
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.clear_grad()
+                >>> paddle.device.set_device('gpu')
+                >>> model = paddle.nn.Conv2D(3, 2, 3, bias_attr=True)
+                >>> optimizer = paddle.optimizer.SGD(learning_rate=0.01, parameters=model.parameters())
+                >>> scaler = paddle.amp.GradScaler(init_loss_scaling=1024)
+                >>> data = paddle.rand([10, 3, 32, 32])
+                >>> with paddle.amp.auto_cast():
+                ...     conv = model(data)
+                ...     loss = paddle.mean(conv)
+                >>> scaled = scaler.scale(loss)  # scale the loss
+                >>> scaled.backward()            # do backward
+                >>> scaler.unscale_(optimizer)    # unscale the parameter
+                >>> scaler.step(optimizer)
+                >>> scaler.update()
+                >>> optimizer.clear_grad()
         """
         return super()._unscale(optimizer)
 
-    def is_enable(self):
+    def is_enable(self) -> bool:
         """
         Enable loss scaling or not.
 
@@ -847,69 +936,78 @@ class GradScaler(AmpScaler):
         Examples:
             .. code-block:: python
 
-                # required: gpu,xpu
-                import paddle
-                scaler = paddle.amp.GradScaler(enable=True,
-                                               init_loss_scaling=1024,
-                                               incr_ratio=2.0,
-                                               decr_ratio=0.5,
-                                               incr_every_n_steps=1000,
-                                               decr_every_n_nan_or_inf=2,
-                                               use_dynamic_loss_scaling=True)
-                enable = scaler.is_enable()
-                print(enable) # True
+                >>> # doctest: +REQUIRES(env:GPU, env:XPU)
+                >>> import paddle
+                >>> scaler = paddle.amp.GradScaler(
+                ...     enable=True,
+                ...     init_loss_scaling=1024,
+                ...     incr_ratio=2.0,
+                ...     decr_ratio=0.5,
+                ...     incr_every_n_steps=1000,
+                ...     decr_every_n_nan_or_inf=2,
+                ...     use_dynamic_loss_scaling=True
+                ... )
+                >>> enable = scaler.is_enable()
+                >>> print(enable)
+                True
         """
         return super().is_enable()
 
-    def is_use_dynamic_loss_scaling(self):
+    def is_use_dynamic_loss_scaling(self) -> bool:
         """
         Whether to use dynamic loss scaling.
 
         Returns:
-            bool: if fixed loss_scaling is used return False, if the loss scaling is updated dynamicly return true.
+            bool: if fixed loss_scaling is used return False, if the loss scaling is updated dynamically return true.
 
         Examples:
             .. code-block:: python
 
-                # required: gpu,xpu
-                import paddle
-                scaler = paddle.amp.GradScaler(enable=True,
-                                               init_loss_scaling=1024,
-                                               incr_ratio=2.0,
-                                               decr_ratio=0.5,
-                                               incr_every_n_steps=1000,
-                                               decr_every_n_nan_or_inf=2,
-                                               use_dynamic_loss_scaling=True)
-                use_dynamic_loss_scaling = scaler.is_use_dynamic_loss_scaling()
-                print(use_dynamic_loss_scaling) # True
+                >>> # doctest: +REQUIRES(env:GPU, env:XPU)
+                >>> import paddle
+                >>> scaler = paddle.amp.GradScaler(
+                ...     enable=True,
+                ...     init_loss_scaling=1024,
+                ...     incr_ratio=2.0,
+                ...     decr_ratio=0.5,
+                ...     incr_every_n_steps=1000,
+                ...     decr_every_n_nan_or_inf=2,
+                ...     use_dynamic_loss_scaling=True
+                ... )
+                >>> use_dynamic_loss_scaling = scaler.is_use_dynamic_loss_scaling()
+                >>> print(use_dynamic_loss_scaling)
+                True
         """
         return super().is_use_dynamic_loss_scaling()
 
-    def get_init_loss_scaling(self):
+    def get_init_loss_scaling(self) -> float:
         """
         Return the initial loss scaling factor.
 
-        Reurns:
+        Returns:
             float:  the initial loss scaling factor.
 
         Examples:
             .. code-block:: python
 
-                # required: gpu,xpu
-                import paddle
-                scaler = paddle.amp.GradScaler(enable=True,
-                                               init_loss_scaling=1024,
-                                               incr_ratio=2.0,
-                                               decr_ratio=0.5,
-                                               incr_every_n_steps=1000,
-                                               decr_every_n_nan_or_inf=2,
-                                               use_dynamic_loss_scaling=True)
-                init_loss_scaling = scaler.get_init_loss_scaling()
-                print(init_loss_scaling) # 1024
+                >>> # doctest: +REQUIRES(env:GPU, env:XPU)
+                >>> import paddle
+                >>> scaler = paddle.amp.GradScaler(
+                ...     enable=True,
+                ...     init_loss_scaling=1024,
+                ...     incr_ratio=2.0,
+                ...     decr_ratio=0.5,
+                ...     incr_every_n_steps=1000,
+                ...     decr_every_n_nan_or_inf=2,
+                ...     use_dynamic_loss_scaling=True
+                ... )
+                >>> init_loss_scaling = scaler.get_init_loss_scaling()
+                >>> print(init_loss_scaling)
+                1024
         """
         return super().get_init_loss_scaling()
 
-    def set_init_loss_scaling(self, new_init_loss_scaling):
+    def set_init_loss_scaling(self, new_init_loss_scaling: int) -> None:
         """
         Set the initial loss scaling factor by `new_init_loss_scaling`.
 
@@ -919,47 +1017,54 @@ class GradScaler(AmpScaler):
         Examples:
             .. code-block:: python
 
-                # required: gpu,xpu
-                import paddle
-                scaler = paddle.amp.GradScaler(enable=True,
-                                               init_loss_scaling=1024,
-                                               incr_ratio=2.0,
-                                               decr_ratio=0.5,
-                                               incr_every_n_steps=1000,
-                                               decr_every_n_nan_or_inf=2,
-                                               use_dynamic_loss_scaling=True)
-                print(scaler.get_init_loss_scaling()) # 1024
-                new_init_loss_scaling = 1000
-                scaler.set_init_loss_scaling(new_init_loss_scaling)
-                print(scaler.get_init_loss_scaling()) # 1000
+                >>> # doctest: +REQUIRES(env:GPU, env:XPU)
+                >>> import paddle
+                >>> scaler = paddle.amp.GradScaler(
+                ...     enable=True,
+                ...     init_loss_scaling=1024,
+                ...     incr_ratio=2.0,
+                ...     decr_ratio=0.5,
+                ...     incr_every_n_steps=1000,
+                ...     decr_every_n_nan_or_inf=2,
+                ...     use_dynamic_loss_scaling=True
+                ... )
+                >>> print(scaler.get_init_loss_scaling())
+                1024
+                >>> new_init_loss_scaling = 1000
+                >>> scaler.set_init_loss_scaling(new_init_loss_scaling)
+                >>> print(scaler.get_init_loss_scaling())
+                1000
         """
         super().set_init_loss_scaling(new_init_loss_scaling)
 
-    def get_incr_ratio(self):
+    def get_incr_ratio(self) -> float:
         """
         Return the multiplier to use when increasing the loss scaling.
 
-        Reurns:
+        Returns:
             float:  the multiplier to use when increasing the loss scaling.
 
         Examples:
             .. code-block:: python
 
-                # required: gpu,xpu
-                import paddle
-                scaler = paddle.amp.GradScaler(enable=True,
-                                               init_loss_scaling=1024,
-                                               incr_ratio=2.0,
-                                               decr_ratio=0.5,
-                                               incr_every_n_steps=1000,
-                                               decr_every_n_nan_or_inf=2,
-                                               use_dynamic_loss_scaling=True)
-                incr_ratio = scaler.get_incr_ratio()
-                print(incr_ratio) # 2.0
+                >>> # doctest: +REQUIRES(env:GPU, env:XPU)
+                >>> import paddle
+                >>> scaler = paddle.amp.GradScaler(
+                ...     enable=True,
+                ...     init_loss_scaling=1024,
+                ...     incr_ratio=2.0,
+                ...     decr_ratio=0.5,
+                ...     incr_every_n_steps=1000,
+                ...     decr_every_n_nan_or_inf=2,
+                ...     use_dynamic_loss_scaling=True
+                ... )
+                >>> incr_ratio = scaler.get_incr_ratio()
+                >>> print(incr_ratio)
+                2.0
         """
         return super().get_incr_ratio()
 
-    def set_incr_ratio(self, new_incr_ratio):
+    def set_incr_ratio(self, new_incr_ratio: float) -> None:
         """
         Set the multiplier to use when increasing the loss scaling by `new_incr_ratio`, `new_incr_ratio` should > 1.0.
 
@@ -969,47 +1074,54 @@ class GradScaler(AmpScaler):
         Examples:
             .. code-block:: python
 
-                # required: gpu,xpu
-                import paddle
-                scaler = paddle.amp.GradScaler(enable=True,
-                                               init_loss_scaling=1024,
-                                               incr_ratio=2.0,
-                                               decr_ratio=0.5,
-                                               incr_every_n_steps=1000,
-                                               decr_every_n_nan_or_inf=2,
-                                               use_dynamic_loss_scaling=True)
-                print(scaler.get_incr_ratio()) # 2.0
-                new_incr_ratio = 3.0
-                scaler.set_incr_ratio(new_incr_ratio)
-                print(scaler.get_incr_ratio()) # 3.0
+                >>> # doctest: +REQUIRES(env:GPU, env:XPU)
+                >>> import paddle
+                >>> scaler = paddle.amp.GradScaler(
+                ...     enable=True,
+                ...     init_loss_scaling=1024,
+                ...     incr_ratio=2.0,
+                ...     decr_ratio=0.5,
+                ...     incr_every_n_steps=1000,
+                ...     decr_every_n_nan_or_inf=2,
+                ...     use_dynamic_loss_scaling=True
+                ... )
+                >>> print(scaler.get_incr_ratio())
+                2.0
+                >>> new_incr_ratio = 3.0
+                >>> scaler.set_incr_ratio(new_incr_ratio)
+                >>> print(scaler.get_incr_ratio())
+                3.0
         """
         super().set_incr_ratio(new_incr_ratio)
 
-    def get_decr_ratio(self):
+    def get_decr_ratio(self) -> float:
         """
         Get the less-than-one-multiplier to use when decreasing the loss scaling.
 
-        Reurns:
+        Returns:
             float:  the less-than-one-multiplier to use when decreasing the loss scaling.
 
         Examples:
             .. code-block:: python
 
-                # required: gpu,xpu
-                import paddle
-                scaler = paddle.amp.GradScaler(enable=True,
-                                               init_loss_scaling=1024,
-                                               incr_ratio=2.0,
-                                               decr_ratio=0.5,
-                                               incr_every_n_steps=1000,
-                                               decr_every_n_nan_or_inf=2,
-                                               use_dynamic_loss_scaling=True)
-                decr_ratio = scaler.get_decr_ratio()
-                print(decr_ratio) # 0.5
+                >>> # doctest: +REQUIRES(env:GPU, env:XPU)
+                >>> import paddle
+                >>> scaler = paddle.amp.GradScaler(
+                ...     enable=True,
+                ...     init_loss_scaling=1024,
+                ...     incr_ratio=2.0,
+                ...     decr_ratio=0.5,
+                ...     incr_every_n_steps=1000,
+                ...     decr_every_n_nan_or_inf=2,
+                ...     use_dynamic_loss_scaling=True
+                ... )
+                >>> decr_ratio = scaler.get_decr_ratio()
+                >>> print(decr_ratio)
+                0.5
         """
         return super().get_decr_ratio()
 
-    def set_decr_ratio(self, new_decr_ratio):
+    def set_decr_ratio(self, new_decr_ratio: float) -> None:
         """
         Set the less-than-one-multiplier to use when decreasing the loss scaling by `new_incr_ratio`, `new_decr_ratio` should < 1.0.
 
@@ -1019,47 +1131,54 @@ class GradScaler(AmpScaler):
         Examples:
             .. code-block:: python
 
-                # required: gpu,xpu
-                import paddle
-                scaler = paddle.amp.GradScaler(enable=True,
-                                               init_loss_scaling=1024,
-                                               incr_ratio=2.0,
-                                               decr_ratio=0.5,
-                                               incr_every_n_steps=1000,
-                                               decr_every_n_nan_or_inf=2,
-                                               use_dynamic_loss_scaling=True)
-                print(scaler.get_decr_ratio()) # 0.5
-                new_decr_ratio = 0.1
-                scaler.set_decr_ratio(new_decr_ratio)
-                print(scaler.get_decr_ratio()) # 0.1
+                >>> # doctest: +REQUIRES(env:GPU, env:XPU)
+                >>> import paddle
+                >>> scaler = paddle.amp.GradScaler(
+                ...     enable=True,
+                ...     init_loss_scaling=1024,
+                ...     incr_ratio=2.0,
+                ...     decr_ratio=0.5,
+                ...     incr_every_n_steps=1000,
+                ...     decr_every_n_nan_or_inf=2,
+                ...     use_dynamic_loss_scaling=True
+                ... )
+                >>> print(scaler.get_decr_ratio())
+                0.5
+                >>> new_decr_ratio = 0.1
+                >>> scaler.set_decr_ratio(new_decr_ratio)
+                >>> print(scaler.get_decr_ratio())
+                0.1
         """
         super().set_decr_ratio(new_decr_ratio)
 
-    def get_incr_every_n_steps(self):
+    def get_incr_every_n_steps(self) -> int:
         """
         Return the num `n`, `n` represent increases loss scaling every `n` consecutive steps with finite gradients.
 
-        Reurns:
+        Returns:
             int:  the num `n`, `n` represent increases loss scaling every `n` consecutive steps with finite gradients.
 
         Examples:
             .. code-block:: python
 
-                # required: gpu,xpu
-                import paddle
-                scaler = paddle.amp.GradScaler(enable=True,
-                                               init_loss_scaling=1024,
-                                               incr_ratio=2.0,
-                                               decr_ratio=0.5,
-                                               incr_every_n_steps=1000,
-                                               decr_every_n_nan_or_inf=2,
-                                               use_dynamic_loss_scaling=True)
-                incr_every_n_steps = scaler.get_incr_every_n_steps()
-                print(incr_every_n_steps) # 1000
+                >>> # doctest: +REQUIRES(env:GPU, env:XPU)
+                >>> import paddle
+                >>> scaler = paddle.amp.GradScaler(
+                ...     enable=True,
+                ...     init_loss_scaling=1024,
+                ...     incr_ratio=2.0,
+                ...     decr_ratio=0.5,
+                ...     incr_every_n_steps=1000,
+                ...     decr_every_n_nan_or_inf=2,
+                ...     use_dynamic_loss_scaling=True
+                ... )
+                >>> incr_every_n_steps = scaler.get_incr_every_n_steps()
+                >>> print(incr_every_n_steps)
+                1000
         """
         return super().get_incr_every_n_steps()
 
-    def set_incr_every_n_steps(self, new_incr_every_n_steps):
+    def set_incr_every_n_steps(self, new_incr_every_n_steps: int) -> None:
         """
         Set the num `n` by `new_incr_every_n_steps`, `n` represent increases loss scaling every `n` consecutive steps with finite gradients.
 
@@ -1069,47 +1188,56 @@ class GradScaler(AmpScaler):
         Examples:
             .. code-block:: python
 
-                # required: gpu,xpu
-                import paddle
-                scaler = paddle.amp.GradScaler(enable=True,
-                                               init_loss_scaling=1024,
-                                               incr_ratio=2.0,
-                                               decr_ratio=0.5,
-                                               incr_every_n_steps=1000,
-                                               decr_every_n_nan_or_inf=2,
-                                               use_dynamic_loss_scaling=True)
-                print(scaler.get_incr_every_n_steps()) # 1000
-                new_incr_every_n_steps = 2000
-                scaler.set_incr_every_n_steps(new_incr_every_n_steps)
-                print(scaler.get_incr_every_n_steps()) # 2000
+                >>> # doctest: +REQUIRES(env:GPU, env:XPU)
+                >>> import paddle
+                >>> scaler = paddle.amp.GradScaler(
+                ...     enable=True,
+                ...     init_loss_scaling=1024,
+                ...     incr_ratio=2.0,
+                ...     decr_ratio=0.5,
+                ...     incr_every_n_steps=1000,
+                ...     decr_every_n_nan_or_inf=2,
+                ...     use_dynamic_loss_scaling=True
+                ... )
+                >>> print(scaler.get_incr_every_n_steps())
+                1000
+                >>> new_incr_every_n_steps = 2000
+                >>> scaler.set_incr_every_n_steps(new_incr_every_n_steps)
+                >>> print(scaler.get_incr_every_n_steps())
+                2000
         """
         super().set_incr_every_n_steps(new_incr_every_n_steps)
 
-    def get_decr_every_n_nan_or_inf(self):
+    def get_decr_every_n_nan_or_inf(self) -> int:
         """
         Return the num `n`, `n` represent decreases loss scaling every `n` accumulated steps with nan or inf gradients.
 
-        Reurns:
+        Returns:
             int:  the num `n`, `n` represent decreases loss scaling every `n` accumulated steps with nan or inf gradients.
 
         Examples:
             .. code-block:: python
 
-                # required: gpu,xpu
-                import paddle
-                scaler = paddle.amp.GradScaler(enable=True,
-                                               init_loss_scaling=1024,
-                                               incr_ratio=2.0,
-                                               decr_ratio=0.5,
-                                               incr_every_n_steps=1000,
-                                               decr_every_n_nan_or_inf=2,
-                                               use_dynamic_loss_scaling=True)
-                decr_every_n_nan_or_inf = scaler.get_decr_every_n_nan_or_inf()
-                print(decr_every_n_nan_or_inf) # 2
+                >>> # doctest: +REQUIRES(env:GPU, env:XPU)
+                >>> import paddle
+                >>> scaler = paddle.amp.GradScaler(
+                ...     enable=True,
+                ...     init_loss_scaling=1024,
+                ...     incr_ratio=2.0,
+                ...     decr_ratio=0.5,
+                ...     incr_every_n_steps=1000,
+                ...     decr_every_n_nan_or_inf=2,
+                ...     use_dynamic_loss_scaling=True
+                ... )
+                >>> decr_every_n_nan_or_inf = scaler.get_decr_every_n_nan_or_inf()
+                >>> print(decr_every_n_nan_or_inf)
+                2
         """
         return super().get_decr_every_n_nan_or_inf()
 
-    def set_decr_every_n_nan_or_inf(self, new_decr_every_n_nan_or_inf):
+    def set_decr_every_n_nan_or_inf(
+        self, new_decr_every_n_nan_or_inf: int
+    ) -> None:
         """
         Set the num `n` by `new_decr_every_n_nan_or_inf`, `n` represent decreases loss scaling every `n` accumulated steps with nan or inf gradients.
 
@@ -1119,27 +1247,31 @@ class GradScaler(AmpScaler):
         Examples:
             .. code-block:: python
 
-                # required: gpu,xpu
-                import paddle
-                scaler = paddle.amp.GradScaler(enable=True,
-                                               init_loss_scaling=1024,
-                                               incr_ratio=2.0,
-                                               decr_ratio=0.5,
-                                               incr_every_n_steps=1000,
-                                               decr_every_n_nan_or_inf=2,
-                                               use_dynamic_loss_scaling=True)
-                print(scaler.get_decr_every_n_nan_or_inf()) # 2
-                new_decr_every_n_nan_or_inf = 3
-                scaler.set_decr_every_n_nan_or_inf(new_decr_every_n_nan_or_inf)
-                print(scaler.get_decr_every_n_nan_or_inf()) # 3
+                >>> # doctest: +REQUIRES(env:GPU, env:XPU)
+                >>> import paddle
+                >>> scaler = paddle.amp.GradScaler(
+                ...     enable=True,
+                ...     init_loss_scaling=1024,
+                ...     incr_ratio=2.0,
+                ...     decr_ratio=0.5,
+                ...     incr_every_n_steps=1000,
+                ...     decr_every_n_nan_or_inf=2,
+                ...     use_dynamic_loss_scaling=True
+                ... )
+                >>> print(scaler.get_decr_every_n_nan_or_inf())
+                2
+                >>> new_decr_every_n_nan_or_inf = 3
+                >>> scaler.set_decr_every_n_nan_or_inf(new_decr_every_n_nan_or_inf)
+                >>> print(scaler.get_decr_every_n_nan_or_inf())
+                3
         """
         super().set_decr_every_n_nan_or_inf(new_decr_every_n_nan_or_inf)
 
-    def state_dict(self):
+    def state_dict(self) -> _ScaleStateDict:
         """
         Returns the state of the scaler as a `dict`, If this instance is not enabled, returns an empty dict.
 
-        Reurns:
+        Returns:
             A dict of scaler includes:
             scale (tensor): The loss scaling factor.
             incr_ratio(float): The multiplier to use when increasing the loss scaling.
@@ -1148,49 +1280,53 @@ class GradScaler(AmpScaler):
             decr_every_n_nan_or_inf(int): Decreases loss scaling every n accumulated steps with nan or inf gradients.
             incr_count(int): The number of recent consecutive unskipped steps.
             decr_count(int): The number of recent consecutive skipped steps.
-            use_dynamic_loss_scaling(bool): Whether to use dynamic loss scaling. If False, fixed loss_scaling is used. If True, the loss scaling is updated dynamicly. Default is True.
+            use_dynamic_loss_scaling(bool): Whether to use dynamic loss scaling. If False, fixed loss_scaling is used. If True, the loss scaling is updated dynamically. Default is True.
 
 
         Examples:
 
             .. code-block:: python
 
-                # required: gpu,xpu
-                import paddle
+                >>> # doctest: +REQUIRES(env:GPU, env:XPU)
+                >>> import paddle
 
-                scaler = paddle.amp.GradScaler(enable=True,
-                                               init_loss_scaling=1024,
-                                               incr_ratio=2.0,
-                                               decr_ratio=0.5,
-                                               incr_every_n_steps=1000,
-                                               decr_every_n_nan_or_inf=2,
-                                               use_dynamic_loss_scaling=True)
-                scaler_state = scaler.state_dict()
+                >>> scaler = paddle.amp.GradScaler(
+                ...     enable=True,
+                ...     init_loss_scaling=1024,
+                ...     incr_ratio=2.0,
+                ...     decr_ratio=0.5,
+                ...     incr_every_n_steps=1000,
+                ...     decr_every_n_nan_or_inf=2,
+                ...     use_dynamic_loss_scaling=True
+                ... )
+                >>> scaler_state = scaler.state_dict()
         """
         return super().state_dict()
 
-    def load_state_dict(self, state_dict):
+    def load_state_dict(self, state_dict: _ScaleStateDict) -> None:
         """
         Loads the scaler state.
 
         Args:
-           state_dict(dict): scaler state.  Should be an object returned from a call to `GradScaler.state_dict()`.
+            state_dict(dict): scaler state.  Should be an object returned from a call to `GradScaler.state_dict()`.
 
         Examples:
 
             .. code-block:: python
 
-                # required: gpu,xpu
-                import paddle
+                >>> # doctest: +REQUIRES(env:GPU, env:XPU)
+                >>> import paddle
 
-                scaler = paddle.amp.GradScaler(enable=True,
-                                               init_loss_scaling=1024,
-                                               incr_ratio=2.0,
-                                               decr_ratio=0.5,
-                                               incr_every_n_steps=1000,
-                                               decr_every_n_nan_or_inf=2,
-                                               use_dynamic_loss_scaling=True)
-                scaler_state = scaler.state_dict()
-                scaler.load_state_dict(scaler_state)
+                >>> scaler = paddle.amp.GradScaler(
+                ...     enable=True,
+                ...     init_loss_scaling=1024,
+                ...     incr_ratio=2.0,
+                ...     decr_ratio=0.5,
+                ...     incr_every_n_steps=1000,
+                ...     decr_every_n_nan_or_inf=2,
+                ...     use_dynamic_loss_scaling=True
+                ... )
+                >>> scaler_state = scaler.state_dict()
+                >>> scaler.load_state_dict(scaler_state)
         """
         super().load_state_dict(state_dict)

@@ -141,7 +141,7 @@ class TestConvAffineChannelFusePass(PassAutoScanTest):
                 return True
             return False
 
-        # mkldnn Output has diff with bias!
+        # onednn Output has diff with bias!
         def teller2(program_config, predictor_config):
             return (
                 predictor_config.mkldnn_enabled()
@@ -152,7 +152,7 @@ class TestConvAffineChannelFusePass(PassAutoScanTest):
             teller1,
             IgnoreReasons.PASS_ACCURACY_ERROR,
             "The output format of conv2d is wrong when data_format attribute is NHWC, \
-            because currently its fused op (Conv2DFusion) only supports data format of channel first (NCHW).",
+            because currently its fused op (FusedConv2dAddAct) only supports data format of channel first (NCHW).",
         )
 
         self.add_ignore_check_case(
@@ -164,7 +164,7 @@ class TestConvAffineChannelFusePass(PassAutoScanTest):
     def test(self):
         self.run_and_statis(
             quant=False,
-            passes=["conv_affine_channel_mkldnn_fuse_pass"],
+            passes=["conv_affine_channel_onednn_fuse_pass"],
         )
 
 

@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "paddle/cinn/common/ir_util.h"
-#include "paddle/cinn/ir/utils/ir_mutator.h"
+#include "paddle/cinn/ir/ir_mutator.h"
 #include "paddle/cinn/runtime/intrinsic.h"
 
 namespace cinn {
@@ -28,7 +28,9 @@ namespace optim {
 namespace {
 
 struct CallArgListToPodValueMutator : ir::IRMutator<> {
-  void operator()(Expr* e) { ir::IRMutator<>::Visit(e, e); }
+  void operator()(ir::Module m) {
+    ir::IRMutator<>::Visit(m.As<ir::_Module_>());
+  }
 
  private:
   void Visit(const ir::Call* op, Expr* expr) override {
@@ -48,7 +50,7 @@ struct CallArgListToPodValueMutator : ir::IRMutator<> {
       auto new_call = ir::Call::Make(
           Void(),
           op->name,
-          {pod_array_var, common::make_const(Int(32), args.size())},
+          {pod_array_var, cinn::common::make_const(Int(32), args.size())},
           {},
           ir::CallType::CINN,
           op->func,
@@ -115,7 +117,7 @@ struct CallArgListToPodValueMutator : ir::IRMutator<> {
 
 }  // namespace
 
-void CallArgListToPodValue(Expr* e) { CallArgListToPodValueMutator()(e); }
+void CallArgListToPodValue(ir::Module m) { CallArgListToPodValueMutator()(m); }
 
 }  // namespace optim
 }  // namespace cinn

@@ -21,51 +21,37 @@
 #include <map>
 #include <string>
 
-#include "paddle/cinn/common/arithmatic.h"
+#include "paddle/cinn/common/arithmetic.h"
 #include "paddle/cinn/common/cas.h"
 #include "paddle/cinn/common/ir_util.h"
+#include "paddle/cinn/ir/ir_mutator.h"
+#include "paddle/cinn/ir/ir_printer.h"
+#include "paddle/cinn/ir/ir_visitor.h"
 #include "paddle/cinn/ir/op/ir_operators.h"
 #include "paddle/cinn/ir/tensor.h"
-#include "paddle/cinn/ir/utils/ir_mutator.h"
-#include "paddle/cinn/ir/utils/ir_printer.h"
-#include "paddle/cinn/ir/utils/ir_visitor.h"
-#include "paddle/cinn/optim/cast_simplify.h"
+#include "paddle/cinn/ir/utils/ir_copy.h"
 #include "paddle/cinn/utils/string.h"
 
 namespace cinn {
 namespace optim {
 using namespace ir;  // NOLINT
-using common::ExprToGinacConverter;
+using cinn::common::bfloat16;
+using cinn::common::ExprToGinacConverter;
+using cinn::common::float16;
 using utils::GetStreamCnt;
 using utils::Replace;
 
 namespace {
 
-//! Simplify some sub-expression in the `expr`. Due to the simplify strategy
-//! just fit several kinds of IR noedes, we partition the original expression to
-//! several sub-expression those supported by simplify, and process each of
-//! them.
-void PartialSimplify(
-    Expr* expr,
-    const absl::flat_hash_map<std::string, common::CasInterval>& var_intervals =
-        {}) {
-  *expr = common::AutoSimplify(*expr, var_intervals);
-}
-
 //! Simplify the expression but Load.
-struct SimplifyButStoreLoadMutator : public ir::IRMutator<ir::Expr*> {
-  common::cas_intervals_t& var_intervals;
-  explicit SimplifyButStoreLoadMutator(
-      common::cas_intervals_t& var_intervals)  // NOLINT
-      : var_intervals(var_intervals) {}
-
+struct SimplifyNoPureMathMutator : public ir::IRMutator<ir::Expr*> {
   void operator()(Expr* x) { ir::IRMutator<ir::Expr*>::Visit(x, x); }
 
   using ir::IRMutator<>::Visit;
 
 #define __(op__)                                    \
   void Visit(const op__* op, Expr* expr) override { \
-    PartialSimplify(expr, var_intervals);           \
+    *expr = ArithSimplify(*expr);                   \
   }
 
   __(Add)
@@ -75,58 +61,6 @@ struct SimplifyButStoreLoadMutator : public ir::IRMutator<ir::Expr*> {
   __(Min)
   __(Max)
 #undef __
-
-  void Visit(const Ramp* op, Expr* expr) override {
-    auto* node = expr->As<Ramp>();
-    CHECK(common::IsPureMath(node->base));
-    CHECK(common::IsPureMath(node->stride));
-    PartialSimplify(&node->base, var_intervals);
-    PartialSimplify(&node->stride, var_intervals);
-  }
-
-  void Visit(const Cast* op, Expr* expr) override {
-    auto* node = expr->As<Cast>();
-    Visit(&node->v(), &node->v());
-  }
-
-  void Visit(const PolyFor* op, Expr* expr) override {
-    auto* node = expr->As<ir::PolyFor>();
-    node->condition = common::SolveInequality(op->condition, op->iterator);
-
-    Visit(&node->body, &node->body);
-  }
-
-  void Visit(const For* op, Expr* expr) override {
-    auto* node = expr->As<ir::For>();
-    Visit(&node->min, &node->min);
-    Visit(&node->extent, &node->extent);
-    auto* min_i = op->min.As<IntImm>();
-    auto* extent_i = op->extent.As<IntImm>();
-    if (min_i && extent_i && extent_i->value > min_i->value) {
-      var_intervals.emplace(
-          op->loop_var->name,
-          common::CasInterval{min_i->value, extent_i->value - 1});
-    } else {
-      var_intervals.emplace(op->loop_var->name,
-                            common::CasInterval{op->min, op->extent - 1});
-    }
-
-    Visit(&node->body, &node->body);
-    if (min_i && extent_i) {
-      var_intervals.erase(op->loop_var->name);
-    }
-  }
-
-  void Visit(const _Tensor_* op, Expr* expr) override {
-    auto* node = expr->As<ir::_Tensor_>();
-
-    for (auto& e : node->shape) {
-      PartialSimplify(&e, var_intervals);
-    }
-    for (auto& e : node->domain) {
-      PartialSimplify(&e, var_intervals);
-    }
-  }
 };
 
 struct SimplifyLoadMutator : public ir::IRMutator<ir::Expr*> {
@@ -135,35 +69,19 @@ struct SimplifyLoadMutator : public ir::IRMutator<ir::Expr*> {
   void Visit(const Load* expr, Expr* op) override {
     auto* node = op->As<Load>();
     for (auto& idx : node->indices) {
-      if (common::IsPureMath(idx)) {
-        PartialSimplify(&idx, var_intervals_);
+      if (cinn::common::IsPureMath(idx)) {
+        idx = ArithSimplify(idx);
       } else {
-        SimplifyButStoreLoadMutator mutator(var_intervals_);
-        mutator(&idx);
+        SimplifyNoPureMathMutator()(&idx);
       }
     }
   }
 
   void Visit(const For* op, Expr* expr) override {
-    auto* min_i = op->min.As<IntImm>();
-    auto* extent_i = op->extent.As<IntImm>();
-    if (min_i && extent_i && extent_i->value > min_i->value) {
-      var_intervals_.emplace(
-          op->loop_var->name,
-          common::CasInterval{min_i->value, extent_i->value - 1});
-    }
-
     auto* node = expr->As<For>();
-
     operator()(&node->body);
     operator()(&node->extent);
-
-    if (min_i && extent_i) {
-      var_intervals_.erase(op->loop_var->name);
-    }
   }
-
-  common::cas_intervals_t var_intervals_;
 };
 
 struct SimplifyStoreMutator : public ir::IRMutator<ir::Expr*> {
@@ -173,35 +91,19 @@ struct SimplifyStoreMutator : public ir::IRMutator<ir::Expr*> {
     auto* node = op->As<Store>();
 
     for (auto& idx : node->indices) {
-      if (common::IsPureMath(idx)) {
-        PartialSimplify(&idx, var_intervals_);
+      if (cinn::common::IsPureMath(idx)) {
+        idx = ArithSimplify(idx);
       } else {
-        SimplifyButStoreLoadMutator mutator(var_intervals_);
-        mutator(&idx);
+        SimplifyNoPureMathMutator()(&idx);
       }
     }
   }
 
   void Visit(const For* op, Expr* expr) override {
-    auto* min_i = op->min.As<IntImm>();
-    auto* extent_i = op->extent.As<IntImm>();
-    if (min_i && extent_i) {
-      var_intervals_.emplace(
-          op->loop_var->name,
-          common::CasInterval{min_i->value, extent_i->value - 1});
-    }
-
     auto* node = expr->As<For>();
-
     operator()(&node->body);
     operator()(&node->extent);
-
-    if (min_i && extent_i) {
-      var_intervals_.erase(op->loop_var->name);
-    }
   }
-
-  common::cas_intervals_t var_intervals_;
 };
 
 struct SimplifyRampMutator : public ir::IRMutator<Expr*> {
@@ -210,13 +112,16 @@ struct SimplifyRampMutator : public ir::IRMutator<Expr*> {
   void Visit(const Ramp* op, Expr* expr) override {
     auto* node = expr->As<ir::Ramp>();
 
-    CHECK(common::IsPureMath(node->base))
-        << node->base << "is not a pure math!";
-    CHECK(common::IsPureMath(node->stride))
-        << node->stride << "is not a pure math!";
-
-    Simplify(&node->base);
-    Simplify(&node->stride);
+    PADDLE_ENFORCE_EQ(
+        cinn::common::IsPureMath(node->base),
+        true,
+        ::common::errors::InvalidArgument("node->base is not a pure math!"));
+    PADDLE_ENFORCE_EQ(
+        cinn::common::IsPureMath(node->stride),
+        true,
+        ::common::errors::InvalidArgument("node->stride is not a pure math!"));
+    node->base = ArithSimplify(node->base);
+    node->stride = ArithSimplify(node->stride);
   }
   // ramp + ramp
   void Visit(const Add* op, Expr* expr) override {
@@ -227,8 +132,8 @@ struct SimplifyRampMutator : public ir::IRMutator<Expr*> {
     auto b_ramp = b.As<ir::Ramp>();
 
     if (a_ramp && b_ramp && a_ramp->lanes == b_ramp->lanes) {
-      Expr base_add = common::AutoSimplify(a_ramp->base + b_ramp->base);
-      Expr stride_add = common::AutoSimplify(a_ramp->stride + b_ramp->stride);
+      Expr base_add = optim::ArithSimplify(a_ramp->base + b_ramp->base);
+      Expr stride_add = optim::ArithSimplify(a_ramp->stride + b_ramp->stride);
       *expr = ir::Ramp::Make(base_add, stride_add, a_ramp->lanes);
     }
   }
@@ -241,33 +146,154 @@ struct SimplifyIfThenElseMutator : public ir::IRMutator<> {
 
   void Visit(const IfThenElse* op, Expr* expr) override {
     auto* node = expr->As<ir::IfThenElse>();
-    node->condition = common::AutoSimplify(node->condition);
 
     auto* condition_int = node->condition.As<ir::IntImm>();
     auto* condition_uint = node->condition.As<ir::UIntImm>();
-    int64_t value;
-    if (condition_int || condition_uint) {
-      if (condition_int) {
-        value = condition_int->value;
-      } else {
-        value = condition_uint->value;
-      }
-      if (value) {
-        *expr = op->true_case;
-      } else {
-        if (op->false_case.defined()) {
-          *expr = op->false_case;
-        } else {
-          // null condition
-          *expr = ir::Block::Make({});
-        }
-      }
-    }
-    if (expr->As<ir::IfThenElse>()) {
-      if (node->true_case.defined()) Visit(&node->true_case, &node->true_case);
-      if (node->false_case.defined())
+
+    // not deterministic
+    if (!condition_int && !condition_uint) {
+      Visit(&node->true_case, &node->true_case);
+      if (node->false_case.defined()) {
         Visit(&node->false_case, &node->false_case);
+      }
+      return;
     }
+
+    bool value = condition_int ? condition_int->value : condition_uint->value;
+    if (value) {
+      *expr = op->true_case;
+      Visit(expr, expr);
+    } else if (op->false_case.defined()) {
+      *expr = op->false_case;
+      Visit(expr, expr);
+    } else {
+      *expr = ir::Block::Make({});
+    }
+  }
+};
+
+struct SimplifySelectMutator : public ir::IRMutator<> {
+  void operator()(Expr* x) { ir::IRMutator<>::Visit(x, x); }
+
+  using ir::IRMutator<>::Visit;
+
+  void Visit(const Select* op, Expr* expr) override {
+    auto* node = expr->As<ir::Select>();
+
+    auto* condition_int = node->condition.As<ir::IntImm>();
+    auto* condition_uint = node->condition.As<ir::UIntImm>();
+
+    // not deterministic
+    if (!condition_int && !condition_uint) {
+      Visit(&node->true_value, &node->true_value);
+      Visit(&node->false_value, &node->false_value);
+      return;
+    }
+
+    bool value = condition_int ? condition_int->value : condition_uint->value;
+    if (value) {
+      *expr = op->true_value;
+      Visit(expr, expr);
+    } else {
+      *expr = op->false_value;
+      Visit(expr, expr);
+    }
+  }
+};
+
+struct SimplifyLogicalMutator : public ir::ExprMutator<> {
+  void operator()(Expr* expr) { ir::ExprMutator<>::Visit(expr, expr); }
+
+#define DEFINE_VISIT_CMP_OP(OpType, Method)                         \
+  void Visit(const ir::OpType* op, Expr* expr) override {           \
+    VLOG(7) << "Begin Visit Cmp op: " << *expr;                     \
+    auto* node = expr->As<ir::OpType>();                            \
+    ir::ExprMutator<>::Visit(&node->a(), &node->a());               \
+    ir::ExprMutator<>::Visit(&node->b(), &node->b());               \
+    if (node->a().is_constant() && node->b().is_constant())         \
+      if (node->a().get_constant() Method node->b().get_constant()) \
+        *expr = Expr(true);                                         \
+    VLOG(7) << "End Visit Cmp op: " << *expr;                       \
+  }
+  DEFINE_VISIT_CMP_OP(LE, <=)
+  DEFINE_VISIT_CMP_OP(LT, <)
+  DEFINE_VISIT_CMP_OP(GE, >=)
+  DEFINE_VISIT_CMP_OP(GT, >)
+  DEFINE_VISIT_CMP_OP(EQ, ==)
+  DEFINE_VISIT_CMP_OP(NE, !=)
+
+#undef DEFINE_VISIT_CMP_OP
+
+  void Visit(const ir::And* op, Expr* expr) override {
+    VLOG(7) << "Begin Visit And op: " << *expr;
+    auto* node = expr->As<ir::And>();
+    ir::ExprMutator<>::Visit(&node->a(), &node->a());
+    if (common::IsZero(node->a())) {
+      *expr = Expr(false);
+      VLOG(7) << "End Visit And op: " << *expr;
+      return;
+    }
+    ir::ExprMutator<>::Visit(&node->b(), &node->b());
+    if (common::IsZero(node->b())) {
+      VLOG(7) << "End Visit And op: " << *expr;
+      *expr = Expr(false);
+      return;
+    }
+    if (common::IsOne(node->a()) && common::IsOne(node->b()))
+      *expr = Expr(true);
+    VLOG(7) << "End Visit And op: " << *expr;
+  }
+
+  void Visit(const ir::Or* op, Expr* expr) override {
+    VLOG(7) << "Begin Visit Or op: " << *expr;
+    auto* node = expr->As<ir::Or>();
+    ir::ExprMutator<>::Visit(&node->a(), &node->a());
+    if (common::IsOne(node->a())) {
+      *expr = Expr(true);
+      VLOG(7) << "End visit Or op: " << *expr;
+      return;
+    }
+    ir::ExprMutator<>::Visit(&node->b(), &node->b());
+    if (common::IsOne(node->b())) {
+      *expr = Expr(true);
+      VLOG(7) << "End visit Or op: " << *expr;
+      return;
+    }
+    if (common::IsZero(node->a()) && common::IsZero(node->b()))
+      *expr = Expr(false);
+    VLOG(7) << "End visit Or op: " << *expr;
+  }
+
+  void Visit(const ir::Not* op, Expr* expr) override {
+    VLOG(7) << "Begin Visit Not op: " << *expr;
+    auto* node = expr->As<ir::Not>();
+    auto v = node->v();
+    ir::ExprMutator<>::Visit(&v, &v);
+    switch (v.node_type()) {
+      case ir::IrNodeTy::IntImm:
+      case ir::IrNodeTy::UIntImm:
+        *expr = common::IsZero(v) ? Expr(true) : Expr(false);
+        return;
+      case ir::IrNodeTy::Not:
+        *expr = v.As<ir::Not>()->v();
+        return;
+      case ir::IrNodeTy::LE:
+        *expr = ir::GT::Make(v->operand(0), v->operand(1));
+        return;
+      case ir::IrNodeTy::LT:
+        *expr = ir::GE::Make(v->operand(0), v->operand(1));
+        return;
+      case ir::IrNodeTy::GE:
+        *expr = ir::LT::Make(v->operand(0), v->operand(1));
+        return;
+      case ir::IrNodeTy::GT:
+        *expr = ir::LE::Make(v->operand(0), v->operand(1));
+        return;
+      default:
+        VLOG(7) << "End Visit Not op: " << *expr;
+        return;
+    }
+    VLOG(7) << "End Visit Not op: " << *expr;
   }
 };
 
@@ -318,32 +344,38 @@ struct SimplifyBlocksMutator : public ir::IRMutator<> {
     }
   }
 
-  void Visit(const IfThenElse* op, Expr* expr) override {
-    if (op->condition.As<ir::UIntImm>()) {
-      if (op->condition.as_bool() == false) {
-        VLOG(6) << "Simplify ir::IfThenElse false block";
-        if (expr->As<IfThenElse>()->false_case.defined()) {
-          *expr = expr->As<IfThenElse>()->false_case;
-        } else {
-          *expr = ir::Block::Make({});
-        }
-      } else {
-        if (expr->As<IfThenElse>()->true_case.defined()) {
-          VLOG(6) << "Simplify ir::IfThenElse true block";
-          *expr = expr->As<IfThenElse>()->true_case;
-        } else {
-          *expr = ir::Block::Make({});
-        }
+  void Visit(const ScheduleBlock* op, Expr* expr) override {
+    auto* node = expr->As<ScheduleBlock>();
+    PADDLE_ENFORCE_NOT_NULL(node,
+                            ::common::errors::InvalidArgument(
+                                "The node expr->As<ScheduleBlock>() is null"));
+    for (auto& var : node->iter_vars) {
+      if (var->lower_bound.defined()) {
+        Visit(&var->lower_bound, &var->lower_bound);
       }
-      ir::IRMutator<ir::Expr*>::Visit(expr, expr);
-      return;
+      if (var->upper_bound.defined()) {
+        Visit(&var->upper_bound, &var->upper_bound);
+      }
     }
-    ir::IRMutator<ir::Expr*>::Visit(op, expr);
+    for (auto& buffer_region : node->read_buffers) {
+      Visit(&buffer_region, &buffer_region);
+    }
+    for (auto& buffer_region : node->write_buffers) {
+      Visit(&buffer_region, &buffer_region);
+    }
+
+    if (node->body.As<Block>()) {
+      if (node->body.As<Block>()->stmts.size() == 1) {
+        node->body = node->body.As<Block>()->stmts[0];
+      }
+    }
+
+    Visit(&(node->body), &(node->body));
   }
 };
 
 struct SimplifyForLoopsMutator : public ir::IRMutator<> {
-  absl::flat_hash_map<std::string, common::CasInterval> var_intervals;
+  absl::flat_hash_map<std::string, Expr> var_mins;
   SimplifyForLoopsMutator() {}
 
   void operator()(Expr* x) { ir::IRMutator<ir::Expr*>::Visit(x, x); }
@@ -356,20 +388,15 @@ struct SimplifyForLoopsMutator : public ir::IRMutator<> {
     Visit(&node->extent, &node->extent);
     auto* min_i = node->min.As<IntImm>();
     auto* extent_i = node->extent.As<IntImm>();
-    if (min_i && extent_i && extent_i->value > min_i->value &&
-        extent_i->value - min_i->value == 1) {
+    if (min_i && extent_i && extent_i->value - min_i->value == 1) {
       VLOG(6) << "Simplify current For Loop";
       std::string var_name = node->loop_var->name;
-      var_intervals.emplace(
-          var_name, common::CasInterval{min_i->value, extent_i->value - 1});
-      if (node->body.As<ir::Block>() &&
-          node->body.As<ir::Block>()->stmts.size() == 1) {
-        *expr = node->body.As<ir::Block>()->stmts[0];
-      } else {
-        *expr = node->body;
-      }
+      var_mins.emplace(var_name, node->min);
+
+      *expr = node->body;
+
       Visit(expr, expr);
-      var_intervals.erase(var_name);
+      var_mins.erase(var_name);
     } else {
       Visit(&node->body, &node->body);
     }
@@ -378,32 +405,127 @@ struct SimplifyForLoopsMutator : public ir::IRMutator<> {
   void Visit(const _Var_* op, Expr* expr) override {
     auto* node = expr->As<ir::_Var_>();
 
-    if (var_intervals.count(node->name)) {
-      auto loop_range = var_intervals.at(node->name);
-      *expr = Expr(loop_range.l);
+    if (var_mins.count(node->name)) {
+      *expr = var_mins.at(node->name);
     }
+  }
+};
+
+template <typename CastType, typename T>
+CastType NormCastValue(T value) {
+  if (type_of<CastType>().is_uint() || type_of<T>().is_uint()) {
+    // not support uint
+    return static_cast<CastType>(value);
+  }
+
+  if (std::isinf(value)) {
+    if (CastType(value) == -std::numeric_limits<CastType>::infinity()) {
+      return -std::numeric_limits<CastType>::infinity();
+    }
+    return std::numeric_limits<CastType>::infinity();
+  } else if (std::isnan(value)) {
+    return std::numeric_limits<CastType>::signaling_NaN();
+  } else if (value >= static_cast<T>(std::numeric_limits<CastType>::max())) {
+    return std::numeric_limits<CastType>::max();
+  } else if (value <= static_cast<T>(std::numeric_limits<CastType>::lowest())) {
+    return std::numeric_limits<CastType>::lowest();
+  }
+  return static_cast<CastType>(value);
+}
+
+struct SimplifyCastMutator : public ir::IRMutator<> {
+  void operator()(Expr* expr) { ir::IRMutator<ir::Expr*>::Visit(expr, expr); }
+
+  void Visit(const ir::Cast* op, Expr* expr) {
+    auto* node = expr->As<ir::Cast>();
+
+    ir::IRMutator<ir::Expr*>::Visit(&node->v(), &node->v());
+
+    if (op->type() == op->v().type()) {
+      *expr = op->v();
+      return;
+    }
+
+#define __CAST_TO_TYPE(type__)                                          \
+  if (auto* i = op->v().As<ir::IntImm>()) {                             \
+    *expr = Expr(static_cast<type__>(i->value));                        \
+  } else if (auto* f = op->v().As<ir::FloatImm>()) {                    \
+    *expr = Expr(static_cast<type__>(NormCastValue<type__>(f->value))); \
+  } else if (auto* u = op->v().As<ir::UIntImm>()) {                     \
+    *expr = Expr(static_cast<type__>(u->value));                        \
+  } else {                                                              \
+    CINN_NOT_IMPLEMENTED                                                \
+  }
+
+    if (op->v().is_constant()) {
+      if (op->type() == type_of<int8_t>()) {
+        __CAST_TO_TYPE(int8_t)
+      } else if (op->type() == type_of<int16_t>()) {
+        __CAST_TO_TYPE(int16_t)
+      } else if (op->type() == type_of<int32_t>()) {
+        __CAST_TO_TYPE(int32_t)
+      } else if (op->type() == type_of<int64_t>()) {
+        __CAST_TO_TYPE(int64_t)
+      } else if (op->type() == type_of<uint8_t>()) {
+        __CAST_TO_TYPE(uint8_t)
+      } else if (op->type() == type_of<uint16_t>()) {
+        __CAST_TO_TYPE(uint16_t)
+      } else if (op->type() == type_of<uint32_t>()) {
+        __CAST_TO_TYPE(uint32_t)
+      } else if (op->type() == type_of<uint64_t>()) {
+        __CAST_TO_TYPE(uint64_t)
+      } else if (op->type() == type_of<float>()) {
+        __CAST_TO_TYPE(float)
+      } else if (op->type() == type_of<double>()) {
+        __CAST_TO_TYPE(double)
+      } else if (op->type() == type_of<bool>()) {
+        __CAST_TO_TYPE(bool)
+      } else if (op->type() == type_of<uint32_t>()) {
+        __CAST_TO_TYPE(uint32_t)
+      } else if (op->type() == type_of<uint64_t>()) {
+        __CAST_TO_TYPE(uint64_t)
+      } else if (op->type() == type_of<bfloat16>()) {
+        // Cannot simplify!!! pass
+        __CAST_TO_TYPE(bfloat16)
+      } else if (op->type() == type_of<float16>()) {
+        // Cannot simplify!!! pass
+        __CAST_TO_TYPE(float16)
+      } else {
+        CINN_NOT_IMPLEMENTED
+      }
+    }
+#undef __CAST_TO_TYPE
   }
 };
 
 }  // namespace
 
-void Simplify(Expr* expr) {
-  VLOG(3) << "Begin Simplify " << *expr;
-  optim::CastSimplify(expr);
-  SimplifyRampMutator()(expr);
-  SimplifyLoadMutator()(expr);
-  SimplifyStoreMutator()(expr);
-  SimplifyIfThenElseMutator()(expr);
-
-  common::cas_intervals_t var_intervals;
-  SimplifyButStoreLoadMutator mutator(var_intervals);
-  mutator(expr);
-
-  ReplaceFracWithDivMutator()(expr);
-}
-
+void SimplifyCast(Expr* expr) { SimplifyCastMutator()(expr); }
 void SimplifyForLoops(Expr* expr) { SimplifyForLoopsMutator()(expr); }
 void SimplifyBlocks(Expr* expr) { SimplifyBlocksMutator()(expr); }
 
+void SimplifyLogical(Expr* expr) { SimplifyLogicalMutator()(expr); }
+
+Expr ArithSimplify(const Expr& u) {
+  if (!u.is_index()) return u;
+  auto copied = ir_utils::IRCopy(u);
+  return copied.as_index().Normalize();
+}
+
+void Simplify(Expr* expr) {
+  VLOG(6) << "Begin Simplify " << *expr;
+  SimplifyNoPureMathMutator()(expr);
+  SimplifyCastMutator()(expr);
+  SimplifyRampMutator()(expr);
+  SimplifyLoadMutator()(expr);
+  SimplifyStoreMutator()(expr);
+  SimplifyLogicalMutator()(expr);
+  SimplifyIfThenElseMutator()(expr);
+  SimplifySelectMutator()(expr);
+  SimplifyNoPureMathMutator()(expr);
+
+  ReplaceFracWithDivMutator()(expr);
+  VLOG(6) << "End Simplify " << *expr;
+}
 }  // namespace optim
 }  // namespace cinn

@@ -60,10 +60,14 @@ class TestExportPrunedGraph(unittest.TestCase):
         model = Logic()
         self.x = paddle.to_tensor(np.array([1]))
         self.y = paddle.to_tensor(np.array([-1]))
-        paddle.jit.to_static(model)
+        paddle.jit.to_static(model, full_graph=True)
         out = model(self.x, self.y, z=True)
         paddle.onnx.export(
-            model, 'pruned', input_spec=[self.x], output_spec=[out]
+            model,
+            'pruned',
+            input_spec=[self.x, self.y, True],
+            output_spec=[out],
+            input_names_after_prune=[self.x.name],
         )
 
 

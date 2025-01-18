@@ -12,8 +12,8 @@ limitations under the License. */
 #pragma once
 #include <vector>
 
+#include "paddle/common/macros.h"
 #include "paddle/phi/core/dense_tensor.h"
-#include "paddle/phi/core/macros.h"
 #include "paddle/phi/kernels/funcs/detail/strided_memcpy.h"
 
 namespace phi {
@@ -61,7 +61,7 @@ inline void CopyWithContext(const Context& ctx,
   memory_utils::Copy(dst_place, dst, src_place, src, num, ctx.stream());
 #else
   PADDLE_THROW(
-      phi::errors::PreconditionNotMet("Paddle is not compiled with GPU."));
+      common::errors::PreconditionNotMet("Paddle is not compiled with GPU."));
 #endif
 }
 
@@ -97,7 +97,7 @@ inline void StridedNumelCopyWithAxis(const Context& ctx,
 
   PADDLE_ENFORCE_EQ(src_stride_numel.size(),
                     dst_stride_numel.size(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Source and destination tensor should have the same "
                         "dimension size, but source tensor dimension size is "
                         "%u, destination tensor size is %u.",
@@ -109,7 +109,7 @@ inline void StridedNumelCopyWithAxis(const Context& ctx,
       PADDLE_ENFORCE_EQ(
           src_stride_numel[i] / src_stride_numel[axis],
           dst_stride_numel[i] / dst_stride_numel[axis],
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Source and destination tensor should have the same number of "
               "elements except the specified axis, but the source elements "
               "number is %d, destination elements number is %d.",
@@ -121,7 +121,7 @@ inline void StridedNumelCopyWithAxis(const Context& ctx,
       PADDLE_ENFORCE_EQ(
           src_stride_numel[i],
           dst_stride_numel[i],
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Source and destination tensor should have the same number of "
               "elements except the specified axis, but the source elements "
               "number is %d, destination elements number is %d.",
@@ -146,12 +146,12 @@ inline void StridedMemcpyWithAxis0(
     const phi::DenseTensor& input,
     const std::vector<const phi::DenseTensor*>& shape_refer,
     std::vector<phi::DenseTensor*>* outputs) {
-  const phi::DDim in_stride = stride_numel(input.dims());
+  const phi::DDim in_stride = common::stride_numel(input.dims());
   const int axis = 0;
   size_t input_offset = 0;
 
   for (size_t i = 0; i < outputs->size(); ++i) {
-    auto out_stride = stride_numel(shape_refer[i]->dims());
+    auto out_stride = common::stride_numel(shape_refer[i]->dims());
     auto out = outputs->at(i);
     if (out != nullptr && out->initialized() && out->numel() > 0) {
       StridedNumelCopyWithAxis<T, Context>(dev_ctx,

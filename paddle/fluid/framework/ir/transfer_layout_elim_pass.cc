@@ -44,23 +44,29 @@ namespace ir {
 // Put transfer_layout after op_node
 // transfer_info is for case when we need know this transfer_layout info,
 // nchw_nhwc or nhwc_nchw
-void TransferLayoutElimPass::PutTranferlayoutAfterOp(
+void TransferLayoutElimPass::PutTransferlayoutAfterOp(
     Node *op_node, ir::Graph *graph, std::string *transfer_info) const {
   std::unordered_set<const Node *> remove_nodes;
   // Ensure op_node has only one output!
   int op_node_useful_output = 0;
-  Node *var2;
+  Node *var2 = nullptr;
   for (auto ele : op_node->outputs) {
     if (!ele->outputs.empty()) {
       op_node_useful_output++;
       var2 = ele;
     }
   }
-  CHECK_EQ(op_node_useful_output == 1, true);
+  PADDLE_ENFORCE_EQ(
+      op_node_useful_output == 1,
+      true,
+      common::errors::InvalidArgument("Wrong number of op_node_useful_output, "
+                                      "expected 1, received %d",
+                                      op_node_useful_output));
 
   // group_norm has 3 inputs, but we do not need there is a transfer_layout
   // before Bias and Scale so we extract useful_var1s from op_node->inputs.
   std::vector<Node *> useful_var1s;
+  useful_var1s.reserve(op_node->inputs.size());
   for (auto var1 : op_node->inputs) {
     // if (var1->inputs.size() >= 1 &&
     //         var1->inputs[0]->Op()->Type() == "transfer_layout") {
@@ -68,7 +74,9 @@ void TransferLayoutElimPass::PutTranferlayoutAfterOp(
     // }
     useful_var1s.push_back(var1);
   }
-  CHECK_EQ(!useful_var1s.empty(), true);
+  PADDLE_ENFORCE_EQ(!useful_var1s.empty(),
+                    true,
+                    common::errors::InvalidArgument("useful_var1s is empty"));
 
   auto transfer_layout_opdesc = *useful_var1s[0]->inputs[0]->Op()->Proto();
   auto block = useful_var1s[0]->inputs[0]->Op()->Block();
@@ -81,7 +89,13 @@ void TransferLayoutElimPass::PutTranferlayoutAfterOp(
   // auto *var2_desc = block->Var(var2->Name());
   auto *var2_desc = var2->Var();
   auto var2_shape = var2_desc->GetShape();
-  CHECK_EQ(var2_shape.size() >= 4L, true);
+  PADDLE_ENFORCE_EQ(
+      var2_shape.size() >= 4L,
+      true,
+      common::errors::InvalidArgument("var2_shape.size is too small"
+                                      "expected no small than 4L"
+                                      "received %d",
+                                      var2_shape.size()));
   auto new_var2_shape = var2_shape;
 
   std::string suffix = "_nchw_to_nhwc";
@@ -119,7 +133,10 @@ void TransferLayoutElimPass::PutTranferlayoutAfterOp(
   auto *new_transfer_layout_node =
       graph->CreateOpNode(&new_transfer_layout_desc);
 
-  for (auto other_op : var2->outputs) {
+  // must use a tmp variable var_out, because var2->outputs will be changed in
+  // loop.
+  auto var_out = var2->outputs;
+  for (auto other_op : var_out) {
     IR_NODE_UNLINK(var2, other_op);
     other_op->Op()->RenameInput(var2->Name(), var2_dot_name);
     IR_NODE_LINK_TO(var2_dot, other_op);
@@ -148,11 +165,11 @@ bool TransferLayoutElimPass::AllInputIsTransferlayout(
   std::set<int> dst_layouts;
   std::set<int> src_layouts;
 
-  auto *scope = param_scope();
+  auto *scope = param_scope();  // NOLINT
 
   for (auto var : op_node->inputs) {
     // If this input is a 1D persistable tensor，we allow transfer_layout not
-    // appear before this var, but temporarily diasble this if.
+    // appear before this var, but temporarily disable this if.
     if (var->Var()->Persistable() && false) {
       auto var_dims =
           scope->FindVar(var->Name())->GetMutable<phi::DenseTensor>()->dims();
@@ -196,16 +213,27 @@ bool TransferLayoutElimPass::AllInputIsTransferlayout(
 //         |   |     |
 //       op0   op1    op2
 
-void TransferLayoutElimPass::ElimTwoTranferlayout(Node *op_node,
-                                                  ir::Graph *graph,
-                                                  bool *modify) const {
+void TransferLayoutElimPass::ElimTwoTransferlayout(Node *op_node,
+                                                   ir::Graph *graph,
+                                                   bool *modify) const {
   std::unordered_set<const Node *> remove_nodes;
   auto var1 = op_node->inputs[0];
   auto transfer_layout0 = var1->inputs[0];
   auto var0 = transfer_layout0->inputs[0];
   auto var2 = op_node->outputs[0];
-  CHECK_EQ(transfer_layout0->Name() == "transfer_layout", true);
-  CHECK_EQ(op_node->Name() == "transfer_layout", true);
+  PADDLE_ENFORCE_EQ(
+      op_node->Name() == "transfer_layout",
+      true,
+      common::errors::InvalidArgument("op_node->Name() must be transfer_layout",
+                                      "received %s",
+                                      op_node->Name()));
+  PADDLE_ENFORCE_EQ(
+      transfer_layout0->Name() == "transfer_layout",
+      true,
+      common::errors::InvalidArgument(
+          "op_node->inputs[0]->inputs[0]->Name() must be transfer_layout",
+          "received %s",
+          transfer_layout0->Name()));
   int dst0 = transfer_layout0->Op()->GetAttrIfExists<int>("dst_layout");
   int src0 = transfer_layout0->Op()->GetAttrIfExists<int>("src_layout");
   int dst1 = op_node->Op()->GetAttrIfExists<int>("dst_layout");
@@ -235,7 +263,7 @@ void TransferLayoutElimPass::ApplyImpl(ir::Graph *graph) const {
   FusePassBase::Init(pattern_name, graph);
 
   auto transfer_format = [&](std::string data_format) -> std::string {
-    if (data_format == "NCHW") {
+    if (data_format == "NCHW") {  // NOLINT
       return "NHWC";
     } else if (data_format == "NHWC") {
       return "NCHW";
@@ -243,8 +271,11 @@ void TransferLayoutElimPass::ApplyImpl(ir::Graph *graph) const {
     return "";
   };
 
+  int move_down_count = 0;
+  int elim_count = 0;
+
   while (true) {
-    auto op_node_sorted = framework::ir::TopologyVarientSort(
+    auto op_node_sorted = framework::ir::TopologyVariantSort(
         *graph, static_cast<framework::ir::SortKind>(0));
     bool modify = false;
     for (auto *op_node : op_node_sorted) {
@@ -286,7 +317,7 @@ void TransferLayoutElimPass::ApplyImpl(ir::Graph *graph) const {
       if (AllInputIsTransferlayout(op_node)) {
         if (is_concat_like_op) {
           std::string transfer_info;
-          PutTranferlayoutAfterOp(op_node, graph, &transfer_info);
+          PutTransferlayoutAfterOp(op_node, graph, &transfer_info);
           int axis = op_node->Op()->GetAttrIfExists<int>("axis");
           int modify_axis = axis;
           if (transfer_info == "nhwc_nchw") {
@@ -308,29 +339,39 @@ void TransferLayoutElimPass::ApplyImpl(ir::Graph *graph) const {
           }
           op_node->Op()->SetAttr("axis", modify_axis);
           modify = true;
+          move_down_count++;
           break;
         }
         if (is_pool_like_op) {
-          PutTranferlayoutAfterOp(op_node, graph, nullptr);
+          PutTransferlayoutAfterOp(op_node, graph, nullptr);
           op_node->Op()->SetAttr(
               "data_format",
               transfer_format(
                   op_node->Op()->GetAttrIfExists<std::string>("data_format")));
           modify = true;
+          move_down_count++;
           break;
         }
         if (is_act_like_op) {
-          PutTranferlayoutAfterOp(op_node, graph, nullptr);
+          PutTransferlayoutAfterOp(op_node, graph, nullptr);
           modify = true;
+          move_down_count++;
           break;
         }
         if (is_elim_op) {
-          ElimTwoTranferlayout(op_node, graph, &modify);
+          ElimTwoTransferlayout(op_node, graph, &modify);
+          elim_count++;
           break;
         }
       }
     }
     if (!modify) break;
+  }
+  if (move_down_count > 0) {
+    LOG(INFO) << "move down " << move_down_count << " transfer_layout";
+  }
+  if (elim_count > 0) {
+    LOG(INFO) << "eliminate " << elim_count << " pair of transfer_layout";
   }
 }
 

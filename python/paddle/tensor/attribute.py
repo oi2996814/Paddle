@@ -12,23 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# TODO: define functions to get tensor attributes
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 import paddle
 from paddle import _C_ops
 
+from ..base.data_feeder import check_type, check_variable_and_dtype
+from ..base.framework import in_dynamic_or_pir_mode, use_pir_api
 from ..common_ops_import import Variable
-from ..fluid.data_feeder import check_type, check_variable_and_dtype
-from ..fluid.framework import in_dygraph_mode
 from ..framework import LayerHelper, core
 from .creation import _complex_to_real_dtype, assign
+
+if TYPE_CHECKING:
+    from paddle import Tensor
 
 __all__ = []
 
 
-def rank(input):
+def rank(input: Tensor) -> Tensor:
     """
 
     Returns the number of dimensions for a tensor, which is a 0-D int32 Tensor.
@@ -42,21 +47,21 @@ def rank(input):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            input = paddle.rand((3, 100, 100))
-            rank = paddle.rank(input)
-            print(rank)
-            # 3
+            >>> input = paddle.rand((3, 100, 100))
+            >>> rank = paddle.rank(input)
+            >>> print(rank.numpy())
+            3
     """
-    check_type(input, 'input', (Variable), 'input')
+    check_type(input, 'input', (Variable, paddle.pir.Value), 'input')
     ndims = len(input.shape)
     out = assign(np.array(ndims, 'int32'))
 
     return out
 
 
-def shape(input):
+def shape(input: Tensor) -> Tensor:
     """
     Get the shape of the input.
 
@@ -87,24 +92,24 @@ def shape(input):
     Examples:
         .. code-block:: python
 
-            import paddle.fluid as fluid
-            import numpy as np
-            import paddle
-            paddle.enable_static()
+            >>> import numpy as np
+            >>> import paddle
+            >>> paddle.enable_static()
 
-            inputs = paddle.static.data(name="x", shape=[3, 100, 100], dtype="float32")
-            output = paddle.shape(inputs)
+            >>> inputs = paddle.static.data(name="x", shape=[3, 100, 100], dtype="float32")
+            >>> output = paddle.shape(inputs)
 
-            exe = fluid.Executor(fluid.CPUPlace())
-            exe.run(fluid.default_startup_program())
+            >>> exe = paddle.static.Executor(paddle.CPUPlace())
+            >>> exe.run(paddle.static.default_startup_program())
 
-            img = np.ones((3, 100, 100)).astype(np.float32)
+            >>> img = np.ones((3, 100, 100)).astype(np.float32) # type: ignore[var-annotated]
 
-            res = exe.run(fluid.default_main_program(), feed={'x':img}, fetch_list=[output])
-            print(res) # [array([  3, 100, 100], dtype=int32)]
+            >>> res = exe.run(paddle.static.default_main_program(), feed={'x':img}, fetch_list=[output])
+            >>> print(res)
+            [array([  3, 100, 100], dtype=int32)]
     """
-    if in_dygraph_mode():
-        out = _C_ops.shape(input)
+    if in_dynamic_or_pir_mode():
+        out = _C_ops.shape64(input)  # type: ignore
         out.stop_gradient = True
         return out
     else:
@@ -122,6 +127,8 @@ def shape(input):
                 'complex64',
                 'complex128',
                 'uint16',
+                'float8_e4m3fn',
+                'float8_e5m2',
             ],
             'shape',
         )
@@ -137,7 +144,7 @@ def shape(input):
         return out
 
 
-def is_complex(x):
+def is_complex(x: Tensor) -> bool:
     """Return whether x is a tensor of complex data type(complex64 or complex128).
 
     Args:
@@ -149,31 +156,35 @@ def is_complex(x):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            x = paddle.to_tensor([1 + 2j, 3 + 4j])
-            print(paddle.is_complex(x))
-            # True
+            >>> x = paddle.to_tensor([1 + 2j, 3 + 4j])
+            >>> print(paddle.is_complex(x))
+            True
 
-            x = paddle.to_tensor([1.1, 1.2])
-            print(paddle.is_complex(x))
-            # False
+            >>> x = paddle.to_tensor([1.1, 1.2])
+            >>> print(paddle.is_complex(x))
+            False
 
-            x = paddle.to_tensor([1, 2, 3])
-            print(paddle.is_complex(x))
-            # False
+            >>> x = paddle.to_tensor([1, 2, 3])
+            >>> print(paddle.is_complex(x))
+            False
     """
-    if not isinstance(x, (paddle.Tensor, paddle.static.Variable)):
+    if not isinstance(
+        x, (paddle.Tensor, paddle.static.Variable, paddle.pir.Value)
+    ):
         raise TypeError(f"Expected Tensor, but received type of x: {type(x)}")
     dtype = x.dtype
     is_complex_dtype = (
         dtype == core.VarDesc.VarType.COMPLEX64
         or dtype == core.VarDesc.VarType.COMPLEX128
+        or dtype == core.DataType.COMPLEX64
+        or dtype == core.DataType.COMPLEX128
     )
     return is_complex_dtype
 
 
-def is_floating_point(x):
+def is_floating_point(x: Tensor) -> bool:
     """
     Returns whether the dtype of `x` is one of paddle.float64, paddle.float32, paddle.float16, and paddle.bfloat16.
 
@@ -186,16 +197,18 @@ def is_floating_point(x):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            x = paddle.arange(1., 5., dtype='float32')
-            y = paddle.arange(1, 5, dtype='int32')
-            print(paddle.is_floating_point(x))
-            # True
-            print(paddle.is_floating_point(y))
-            # False
+            >>> x = paddle.arange(1., 5., dtype='float32')
+            >>> y = paddle.arange(1, 5, dtype='int32')
+            >>> print(paddle.is_floating_point(x))
+            True
+            >>> print(paddle.is_floating_point(y))
+            False
     """
-    if not isinstance(x, (paddle.Tensor, paddle.static.Variable)):
+    if not isinstance(
+        x, (paddle.Tensor, paddle.static.Variable, paddle.pir.Value)
+    ):
         raise TypeError(f"Expected Tensor, but received type of x: {type(x)}")
     dtype = x.dtype
     is_fp_dtype = (
@@ -203,12 +216,16 @@ def is_floating_point(x):
         or dtype == core.VarDesc.VarType.FP64
         or dtype == core.VarDesc.VarType.FP16
         or dtype == core.VarDesc.VarType.BF16
+        or dtype == core.DataType.FLOAT32
+        or dtype == core.DataType.FLOAT64
+        or dtype == core.DataType.FLOAT16
+        or dtype == core.DataType.BFLOAT16
     )
     return is_fp_dtype
 
 
-def is_integer(x):
-    """Return whether x is a tensor of integeral data type.
+def is_integer(x: Tensor) -> bool:
+    """Return whether x is a tensor of integral data type.
 
     Args:
         x (Tensor): The input tensor.
@@ -219,40 +236,54 @@ def is_integer(x):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            x = paddle.to_tensor([1 + 2j, 3 + 4j])
-            print(paddle.is_integer(x))
-            # False
+            >>> x = paddle.to_tensor([1 + 2j, 3 + 4j])
+            >>> print(paddle.is_integer(x))
+            False
 
-            x = paddle.to_tensor([1.1, 1.2])
-            print(paddle.is_integer(x))
-            # False
+            >>> x = paddle.to_tensor([1.1, 1.2])
+            >>> print(paddle.is_integer(x))
+            False
 
-            x = paddle.to_tensor([1, 2, 3])
-            print(paddle.is_integer(x))
-            # True
+            >>> x = paddle.to_tensor([1, 2, 3])
+            >>> print(paddle.is_integer(x))
+            True
     """
-    if not isinstance(x, (paddle.Tensor, paddle.static.Variable)):
+    if not isinstance(
+        x, (paddle.Tensor, paddle.static.Variable, paddle.pir.Value)
+    ):
         raise TypeError(f"Expected Tensor, but received type of x: {type(x)}")
     dtype = x.dtype
-    is_int_dtype = (
-        dtype == core.VarDesc.VarType.UINT8
-        or dtype == core.VarDesc.VarType.INT8
-        or dtype == core.VarDesc.VarType.INT16
-        or dtype == core.VarDesc.VarType.INT32
-        or dtype == core.VarDesc.VarType.INT64
-    )
+
+    is_int_dtype = False
+    if not use_pir_api():
+        is_int_dtype = (
+            dtype == core.VarDesc.VarType.UINT8
+            or dtype == core.VarDesc.VarType.INT8
+            or dtype == core.VarDesc.VarType.INT16
+            or dtype == core.VarDesc.VarType.INT32
+            or dtype == core.VarDesc.VarType.INT64
+        )
+    else:
+        is_int_dtype = (
+            dtype == core.DataType.UINT8
+            or dtype == core.DataType.INT8
+            or dtype == core.DataType.INT16
+            or dtype == core.DataType.INT32
+            or dtype == core.DataType.INT64
+        )
+
     return is_int_dtype
 
 
-def real(x, name=None):
+def real(x: Tensor, name: str | None = None) -> Tensor:
     """
     Returns a new Tensor containing real values of the input Tensor.
 
     Args:
         x (Tensor): the input Tensor, its data type could be complex64 or complex128.
-        name (str, optional): The default value is None. Normally there is no need for
+        name (str|None, optional): The default value is None. Normally there is no need for
             user to set this property. For more information, please refer to :ref:`api_guide_Name` .
 
     Returns:
@@ -261,25 +292,28 @@ def real(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            x = paddle.to_tensor(
-                [[1 + 6j, 2 + 5j, 3 + 4j], [4 + 3j, 5 + 2j, 6 + 1j]])
-            # Tensor(shape=[2, 3], dtype=complex64, place=CUDAPlace(0), stop_gradient=True,
-            #        [[(1+6j), (2+5j), (3+4j)],
-            #         [(4+3j), (5+2j), (6+1j)]])
+            >>> x = paddle.to_tensor(
+            ...     [[1 + 6j, 2 + 5j, 3 + 4j], [4 + 3j, 5 + 2j, 6 + 1j]])
+            >>> print(x)
+            Tensor(shape=[2, 3], dtype=complex64, place=Place(cpu), stop_gradient=True,
+            [[(1+6j), (2+5j), (3+4j)],
+             [(4+3j), (5+2j), (6+1j)]])
 
-            real_res = paddle.real(x)
-            # Tensor(shape=[2, 3], dtype=float32, place=CUDAPlace(0), stop_gradient=True,
-            #        [[1., 2., 3.],
-            #         [4., 5., 6.]])
+            >>> real_res = paddle.real(x)
+            >>> print(real_res)
+            Tensor(shape=[2, 3], dtype=float32, place=Place(cpu), stop_gradient=True,
+            [[1., 2., 3.],
+             [4., 5., 6.]])
 
-            real_t = x.real()
-            # Tensor(shape=[2, 3], dtype=float32, place=CUDAPlace(0), stop_gradient=True,
-            #        [[1., 2., 3.],
-            #         [4., 5., 6.]])
+            >>> real_t = x.real()
+            >>> print(real_t)
+            Tensor(shape=[2, 3], dtype=float32, place=Place(cpu), stop_gradient=True,
+            [[1., 2., 3.],
+             [4., 5., 6.]])
     """
-    if in_dygraph_mode():
+    if in_dynamic_or_pir_mode():
         return _C_ops.real(x)
     else:
         check_variable_and_dtype(x, 'x', ['complex64', 'complex128'], 'real')
@@ -291,13 +325,13 @@ def real(x, name=None):
         return out
 
 
-def imag(x, name=None):
+def imag(x: Tensor, name: str | None = None) -> Tensor:
     """
     Returns a new tensor containing imaginary values of input tensor.
 
     Args:
         x (Tensor): the input tensor, its data type could be complex64 or complex128.
-        name (str, optional): The default value is None. Normally there is no need for
+        name (str|None, optional): The default value is None. Normally there is no need for
             user to set this property. For more information, please refer to :ref:`api_guide_Name` .
 
     Returns:
@@ -306,25 +340,28 @@ def imag(x, name=None):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            x = paddle.to_tensor(
-                [[1 + 6j, 2 + 5j, 3 + 4j], [4 + 3j, 5 + 2j, 6 + 1j]])
-            # Tensor(shape=[2, 3], dtype=complex64, place=CUDAPlace(0), stop_gradient=True,
-            #        [[(1+6j), (2+5j), (3+4j)],
-            #         [(4+3j), (5+2j), (6+1j)]])
+            >>> x = paddle.to_tensor(
+            ...     [[1 + 6j, 2 + 5j, 3 + 4j], [4 + 3j, 5 + 2j, 6 + 1j]])
+            >>> print(x)
+            Tensor(shape=[2, 3], dtype=complex64, place=Place(cpu), stop_gradient=True,
+            [[(1+6j), (2+5j), (3+4j)],
+             [(4+3j), (5+2j), (6+1j)]])
 
-            imag_res = paddle.imag(x)
-            # Tensor(shape=[2, 3], dtype=float32, place=CUDAPlace(0), stop_gradient=True,
-            #        [[6., 5., 4.],
-            #         [3., 2., 1.]])
+            >>> imag_res = paddle.imag(x)
+            >>> print(imag_res)
+            Tensor(shape=[2, 3], dtype=float32, place=Place(cpu), stop_gradient=True,
+            [[6., 5., 4.],
+             [3., 2., 1.]])
 
-            imag_t = x.imag()
-            # Tensor(shape=[2, 3], dtype=float32, place=CUDAPlace(0), stop_gradient=True,
-            #        [[6., 5., 4.],
-            #         [3., 2., 1.]])
+            >>> imag_t = x.imag()
+            >>> print(imag_t)
+            Tensor(shape=[2, 3], dtype=float32, place=Place(cpu), stop_gradient=True,
+            [[6., 5., 4.],
+             [3., 2., 1.]])
     """
-    if in_dygraph_mode():
+    if in_dynamic_or_pir_mode():
         return _C_ops.imag(x)
     else:
         check_variable_and_dtype(x, 'x', ['complex64', 'complex128'], 'imag')

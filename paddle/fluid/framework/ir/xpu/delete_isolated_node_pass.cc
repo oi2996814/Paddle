@@ -62,7 +62,7 @@ class DeleteIsolatedNodePass : public Pass {
 
 void DeleteIsolatedNodePass::ApplyImpl(Graph* graph) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, platform::errors::PreconditionNotMet("graph should not be null."));
+      graph, common::errors::PreconditionNotMet("graph should not be null."));
   if (!graph->IsMainGraph()) {
     VLOG(3) << "Pass(apply in main graph) will delete isolated nodes in all "
                "subgraphs.";
@@ -100,7 +100,7 @@ void DeleteIsolatedNodePass::CollectReservedPersistableNodeNames(
     std::unordered_set<std::string>* reserved_persistable_node_names) const {
   for (auto* node : graph->Nodes()) {
     if (!node || node->Name() == "fetch" || node->Name() == "feed") continue;
-    if (!node->IsVar() || !node->Var()->Persistable()) continue;
+    if (!node->IsVar() || !node->Var() || !node->Var()->Persistable()) continue;
     for (auto* out_node : node->outputs) {
       auto op_type = out_node->Op()->Type();
       if (control_flow_op_input_map_.count(op_type) == 0) {
@@ -119,7 +119,9 @@ int DeleteIsolatedNodePass::RemoveIsolatedNodes(
   for (auto* node : graph->Nodes()) {
     if (node->IsOp()) {
       block = node->Op()->Block();
-      break;
+      if (block != nullptr) {
+        break;
+      }
     }
   }
   Scope& scope = graph->Get<framework::Scope>("__param_scope__");
@@ -133,7 +135,7 @@ int DeleteIsolatedNodePass::RemoveIsolatedNodes(
   const std::unordered_set<ir::Node*> nodes = graph->Nodes();
   for (auto* node : nodes) {
     if (!node || node->Name() == "fetch" || node->Name() == "feed") continue;
-    if (!node->IsVar() || !node->Var()->Persistable()) continue;
+    if (!node->IsVar() || !node->Var() || !node->Var()->Persistable()) continue;
     auto name = node->Var()->Name();
     if (reserved_persistable_node_names.count(name) > 0) continue;
     delete_nodes.insert(node);

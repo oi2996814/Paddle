@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
 
 import paddle
-from paddle import fluid
+from paddle import base
 
 
 def numpy_cov(np_arr, rowvar=True, ddof=1, fweights=None, aweights=None):
@@ -37,9 +38,15 @@ class Cov_Test(unittest.TestCase):
 
     def test_tensor_cov_default(self):
         typelist = ['float64']
-        places = [fluid.CPUPlace()]
-        if fluid.core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
+        if base.core.is_compiled_with_cuda():
+            places.append(base.CUDAPlace(0))
 
         for idx, p in enumerate(places):
             if idx == 0:
@@ -60,9 +67,15 @@ class Cov_Test(unittest.TestCase):
 
     def test_tensor_cov_rowvar(self):
         typelist = ['float64']
-        places = [fluid.CPUPlace()]
-        if fluid.core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
+        if base.core.is_compiled_with_cuda():
+            places.append(base.CUDAPlace(0))
 
         for idx, p in enumerate(places):
             if idx == 0:
@@ -87,9 +100,15 @@ class Cov_Test(unittest.TestCase):
 
     def test_tensor_cov_ddof(self):
         typelist = ['float64']
-        places = [fluid.CPUPlace()]
-        if fluid.core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
+        if base.core.is_compiled_with_cuda():
+            places.append(base.CUDAPlace(0))
 
         for idx, p in enumerate(places):
             if idx == 0:
@@ -114,9 +133,15 @@ class Cov_Test(unittest.TestCase):
 
     def test_tensor_cov_fweights(self):
         typelist = ['float64']
-        places = [fluid.CPUPlace()]
-        if fluid.core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
+        if base.core.is_compiled_with_cuda():
+            places.append(base.CUDAPlace(0))
 
         for idx, p in enumerate(places):
             if idx == 0:
@@ -145,9 +170,15 @@ class Cov_Test(unittest.TestCase):
 
     def test_tensor_cov_aweights(self):
         typelist = ['float64']
-        places = [fluid.CPUPlace()]
-        if fluid.core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
+        if base.core.is_compiled_with_cuda():
+            places.append(base.CUDAPlace(0))
 
         for idx, p in enumerate(places):
             if idx == 0:
@@ -176,9 +207,15 @@ class Cov_Test(unittest.TestCase):
 
     def test_tensor_cov_weights(self):
         typelist = ['float64']
-        places = [fluid.CPUPlace()]
-        if fluid.core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
+        if base.core.is_compiled_with_cuda():
+            places.append(base.CUDAPlace(0))
 
         for idx, p in enumerate(places):
             if idx == 0:
@@ -266,7 +303,7 @@ class Cov_Test5(Cov_Test3):
         self.aw_s = 1.0
 
 
-# The value of Input(fweights) cannot be negtive
+# The value of Input(fweights) cannot be negative
 class Cov_Test6(Cov_Test3):
     def setUp(self):
         self.shape = [5, 10]
@@ -296,7 +333,7 @@ class Cov_Test8(Cov_Test3):
         self.aw_s = 1.0
 
 
-# The value of Input(aweights) cannot be negtive
+# The value of Input(aweights) cannot be negative
 class Cov_Test9(Cov_Test3):
     def setUp(self):
         self.shape = [5, 10]

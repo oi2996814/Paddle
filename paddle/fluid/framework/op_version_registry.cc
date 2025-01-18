@@ -14,9 +14,7 @@ limitations under the License. */
 
 #include "paddle/fluid/framework/op_version_registry.h"
 
-namespace paddle {
-namespace framework {
-namespace compatible {
+namespace paddle::framework::compatible {
 
 OpVersionDesc&& OpVersionDesc::NewInput(const std::string& name,
                                         const std::string& remark) {
@@ -79,7 +77,7 @@ OpVersion& OpVersionRegistrar::Register(const std::string& op_type) {
   PADDLE_ENFORCE_EQ(
       op_version_map_.find(op_type),
       op_version_map_.end(),
-      platform::errors::AlreadyExists(
+      common::errors::AlreadyExists(
           "'%s' is registered in operator version more than once.", op_type));
   op_version_map_.insert(
       std::pair<std::string, OpVersion>{op_type, OpVersion()});
@@ -89,7 +87,7 @@ uint32_t OpVersionRegistrar::version_id(const std::string& op_type) const {
   PADDLE_ENFORCE_NE(
       op_version_map_.count(op_type),
       0,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The version of operator type %s has not been registered.", op_type));
   return op_version_map_.find(op_type)->second.version_id();
 }
@@ -102,6 +100,4 @@ PassVersionCheckerRegistrar& PassVersionCheckerRegistrar::GetInstance() {
 // Provide a fake registration item for pybind testing.
 #include "paddle/fluid/framework/op_version_registry.inl"
 
-}  // namespace compatible
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::compatible

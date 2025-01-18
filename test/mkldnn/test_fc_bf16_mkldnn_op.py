@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 from paddle import enable_static
-from paddle.fluid import core
+from paddle.base import core
 
 
 def fully_connected_naive(input, weights, bias_data):
@@ -67,7 +67,7 @@ class TestFcBf16MklDNNOp(OpTest):
         self.outputs = {'Out': self.output}
 
     def test_check_output(self):
-        self.check_output_with_place(core.CPUPlace())
+        self.check_output_with_place(core.CPUPlace(), check_pir_onednn=True)
 
     def test_check_grad_normal(self):
         pass

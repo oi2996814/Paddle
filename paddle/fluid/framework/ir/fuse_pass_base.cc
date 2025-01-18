@@ -16,15 +16,11 @@
 
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Scope;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 class Graph;
 
@@ -36,7 +32,7 @@ void FusePassBase::Init(const std::string& repr, Graph* graph) const {
 Scope* FusePassBase::param_scope() const {
   PADDLE_ENFORCE_EQ(graph_->Has(kParamScopeAttr),
                     true,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Graph must have kParamScopeAttr attribute."));
   auto& scope = graph_->Get<framework::Scope>(kParamScopeAttr);
   return &scope;
@@ -44,10 +40,10 @@ Scope* FusePassBase::param_scope() const {
 
 void FusePassBase::AddStatis(int count_of_fused) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph_, platform::errors::InvalidArgument("Graph cannot be nullptr."));
+      graph_, common::errors::InvalidArgument("Graph cannot be nullptr."));
   PADDLE_ENFORCE_EQ(repr_.empty(),
                     false,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Fuse pass must be initialized with a name."));
   if (!graph_->Has(kFuseStatisAttr)) {
     graph_->Set(kFuseStatisAttr, new std::unordered_map<std::string, int>);
@@ -77,6 +73,4 @@ FuseOptions FusePassBase::FindFuseOption(const Node& node1,
 #endif
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir

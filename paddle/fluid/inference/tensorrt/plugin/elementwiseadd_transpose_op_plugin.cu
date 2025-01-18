@@ -61,16 +61,16 @@ bool ElementwiseAddTransposePluginDynamic::supportsFormatCombination(
     int nb_outputs) TRT_NOEXCEPT {
   PADDLE_ENFORCE_NOT_NULL(
       in_out,
-      platform::errors::InvalidArgument("The input of elementwiseadd_transpose "
-                                        "plugin shoule not be nullptr."));
+      common::errors::InvalidArgument("The input of elementwiseadd_transpose "
+                                      "plugin should not be nullptr."));
 
   PADDLE_ENFORCE_LT(
       pos,
       nb_inputs + nb_outputs,
-      platform::errors::InvalidArgument("The pos(%d) should be less than the "
-                                        "num(%d) of the input and the output.",
-                                        pos,
-                                        nb_inputs + nb_outputs));
+      common::errors::InvalidArgument("The pos(%d) should be less than the "
+                                      "num(%d) of the input and the output.",
+                                      pos,
+                                      nb_inputs + nb_outputs));
   // (in_out && pos < (nb_inputs + nb_outputs));
   const nvinfer1::PluginTensorDesc &in = in_out[pos];
   // input 0
@@ -131,28 +131,27 @@ void ElementwiseAddTransposePluginDynamic::configurePlugin(
   if (x_numel <= 0) {
     return;
   }
-  ele_out_tensor_.Resize(phi::make_ddim(x_shape));
-  paddle::platform::DeviceContextPool &pool =
-      paddle::platform::DeviceContextPool::Instance();
-  platform::CUDAPlace place(platform::GetCurrentDeviceId());
+  ele_out_tensor_.Resize(common::make_ddim(x_shape));
+  phi::DeviceContextPool &pool = phi::DeviceContextPool::Instance();
+  phi::GPUPlace place(platform::GetCurrentDeviceId());
   auto *device_context = static_cast<phi::GPUContext *>(pool.Get(place));
   const phi::GPUContext &dev_ctx = *device_context;
 
   if (x_type == nvinfer1::DataType::kFLOAT) {
-    x_meta_ =
-        phi::DenseTensorMeta(phi::DataType::FLOAT32, phi::make_ddim(x_shape));
-    y_meta_ =
-        phi::DenseTensorMeta(phi::DataType::FLOAT32, phi::make_ddim(y_shape));
-    out_meta_ =
-        phi::DenseTensorMeta(phi::DataType::FLOAT32, phi::make_ddim(out_shape));
+    x_meta_ = phi::DenseTensorMeta(phi::DataType::FLOAT32,
+                                   common::make_ddim(x_shape));
+    y_meta_ = phi::DenseTensorMeta(phi::DataType::FLOAT32,
+                                   common::make_ddim(y_shape));
+    out_meta_ = phi::DenseTensorMeta(phi::DataType::FLOAT32,
+                                     common::make_ddim(out_shape));
     dev_ctx.template Alloc<float>(&ele_out_tensor_, x_numel * sizeof(float));
   } else if (x_type == nvinfer1::DataType::kHALF) {
-    x_meta_ =
-        phi::DenseTensorMeta(phi::DataType::FLOAT16, phi::make_ddim(x_shape));
-    y_meta_ =
-        phi::DenseTensorMeta(phi::DataType::FLOAT16, phi::make_ddim(y_shape));
-    out_meta_ =
-        phi::DenseTensorMeta(phi::DataType::FLOAT16, phi::make_ddim(out_shape));
+    x_meta_ = phi::DenseTensorMeta(phi::DataType::FLOAT16,
+                                   common::make_ddim(x_shape));
+    y_meta_ = phi::DenseTensorMeta(phi::DataType::FLOAT16,
+                                   common::make_ddim(y_shape));
+    out_meta_ = phi::DenseTensorMeta(phi::DataType::FLOAT16,
+                                     common::make_ddim(out_shape));
     dev_ctx.template Alloc<phi::dtype::float16>(
         &ele_out_tensor_, x_numel * sizeof(phi::dtype::float16));
   }
@@ -163,7 +162,7 @@ nvinfer1::DataType ElementwiseAddTransposePluginDynamic::getOutputDataType(
     int nb_inputs) const TRT_NOEXCEPT {
   PADDLE_ENFORCE_EQ(index,
                     0,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The Elementwise Plugin only has one input, so the "
                         "index value should be 0, but get %d.",
                         index));
@@ -177,9 +176,8 @@ int ElementwiseAddTransposePluginDynamic::enqueue(
     void *const *outputs,
     void *workspace,
     cudaStream_t stream) TRT_NOEXCEPT {
-  paddle::platform::DeviceContextPool &pool =
-      paddle::platform::DeviceContextPool::Instance();
-  platform::CUDAPlace place(platform::GetCurrentDeviceId());
+  phi::DeviceContextPool &pool = phi::DeviceContextPool::Instance();
+  phi::GPUPlace place(platform::GetCurrentDeviceId());
   auto *device_context = static_cast<phi::GPUContext *>(pool.Get(place));
   const phi::GPUContext &dev_ctx = *device_context;
 

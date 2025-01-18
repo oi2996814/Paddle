@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -24,7 +24,7 @@ set -ex
 # remove others to expedite build and reduce docker image size. The original
 # manylinux docker image project builds many python versions.
 # NOTE We added back 3.5.1, since auditwheel requires python 3.3+
-CPYTHON_VERSIONS="3.11.0 3.10.0 3.9.0 3.8.0"
+CPYTHON_VERSIONS="3.12.0 3.11.0 3.10.0 3.9.0 3.8.0"
 
 # openssl version to build, with expected sha256 hash of .tar.gz
 # archive
@@ -36,7 +36,7 @@ AUTOCONF_HASH=954bd69b391edc12d6a4a51a2dd1476543da5c6bbf05a95b59dc0dd6fd4c2969
 
 # Dependencies for compiling Python that we want to remove from
 # the final image after compiling Python
-PYTHON_COMPILE_DEPS="zlib-devel bzip2-devel ncurses-devel sqlite-devel readline-devel tk-devel gdbm-devel db4-devel libpcap-devel xz-devel libffi-devel"
+PYTHON_COMPILE_DEPS="zlib-devel bzip2-devel ncurses-devel sqlite-devel readline-devel tk-devel gdbm-devel xz-devel libffi-devel"
 
 # Libraries that are allowed as part of the manylinux1 profile
 MANYLINUX1_DEPS="glibc-devel libstdc++-devel glib2-devel libX11-devel libXext-devel libXrender-devel  mesa-libGL-devel libICE-devel libSM-devel ncurses-devel freetype-devel libpng-devel"
@@ -49,11 +49,8 @@ source $MY_DIR/build_utils.sh
 yum -y install wget curl epel-release
 
 # Development tools and libraries
-yum -y install bzip2 make git patch unzip bison yasm diffutils \
+yum -y install bzip2 make git patch unzip bison diffutils \
     automake which file \
-    kernel-devel-`uname -r` \
-    devtoolset-2-binutils devtoolset-2-gcc \
-    devtoolset-2-gcc-c++ devtoolset-2-gcc-gfortran \
     ${PYTHON_COMPILE_DEPS}
 
 # Install more recent version of cmake
@@ -82,6 +79,7 @@ PY38_BIN=/opt/python/cp38-cp38/bin
 PY39_BIN=/opt/python/cp39-cp39/bin
 PY310_BIN=/opt/python/cp310-cp310/bin
 PY311_BIN=/opt/python/cp311-cp311/bin
+PY312_BIN=/opt/python/cp312-cp312/bin
 # NOTE Since our custom manylinux image builds pythons with shared
 # libpython, we need to add libpython's dir to LD_LIBRARY_PATH before running
 # python.

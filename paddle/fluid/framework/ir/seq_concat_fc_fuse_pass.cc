@@ -17,9 +17,7 @@
 #include "paddle/fluid/framework/ir/graph_pattern_detector.h"
 #include "paddle/fluid/framework/op_version_registry.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 struct FuseExpr {};
 
@@ -266,14 +264,14 @@ void SeqConcatFcFusePass::ApplyImpl(ir::Graph* graph) const {
   auto* concat_out = BuildSeqExpandConcatPattern(pattern);
   BuildFCPattern(pattern, concat_out);
 
-#define GET_NODE(id, pattern)                                             \
-  PADDLE_ENFORCE_GT(                                                      \
-      subgraph.count(pattern.RetrieveNode(#id)),                          \
-      0,                                                                  \
-      platform::errors::NotFound("Pattern has no node called %s.", #id)); \
-  auto* id = subgraph.at(pattern.RetrieveNode(#id));                      \
-  PADDLE_ENFORCE_NOT_NULL(                                                \
-      id, platform::errors::NotFound("Subgraph has no node %s.", #id));
+#define GET_NODE(id, pattern)                                           \
+  PADDLE_ENFORCE_GT(                                                    \
+      subgraph.count(pattern.RetrieveNode(#id)),                        \
+      0,                                                                \
+      common::errors::NotFound("Pattern has no node called %s.", #id)); \
+  auto* id = subgraph.at(pattern.RetrieveNode(#id));                    \
+  PADDLE_ENFORCE_NOT_NULL(                                              \
+      id, common::errors::NotFound("Subgraph has no node %s.", #id));
 
   int fuse_count{0};
 
@@ -340,9 +338,7 @@ void SeqConcatFcFusePass::ApplyImpl(ir::Graph* graph) const {
   AddStatis(fuse_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(seq_concat_fc_fuse_pass,
               paddle::framework::ir::SeqConcatFcFusePass);

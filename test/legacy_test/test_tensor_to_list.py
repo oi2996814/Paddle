@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
 
 import paddle
-from paddle import fluid
+from paddle import base
 
 
 class TensorToListTest(unittest.TestCase):
@@ -25,10 +26,16 @@ class TensorToListTest(unittest.TestCase):
         self.shape = [11, 25, 32, 43]
 
     def test_tensor_tolist(self):
-        places = [fluid.CPUPlace()]
-        if fluid.core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
-            places.append(fluid.CUDAPinnedPlace())
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
+        if base.core.is_compiled_with_cuda():
+            places.append(base.CUDAPlace(0))
+            places.append(base.CUDAPinnedPlace())
 
         for p in places:
             np_arr = np.reshape(

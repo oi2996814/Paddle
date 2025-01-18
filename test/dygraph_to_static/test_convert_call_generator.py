@@ -14,10 +14,12 @@
 
 import unittest
 
-from dygraph_to_static_util import ast_only_test
+from dygraph_to_static_utils import (
+    Dy2StTestBase,
+    test_ast_only,
+)
 
 import paddle
-from paddle.jit import to_static
 from paddle.jit.dy2static.convert_call_func import translator_logger
 
 
@@ -32,15 +34,15 @@ def main_func():
         print(i)
 
 
-class TestConvertGenerator(unittest.TestCase):
+class TestConvertGenerator(Dy2StTestBase):
     # fallback will ok.
-    @ast_only_test
+    @test_ast_only
     def test_raise_error(self):
         translator_logger.verbosity_level = 1
         with self.assertLogs(
             translator_logger.logger_name, level='WARNING'
         ) as cm:
-            to_static(main_func)()
+            paddle.jit.to_static(main_func)()
             self.assertRegex(
                 cm.output[0],
                 "Your function:`dyfunc_generator` doesn't support "

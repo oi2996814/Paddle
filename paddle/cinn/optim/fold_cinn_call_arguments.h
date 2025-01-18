@@ -40,7 +40,7 @@ namespace optim {
  * Call(some_lowered_func, packed_args, 3); // 3 is the number of arguments
  * \endcode
  */
-void FoldCINNCallArguments(Expr* expr);
+void FoldCINNCallArguments(ir::LoweredFunc fn);
 
 }  // namespace optim
 }  // namespace cinn

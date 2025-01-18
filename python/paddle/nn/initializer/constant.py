@@ -11,11 +11,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
+import paddle
 from paddle import _C_ops
 
-from ...fluid import core, framework
-from ...fluid.framework import _current_expected_place, in_dygraph_mode
+from ...base import core, framework
+from ...base.framework import (
+    _current_expected_place,
+    in_dygraph_mode,
+    in_dynamic_or_pir_mode,
+)
 
 # TODO: define the initializers of Constant in neural network
 from .initializer import Initializer
@@ -31,13 +37,17 @@ class ConstantInitializer(Initializer):
 
     """
 
-    def __init__(self, value=0.0, force_cpu=False):
+    def __init__(self, value: float = 0.0, force_cpu: bool = False) -> None:
         assert value is not None
         super().__init__()
         self._value = value
         self._force_cpu = force_cpu
 
-    def forward(self, var, block=None):
+    def forward(
+        self,
+        var: paddle.Tensor,
+        block: paddle.pir.Block | None = None,
+    ) -> paddle.Tensor | None:
         """Initialize the input tensor with constant.
 
         Args:
@@ -48,19 +58,44 @@ class ConstantInitializer(Initializer):
         Returns:
             The initialization op
         """
+
         block = self._check_block(block)
 
-        assert isinstance(var, (framework.Variable, framework.EagerParamBase))
-        assert isinstance(block, framework.Block)
+        assert isinstance(
+            var,
+            (
+                framework.Variable,
+                framework.EagerParamBase,
+                paddle.pir.Value,
+                paddle.pir.core.ParameterMeta,
+            ),
+        )
+        assert isinstance(block, (framework.Block, paddle.pir.Block))
 
-        if in_dygraph_mode():
+        if in_dynamic_or_pir_mode():
             place = _current_expected_place()
             if self._force_cpu:
                 place = core.CPUPlace()
-            _C_ops.full_(
-                var, var.shape, str(float(self._value)), var.dtype, place
-            )
-            return None
+            if in_dygraph_mode():
+                if isinstance(var, framework.EagerParamBase) and var.is_dist():
+                    out_var = _C_ops.full(
+                        var._local_shape, float(self._value), var.dtype, place
+                    )
+                    out_var = (
+                        paddle.distributed.auto_parallel.api.dtensor_from_local(
+                            out_var, var.process_mesh, var.placements
+                        )
+                    )
+                    out_var._share_underline_tensor_to(var)
+                else:
+                    _C_ops.full_(
+                        var, var.shape, float(self._value), var.dtype, place
+                    )
+                return None
+            else:
+                return _C_ops.full(
+                    var.shape, float(self._value), var.dtype, place
+                )
         else:
             op = block.append_op(
                 type="fill_constant",
@@ -105,7 +140,7 @@ class Constant(ConstantInitializer):
 
     """
 
-    def __init__(self, value=0.0):
+    def __init__(self, value: float = 0.0) -> None:
         if value is None:
             raise ValueError("value must not be none.")
         super().__init__(value=value, force_cpu=False)

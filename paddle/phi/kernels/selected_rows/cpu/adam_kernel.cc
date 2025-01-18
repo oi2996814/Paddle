@@ -14,8 +14,8 @@
 
 #include "paddle/phi/kernels/selected_rows/adam_kernel.h"
 
-#include "gflags/gflags.h"
 #include "glog/logging.h"
+#include "paddle/common/flags.h"
 
 #include "paddle/phi/backends/cpu/cpu_context.h"
 #include "paddle/phi/core/kernel_registry.h"
@@ -24,10 +24,9 @@
 #include "paddle/phi/kernels/funcs/adam_functors.h"
 #include "paddle/phi/kernels/funcs/selected_rows_functor.h"
 
-DECLARE_int32(inner_op_parallelism);
+PD_DECLARE_int32(inner_op_parallelism);
 
-namespace phi {
-namespace sr {
+namespace phi::sr {
 
 template <typename T, typename Context>
 void AdamDenseParamSparseGradKernel(
@@ -37,6 +36,7 @@ void AdamDenseParamSparseGradKernel(
     const DenseTensor& learning_rate,
     const DenseTensor& moment1,
     const DenseTensor& moment2,
+    const paddle::optional<DenseTensor>& moment2_max,
     const DenseTensor& beta1_pow,
     const DenseTensor& beta2_pow,
     const paddle::optional<DenseTensor>& master_param UNUSED,
@@ -48,9 +48,11 @@ void AdamDenseParamSparseGradKernel(
     int64_t min_row_size_to_use_multithread,
     bool multi_precision UNUSED,
     bool use_global_beta_pow,
+    bool amsgrad,
     DenseTensor* param_out,
     DenseTensor* moment1_out,
     DenseTensor* moment2_out,
+    DenseTensor* moment2_max_out,
     DenseTensor* beta1_pow_out,
     DenseTensor* beta2_pow_out,
     DenseTensor* master_param_outs UNUSED) {
@@ -74,6 +76,13 @@ void AdamDenseParamSparseGradKernel(
     phi::Copy(dev_ctx, param, dev_ctx.GetPlace(), false, param_out);
     phi::Copy(dev_ctx, moment1, dev_ctx.GetPlace(), false, moment1_out);
     phi::Copy(dev_ctx, moment2, dev_ctx.GetPlace(), false, moment2_out);
+    if (amsgrad) {
+      phi::Copy(dev_ctx,
+                moment2_max.get(),
+                dev_ctx.GetPlace(),
+                false,
+                moment2_max_out);
+    }
     if (!use_global_beta_pow) {
       phi::Copy(dev_ctx, beta1_pow, dev_ctx.GetPlace(), false, beta1_pow_out);
       phi::Copy(dev_ctx, beta2_pow, dev_ctx.GetPlace(), false, beta2_pow_out);
@@ -118,7 +127,7 @@ void AdamDenseParamSparseGradKernel(
   }
 
   phi::SelectedRows tmp_grad_merge;
-  const phi::SelectedRows* grad_merge_ptr;
+  const phi::SelectedRows* grad_merge_ptr = nullptr;
   if (is_strict_sorted) {
     grad_merge_ptr = &grad;
   } else {
@@ -147,6 +156,8 @@ void AdamDenseParamSparseGradKernel(
       dev_ctx.template Alloc<T>(moment1_out),
       moment2.data<T>(),
       dev_ctx.template Alloc<T>(moment2_out),
+      amsgrad ? moment2_max.get().data<T>() : nullptr,
+      amsgrad ? dev_ctx.template Alloc<T>(moment2_max_out) : nullptr,
       learning_rate.data<T>(),
       grad_data,
       param.data<T>(),
@@ -154,7 +165,8 @@ void AdamDenseParamSparseGradKernel(
       rows,
       row_numel,
       grad_merge.rows().size(),
-      lazy_mode);
+      lazy_mode,
+      amsgrad);
   // update beta1 and beta2
   if (!use_global_beta_pow) {
     dev_ctx.template Alloc<T>(beta1_pow_out)[0] =
@@ -192,12 +204,12 @@ void AdamDenseParamSparseGradKernel(
                  "multi thread, currently "
               << param_row_count;
     }
-    for (size_t i = 0; i < grad_rows.size(); ++i) {
+    for (int i = 0; i < static_cast<int>(grad_rows.size()); ++i) {
       row_id_to_grad_row_offset[grad_rows[i]] = i;
     }
     std::vector<std::future<void>> fs;
-    int64_t line_in_each_thread =
-        param_row_count / FLAGS_inner_op_parallelism + 1;
+    int64_t line_in_each_thread = static_cast<int64_t>(
+        param_row_count / FLAGS_inner_op_parallelism + static_cast<int64_t>(1));
     for (int i = 0; i < FLAGS_inner_op_parallelism; ++i) {
       int64_t start = i * line_in_each_thread;
       int64_t end = (i + 1) * line_in_each_thread;
@@ -237,8 +249,7 @@ void AdamDenseParamSparseGradKernel(
   }
 }
 
-}  // namespace sr
-}  // namespace phi
+}  // namespace phi::sr
 
 PD_REGISTER_KERNEL(adam_dense_param_sparse_grad,
                    CPU,

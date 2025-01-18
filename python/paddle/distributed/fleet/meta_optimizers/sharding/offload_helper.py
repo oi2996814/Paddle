@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import paddle
 from paddle.framework import core
 from paddle.utils import unique_name
 
@@ -59,7 +60,7 @@ class OffloadHelper:
                 persistable=True,
             )
         dst_var = block.var(dst_name)
-        assert dst_var.dtype == core.VarDesc.VarType.FP16
+        assert dst_var.dtype == paddle.float16
         block._insert_op_without_sync(
             idx,
             type='cast',
@@ -88,13 +89,12 @@ class OffloadHelper:
         for ring in rings:
             block._insert_op_without_sync(
                 idx,
-                type="c_broadcast",
-                inputs={'X': param_name},
-                outputs={'Out': param_name},
+                type="broadcast",
+                inputs={'x': param_name},
+                outputs={'out': param_name},
                 attrs={
                     'ring_id': ring,
                     'root': 0,
-                    'use_calc_stream': True,
                     OP_ROLE_KEY: OpRole.Forward,
                 },
             )
@@ -516,7 +516,7 @@ class OffloadHelper:
 
         # step5: remove fp32 param which not need
         for idx, op in enumerate(block.ops):
-            if op.type not in ['coalesce_tensor', 'c_broadcast']:
+            if op.type not in ['coalesce_tensor', 'c_broadcast', 'broadcast']:
                 continue
             for input_name in op.desc.input_arg_names():
                 if input_name in param_to_fp16:

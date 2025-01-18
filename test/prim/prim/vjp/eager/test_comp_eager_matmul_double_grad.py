@@ -18,7 +18,7 @@ import numpy as np
 import parameterized as param
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 core.set_prim_eager_enabled(True)
 
@@ -412,7 +412,7 @@ class TestMatmulDoubleGradComp(unittest.TestCase):
         ),
     ],
 )
-class TestMatmulTribleGradComp(unittest.TestCase):
+class TestMatmulTripleGradComp(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.primal0 = cls.primal0.astype(cls.dtype)

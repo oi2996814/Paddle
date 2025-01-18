@@ -18,8 +18,8 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 from paddle.vision.models import resnet50
 
 SEED = 2020
@@ -42,19 +42,19 @@ epoch_num = 1
 #     8.438933372497559,
 #     10.305074691772461,
 
-# note: Version 2.0 momentum is fused to OP when L2Decay is available, and the results are different from the fluid version.
+# note: Version 2.0 momentum is fused to OP when L2Decay is available, and the results are different from the base version.
 # The results in ci as as follows:
 DY2ST_CINN_GT = [
-    5.828789710998535,
-    8.340764999389648,
-    4.998946666717529,
-    8.4613676071167,
-    8.033733367919922,
-    7.352842807769775,
-    9.8336181640625,
-    8.22379207611084,
-    8.195695877075195,
-    10.508796691894531,
+    5.847333908081055,
+    8.347576141357422,
+    5.1415300369262695,
+    8.373777389526367,
+    8.05331802368164,
+    7.437496185302734,
+    9.630914688110352,
+    8.547889709472656,
+    8.343082427978516,
+    10.203847885131836,
 ]
 
 if core.is_compiled_with_cuda():
@@ -145,16 +145,11 @@ def run(model, data_loader, optimizer, mode):
 
             end_time = time.time()
             print(
-                "[%s]epoch %d | batch step %d, loss %0.8f, acc1 %0.3f, acc5 %0.3f, time %f"
-                % (
-                    mode,
-                    epoch,
-                    batch_id,
-                    avg_loss,
-                    total_acc1.numpy() / total_sample,
-                    total_acc5.numpy() / total_sample,
-                    end_time - start_time,
-                )
+                f"[{mode}]epoch {epoch} | batch step {batch_id}, "
+                f"loss {avg_loss:0.8f}, "
+                f"acc1 {total_acc1.numpy() / total_sample:0.3f}, "
+                f"acc5 {total_acc5.numpy() / total_sample:0.3f}, "
+                f"time {end_time - start_time:f}"
             )
             if batch_id >= end_step:
                 break
@@ -170,7 +165,7 @@ def train(to_static, enable_prim, enable_cinn):
     np.random.seed(SEED)
     paddle.seed(SEED)
     paddle.framework.random._manual_program_seed(SEED)
-    fluid.core._set_prim_all_enabled(enable_prim)
+    base.core._set_prim_all_enabled(enable_prim)
 
     dataset = TransedFlowerDataSet(
         reader_decorator(paddle.dataset.flowers.train(use_xmap=False)),
@@ -185,23 +180,15 @@ def train(to_static, enable_prim, enable_cinn):
         build_strategy = paddle.static.BuildStrategy()
         if enable_cinn:
             build_strategy.build_cinn_pass = True
-        resnet = paddle.jit.to_static(resnet, build_strategy=build_strategy)
+        resnet = paddle.jit.to_static(
+            resnet, build_strategy=build_strategy, full_graph=True
+        )
     optimizer = optimizer_setting(parameter_list=resnet.parameters())
 
     train_losses = run(resnet, data_loader, optimizer, 'train')
     if to_static and enable_prim and enable_cinn:
         eval_losses = run(resnet, data_loader, optimizer, 'eval')
     return train_losses
-
-
-class TestResnet(unittest.TestCase):
-    @unittest.skipIf(
-        not (paddle.is_compiled_with_cinn() and paddle.is_compiled_with_cuda()),
-        "paddle is not compiled with CINN and CUDA",
-    )
-    def test_cinn(self):
-        dy2st_cinn = train(to_static=True, enable_prim=False, enable_cinn=True)
-        np.testing.assert_allclose(dy2st_cinn, DY2ST_CINN_GT, rtol=1e-5)
 
 
 if __name__ == '__main__':

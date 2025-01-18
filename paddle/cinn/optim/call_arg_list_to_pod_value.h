@@ -22,7 +22,7 @@
 namespace cinn {
 namespace optim {
 
-void CallArgListToPodValue(Expr* e);
+void CallArgListToPodValue(ir::Module m);
 
 }  // namespace optim
 }  // namespace cinn

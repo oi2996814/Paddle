@@ -14,14 +14,15 @@
 
 #include "paddle/fluid/distributed/ps/table/sparse_sgd_rule.h"
 
-#include <gflags/gflags.h>
-
 #include "glog/logging.h"
 
-DEFINE_bool(enable_show_scale_gradient, true, "enable show scale gradient");
+#include "paddle/common/flags.h"
 
-namespace paddle {
-namespace distributed {
+#include "paddle/common/enforce.h"
+
+PD_DEFINE_bool(enable_show_scale_gradient, true, "enable show scale gradient");
+
+namespace paddle::distributed {
 
 void SparseNaiveSGDRule::LoadConfig(const SparseCommonSGDRuleParameter &param,
                                     size_t emb_dim) {
@@ -33,9 +34,11 @@ void SparseNaiveSGDRule::LoadConfig(const SparseCommonSGDRuleParameter &param,
     _min_bound = -std::numeric_limits<float>::max();
     _max_bound = std::numeric_limits<float>::max();
   } else {
-    CHECK(naive_param.weight_bounds_size() >= 2)
-        << "invalid repeated size for weight_bounds:"
-        << naive_param.weight_bounds_size();
+    PADDLE_ENFORCE_GE(naive_param.weight_bounds_size(),
+                      2,
+                      common::errors::InvalidArgument(
+                          "invalid repeated size for weight_bounds: %d",
+                          naive_param.weight_bounds_size()));
     _min_bound = naive_param.weight_bounds(0);
     _max_bound = naive_param.weight_bounds(1);
   }
@@ -80,9 +83,11 @@ void SparseAdaGradSGDRule::LoadConfig(const SparseCommonSGDRuleParameter &param,
     _min_bound = -std::numeric_limits<float>::max();
     _max_bound = std::numeric_limits<float>::max();
   } else {
-    CHECK(adagrad_param.weight_bounds_size() >= 2)
-        << "invalid repeated size for weight_bounds:"
-        << adagrad_param.weight_bounds_size();
+    PADDLE_ENFORCE_GE(adagrad_param.weight_bounds_size(),
+                      2,
+                      common::errors::InvalidArgument(
+                          "invalid repeated size for weight_bounds: %d",
+                          adagrad_param.weight_bounds_size()));
     _min_bound = adagrad_param.weight_bounds(0);
     _max_bound = adagrad_param.weight_bounds(1);
   }
@@ -137,9 +142,11 @@ void StdAdaGradSGDRule::LoadConfig(const SparseCommonSGDRuleParameter &param,
     _min_bound = -std::numeric_limits<float>::max();
     _max_bound = std::numeric_limits<float>::max();
   } else {
-    CHECK(adagrad_param.weight_bounds_size() >= 2)
-        << "invalid repeated size for weight_bounds:"
-        << adagrad_param.weight_bounds_size();
+    PADDLE_ENFORCE_GE(adagrad_param.weight_bounds_size(),
+                      2,
+                      common::errors::InvalidArgument(
+                          "invalid repeated size for weight_bounds: %d",
+                          adagrad_param.weight_bounds_size()));
     _min_bound = adagrad_param.weight_bounds(0);
     _max_bound = adagrad_param.weight_bounds(1);
   }
@@ -191,9 +198,11 @@ void SparseAdamSGDRule::LoadConfig(const SparseCommonSGDRuleParameter &param,
     _min_bound = -std::numeric_limits<float>::max();
     _max_bound = std::numeric_limits<float>::max();
   } else {
-    CHECK(adam_param.weight_bounds_size() >= 2)
-        << "invalid repeated size for weight_bounds:"
-        << adam_param.weight_bounds_size();
+    PADDLE_ENFORCE_GE(adam_param.weight_bounds_size(),
+                      2,
+                      common::errors::InvalidArgument(
+                          "invalid repeated size for weight_bounds: %d",
+                          adam_param.weight_bounds_size()));
     _min_bound = adam_param.weight_bounds(0);
     _max_bound = adam_param.weight_bounds(1);
   }
@@ -265,9 +274,11 @@ void SparseSharedAdamSGDRule::LoadConfig(
     _min_bound = -std::numeric_limits<float>::max();
     _max_bound = std::numeric_limits<float>::max();
   } else {
-    CHECK(adam_param.weight_bounds_size() >= 2)
-        << "invalid repeated size for weight_bounds:"
-        << adam_param.weight_bounds_size();
+    PADDLE_ENFORCE_GE(adam_param.weight_bounds_size(),
+                      2,
+                      common::errors::InvalidArgument(
+                          "invalid repeated size for weight_bounds: %d",
+                          adam_param.weight_bounds_size()));
     _min_bound = adam_param.weight_bounds(0);
     _max_bound = adam_param.weight_bounds(1);
   }
@@ -334,5 +345,67 @@ void SparseSharedAdamSGDRule::InitValueWork(float *value,
   *(sgd + Beta1PowIndex()) = _beta1_decay_rate;
   *(sgd + Beta2PowIndex()) = _beta2_decay_rate;
 }
-}  // namespace distributed
-}  // namespace paddle
+
+void SparseAdaGradV2SGDRule::LoadConfig(
+    const SparseCommonSGDRuleParameter &param, size_t emb_dim) {
+  _embedding_dim = emb_dim;
+  auto adagrad_param = param.adagrad();
+  learning_rate_ = adagrad_param.learning_rate();
+  _initial_g2sum = adagrad_param.initial_g2sum();
+  _initial_range = adagrad_param.initial_range();
+
+  if (adagrad_param.weight_bounds_size() == 0) {
+    _min_bound = -std::numeric_limits<float>::max();
+    _max_bound = std::numeric_limits<float>::max();
+  } else {
+    PADDLE_ENFORCE_GE(adagrad_param.weight_bounds_size(),
+                      2,
+                      common::errors::InvalidArgument(
+                          "invalid repeated size for weight_bounds: %d",
+                          adagrad_param.weight_bounds_size()));
+    _min_bound = adagrad_param.weight_bounds(0);
+    _max_bound = adagrad_param.weight_bounds(1);
+  }
+}
+
+void SparseAdaGradV2SGDRule::UpdateValueWork(float *w,
+                                             float *sgd,
+                                             const float *grad,
+                                             float scale) {
+  float &g2sum = sgd[G2SumIndex()];
+  double add_g2sum = 0;
+  float epsilon = 1e-8;
+
+  for (size_t i = 0; i < _embedding_dim; i++) {
+    double scaled_grad = grad[i] / scale;
+    add_g2sum += scaled_grad * scaled_grad;
+  }
+  g2sum += add_g2sum / _embedding_dim;
+
+  for (size_t i = 0; i < _embedding_dim; i++) {
+    double scaled_grad = grad[i] / scale;
+    w[i] -= learning_rate_ * scaled_grad / (sqrt(g2sum) + epsilon);
+    BoundValue(w[i]);
+  }
+}
+
+void SparseAdaGradV2SGDRule::InitValueWork(float *value,
+                                           float *sgd,
+                                           bool zero_init) {
+  for (size_t i = 0; i < _embedding_dim; ++i) {
+    if (zero_init) {
+      value[i] = 0.0;
+      BoundValue(value[i]);
+    } else {
+      value[i] =
+          (local_uniform_real_distribution<double>()(local_random_engine()) *
+               2 -
+           1) *
+          _initial_range;
+      BoundValue(value[i]);
+    }
+  }
+  sgd[G2SumIndex()] = 0;
+}
+
+}  // namespace paddle::distributed

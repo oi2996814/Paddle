@@ -17,8 +17,8 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle import fluid
-from paddle.fluid import Program, core, program_guard
+from paddle import base
+from paddle.base import core
 
 
 def ref_frac(x):
@@ -42,13 +42,10 @@ class TestFracAPI(unittest.TestCase):
 
     def test_api_static(self):
         paddle.enable_static()
-        with program_guard(Program()):
+        with paddle.static.program_guard(paddle.static.Program()):
             input = paddle.static.data('X', self.x_np.shape, self.x_np.dtype)
             out = paddle.frac(input)
-            place = fluid.CPUPlace()
-            if fluid.core.is_compiled_with_cuda():
-                place = fluid.CUDAPlace(0)
-            exe = fluid.Executor(place)
+            exe = base.Executor(self.place)
             (res,) = exe.run(feed={'X': self.x_np}, fetch_list=[out])
         out_ref = ref_frac(self.x_np)
         np.testing.assert_allclose(out_ref, res, rtol=1e-05)

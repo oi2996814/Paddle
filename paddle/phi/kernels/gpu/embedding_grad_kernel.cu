@@ -15,8 +15,8 @@
 #include "paddle/phi/kernels/embedding_grad_kernel.h"
 #include "paddle/phi/kernels/funcs/embedding_grad.h"
 
-#include "gflags/gflags.h"
 #include "glog/logging.h"
+#include "paddle/common/flags.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
 #include "paddle/phi/backends/gpu/gpu_primitives.h"
 #include "paddle/phi/common/amp_type_traits.h"
@@ -27,7 +27,7 @@
 #include "paddle/phi/kernels/funcs/eigen/common.h"
 #include "paddle/phi/kernels/funcs/embedding_util.h"
 
-DECLARE_int64(embedding_deterministic);
+COMMON_DECLARE_int64(embedding_deterministic);
 
 namespace phi {
 
@@ -88,9 +88,9 @@ struct EmbeddingGradCUDAFunctor {
       auto d_output_t = out_grad_;
       auto d_table_t = weight_grad_;
 
-      int N = weight_grad_->dims()[0];
-      int D = weight_grad_->dims()[1];
-      int K = input_.numel();
+      size_t N = weight_grad_->dims()[0];
+      size_t D = weight_grad_->dims()[1];
+      size_t K = input_.numel();
 
       const T* d_output = d_output_t.template data<T>();
       const auto* ids = input_.template data<IdT>();
@@ -148,8 +148,8 @@ void EmbeddingGradKernel(const Context& ctx,
   } else if (input.dtype() == phi::DataType::INT16) {
     functor.template apply<int16_t>();
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
-        "emebdding input only support int16, int32 and int64"));
+    PADDLE_THROW(common::errors::Unimplemented(
+        "embedding input only support int16, int32 and int64"));
   }
 }
 
@@ -209,10 +209,10 @@ struct EmbeddingSparseGradCUDAFunctor {
     auto* d_output_data = d_output->template data<T>();
     auto d_output_dims = d_output->dims();
     auto d_output_dims_2d =
-        phi::flatten_to_2d(d_output_dims, d_output_dims.size() - 1);
+        common::flatten_to_2d(d_output_dims, d_output_dims.size() - 1);
     PADDLE_ENFORCE_EQ(d_table_value->dims(),
                       d_output_dims_2d,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "ShapeError: The shape of lookup_table@Grad and "
                           "output@Grad should be same. "
                           "But received lookup_table@Grad's shape = [%s], "
@@ -252,8 +252,8 @@ void EmbeddingSparseGradKernel(const Context& ctx,
     functor.template apply<int64_t>();
   } else if (input.dtype() == phi::DataType::INT16) {
     functor.template apply<int16_t>();
-    PADDLE_THROW(phi::errors::Unimplemented(
-        "emebdding input only support int16, int32 and int64"));
+    PADDLE_THROW(common::errors::Unimplemented(
+        "embedding input only support int16, int32 and int64"));
   }
 }
 
@@ -266,7 +266,9 @@ PD_REGISTER_KERNEL(embedding_grad,
                    float,
                    double,
                    phi::dtype::float16,
-                   phi::dtype::bfloat16) {}
+                   phi::dtype::bfloat16,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}
 
 PD_REGISTER_KERNEL(embedding_sparse_grad,
                    GPU,
@@ -275,4 +277,6 @@ PD_REGISTER_KERNEL(embedding_sparse_grad,
                    float,
                    double,
                    phi::dtype::float16,
-                   phi::dtype::bfloat16) {}
+                   phi::dtype::bfloat16,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}

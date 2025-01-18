@@ -288,8 +288,7 @@ class ParameterServerOptimizer(MetaOptimizerBase):
                 return free
             else:
                 raise ValueError(
-                    "%s platform is unsupported is parameter server optimizer"
-                    % (platform.system())
+                    f"{platform.system()} platform is unsupported is parameter server optimizer"
                 )
 
         if not isinstance(self.inner_opt, paddle.optimizer.SGD):
@@ -307,7 +306,7 @@ class ParameterServerOptimizer(MetaOptimizerBase):
             var = program.global_block().vars[varname]
             if (
                 not var.persistable
-                or var.desc.type() != core.VarDesc.VarType.LOD_TENSOR
+                or var.desc.type() != core.VarDesc.VarType.DENSE_TENSOR
             ):
                 continue
             param = vars_metatools.create_var_struct(var)
@@ -325,7 +324,7 @@ class ParameterServerOptimizer(MetaOptimizerBase):
                 processed_var_names.add(var_name)
                 var = program.global_block().vars[var_name]
 
-                if var.desc.type() != core.VarDesc.VarType.LOD_TENSOR:
+                if var.desc.type() != core.VarDesc.VarType.DENSE_TENSOR:
                     continue
 
                 data_count = 1
@@ -334,8 +333,7 @@ class ParameterServerOptimizer(MetaOptimizerBase):
                     if x < 0:
                         if neg_dim_count >= 1:
                             raise ValueError(
-                                "Var %s has more than one negative dim."
-                                % (var_name)
+                                f"Var {var_name} has more than one negative dim."
                             )
                         neg_dim_count += 1
                         data_count *= -x

@@ -14,6 +14,7 @@
 
 #include "paddle/phi/kernels/allclose_kernel.h"
 
+#include <type_traits>
 #include "glog/logging.h"
 
 #include "paddle/phi/common/amp_type_traits.h"
@@ -33,7 +34,15 @@ __global__ void AllcloseCUDAKernel(const T* in_data,
                                    bool* out_data) {
   unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x;
   bool val;
-  using MPType = typename phi::dtype::MPTypeTrait<T>::Type;
+  using BaseMPType = typename phi::dtype::MPTypeTrait<T>::Type;
+
+  using MPType =
+      typename std::conditional<std::is_same<T, int32_t>::value ||
+                                    std::is_same<T, int64_t>::value ||
+                                    std::is_same<T, bool>::value,
+                                double,
+                                BaseMPType>::type;
+
   for (int i = idx; i < num; i += blockDim.x * gridDim.x) {
     const MPType a = static_cast<MPType>(in_data[i]);
     const MPType b = static_cast<MPType>(other_data[i]);
@@ -63,7 +72,7 @@ void AllCloseKernel(const Context& dev_ctx,
   } else if (rtol.dtype() == DataType::FLOAT32) {
     rtol_v = rtol.to<float>();
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "Input (Rtol) type must be double or float, but get %s.",
         rtol.dtype()));
   }
@@ -72,7 +81,7 @@ void AllCloseKernel(const Context& dev_ctx,
   } else if (atol.dtype() == DataType::FLOAT32) {
     atol_v = atol.to<float>();
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "Input (Atol) type must be double or float, but get %s.",
         atol.dtype()));
   }
@@ -102,6 +111,9 @@ PD_REGISTER_KERNEL(allclose,
                    phi::AllCloseKernel,
                    float,
                    double,
+                   bool,
+                   int,
+                   int64_t,
                    phi::dtype::float16) {
   kernel->OutputAt(0).SetDataType(phi::DataType::BOOL);
 }

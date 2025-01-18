@@ -20,6 +20,7 @@
 
 #include "paddle/cinn/cinn.h"
 #include "paddle/cinn/ir/tensor.h"
+#include "paddle/fluid/platform/enforce.h"
 
 namespace cinn {
 namespace hlir {
@@ -30,7 +31,7 @@ namespace framework {
  *  For operations and all the operations they depend on.
  *  The schedule per Operation is named as stage.
  */
-class Schedule : public common::Object {
+class Schedule : public cinn::common::Object {
  public:
   const char* type_info() const override { return __type_info__; }
 
@@ -40,8 +41,10 @@ class Schedule : public common::Object {
    */
   ir::Tensor operator[](const ir::Operation& op) {
     auto it = stage_map.find(op.name);
-    CHECK(it != stage_map.end())
-        << "Cannot find Stage for operator " << op.name << " in the schedule";
+    PADDLE_ENFORCE(
+        it != stage_map.end(),
+        ::common::errors::NotFound(
+            "Cannot find Stage for operator in the schedule", op.name));
     return it->second;
   }
 

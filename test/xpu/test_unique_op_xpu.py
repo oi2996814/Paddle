@@ -23,7 +23,7 @@ from get_test_cover_info import (
 from op_test_xpu import XPUOpTest
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 paddle.enable_static()
 
@@ -50,7 +50,7 @@ class XPUTestUniqueOp(XPUOpTestWrapper):
                 'dtype': int(core.VarDesc.VarType.INT32),
                 'return_index': True,
                 'return_inverse': True,
-                'is_sorted': True,  # is_sorted must be set to true to call paddle.unique rather than fluid.layers.unique
+                'is_sorted': True,  # is_sorted must be set to true to call paddle.unique rather than base.layers.unique
             }
             self.outputs = {
                 'Out': np.array([1, 2, 3, 5], dtype=self.dtype),
@@ -116,6 +116,8 @@ class XPUTestUniqueOp(XPUOpTestWrapper):
                 return_counts=True,
                 axis=None,
             )
+            if np.lib.NumpyVersion(np.__version__) >= "2.0.0":
+                inverse = inverse.flatten()
             self.attrs = {
                 'dtype': int(core.VarDesc.VarType.INT64),
                 "return_index": True,
@@ -160,6 +162,8 @@ class XPUTestUniqueOp(XPUOpTestWrapper):
                 return_counts=True,
                 axis=1,
             )
+            if np.lib.NumpyVersion(np.__version__) >= "2.0.0":
+                inverse = inverse.flatten()
             self.attrs = {
                 'dtype': int(core.VarDesc.VarType.INT32),
                 "return_index": True,
@@ -188,7 +192,8 @@ class XPUTestUniqueOp(XPUOpTestWrapper):
                 return_counts=True,
                 axis=0,
             )
-
+            if np.lib.NumpyVersion(np.__version__) >= "2.0.0":
+                inverse = inverse.flatten()
             self.attrs = {
                 'dtype': int(core.VarDesc.VarType.INT32),
                 "return_index": True,
@@ -217,6 +222,8 @@ class XPUTestUniqueOp(XPUOpTestWrapper):
                 return_counts=True,
                 axis=-1,
             )
+            if np.lib.NumpyVersion(np.__version__) >= "2.0.0":
+                inverse = inverse.flatten()
             self.attrs = {
                 'dtype': int(core.VarDesc.VarType.INT32),
                 "return_index": True,

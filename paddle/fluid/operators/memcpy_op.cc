@@ -12,11 +12,11 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include "paddle/fluid/operators/memcpy_op.h"
-
 #include <string>
-
+#include "paddle/fluid/framework/data_type.h"
 #include "paddle/fluid/framework/infershape_utils.h"
+#include "paddle/fluid/framework/op_registry.h"
+#include "paddle/fluid/framework/var_type.h"
 #include "paddle/phi/infermeta/unary.h"
 
 namespace paddle {
@@ -45,9 +45,9 @@ class MemcpyOp : public framework::OperatorWithKernel {
   void InferShape(framework::InferShapeContext *ctx) const override {
     auto type = ctx->GetInputsVarType("X")[0];
     if (type == framework::proto::VarType::SELECTED_ROWS ||
-        type == framework::proto::VarType::LOD_TENSOR) {
+        type == framework::proto::VarType::DENSE_TENSOR) {
       ctx->SetOutputDim("Out", ctx->GetInputDim("X"));
-      if (type == framework::proto::VarType::LOD_TENSOR) {
+      if (type == framework::proto::VarType::DENSE_TENSOR) {
         ctx->ShareLoD("X", /*->*/ "Out");
       }
     }
@@ -76,26 +76,6 @@ class MemcpyInferVarType : public framework::VarTypeInference {
     ctx->SyncTypeAndDataType("X", "Out");
   }
 };
-
-class MemcpyKernel {
- public:
-  void operator()(const framework::ExecutionContext &ctx) const {
-    auto *x = ctx.InputVar("X");
-    if (x == nullptr) {
-      return;
-    }
-    PADDLE_ENFORCE_EQ(
-        ctx.HasOutput("Out"),
-        true,
-        platform::errors::NotFound("Output(Out) of memcpy_op is not found."));
-    auto *out = ctx.OutputVar("Out");
-    platform::DeviceContextPool &pool = platform::DeviceContextPool::Instance();
-    auto &dev_ctx = *pool.Get(ctx.GetPlace());
-    auto dst_place_type = ctx.Attr<int>("dst_place_type");
-    framework::VisitVarType(*x, MemcpyFunctor(out, dev_ctx, dst_place_type));
-  }
-};
-
 class MemcpyOpProtoMaker : public framework::OpProtoAndCheckerMaker {
  public:
   void Make() override {
@@ -127,7 +107,6 @@ raise error if the type is not listed above.
 }  // namespace paddle
 
 namespace ops = paddle::operators;
-namespace plat = paddle::platform;
 
 DECLARE_INFER_SHAPE_FUNCTOR(memcpy,
                             MemcpyInferShapeFunctor,

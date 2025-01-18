@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, paddle_static_guard
+from op_test import OpTest, paddle_static_guard
 
 import paddle
-from paddle import fluid
+from paddle import base
 from paddle.incubate.layers.nn import tdm_child
 
 
@@ -55,9 +55,16 @@ def create_tdm_tree():
     return tree_info
 
 
+def api_wrapper(x, tree_info, child_nums, dtype=paddle.int32):
+    return paddle._legacy_C_ops.tdm_child(
+        x, tree_info, "child_nums", child_nums, "dtype", dtype
+    )
+
+
 class TestTDMChildOp(OpTest):
     def setUp(self):
         self.__class__.op_type = "tdm_child"
+        self.python_api = api_wrapper
         self.config()
         tree_info = create_tdm_tree()
         tree_info_np = np.array(tree_info).astype(self.info_type)
@@ -142,9 +149,7 @@ class TestCase4(TestTDMChildOp):
 class TestTDMChildShape(unittest.TestCase):
     def test_shape(self):
         with paddle_static_guard():
-            x = paddle.static.data(
-                name='x', shape=[-1, 1], dtype='int32', lod_level=1
-            )
+            x = paddle.static.data(name='x', shape=[-1, 1], dtype='int32')
             tdm_tree_info = create_tdm_tree()
             tree_info_np = np.array(tdm_tree_info).astype('int32')
 
@@ -152,14 +157,14 @@ class TestTDMChildShape(unittest.TestCase):
                 x=x,
                 node_nums=26,
                 child_nums=2,
-                param_attr=fluid.ParamAttr(
+                param_attr=base.ParamAttr(
                     initializer=paddle.nn.initializer.Assign(tree_info_np)
                 ),
             )
 
-            place = fluid.CPUPlace()
-            exe = fluid.Executor(place=place)
-            exe.run(fluid.default_startup_program())
+            place = base.CPUPlace()
+            exe = base.Executor(place=place)
+            exe.run(base.default_startup_program())
 
             feed = {
                 'x': np.array(

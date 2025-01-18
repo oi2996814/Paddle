@@ -12,29 +12,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import collections
 import copyreg
 import os
 import pickle
 import sys
+import threading
 import warnings
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 import paddle
 
 # deprecated module import
-from paddle import fluid
-from paddle.fluid import core
-from paddle.fluid.framework import (
+from paddle import base
+from paddle.base import core
+from paddle.base.framework import (
     EagerParamBase,
     Program,
     Variable,
     _create_tensor,
     _current_expected_place,
+    _current_expected_place_,
     _dygraph_tracer,
     in_dygraph_mode,
+    in_pir_mode,
 )
 
 from .io_utils import (
@@ -47,7 +53,111 @@ from .io_utils import (
     _unpack_saved_dict,
 )
 
+if TYPE_CHECKING:
+    from io import BytesIO
+    from typing import Any, Literal, TypedDict
+
+    from typing_extensions import NotRequired, Unpack
+
+    from paddle import Tensor
+    from paddle._typing import NestedStructure
+    from paddle.nn.layer.layers import _StateDict
+
+    class _EmptyDict(TypedDict):
+        pass
+
+    class _LoadOptions(TypedDict):
+        model_filename: NotRequired[str]
+        params_filename: NotRequired[str]
+        keep_name_table: NotRequired[bool]
+        return_numpy: NotRequired[bool]
+
+    class _SaveOptions(TypedDict):
+        use_binary_format: NotRequired[bool]
+        pickle_protocol: NotRequired[Literal[2, 3, 4]]
+
+
 __all__ = []
+async_save_queue = []
+
+
+def clear_async_save_task_queue() -> None:
+    '''
+    wait until all async save task to be done.
+    '''
+    while len(async_save_queue) > 0:
+        task = async_save_queue.pop()
+        if task and task.is_alive():
+            task.join()
+
+
+def async_save(
+    obj: object,
+    path: str | BytesIO,
+    protocol: Literal[2, 3, 4] = 4,
+    sync_other_task: bool = False,
+    **configs: Unpack[_EmptyDict],
+) -> None:
+    '''
+    async version of paddle.save.
+    Note:
+        currently only support dygraph mode.
+    Note:
+        any argument passed through configs will be overridden by default setting.
+    Args:
+        obj(Object) : The object to be saved.
+        path(str|BytesIO) : The path/buffer of the object to be saved.
+          If saved in the current directory, the input path string will be used as the file name.
+        protocol(int, optional): The protocol version of pickle module must be greater than 1 and less than 5.
+                                 Default: 4
+        sync_other_task(bool) : Determine whether to wait other async save task to be finished before this one be put in queue.
+        **configs(dict, optional): compatible argument to paddle.save, but will be overridden by default setting.
+    Examples:
+        .. code-block:: python
+            :name: code-example-1
+
+            import paddle
+            emb = paddle.nn.Embedding(10, 10)
+            layer_state_dict = emb.state_dict()
+
+            # call paddle.async_save with the same style of paddle.save
+            paddle.async_save(layer_state_dict, "emb.pdparams")
+            for i in range(10):
+                # do some calculations here
+            # wait if any async_save task has not been done
+            paddle.clear_async_task_queue()
+    '''
+    if not in_dygraph_mode():
+        raise ValueError(
+            "async_save currently is not supported in static mode."
+        )
+    if len(configs) > 0:
+        warnings.warn(
+            "configs are not supported in async mode, will be overridden by default settings."
+        )
+
+    # TODO: make this part async
+    def move_state_dict_to_cpu(sd):
+        for k, v in sd.items():
+            if isinstance(v, dict):
+                move_state_dict_to_cpu(v)
+            elif isinstance(v, core.eager.Tensor):
+                sd[k] = v.pin_memory() if core.is_compiled_with_cuda() else v
+
+    if isinstance(obj, dict):
+        move_state_dict_to_cpu(obj)
+    elif isinstance(obj, core.eager.Tensor):
+        obj = obj.pin_memory() if core.is_compiled_with_cuda() else obj
+    else:
+        # other types are currently not supported
+        raise TypeError(
+            f"currently async_save does not support this type: {type(obj)}"
+        )
+    if sync_other_task:
+        clear_async_save_task_queue()
+    t = threading.Thread(target=save, args=(obj, path, protocol))
+    t.start()
+    async_save_queue.append(t)
 
 
 def _build_saved_state_dict(state_dict):
@@ -62,7 +172,9 @@ def _build_saved_state_dict(state_dict):
                     raise ValueError(
                         "The saved tensor is not initialized. If you used group sharded, please use save_group_sharded_model."
                     )
-                save_dict[key] = np.array(value)
+                if value.is_dense() and value.place.is_custom_place():
+                    value = paddle._C_ops.npu_identity(value, -1)
+                save_dict[key] = np.array(value.cpu())
             name_table[key] = value.name
         else:
             save_dict[key] = value
@@ -75,23 +187,38 @@ def _load_state_dict_from_save_inference_model(model_path, config):
     # 1. load program desc & construct _ProgramHolder
     # TODO(GGBond8488):From a long-term perspective, it is inappropriate for the framework to
     # rely on jit. It is necessary to migrate the dependency from jit to the framework in the future
-    from paddle.jit.translated_layer import (
-        _construct_params_and_buffers,
-        _construct_program_holders,
-    )
+    if in_pir_mode():
+        from paddle.jit.pir_translated_layer import (
+            _construct_params_and_buffers,
+            _construct_program_holders,
+        )
 
-    programs = _construct_program_holders(model_path, config.model_filename)
+        programs = _construct_program_holders(model_path, config.model_filename)
+
+    else:
+        from paddle.jit.translated_layer import (
+            _construct_params_and_buffers,
+            _construct_program_holders,
+        )
+
+        programs = _construct_program_holders(model_path, config.model_filename)
 
     # 2. load layer parameters & buffers
-    with fluid.dygraph.guard():
+    with base.dygraph.guard():
         persistable_var_dict = _construct_params_and_buffers(
-            model_path, programs, config.params_filename, append_suffix=False
+            model_path, programs, config.params_filename
         )
 
         # 3. construct state_dict
         load_param_dict = {}
         for var_name in persistable_var_dict:
-            load_param_dict[var_name] = np.array(persistable_var_dict[var_name])
+            tmp_var = persistable_var_dict[var_name]
+            if tmp_var.is_dense() and tmp_var.place.is_custom_place():
+                load_param_dict[var_name] = np.array(
+                    paddle._C_ops.npu_identity(tmp_var, -1).cpu()
+                )
+            else:
+                load_param_dict[var_name] = np.array(tmp_var.cpu())
 
         # if *.info exists, we can recover structured_name
         var_info_filename = str(config.params_filename) + ".info"
@@ -104,10 +231,9 @@ def _load_state_dict_from_save_inference_model(model_path, config):
                 structured_name = extra_var_info[var_name].get(
                     'structured_name', None
                 )
-                assert structured_name is not None, (
-                    "Cannot find saved variable (%s)'s structured name in saved model."
-                    % var_name
-                )
+                assert (
+                    structured_name is not None
+                ), f"Cannot find saved variable ({var_name})'s structured name in saved model."
                 structured_para_dict[structured_name] = load_param_dict[
                     var_name
                 ]
@@ -131,7 +257,7 @@ def _load_state_dict_from_save_params(model_path):
             var_name_list.append(var_name)
 
     # 2. create and load Tensor
-    with fluid.dygraph.guard():
+    with base.dygraph.guard():
         for name in var_name_list:
             new_var = _create_tensor(name=name, persistable=True)
             _dygraph_tracer().trace_op(
@@ -145,7 +271,9 @@ def _load_state_dict_from_save_params(model_path):
     # 3. construct state_dict
     load_param_dict = {}
     for var in load_var_list:
-        load_param_dict[var.name] = np.array(var)
+        if var.is_dense() and var.place.is_custom_place():
+            var = paddle._C_ops.npu_identity(var, -1)
+        load_param_dict[var.name] = np.array(var.cpu())
 
     return load_param_dict
 
@@ -160,8 +288,8 @@ def _load_state_dict_from_save_params(model_path):
 #       - paddle.jit.save
 #       - paddle.static.save_inference_model
 #   - need [directory] when loading [compatible for paddle 1.x]
-#       - paddle.fluid.io.save_inference_model
-#       - paddle.fluid.io.save_params/save_persistable
+#       - paddle.base.io.save_inference_model
+#       - paddle.base.io.save_params/save_persistable
 # 2. Error cases:
 #   - no error case
 def _build_load_path_and_config(path, config):
@@ -169,25 +297,31 @@ def _build_load_path_and_config(path, config):
     # raise error, avoid confusing behavior
     # TODO(GGBond8488):From a long-term perspective, it is inappropriate for the framework to
     # rely on jit. It is necessary to migrate the dependency from jit to the framework in the future
+    from paddle.jit.pir_translated_layer import (
+        PIR_INFER_MODEL_SUFFIX,
+    )
     from paddle.jit.translated_layer import (
         INFER_MODEL_SUFFIX,
         INFER_PARAMS_SUFFIX,
     )
 
-    prefix_format_path = path + INFER_MODEL_SUFFIX
+    if in_pir_mode():
+        prefix_format_path = path + PIR_INFER_MODEL_SUFFIX
+    else:
+        prefix_format_path = path + INFER_MODEL_SUFFIX
     prefix_format_exist = os.path.exists(prefix_format_path)
     directory_format_exist = os.path.isdir(path)
     if prefix_format_exist and directory_format_exist:
         raise ValueError(
-            "The {}.pdmodel and {} directory exist at the same time, "
+            f"The {path}.pdmodel and {path} directory exist at the same time, "
             "don't know which one to load, please make sure that the specified target "
-            "of ``path`` is unique.".format(path, path)
+            "of ``path`` is unique."
         )
     elif not prefix_format_exist and not directory_format_exist:
         error_msg = "The ``path`` (%s) to load model not exists."
         # if current path is a prefix, and the path.pdparams or path.pdopt
         # is exist, users may want use `paddle.load` load the result of
-        # `fluid.save_dygraph`, we raise error here for users
+        # `base.save_dygraph`, we raise error here for users
         params_file_path = path + ".pdparams"
         opti_file_path = path + ".pdopt"
         if os.path.exists(params_file_path) or os.path.exists(opti_file_path):
@@ -207,7 +341,10 @@ def _build_load_path_and_config(path, config):
                     "specified file prefix, the ``model_filename`` config does "
                     "not take effect."
                 )
-            config.model_filename = file_prefix + INFER_MODEL_SUFFIX
+            if in_pir_mode():
+                config.model_filename = file_prefix + PIR_INFER_MODEL_SUFFIX
+            else:
+                config.model_filename = file_prefix + INFER_MODEL_SUFFIX
             if config.params_filename is not None:
                 warnings.warn(
                     "When loading the result saved with the "
@@ -234,8 +371,7 @@ def _parse_load_config(configs):
     for key in configs:
         if key not in supported_configs:
             raise ValueError(
-                "The additional config (%s) of `paddle.load` is not supported."
-                % key
+                f"The additional config ({key}) of `paddle.load` is not supported."
             )
 
     # construct inner config
@@ -259,8 +395,7 @@ def _parse_save_config(configs):
     for key in configs:
         if key not in supported_configs:
             raise ValueError(
-                "The additional config (%s) of `paddle.save` is not supported."
-                % key
+                f"The additional config ({key}) of `paddle.save` is not supported."
             )
 
     # construct inner config
@@ -279,9 +414,7 @@ def _pickle_save(obj, f, protocol):
     # TODO(weixin):add support for BytesIO.
     if not isinstance(protocol, int):
         raise ValueError(
-            "The 'protocol' MUST be `int`, but received {}".format(
-                type(protocol)
-            )
+            f"The 'protocol' MUST be `int`, but received {type(protocol)}"
         )
 
     if protocol < 2 or protocol > 4:
@@ -290,13 +423,21 @@ def _pickle_save(obj, f, protocol):
         )
 
     def reduce_varbase(self):
-        data = np.array(self)
+        if self.is_dense() and self.place.is_custom_place():
+            data = np.array(paddle._C_ops.npu_identity(self, -1).cpu())
+        else:
+            data = np.array(self.cpu())
         name = self.name
 
         return (tuple, ((name, data),))
 
-    def reduce_LoDTensor(self):
-        data = np.array(self)
+    def reduce_DenseTensor(self):
+        p = core.Place()
+        p.set_place(paddle.CPUPlace())
+        if self._place().is_custom_place():
+            data = np.array(paddle._C_ops.npu_identity(self, -1)._copy(p))
+        else:
+            data = np.array(self._copy(p))
 
         return (eval, ('data', {'data': data}))
 
@@ -321,11 +462,11 @@ def _pickle_save(obj, f, protocol):
         # This is not a good method, because the pickle module has been modified.
         pickle.dispatch_table[core.eager.Tensor] = reduce_varbase
         pickle.dispatch_table[EagerParamBase] = reduce_varbase
-        pickle.dispatch_table[core.LoDTensor] = reduce_LoDTensor
+        pickle.dispatch_table[core.DenseTensor] = reduce_DenseTensor
         pickle.dispatch_table.update(dispatch_table_layer)
 
     def pop_dispatch_table():
-        pickle.dispatch_table.pop(core.LoDTensor)
+        pickle.dispatch_table.pop(core.DenseTensor)
         pickle.dispatch_table.pop(core.eager.Tensor)
         pickle.dispatch_table.pop(EagerParamBase)
         for k in dispatch_table_layer:
@@ -344,7 +485,7 @@ def _pickle_save(obj, f, protocol):
         pickler = pickle.Pickler(f, protocol)
         pickler.dispatch_table = copyreg.dispatch_table.copy()
 
-        pickler.dispatch_table[core.LoDTensor] = reduce_LoDTensor
+        pickler.dispatch_table[core.DenseTensor] = reduce_DenseTensor
         pickler.dispatch_table[core.eager.Tensor] = reduce_varbase
         pickler.dispatch_table[EagerParamBase] = reduce_varbase
         pickler.dispatch_table.update(dispatch_table_layer)
@@ -384,20 +525,20 @@ def _is_state_dict(obj):
                     paddle.nn.Layer,
                     Program,
                     core.eager.Tensor,
-                    core.LoDTensor,
+                    core.DenseTensor,
                     core.SelectedRows,
                 ),
             )
 
-        # If the value of a dict is a core.Tensor/LoDTensor or a dict
-        # that does not contain a paddle type(Layer, Program, Tensor, LoDTensor, SelectedRows),
+        # If the value of a dict is a core.Tensor/DenseTensor or a dict
+        # that does not contain a paddle type(Layer, Program, Tensor, DenseTensor, SelectedRows),
         # the dict is considered to be a state_ dict.
         for key, value in obj.items():
             if isinstance(value, dict):
                 for k, v in value.items():
                     if _contain_x(v, condition):
                         return False
-            elif not isinstance(value, (core.eager.Tensor, core.LoDTensor)):
+            elif not isinstance(value, (core.eager.Tensor, core.DenseTensor)):
                 return False
         return True
 
@@ -406,7 +547,7 @@ def _is_state_dict(obj):
 
 def _transformed_from_varbase(obj):
     # In paddle2.1 version, Tensor is saved as tuple(tensor.name, tensor.numpy()).
-    # When executing paddle.load, use this function to determine whether to restore to Tensor/LoDTensor.
+    # When executing paddle.load, use this function to determine whether to restore to Tensor.
     if isinstance(obj, tuple) and len(obj) == 2:
         name_types = str
         if isinstance(obj[0], name_types) and isinstance(obj[1], np.ndarray):
@@ -415,8 +556,8 @@ def _transformed_from_varbase(obj):
 
 
 def _transformed_from_lodtensor(obj):
-    # In paddle2.1 version, LoDTensor is saved as np.array(tensor).
-    # When executing paddle.load, use this function to determine whether to restore to Tensor/LoDTensor.
+    # In paddle2.1 version, DenseTensor is saved as np.array(tensor).
+    # When executing paddle.load, use this function to determine whether to restore to Tensor.
     if isinstance(obj, np.ndarray):
         return True
     return False
@@ -425,12 +566,10 @@ def _transformed_from_lodtensor(obj):
 def _to_LodTensor(ndarray):
     if not isinstance(ndarray, np.ndarray):
         raise TypeError(
-            'Type of `ndarray` should be numpy.ndarray, but received {}.'.format(
-                type(ndarray)
-            )
+            f'Type of `ndarray` should be numpy.ndarray, but received {type(ndarray)}.'
         )
-    t = core.LoDTensor()
-    place = _current_expected_place()
+    t = core.DenseTensor()
+    place = _current_expected_place_()
     t.set(ndarray, place)
     return t
 
@@ -488,12 +627,10 @@ def _parse_every_object(obj, condition_func, convert_func):
     else:
         if isinstance(obj, Iterable) and not isinstance(
             obj,
-            (str, np.ndarray, core.eager.Tensor, core.LoDTensor),
+            (str, np.ndarray, core.eager.Tensor, core.DenseTensor),
         ):
             raise NotImplementedError(
-                "The iteratable objects supported are tuple, list, dict, OrderedDict, string. But received {}.".format(
-                    type(obj)
-                )
+                f"The iterable objects supported are tuple, list, dict, OrderedDict, string. But received {type(obj)}."
             )
         return obj
 
@@ -521,31 +658,31 @@ def _parse_load_result(obj, return_numpy):
     def ndarray_to_tensor(obj):
         return _ndarray_to_tensor(obj, return_numpy=return_numpy)
 
-    # tuple(name, ndarry) was converted from varbase of paddle2.1,
-    # and all tuple(name, ndarry) are converted to tensor.
+    # tuple(name, ndarray) was converted from varbase of paddle2.1,
+    # and all tuple(name, ndarray) are converted to tensor.
     if _contain_x(obj, _transformed_from_varbase):
         return _parse_every_object(
             obj, _transformed_from_varbase, tuple_to_tensor
         )
-    # If there is no tuple(name, ndary), it is considered to be saved by paddle2.0
-    # or converted from LoDTensor, and all ndarrays are converted to tensor.
+    # If there is no tuple(name, ndarray), it is considered to be saved by paddle2.0
+    # or converted from DenseTensor, and all ndarrays are converted to tensor.
     else:
         return _parse_every_object(
             obj, _transformed_from_lodtensor, ndarray_to_tensor
         )
 
 
-def _save_lod_tensor(tensor, file_name):
+def _save_dense_tensor(tensor, file_name):
     if not tensor._is_initialized():
         raise ValueError(
             "The saved tensor is not initialized. If you used group sharded, please use save_group_sharded_model firstly."
         )
     if _is_file_path(file_name):
-        _seek = core.save_lod_tensor(tensor, file_name)
+        _seek = core.save_dense_tensor(tensor, file_name)
         # '_seek' is the end position of this tensor in the file.
 
     elif _is_memory_buffer(file_name):
-        tensor_bytes = core.save_lod_tensor_to_memory(tensor)
+        tensor_bytes = core.save_dense_tensor_to_memory(tensor)
 
         with _open_file_buffer(file_name, 'wb') as f:
             f.write(tensor_bytes)
@@ -553,30 +690,26 @@ def _save_lod_tensor(tensor, file_name):
 
     else:
         raise NotImplementedError(
-            'Only supports saving objects to file or BytesIO, but received {}'.format(
-                type(file_name)
-            )
+            f'Only supports saving objects to file or BytesIO, but received {type(file_name)}'
         )
     return _seek
 
 
-def _load_lod_tensor(file_name):
-    temp_t = paddle.fluid.core.LoDTensor()
+def _load_dense_tensor(file_name):
+    temp_t = paddle.base.core.DenseTensor()
     if _is_file_path(file_name):
         # '_seek' is the end position of this tensor in the file.
-        _seek = paddle.fluid.core.load_lod_tensor(temp_t, file_name)
+        _seek = paddle.base.core.load_dense_tensor(temp_t, file_name)
 
     elif _is_memory_buffer(file_name):
         with _open_file_buffer(file_name, 'rb') as f:
             tensor_bytes = f.read()
-            paddle.fluid.core.load_lod_tensor_from_memory(temp_t, tensor_bytes)
+            paddle.base.core.load_dense_tensor_from_memory(temp_t, tensor_bytes)
             _seek = f.tell()
 
     else:
         raise NotImplementedError(
-            'Only supports load objects from file or BytesIO, but received {}'.format(
-                type(file_name)
-            )
+            f'Only supports load objects from file or BytesIO, but received {type(file_name)}'
         )
 
     return temp_t, _seek
@@ -596,9 +729,7 @@ def _save_selected_rows(selected_rows, file_name):
             _seek = f.tell()
     else:
         raise NotImplementedError(
-            'Only supports saving objects to file or BytesIO, but received {}'.format(
-                type(file_name)
-            )
+            f'Only supports saving objects to file or BytesIO, but received {type(file_name)}'
         )
     return _seek
 
@@ -612,38 +743,39 @@ def _load_selected_rows(file_name):
     elif _is_memory_buffer(file_name):
         with _open_file_buffer(file_name, 'rb') as f:
             selected_rows_bytes = f.read()
-            paddle.fluid.core.load_selected_rows_from_memory(
+            paddle.base.core.load_selected_rows_from_memory(
                 temp_sr, selected_rows_bytes
             )
         _seek = f.tell()
 
     else:
         raise NotImplementedError(
-            'Only supports load objects from file or BytesIO, but received {}'.format(
-                type(file_name)
-            )
+            f'Only supports load objects from file or BytesIO, but received {type(file_name)}'
         )
 
     return temp_sr, _seek
 
 
 def _save_binary_var(obj, path):
-    if isinstance(obj, core.LoDTensor):
-        _save_lod_tensor(obj, path)
+    if isinstance(obj, core.DenseTensor):
+        _save_dense_tensor(obj, path)
     elif isinstance(obj, core.SelectedRows):
         _save_selected_rows(obj, path)
     elif isinstance(obj, core.eager.Tensor):
-        _save_lod_tensor(obj.value().get_tensor(), path)
+        _save_dense_tensor(obj.value().get_tensor(), path)
     else:
-        # Since the concept of 'Tensor' is only exposed to users, the error message can only contain tensor instead of 'LoDTensor' or 'SelectedRows'
+        # Since the concept of 'Tensor' is only exposed to users, the error message can only contain tensor instead of 'DenseTensor' or 'SelectedRows'
         raise NotImplementedError(
-            "When use_binary_format = True, `paddle.save`  expected Tensor, but received {}.".format(
-                type(obj)
-            )
+            f"When use_binary_format = True, `paddle.save`  expected Tensor, but received {type(obj)}."
         )
 
 
-def save(obj, path, protocol=4, **configs):
+def save(
+    obj: _StateDict | NestedStructure[Tensor] | Program,
+    path: str | BytesIO,
+    protocol: Literal[2, 3, 4] = 4,
+    **configs: Unpack[_SaveOptions],
+) -> None:
     '''
     Save an object to the specified path.
 
@@ -686,7 +818,7 @@ def save(obj, path, protocol=4, **configs):
             >>> paddle.save(layer_state_dict, "emb.pdparams")
 
             >>> scheduler = paddle.optimizer.lr.NoamDecay(
-            ...     d_model=0.01, warmup_steps=100, verbose=True)
+            ...     d_model=100, warmup_steps=100, verbose=True)
             >>> adam = paddle.optimizer.Adam(
             ...     learning_rate=scheduler,
             ...     parameters=emb.parameters())
@@ -790,18 +922,14 @@ def save(obj, path, protocol=4, **configs):
             os.makedirs(dirname, exist_ok=True)
     elif not _is_memory_buffer(path):
         raise ValueError(
-            "only supports saving objects to file and `BytesIO`, but got {}".format(
-                type(path)
-            )
+            f"only supports saving objects to file and `BytesIO`, but got {type(path)}"
         )
 
     config = _parse_save_config(configs)
 
     if not isinstance(config.use_binary_format, bool):
         raise TypeError(
-            "Type of `use_binary_format` should be bool, but received {}.".format(
-                type(config.use_binary_format)
-            )
+            f"Type of `use_binary_format` should be bool, but received {type(config.use_binary_format)}."
         )
 
     if config.use_binary_format:
@@ -814,10 +942,15 @@ def save(obj, path, protocol=4, **configs):
                 "'pickle_protocol' is a deprecated argument. Please use 'protocol' instead."
             )
 
-        if isinstance(obj, Program):
-            obj.desc.flush()
-            with _open_file_buffer(path, "wb") as f:
-                f.write(obj.desc.serialize_to_string())
+        if isinstance(obj, paddle.static.Program):
+            if in_pir_mode():
+                paddle.core.serialize_pir_program(
+                    obj, path, 1, True, False, True
+                )
+            else:
+                obj.desc.flush()
+                with _open_file_buffer(path, "wb") as f:
+                    f.write(obj.desc.serialize_to_string())
 
         elif _is_state_dict(obj):
             if in_dygraph_mode():
@@ -834,7 +967,7 @@ def _legacy_save(obj, path, protocol=2):
     if not isinstance(obj, dict):
         raise NotImplementedError(
             "Now only supports save state_dict of Layer or Optimizer, "
-            "expect dict, but received %s." % type(obj)
+            f"expect dict, but received {type(obj)}."
         )
 
     if len(obj) == 0:
@@ -842,9 +975,7 @@ def _legacy_save(obj, path, protocol=2):
 
     if not isinstance(protocol, int):
         raise ValueError(
-            "The 'protocol' MUST be `int`, but received {}".format(
-                type(protocol)
-            )
+            f"The 'protocol' MUST be `int`, but received {type(protocol)}"
         )
 
     if protocol < 2 or protocol > 4:
@@ -886,7 +1017,7 @@ def _legacy_save(obj, path, protocol=2):
             pickle.dump(saved_obj, f, protocol=protocol)
 
 
-def load(path, **configs):
+def load(path: str | BytesIO, **configs: Unpack[_LoadOptions]) -> Any:
     '''
     Load an object can be used in paddle from specified path.
 
@@ -905,8 +1036,8 @@ def load(path, **configs):
         or ``paddle.Model().save(training=False)`` , ``path`` need to be a file prefix,
         such as ``model/mnist``, and ``paddle.load`` will get information from
         ``mnist.pdmodel`` and ``mnist.pdiparams`` ;
-        3. loading from paddle 1.x APIs ``paddle.fluid.io.save_inference_model`` or
-        ``paddle.fluid.io.save_params/save_persistables`` , ``path`` need to be a
+        3. loading from paddle 1.x APIs ``paddle.base.io.save_inference_model`` or
+        ``paddle.base.io.save_params/save_persistables`` , ``path`` need to be a
         directory, such as ``model`` and model is a directory.
 
     Note:
@@ -948,7 +1079,7 @@ def load(path, **configs):
             >>> paddle.save(layer_state_dict, "emb.pdparams")
 
             >>> scheduler = paddle.optimizer.lr.NoamDecay(
-            ...     d_model=0.01, warmup_steps=100, verbose=True)
+            ...     d_model=100, warmup_steps=100, verbose=True)
             >>> adam = paddle.optimizer.Adam(
             ...     learning_rate=scheduler,
             ...     parameters=emb.parameters())
@@ -1106,26 +1237,63 @@ def load(path, **configs):
                 return tensor
             except:
                 try:
-                    tensor, _ = _load_lod_tensor(path)
+                    tensor, _ = _load_dense_tensor(path)
                     if config.return_numpy:
-                        return np.array(tensor)
+                        p = core.Place()
+                        p.set_place(paddle.CPUPlace())
+                        if tensor._place().is_custom_place():
+                            return np.array(
+                                paddle._C_ops.npu_identity(tensor, -1)._copy(p)
+                            )
+                        else:
+                            return np.array(tensor._copy(p))
                     else:
                         if in_dygraph_mode():
                             return _lod_tensor2varbase(tensor)
                         return tensor
                 except:
                     try:
+                        if in_pir_mode():
+                            program = paddle.static.Program()
+                            paddle.core.deserialize_pir_program(
+                                path, program, 1
+                            )
+                            return program
                         with _open_file_buffer(path, "rb") as f:
                             program_desc_str = f.read()
                             program = Program.parse_from_string(
                                 program_desc_str
                             )
+                            if paddle.framework.in_pir_executor_mode():
+                                with paddle.pir_utils.IrGuard():
+                                    program = paddle.pir.translate_to_pir(
+                                        program.desc
+                                    )
+                                    block = program.global_block()
+                                    remove_op_list = []
+                                    for op in block.ops:
+                                        if op.name() == "pd_op.feed":
+                                            var_name = op.attrs()["name"]
+                                            org_value = op.result(0)
+                                            with block:
+                                                value = paddle.static.data(
+                                                    name=var_name,
+                                                    shape=org_value.shape,
+                                                    dtype=org_value.dtype,
+                                                )
+                                                org_value.replace_all_uses_with(
+                                                    value
+                                                )
+                                                value.get_defining_op().move_before(
+                                                    op
+                                                )
+                                            remove_op_list.append(op)
+                                    for op in remove_op_list:
+                                        block.remove_op(op)
                             return program
                     except:
                         raise ValueError(
-                            "`paddle.load` can not parse the file:{}.".format(
-                                path
-                            )
+                            f"`paddle.load` can not parse the file:{path}."
                         )
 
     else:

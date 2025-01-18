@@ -26,7 +26,7 @@ namespace backends {
 using cinn::common::bfloat16;
 using cinn::common::float16;
 
-llvm::Type *CinnTypeToLLVMType(common::Type type,
+llvm::Type *CinnTypeToLLVMType(cinn::common::Type type,
                                llvm::Module *m,
                                bool is_vec) {
   llvm::Type *ir_type = nullptr;
@@ -92,10 +92,14 @@ llvm::Type *CinnTypeToLLVMType(common::Type type,
   } else if (type.is_string()) {
     ir_type = arr;
   } else if (type.is_customized_type()) {
-    CHECK(!type.customized_type().empty());
+    PADDLE_ENFORCE_EQ(!type.customized_type().empty(),
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "Customized type name should not be empty."));
     ir_type = m->getTypeByName("struct." + type.customized_type());
   }
-  CHECK(ir_type) << "LLVM can't convert type: " << type;
+  PADDLE_ENFORCE_NOT_NULL(
+      ir_type, ::common::errors::InvalidArgument("LLVM can't convert type."));
 
   // C array / vector.
   if (type.lanes() > 1) {
@@ -118,10 +122,10 @@ llvm::Type *CinnTypeToLLVMType(common::Type type,
   return ir_type;
 }
 
-#define __(ty__)                                           \
-  template <>                                              \
-  llvm::Type *llvm_type_of<ty__>(llvm::Module * m) {       \
-    return CinnTypeToLLVMType(common::type_of<ty__>(), m); \
+#define __(ty__)                                                 \
+  template <>                                                    \
+  llvm::Type *llvm_type_of<ty__>(llvm::Module * m) {             \
+    return CinnTypeToLLVMType(cinn::common::type_of<ty__>(), m); \
   }
 
 __(int8_t)

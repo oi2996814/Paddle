@@ -17,8 +17,8 @@
 #include <unordered_set>
 #include <vector>
 
-#include "paddle/cinn/ir/utils/ir_mutator.h"
-#include "paddle/cinn/ir/utils/ir_printer.h"
+#include "paddle/cinn/ir/ir_mutator.h"
+#include "paddle/cinn/ir/ir_printer.h"
 #include "paddle/cinn/utils/string.h"
 
 namespace cinn {
@@ -30,7 +30,8 @@ namespace {
  * Fold the arguments of the Call nodes marked as CINN(calls an LoweredFunc).
  */
 struct FoldCINNCallArgumentsMutator : public ir::IRMutator<> {
-  void operator()(Expr* expr) { ir::IRMutator<>::Visit(expr, expr); }
+  using ir::IRMutator<>::Visit;
+  void operator()(ir::LoweredFunc fn) { Visit(fn.As<ir::_LoweredFunc_>()); }
 
  private:
   void Visit(const ir::Block* op, Expr* expr) override {
@@ -82,8 +83,12 @@ struct FoldCINNCallArgumentsMutator : public ir::IRMutator<> {
     std::vector<Expr> write_args;
     for (auto& arg : call->read_args) {
       if (arg.as_tensor()) {
-        CHECK(arg.as_tensor()->buffer.defined())
-            << "arg tensor [" << arg.as_tensor()->name << "] not has buffer";
+        PADDLE_ENFORCE_EQ(arg.as_tensor()->buffer.defined(),
+                          true,
+                          ::common::errors::InvalidArgument(
+                              "Expected tensor [%s] to have a defined buffer, "
+                              "but the buffer is not defined.",
+                              arg.as_tensor()->name.c_str()));
         read_args.push_back(arg.as_tensor()->buffer);
       } else {
         read_args.push_back(arg);
@@ -109,7 +114,9 @@ struct FoldCINNCallArgumentsMutator : public ir::IRMutator<> {
 
 }  // namespace
 
-void FoldCINNCallArguments(Expr* expr) { FoldCINNCallArgumentsMutator()(expr); }
+void FoldCINNCallArguments(ir::LoweredFunc fn) {
+  FoldCINNCallArgumentsMutator()(fn);
+}
 
 }  // namespace optim
 }  // namespace cinn

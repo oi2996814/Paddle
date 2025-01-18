@@ -14,9 +14,7 @@ limitations under the License. */
 
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 class ShapeOpConverter : public OpConverter {
  public:
@@ -29,13 +27,18 @@ class ShapeOpConverter : public OpConverter {
     // Declare inputs
     auto* input = engine_->GetITensor(op_desc.Input("Input")[0]);
     nvinfer1::ILayer* layer = TRT_ENGINE_ADD_LAYER(engine_, Shape, *input);
+#if IS_TRT_VERSION_GE(10000)
+    auto* cast_layer =
+        TRT_ENGINE_ADD_LAYER(engine_, Identity, *layer->getOutput(0));
+    cast_layer->setOutputType(0, nvinfer1::DataType::kINT32);
+    cast_layer->getOutput(0)->setType(nvinfer1::DataType::kINT32);
+    layer = cast_layer;
+#endif
     auto output_name = op_desc.Output("Out")[0];
-    RreplenishLayerAndOutput(layer, "shape", {output_name}, test_mode);
+    ReplenishLayerAndOutput(layer, "shape", {output_name}, test_mode);
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(shape, ShapeOpConverter);

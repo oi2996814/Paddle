@@ -11,14 +11,48 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Callable
 
 import paddle
 from paddle import nn
 from paddle.utils.download import get_weights_path_from_url
 
+if TYPE_CHECKING:
+    from typing import Literal, TypedDict
+
+    from typing_extensions import NotRequired, Unpack
+
+    from paddle import Tensor
+    from paddle._typing import Size2
+
+    _ResNetArch = Literal[
+        'resnet18',
+        'resnet34',
+        'resnet50',
+        'resnet101',
+        'resnet152',
+        'resnext50_32x4d',
+        'resnext50_64x4d',
+        'resnext101_32x4d',
+        'resnext101_64x4d',
+        'resnext152_32x4d',
+        'resnext152_64x4d',
+        'wide_resnet50_2',
+        'wide_resnet101_2',
+    ]
+
+    class _ResNetOptions(TypedDict):
+        width: NotRequired[int]
+        num_classes: NotRequired[int]
+        with_pool: NotRequired[bool]
+        groups: NotRequired[int]
+
+
 __all__ = []
 
-model_urls = {
+model_urls: dict[str, tuple[str, str]] = {
     'resnet18': (
         'https://paddle-hapi.bj.bcebos.com/models/resnet18.pdparams',
         'cf548f46534aa3560945be4b95cd11c4',
@@ -75,22 +109,22 @@ model_urls = {
 
 
 class BasicBlock(nn.Layer):
-    expansion = 1
+    expansion: int = 1
 
     def __init__(
         self,
-        inplanes,
-        planes,
-        stride=1,
-        downsample=None,
-        groups=1,
-        base_width=64,
-        dilation=1,
-        norm_layer=None,
-    ):
+        inplanes: int,
+        planes: int,
+        stride: Size2 = 1,
+        downsample: nn.Layer | None = None,
+        groups: int = 1,
+        base_width: int = 64,
+        dilation: int = 1,
+        norm_layer: Callable[..., nn.Layer] | None = None,
+    ) -> None:
         super().__init__()
         if norm_layer is None:
-            norm_layer = nn.BatchNorm2D
+            norm_layer: type[nn.BatchNorm2D] = nn.BatchNorm2D
 
         if dilation > 1:
             raise NotImplementedError(
@@ -107,7 +141,7 @@ class BasicBlock(nn.Layer):
         self.downsample = downsample
         self.stride = stride
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         identity = x
 
         out = self.conv1(x)
@@ -127,19 +161,19 @@ class BasicBlock(nn.Layer):
 
 
 class BottleneckBlock(nn.Layer):
-    expansion = 4
+    expansion: int = 4
 
     def __init__(
         self,
-        inplanes,
-        planes,
-        stride=1,
-        downsample=None,
-        groups=1,
-        base_width=64,
-        dilation=1,
-        norm_layer=None,
-    ):
+        inplanes: int,
+        planes: int,
+        stride: Size2 = 1,
+        downsample: nn.Layer | None = None,
+        groups: int = 1,
+        base_width: int = 64,
+        dilation: int = 1,
+        norm_layer: Callable[..., nn.Layer] | None = None,
+    ) -> None:
         super().__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2D
@@ -168,7 +202,7 @@ class BottleneckBlock(nn.Layer):
         self.downsample = downsample
         self.stride = stride
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         identity = x
 
         out = self.conv1(x)
@@ -210,38 +244,45 @@ class ResNet(nn.Layer):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import ResNet
-            from paddle.vision.models.resnet import BottleneckBlock, BasicBlock
+            >>> import paddle
+            >>> from paddle.vision.models import ResNet
+            >>> from paddle.vision.models.resnet import BottleneckBlock, BasicBlock
 
-            # build ResNet with 18 layers
-            resnet18 = ResNet(BasicBlock, 18)
+            >>> # build ResNet with 18 layers
+            >>> resnet18 = ResNet(BasicBlock, 18)
 
-            # build ResNet with 50 layers
-            resnet50 = ResNet(BottleneckBlock, 50)
+            >>> # build ResNet with 50 layers
+            >>> resnet50 = ResNet(BottleneckBlock, 50)
 
-            # build Wide ResNet model
-            wide_resnet50_2 = ResNet(BottleneckBlock, 50, width=64*2)
+            >>> # build Wide ResNet model
+            >>> wide_resnet50_2 = ResNet(BottleneckBlock, 50, width=64*2)
 
-            # build ResNeXt model
-            resnext50_32x4d = ResNet(BottleneckBlock, 50, width=4, groups=32)
+            >>> # build ResNeXt model
+            >>> resnext50_32x4d = ResNet(BottleneckBlock, 50, width=4, groups=32)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = resnet18(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = resnet18(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
+
+    groups: int
+    base_width: int
+    num_classes: int
+    with_pool: bool
+    inplanes: int
+    dilation: int
 
     def __init__(
         self,
-        block,
-        depth=50,
-        width=64,
-        num_classes=1000,
-        with_pool=True,
-        groups=1,
-    ):
+        block: type[BasicBlock | BottleneckBlock],
+        depth: int = 50,
+        width: int = 64,
+        num_classes: int = 1000,
+        with_pool: bool = True,
+        groups: int = 1,
+    ) -> None:
         super().__init__()
         layer_cfg = {
             18: [2, 2, 2, 2],
@@ -281,7 +322,14 @@ class ResNet(nn.Layer):
         if num_classes > 0:
             self.fc = nn.Linear(512 * block.expansion, num_classes)
 
-    def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
+    def _make_layer(
+        self,
+        block: type[BasicBlock | BottleneckBlock],
+        planes: int,
+        blocks: int,
+        stride: int = 1,
+        dilate: bool = False,
+    ) -> nn.Sequential:
         norm_layer = self._norm_layer
         downsample = None
         previous_dilation = self.dilation
@@ -327,7 +375,7 @@ class ResNet(nn.Layer):
 
         return nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
@@ -347,14 +395,18 @@ class ResNet(nn.Layer):
         return x
 
 
-def _resnet(arch, Block, depth, pretrained, **kwargs):
+def _resnet(
+    arch: _ResNetArch,
+    Block: type[BasicBlock | BottleneckBlock],
+    depth: int,
+    pretrained: bool,
+    **kwargs: Unpack[_ResNetOptions],
+) -> ResNet:
     model = ResNet(Block, depth, **kwargs)
     if pretrained:
         assert (
             arch in model_urls
-        ), "{} model do not have a pretrained model now, you should set pretrained=False".format(
-            arch
-        )
+        ), f"{arch} model do not have a pretrained model now, you should set pretrained=False"
         weight_path = get_weights_path_from_url(
             model_urls[arch][0], model_urls[arch][1]
         )
@@ -365,14 +417,14 @@ def _resnet(arch, Block, depth, pretrained, **kwargs):
     return model
 
 
-def resnet18(pretrained=False, **kwargs):
+def resnet18(pretrained=False, **kwargs: Unpack[_ResNetOptions]) -> ResNet:
     """ResNet 18-layer model from
     `"Deep Residual Learning for Image Recognition" <https://arxiv.org/pdf/1512.03385.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
                             on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_ResNet>`.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_models_ResNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of ResNet 18-layer model.
@@ -380,32 +432,34 @@ def resnet18(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import resnet18
+            >>> import paddle
+            >>> from paddle.vision.models import resnet18
 
-            # build model
-            model = resnet18()
+            >>> # build model
+            >>> model = resnet18()
 
-            # build model and load imagenet pretrained weight
-            # model = resnet18(pretrained=True)
+            >>> # build model and load imagenet pretrained weight
+            >>> # model = resnet18(pretrained=True)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     return _resnet('resnet18', BasicBlock, 18, pretrained, **kwargs)
 
 
-def resnet34(pretrained=False, **kwargs):
+def resnet34(
+    pretrained: bool = False, **kwargs: Unpack[_ResNetOptions]
+) -> ResNet:
     """ResNet 34-layer model from
     `"Deep Residual Learning for Image Recognition" <https://arxiv.org/pdf/1512.03385.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
                             on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_ResNet>`.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_models_ResNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of ResNet 34-layer model.
@@ -413,32 +467,34 @@ def resnet34(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import resnet34
+            >>> import paddle
+            >>> from paddle.vision.models import resnet34
 
-            # build model
-            model = resnet34()
+            >>> # build model
+            >>> model = resnet34()
 
-            # build model and load imagenet pretrained weight
-            # model = resnet34(pretrained=True)
+            >>> # build model and load imagenet pretrained weight
+            >>> # model = resnet34(pretrained=True)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     return _resnet('resnet34', BasicBlock, 34, pretrained, **kwargs)
 
 
-def resnet50(pretrained=False, **kwargs):
+def resnet50(
+    pretrained: bool = False, **kwargs: Unpack[_ResNetOptions]
+) -> ResNet:
     """ResNet 50-layer model from
     `"Deep Residual Learning for Image Recognition" <https://arxiv.org/pdf/1512.03385.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
                             on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_ResNet>`.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_models_ResNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of ResNet 50-layer model.
@@ -446,32 +502,34 @@ def resnet50(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import resnet50
+            >>> import paddle
+            >>> from paddle.vision.models import resnet50
 
-            # build model
-            model = resnet50()
+            >>> # build model
+            >>> model = resnet50()
 
-            # build model and load imagenet pretrained weight
-            # model = resnet50(pretrained=True)
+            >>> # build model and load imagenet pretrained weight
+            >>> # model = resnet50(pretrained=True)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     return _resnet('resnet50', BottleneckBlock, 50, pretrained, **kwargs)
 
 
-def resnet101(pretrained=False, **kwargs):
+def resnet101(
+    pretrained: bool = False, **kwargs: Unpack[_ResNetOptions]
+) -> ResNet:
     """ResNet 101-layer model from
     `"Deep Residual Learning for Image Recognition" <https://arxiv.org/pdf/1512.03385.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
                             on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_ResNet>`.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_models_ResNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of ResNet 101-layer.
@@ -479,32 +537,34 @@ def resnet101(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import resnet101
+            >>> import paddle
+            >>> from paddle.vision.models import resnet101
 
-            # build model
-            model = resnet101()
+            >>> # build model
+            >>> model = resnet101()
 
-            # build model and load imagenet pretrained weight
-            # model = resnet101(pretrained=True)
+            >>> # build model and load imagenet pretrained weight
+            >>> # model = resnet101(pretrained=True)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     return _resnet('resnet101', BottleneckBlock, 101, pretrained, **kwargs)
 
 
-def resnet152(pretrained=False, **kwargs):
+def resnet152(
+    pretrained: bool = False, **kwargs: Unpack[_ResNetOptions]
+) -> ResNet:
     """ResNet 152-layer model from
     `"Deep Residual Learning for Image Recognition" <https://arxiv.org/pdf/1512.03385.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
                             on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_ResNet>`.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_models_ResNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of ResNet 152-layer model.
@@ -512,32 +572,34 @@ def resnet152(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import resnet152
+            >>> import paddle
+            >>> from paddle.vision.models import resnet152
 
-            # build model
-            model = resnet152()
+            >>> # build model
+            >>> model = resnet152()
 
-            # build model and load imagenet pretrained weight
-            # model = resnet152(pretrained=True)
+            >>> # build model and load imagenet pretrained weight
+            >>> # model = resnet152(pretrained=True)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     return _resnet('resnet152', BottleneckBlock, 152, pretrained, **kwargs)
 
 
-def resnext50_32x4d(pretrained=False, **kwargs):
+def resnext50_32x4d(
+    pretrained: bool = False, **kwargs: Unpack[_ResNetOptions]
+) -> ResNet:
     """ResNeXt-50 32x4d model from
     `"Aggregated Residual Transformations for Deep Neural Networks" <https://arxiv.org/pdf/1611.05431.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
                             on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_ResNet>`.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_models_ResNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of ResNeXt-50 32x4d model.
@@ -545,34 +607,36 @@ def resnext50_32x4d(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import resnext50_32x4d
+            >>> import paddle
+            >>> from paddle.vision.models import resnext50_32x4d
 
-            # build model
-            model = resnext50_32x4d()
+            >>> # build model
+            >>> model = resnext50_32x4d()
 
-            # build model and load imagenet pretrained weight
-            # model = resnext50_32x4d(pretrained=True)
+            >>> # build model and load imagenet pretrained weight
+            >>> # model = resnext50_32x4d(pretrained=True)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     kwargs['groups'] = 32
     kwargs['width'] = 4
     return _resnet('resnext50_32x4d', BottleneckBlock, 50, pretrained, **kwargs)
 
 
-def resnext50_64x4d(pretrained=False, **kwargs):
+def resnext50_64x4d(
+    pretrained: bool = False, **kwargs: Unpack[_ResNetOptions]
+) -> ResNet:
     """ResNeXt-50 64x4d model from
     `"Aggregated Residual Transformations for Deep Neural Networks" <https://arxiv.org/pdf/1611.05431.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
                             on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_ResNet>`.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_models_ResNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of ResNeXt-50 64x4d model.
@@ -580,34 +644,36 @@ def resnext50_64x4d(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import resnext50_64x4d
+            >>> import paddle
+            >>> from paddle.vision.models import resnext50_64x4d
 
-            # build model
-            model = resnext50_64x4d()
+            >>> # build model
+            >>> model = resnext50_64x4d()
 
-            # build model and load imagenet pretrained weight
-            # model = resnext50_64x4d(pretrained=True)
+            >>> # build model and load imagenet pretrained weight
+            >>> # model = resnext50_64x4d(pretrained=True)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     kwargs['groups'] = 64
     kwargs['width'] = 4
     return _resnet('resnext50_64x4d', BottleneckBlock, 50, pretrained, **kwargs)
 
 
-def resnext101_32x4d(pretrained=False, **kwargs):
+def resnext101_32x4d(
+    pretrained: bool = False, **kwargs: Unpack[_ResNetOptions]
+) -> ResNet:
     """ResNeXt-101 32x4d model from
     `"Aggregated Residual Transformations for Deep Neural Networks" <https://arxiv.org/pdf/1611.05431.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
                             on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_ResNet>`.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_models_ResNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of ResNeXt-101 32x4d model.
@@ -615,20 +681,20 @@ def resnext101_32x4d(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import resnext101_32x4d
+            >>> import paddle
+            >>> from paddle.vision.models import resnext101_32x4d
 
-            # build model
-            model = resnext101_32x4d()
+            >>> # build model
+            >>> model = resnext101_32x4d()
 
-            # build model and load imagenet pretrained weight
-            # model = resnext101_32x4d(pretrained=True)
+            >>> # build model and load imagenet pretrained weight
+            >>> # model = resnext101_32x4d(pretrained=True)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     kwargs['groups'] = 32
     kwargs['width'] = 4
@@ -637,14 +703,16 @@ def resnext101_32x4d(pretrained=False, **kwargs):
     )
 
 
-def resnext101_64x4d(pretrained=False, **kwargs):
+def resnext101_64x4d(
+    pretrained: bool = False, **kwargs: Unpack[_ResNetOptions]
+) -> ResNet:
     """ResNeXt-101 64x4d model from
     `"Aggregated Residual Transformations for Deep Neural Networks" <https://arxiv.org/pdf/1611.05431.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
                             on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_ResNet>`.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_models_ResNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of ResNeXt-101 64x4d model.
@@ -652,20 +720,20 @@ def resnext101_64x4d(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import resnext101_64x4d
+            >>> import paddle
+            >>> from paddle.vision.models import resnext101_64x4d
 
-            # build model
-            model = resnext101_64x4d()
+            >>> # build model
+            >>> model = resnext101_64x4d()
 
-            # build model and load imagenet pretrained weight
-            # model = resnext101_64x4d(pretrained=True)
+            >>> # build model and load imagenet pretrained weight
+            >>> # model = resnext101_64x4d(pretrained=True)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     kwargs['groups'] = 64
     kwargs['width'] = 4
@@ -674,14 +742,16 @@ def resnext101_64x4d(pretrained=False, **kwargs):
     )
 
 
-def resnext152_32x4d(pretrained=False, **kwargs):
+def resnext152_32x4d(
+    pretrained: bool = False, **kwargs: Unpack[_ResNetOptions]
+) -> ResNet:
     """ResNeXt-152 32x4d model from
     `"Aggregated Residual Transformations for Deep Neural Networks" <https://arxiv.org/pdf/1611.05431.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
                             on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_ResNet>`.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_models_ResNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of ResNeXt-152 32x4d model.
@@ -689,20 +759,20 @@ def resnext152_32x4d(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import resnext152_32x4d
+            >>> import paddle
+            >>> from paddle.vision.models import resnext152_32x4d
 
-            # build model
-            model = resnext152_32x4d()
+            >>> # build model
+            >>> model = resnext152_32x4d()
 
-            # build model and load imagenet pretrained weight
-            # model = resnext152_32x4d(pretrained=True)
+            >>> # build model and load imagenet pretrained weight
+            >>> # model = resnext152_32x4d(pretrained=True)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     kwargs['groups'] = 32
     kwargs['width'] = 4
@@ -711,14 +781,16 @@ def resnext152_32x4d(pretrained=False, **kwargs):
     )
 
 
-def resnext152_64x4d(pretrained=False, **kwargs):
+def resnext152_64x4d(
+    pretrained: bool = False, **kwargs: Unpack[_ResNetOptions]
+) -> ResNet:
     """ResNeXt-152 64x4d model from
     `"Aggregated Residual Transformations for Deep Neural Networks" <https://arxiv.org/pdf/1611.05431.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
                             on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_ResNet>`.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_models_ResNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of ResNeXt-152 64x4d model.
@@ -726,20 +798,20 @@ def resnext152_64x4d(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import resnext152_64x4d
+            >>> import paddle
+            >>> from paddle.vision.models import resnext152_64x4d
 
-            # build model
-            model = resnext152_64x4d()
+            >>> # build model
+            >>> model = resnext152_64x4d()
 
-            # build model and load imagenet pretrained weight
-            # model = resnext152_64x4d(pretrained=True)
+            >>> # build model and load imagenet pretrained weight
+            >>> # model = resnext152_64x4d(pretrained=True)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     kwargs['groups'] = 64
     kwargs['width'] = 4
@@ -748,14 +820,16 @@ def resnext152_64x4d(pretrained=False, **kwargs):
     )
 
 
-def wide_resnet50_2(pretrained=False, **kwargs):
+def wide_resnet50_2(
+    pretrained: bool = False, **kwargs: Unpack[_ResNetOptions]
+) -> ResNet:
     """Wide ResNet-50-2 model from
     `"Wide Residual Networks" <https://arxiv.org/pdf/1605.07146.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
                             on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_ResNet>`.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_models_ResNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of Wide ResNet-50-2 model.
@@ -763,33 +837,35 @@ def wide_resnet50_2(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import wide_resnet50_2
+            >>> import paddle
+            >>> from paddle.vision.models import wide_resnet50_2
 
-            # build model
-            model = wide_resnet50_2()
+            >>> # build model
+            >>> model = wide_resnet50_2()
 
-            # build model and load imagenet pretrained weight
-            # model = wide_resnet50_2(pretrained=True)
+            >>> # build model and load imagenet pretrained weight
+            >>> # model = wide_resnet50_2(pretrained=True)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     kwargs['width'] = 64 * 2
     return _resnet('wide_resnet50_2', BottleneckBlock, 50, pretrained, **kwargs)
 
 
-def wide_resnet101_2(pretrained=False, **kwargs):
+def wide_resnet101_2(
+    pretrained: bool = False, **kwargs: Unpack[_ResNetOptions]
+) -> ResNet:
     """Wide ResNet-101-2 model from
     `"Wide Residual Networks" <https://arxiv.org/pdf/1605.07146.pdf>`_.
 
     Args:
         pretrained (bool, optional): Whether to load pre-trained weights. If True, returns a model pre-trained
                             on ImageNet. Default: False.
-        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_ResNet>`.
+        **kwargs (optional): Additional keyword arguments. For details, please refer to :ref:`ResNet <api_paddle_vision_models_ResNet>`.
 
     Returns:
         :ref:`api_paddle_nn_Layer`. An instance of Wide ResNet-101-2 model.
@@ -797,20 +873,20 @@ def wide_resnet101_2(pretrained=False, **kwargs):
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.vision.models import wide_resnet101_2
+            >>> import paddle
+            >>> from paddle.vision.models import wide_resnet101_2
 
-            # build model
-            model = wide_resnet101_2()
+            >>> # build model
+            >>> model = wide_resnet101_2()
 
-            # build model and load imagenet pretrained weight
-            # model = wide_resnet101_2(pretrained=True)
+            >>> # build model and load imagenet pretrained weight
+            >>> # model = wide_resnet101_2(pretrained=True)
 
-            x = paddle.rand([1, 3, 224, 224])
-            out = model(x)
+            >>> x = paddle.rand([1, 3, 224, 224])
+            >>> out = model(x)
 
-            print(out.shape)
-            # [1, 1000]
+            >>> print(out.shape)
+            [1, 1000]
     """
     kwargs['width'] = 64 * 2
     return _resnet(

@@ -20,25 +20,21 @@ limitations under the License. */
 #include "paddle/fluid/framework/op_proto_maker.h"
 #include "paddle/fluid/framework/program_utils.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Scope;
-namespace ir {
+}  // namespace paddle::framework
+namespace paddle::framework::ir {
 class Graph;
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 #ifdef PADDLE_WITH_DNNL
-#include "paddle/fluid/platform/mkldnn_helper.h"
+#include "paddle/fluid/platform/onednn_helper.h"
 #endif
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 static const char kParamScopeAttr[] = "__param_scope__";  // NOLINT
 
-static const std::vector<std::string> support_subgraph_passes = {
+static const std::vector<std::string> gpu_support_subgraph_passes = {
     "simplify_with_basic_ops_pass",
     "fused_multi_transformer_encoder_pass",
     "fused_multi_transformer_decoder_pass",
@@ -51,6 +47,14 @@ static const std::vector<std::string> support_subgraph_passes = {
     "delete_weight_dequant_linear_op_pass",
 };
 
+static const std::vector<std::string> trt_support_subgraph_passes = {
+    "feed_fetch_subgraph_pass",
+    "set_subgraph_edge_pass",
+    "trt_map_ops_to_matrix_multiply_pass",
+    "tensorrt_subgraph_pass",
+    "simplify_with_basic_ops_pass",
+};
+
 static const std::vector<std::string> xpu_support_subgraph_passes = {
     "delete_assign_op_pass",
     "delete_dropout_op_pass",
@@ -60,18 +64,23 @@ static const std::vector<std::string> xpu_support_subgraph_passes = {
     "constant_folding_pass",
     "delete_elementwise_mul_op_pass",
     "generate_sequence_xpu_fuse_pass",
+    "group_norm_silu_xpu_fuse_pass",
+    "layer_norm_relu_xpu_fuse_pass",
     "embedding_with_eltwise_add_xpu_fuse_pass",
     "multi_encoder_xpu_fuse_pass",
     "multi_encoder_xpu_adaptive_seqlen_fuse_pass",
     "multi_encoder_xpu_slice_fuse_pass",
     "fused_multi_transformer_cachekv_layout_trans_pass",
+    "fused_multi_transformer_int8_cachekv_layout_trans_pass",
     "one_beam_size_fuse_pass",
     "stack_fuse_pass",
     "fused_multi_transformer_xpu_pass",
+    "fused_multi_transformer_int8_xpu_quant_pass",
     "xpu_delete_cast_op_pass",
     "fc_xpu_fuse_pass",
     "link_xpu_op_max_pass",
     "xpu_delete_cast_op_pass",
+    "spatial_transformer_resblock_xpu_fuse_pass",
 };
 
 static std::vector<std::string> support_subgraph_generate_passes;
@@ -88,31 +97,31 @@ Graph *Pass::Apply(Graph *graph) const {
   VLOG(10) << "start to apply pass " << Type() << " to graph";
   CheckPrevPass();
   PADDLE_ENFORCE_NOT_NULL(
-      graph, platform::errors::InvalidArgument("Graph cannot be nullptr."));
+      graph, common::errors::InvalidArgument("Graph cannot be nullptr."));
   for (const std::string &attr : required_pass_attrs_) {
     PADDLE_ENFORCE_NE(
         attrs_.find(attr),
         attrs_.end(),
-        platform::errors::InvalidArgument(
-            "Required atrribute %s for pass < %s > is not set.", attr, Type()));
+        common::errors::InvalidArgument(
+            "Required attribute %s for pass < %s > is not set.", attr, Type()));
   }
   for (const std::string &attr : required_graph_attrs_) {
     PADDLE_ENFORCE_EQ(graph->Has(attr),
                       true,
-                      platform::errors::InvalidArgument(
-                          "Required atrribute %s for graph is not set.", attr));
+                      common::errors::InvalidArgument(
+                          "Required attribute %s for graph is not set.", attr));
   }
   ApplyImpl(graph);
   // TODO(panyx0718): Add more verifications.
   PADDLE_ENFORCE_EQ(
       HasCircle(*graph),
       false,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Illegal pass %s. Generated graph shouldn't contain cycle.", Type()));
   PADDLE_ENFORCE_EQ(
       VarDescIsConsistency(*graph),
       true,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The VarDescs of persistable variable are not consistency."));
   if (!graph->Has(kPassRecorder)) {
     graph->Set<PassRecorder>(kPassRecorder, new PassRecorder);
@@ -121,12 +130,20 @@ Graph *Pass::Apply(Graph *graph) const {
 
   std::vector<std::string> subgraph_passes;
   bool use_xpu = Has("use_xpu") && Get<bool>("use_xpu");
+  bool use_tensorrt = Has("use_tensorrt") && Get<bool>("use_tensorrt");
+  bool all_blocks_convert = false;
   if (use_xpu) {
     subgraph_passes = xpu_support_subgraph_passes;
+    all_blocks_convert = FLAGS_convert_all_blocks;
+  } else if (use_tensorrt) {
+    subgraph_passes = trt_support_subgraph_passes;
+    all_blocks_convert =
+        FLAGS_all_blocks_convert_trt && FLAGS_convert_all_blocks;
   } else {
-    subgraph_passes = support_subgraph_passes;
+    subgraph_passes = gpu_support_subgraph_passes;
+    all_blocks_convert = FLAGS_convert_all_blocks;
   }
-  if (graph->IsMainGraph() &&
+  if (all_blocks_convert && graph->IsMainGraph() &&
       (std::count(subgraph_passes.begin(), subgraph_passes.end(), Type()) ||
        std::count(support_subgraph_generate_passes.begin(),
                   support_subgraph_generate_passes.end(),
@@ -143,13 +160,13 @@ Graph *Pass::Apply(Graph *graph) const {
       PADDLE_ENFORCE_EQ(
           HasCircle(*sub_graph),
           false,
-          platform::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Illegal pass %s. Generated graph shouldn't contain cycle.",
               Type()));
       PADDLE_ENFORCE_EQ(
           VarDescIsConsistency(*sub_graph),
           true,
-          platform::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The VarDescs of persistable variable are not consistency."));
       if (!sub_graph->Has(kPassRecorder)) {
         sub_graph->Set<PassRecorder>(kPassRecorder, new PassRecorder);
@@ -161,7 +178,7 @@ Graph *Pass::Apply(Graph *graph) const {
 #ifdef PADDLE_WITH_DNNL
   // Clear mkl-dnn cache,
   // Passes can change params, tensors, so caching need to be discarded
-  platform::ClearMKLDNNCache(paddle::platform::CPUPlace());
+  platform::ClearMKLDNNCache(phi::CPUPlace());
 #endif
   VLOG(10) << "finish to apply pass " << Type() << " to graph";
   return graph;
@@ -206,21 +223,21 @@ void Pass::ApplyPassesToProgram(const std::vector<const Pass *> &passes,
   VLOG(10) << "ApplyPassesToProgram is called";
   PADDLE_ENFORCE_NOT_NULL(
       main_program,
-      platform::errors::InvalidArgument("The main program must be provided."));
+      common::errors::InvalidArgument("The main program must be provided."));
 
-  PADDLE_ENFORCE_NOT_NULL(startup_program,
-                          platform::errors::InvalidArgument(
-                              "The startup program must be provided."));
+  PADDLE_ENFORCE_NOT_NULL(
+      startup_program,
+      common::errors::InvalidArgument("The startup program must be provided."));
 
   for (auto *p : passes) {
     PADDLE_ENFORCE_NOT_NULL(p,
-                            platform::errors::InvalidArgument(
+                            common::errors::InvalidArgument(
                                 "The provided pass cannot be nullptr."));
     VLOG(10) << "Pass " << p->Type();
     if (passes.size() > 1) {
       PADDLE_ENFORCE_EQ(p->SupportApplyProgramViaGraph(),
                         true,
-                        platform::errors::PermissionDenied(
+                        common::errors::PermissionDenied(
                             "Each pass must support to be applied via Graph if "
                             "multi-passes are applied."));
     }
@@ -244,7 +261,7 @@ void Pass::ApplyPassesToProgram(const std::vector<const Pass *> &passes,
 
 void Pass::ApplyImpl(ProgramDesc *main_program,
                      ProgramDesc *startup_program) const {
-  PADDLE_THROW(platform::errors::Unimplemented(
+  PADDLE_THROW(common::errors::Unimplemented(
       "The pass %s does not support to apply ProgramDesc directly", Type()));
 }
 
@@ -279,6 +296,4 @@ PassRegistry &PassRegistry::Instance() {
   static PassRegistry g_pass_info_map;
   return g_pass_info_map;
 }
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir

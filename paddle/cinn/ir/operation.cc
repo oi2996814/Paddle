@@ -31,6 +31,19 @@ Operation PlaceholderOp::Make(const std::string &name,
   return Operation(n);
 }
 
+Operation PlaceholderOp::Make(const std::string &name,
+                              const std::vector<Dim> &sym_shape,
+                              Type dtype) {
+  auto n = make_shared<PlaceholderOp>();
+  n->name = name;
+  n->sym_shape = sym_shape;
+  for (int i = 0; i < sym_shape.size(); i++) {
+    n->shape.emplace_back(sym_shape[i]->dim_expr);
+  }
+  n->set_type(dtype);
+  return Operation(n);
+}
+
 const char *PlaceholderOp::func_type() const { return "placeholder_op"; }
 
 const char *ComputeOp::func_type() const { return "compute_op"; }
@@ -49,10 +62,12 @@ Operation ComputeOp::Make(const std::string &name,
   n->reduce_axis = reduce_axis;
   n->tag = tag;
   n->attrs = attrs;
-  auto axis = common::GenDefaultAxis(domain.size());
-  std::vector<Expr> _axis;
-  for (auto &x : axis) _axis.push_back(x);
-  n->body = {handle(_axis)};
+  n->axis = cinn::common::GenDefaultAxis(domain.size());
+  std::vector<Expr> tmp_axis;
+  for (auto &x : n->axis) {
+    tmp_axis.push_back(x);
+  }
+  n->body = {handle(tmp_axis)};
   n->reduce_axis = reduce_axis;
   return Operation(n);
 }
@@ -79,27 +94,37 @@ const char *CallOp::__func_type__ = "call_op";
 
 const std::string &CallOp::target() const {
   auto *call = call_expr.As<ir::Call>();
-  CHECK(call);
+  PADDLE_ENFORCE_NOT_NULL(call,
+                          ::common::errors::InvalidArgument(
+                              "The 'call_expr' must be of type 'ir::Call'."));
   return call->name;
 }
 std::vector<Expr> &CallOp::write_args() {
   auto *call = call_expr.As<ir::Call>();
-  CHECK(call);
+  PADDLE_ENFORCE_NOT_NULL(call,
+                          ::common::errors::InvalidArgument(
+                              "The 'call_expr' must be of type 'ir::Call'."));
   return call->write_args;
 }
 std::vector<Expr> &CallOp::read_args() {
   auto *call = call_expr.As<ir::Call>();
-  CHECK(call);
+  PADDLE_ENFORCE_NOT_NULL(call,
+                          ::common::errors::InvalidArgument(
+                              "The 'call_expr' must be of type 'ir::Call'."));
   return call->read_args;
 }
 const std::vector<Expr> &CallOp::write_args() const {
   auto *call = call_expr.As<ir::Call>();
-  CHECK(call);
+  PADDLE_ENFORCE_NOT_NULL(call,
+                          ::common::errors::InvalidArgument(
+                              "The 'call_expr' must be of type 'ir::Call'."));
   return call->write_args;
 }
 const std::vector<Expr> &CallOp::read_args() const {
   auto *call = call_expr.As<ir::Call>();
-  CHECK(call);
+  PADDLE_ENFORCE_NOT_NULL(call,
+                          ::common::errors::InvalidArgument(
+                              "The 'call_expr' must be of type 'ir::Call'."));
   return call->read_args;
 }
 std::vector<Expr> CallOp::args() const {

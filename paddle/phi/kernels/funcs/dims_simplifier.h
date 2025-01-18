@@ -14,7 +14,7 @@ limitations under the License. */
 
 #pragma once
 
-#include "paddle/phi/core/ddim.h"
+#include "paddle/common/ddim.h"
 #include "paddle/phi/core/dense_tensor.h"
 
 #include "glog/logging.h"
@@ -39,20 +39,20 @@ struct BroadcastDimsSimplifier {
     N = std::max(static_cast<int>(ins.size()), 2);
     in_dims.resize(N);
     rank = dims.size();
-    out_dims = phi::vectorize<int64_t>(dims);
+    out_dims = common::vectorize<int64_t>(dims);
     if (ins.size() == 1) {
       // When ins.size() = 1, broadcast input to output.
-      in_dims[0] = phi::vectorize<int64_t>(ins[0]->dims());
+      in_dims[0] = common::vectorize<int64_t>(ins[0]->dims());
       // Add out_dims to in_dims to avoid errors in dims merging.
       in_dims[1] = out_dims;
     } else {
       for (int j = 0; j < N; ++j) {
-        in_dims[j] = phi::vectorize<int64_t>(ins[j]->dims());
+        in_dims[j] = common::vectorize<int64_t>(ins[j]->dims());
       }
     }
     ExtendInputDimensions(axis);
 
-    // To Merge the dimensions of input_tensors while the consequtive
+    // To Merge the dimensions of input_tensors while the consecutive
     // equal-dimensions appears. Example below :
     //   in_1.shape = [2, 3, 4, 5]    in_1.shape = [2, 12, 5]
     //   in_2.shape = [1, 3, 4, 5] -> in_2.shape = [1, 12, 5]
@@ -113,7 +113,7 @@ struct BroadcastDimsSimplifier {
             extended_in_dim[out_idx] = in_dim[in_idx];
             out_idx++;
           } else {
-            PADDLE_THROW(phi::errors::InvalidArgument(
+            PADDLE_THROW(common::errors::InvalidArgument(
                 "The %d-th dimension of input tensor is expected to be equal "
                 "with the %d-th dimension of output tensor %d or 1, but "
                 "received %d. The input's shape is {%s}, the output's shape is "
@@ -122,8 +122,8 @@ struct BroadcastDimsSimplifier {
                 out_idx,
                 out_dims[out_idx],
                 in_dim[in_idx],
-                phi::make_ddim(in_dim),
-                phi::make_ddim(out_dims)));
+                common::make_ddim(in_dim),
+                common::make_ddim(out_dims)));
           }
         }
         in_dim.resize(rank);
@@ -134,7 +134,7 @@ struct BroadcastDimsSimplifier {
           PADDLE_ENFORCE_EQ(
               in_dim[in_idx] == out_dims[in_idx] || in_dim[in_idx] == 1,
               true,
-              phi::errors::InvalidArgument(
+              common::errors::InvalidArgument(
                   "The %d-th dimension of input tensor is expected to be equal "
                   "with the %d-th dimension of output tensor %d or 1, but "
                   "received %d.",
@@ -156,7 +156,7 @@ struct BroadcastDimsSimplifier {
     auto VectorReorganise = [](DimVector *vec, int l_idx, int m_idx) {
       (*vec)[m_idx - 1] = std::accumulate(vec->begin() + l_idx,
                                           vec->begin() + m_idx,
-                                          1,
+                                          int64_t{1},
                                           std::multiplies<int64_t>());
       vec->erase(vec->begin() + l_idx, vec->begin() + m_idx - 1);
     };
@@ -334,11 +334,11 @@ struct DimsSimplifiedLogger {
     VLOG(6) << op_name << "`s dims after simplification is below :";
     for (size_t i = 0; i < ins.size(); ++i) {
       VLOG(6) << "input i=" << i << ": origin_dims={" << ins[i]->dims()
-              << "}, simplied_dims={"
+              << "}, simplified_dims={"
               << ReversedVectorToString(dims_simplifier.in_dims[i]) << "}";
     }
     VLOG(6) << "output: origin_dims={" << (*outs)[0]->dims()
-            << "}, simplied_dims={"
+            << "}, simplified_dims={"
             << ReversedVectorToString(dims_simplifier.out_dims) << "}";
   }
 

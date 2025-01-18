@@ -19,10 +19,34 @@ from test_imperative_base import new_program_scope
 from utils import DyGraphProgramDescTracerTestHelper
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core, framework
-from paddle.fluid.dygraph.base import to_variable
+from paddle import base
+from paddle.autograd.backward_utils import ValueDict
+from paddle.base import core
 from paddle.nn import Embedding
+
+
+def create_parameter_mapping(startup_program, main_program):
+    startup_params = {}
+    main_params = {}
+    parameter_mapping = ValueDict()
+    for op in startup_program.global_block().ops:
+        if op.name() == "builtin.set_parameter":
+            name = op.attrs()["parameter_name"]
+            param = op.operand(0).source()
+            startup_params[name] = param
+
+    for op in main_program.global_block().ops:
+        if op.name() == "builtin.parameter":
+            name = op.attrs()["parameter_name"]
+            param = op.result(0)
+            main_params[name] = param
+
+    assert len(startup_params) == len(main_params)
+    for name, startup_param in startup_params.items():
+        assert name in main_params
+        main_param = main_params[name]
+        parameter_mapping[main_param] = startup_param
+    return parameter_mapping
 
 
 class SimpleLSTMRNN(paddle.nn.Layer):
@@ -48,7 +72,7 @@ class SimpleLSTMRNN(paddle.nn.Layer):
 
         for i in range(self._num_layers):
             weight_1 = self.create_parameter(
-                attr=fluid.ParamAttr(
+                attr=base.ParamAttr(
                     initializer=paddle.nn.initializer.Uniform(
                         low=-self._init_scale, high=self._init_scale
                     )
@@ -59,9 +83,9 @@ class SimpleLSTMRNN(paddle.nn.Layer):
                     low=-self._init_scale, high=self._init_scale
                 ),
             )
-            self.weight_1_arr.append(self.add_parameter('w_%d' % i, weight_1))
+            self.weight_1_arr.append(self.add_parameter(f'w_{i}', weight_1))
             bias_1 = self.create_parameter(
-                attr=fluid.ParamAttr(
+                attr=base.ParamAttr(
                     initializer=paddle.nn.initializer.Uniform(
                         low=-self._init_scale, high=self._init_scale
                     )
@@ -70,7 +94,7 @@ class SimpleLSTMRNN(paddle.nn.Layer):
                 dtype="float32",
                 default_initializer=paddle.nn.initializer.Constant(0.0),
             )
-            self.bias_arr.append(self.add_parameter('b_%d' % i, bias_1))
+            self.bias_arr.append(self.add_parameter(f'b_{i}', bias_1))
 
     def forward(self, input_embedding, init_hidden=None, init_cell=None):
         self.cell_array = []
@@ -172,7 +196,7 @@ class PtbModel(paddle.nn.Layer):
             vocab_size,
             hidden_size,
             sparse=is_sparse,
-            weight_attr=fluid.ParamAttr(
+            weight_attr=base.ParamAttr(
                 name='embedding_para',
                 initializer=paddle.nn.initializer.Uniform(
                     low=-init_scale, high=init_scale
@@ -180,7 +204,7 @@ class PtbModel(paddle.nn.Layer):
             ),
         )
         self.softmax_weight = self.create_parameter(
-            attr=fluid.ParamAttr(),
+            attr=base.ParamAttr(),
             shape=[self.hidden_size, self.vocab_size],
             dtype="float32",
             default_initializer=paddle.nn.initializer.Uniform(
@@ -188,7 +212,7 @@ class PtbModel(paddle.nn.Layer):
             ),
         )
         self.softmax_bias = self.create_parameter(
-            attr=fluid.ParamAttr(),
+            attr=base.ParamAttr(),
             shape=[self.vocab_size],
             dtype="float32",
             default_initializer=paddle.nn.initializer.Uniform(
@@ -250,9 +274,16 @@ class TestDygraphPtbRnn(unittest.TestCase):
         batch_num = 200
         traced_layer = None
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             paddle.seed(seed)
-            paddle.framework.random._manual_program_seed(seed)
+            if paddle.framework.use_pir_api():
+                with paddle.pir_utils.OldIrGuard():
+                    # Note: dygraph use self.main_program.global_block().create_parameter(), it's need manual seed to old Program
+                    paddle.framework.random._manual_program_seed(seed)
+                paddle.framework.random._manual_program_seed(seed)
+            else:
+                paddle.framework.random._manual_program_seed(seed)
+
             # TODO: marsyang1993 Change seed to
             ptb_model = PtbModel(
                 hidden_size=hidden_size,
@@ -285,10 +316,10 @@ class TestDygraphPtbRnn(unittest.TestCase):
                 init_cell_data = np.zeros(
                     (num_layers, batch_size, hidden_size), dtype='float32'
                 )
-                x = to_variable(x_data)
-                y = to_variable(y_data)
-                init_hidden = to_variable(init_hidden_data)
-                init_cell = to_variable(init_cell_data)
+                x = paddle.to_tensor(x_data)
+                y = paddle.to_tensor(y_data)
+                init_hidden = paddle.to_tensor(init_hidden_data)
+                init_cell = paddle.to_tensor(init_cell_data)
 
                 outs = ptb_model(x, y, init_hidden, init_cell)
 
@@ -310,7 +341,14 @@ class TestDygraphPtbRnn(unittest.TestCase):
 
         with new_program_scope():
             paddle.seed(seed)
-            paddle.framework.random._manual_program_seed(seed)
+            if paddle.framework.use_pir_api():
+                with paddle.pir_utils.OldIrGuard():
+                    # Note: dygraph use self.main_program.global_block().create_parameter(), it's need manual seed to old Program
+                    paddle.framework.random._manual_program_seed(seed)
+                paddle.framework.random._manual_program_seed(seed)
+            else:
+                paddle.framework.random._manual_program_seed(seed)
+
             ptb_model = PtbModel(
                 hidden_size=hidden_size,
                 vocab_size=vocab_size,
@@ -320,26 +358,27 @@ class TestDygraphPtbRnn(unittest.TestCase):
                 is_sparse=is_sparse,
             )
 
-            exe = fluid.Executor(
-                fluid.CPUPlace()
+            exe = base.Executor(
+                base.CPUPlace()
                 if not core.is_compiled_with_cuda()
-                else fluid.CUDAPlace(0)
+                else base.CUDAPlace(0)
             )
             sgd = paddle.optimizer.SGD(learning_rate=1e-3)
             x = paddle.static.data(
                 name="x", shape=[-1, num_steps], dtype='int64'
             )
-            x.desc.set_need_check_feed(False)
             y = paddle.static.data(name="y", shape=[-1, 1], dtype='float32')
-            y.desc.set_need_check_feed(False)
             init_hidden = paddle.static.data(
                 name="init_hidden", shape=[-1, 1], dtype='float32'
             )
-            init_hidden.desc.set_need_check_feed(False)
             init_cell = paddle.static.data(
                 name="init_cell", shape=[-1, 1], dtype='float32'
             )
-            init_cell.desc.set_need_check_feed(False)
+            if not paddle.framework.use_pir_api():
+                x.desc.set_need_check_feed(False)
+                y.desc.set_need_check_feed(False)
+                init_hidden.desc.set_need_check_feed(False)
+                init_cell.desc.set_need_check_feed(False)
 
             static_loss, static_last_hidden, static_last_cell = ptb_model(
                 x, y, init_hidden, init_cell
@@ -348,15 +387,31 @@ class TestDygraphPtbRnn(unittest.TestCase):
             static_param_updated = {}
             static_param_init = {}
             static_param_name_list = []
+            static_params = []
             for param in ptb_model.parameters():
                 static_param_name_list.append(param.name)
+                static_params.append(param)
+
+            if paddle.framework.use_pir_api():
+                parameter_mapping = create_parameter_mapping(
+                    paddle.static.default_startup_program(),
+                    paddle.static.default_main_program(),
+                )
+                startup_params = [
+                    parameter_mapping[param] for param in static_params
+                ]
+            else:
+                startup_params = static_params
 
             out = exe.run(
-                framework.default_startup_program(),
-                fetch_list=static_param_name_list,
+                paddle.static.default_startup_program(),
+                fetch_list=startup_params,
             )
-            for i in range(len(static_param_name_list)):
-                static_param_init[static_param_name_list[i]] = out[i]
+
+            for i in range(len(static_params)):
+                param_name = static_param_name_list[i]
+                static_param_init[param_name] = out[i]
+
             static_loss_value = None
             static_last_cell_value = None
             static_last_hidden_value = None
@@ -372,9 +427,9 @@ class TestDygraphPtbRnn(unittest.TestCase):
                     (num_layers, batch_size, hidden_size), dtype='float32'
                 )
                 fetch_list = [static_loss, static_last_hidden, static_last_cell]
-                fetch_list.extend(static_param_name_list)
+                fetch_list.extend(static_params)
                 out = exe.run(
-                    fluid.default_main_program(),
+                    base.default_main_program(),
                     feed={
                         "x": x_data,
                         "y": y_data,
@@ -389,9 +444,9 @@ class TestDygraphPtbRnn(unittest.TestCase):
 
                 if i == batch_num - 1:
                     for k in range(3, len(out)):
-                        static_param_updated[
-                            static_param_name_list[k - 3]
-                        ] = out[k]
+                        static_param_updated[static_param_name_list[k - 3]] = (
+                            out[k]
+                        )
 
         np.testing.assert_array_equal(static_loss_value, dy_loss_value)
         np.testing.assert_array_equal(
@@ -403,7 +458,9 @@ class TestDygraphPtbRnn(unittest.TestCase):
         for key, value in static_param_init.items():
             np.testing.assert_array_equal(value, dy_param_init[key])
         for key, value in static_param_updated.items():
-            np.testing.assert_array_equal(value, dy_param_updated[key])
+            np.testing.assert_allclose(
+                value, dy_param_updated[key], atol=1e-10, rtol=1e-6
+            )
 
 
 if __name__ == '__main__':

@@ -88,13 +88,13 @@ int LayerNormPlugin::enqueue(int batch_size,
 
   PADDLE_ENFORCE_EQ(1,
                     mean_shape_.size(),
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Size of mean_shape vector should be equal to 1,"
                         "but got Size of mean_shape vector:%d",
                         mean_shape_.size()));
   PADDLE_ENFORCE_EQ(1,
                     variance_shape_.size(),
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Size of variance_shape vector should be equal to 1,"
                         "but got Size of mean_shape vector:%d",
                         mean_shape_.size()));
@@ -102,24 +102,24 @@ int LayerNormPlugin::enqueue(int batch_size,
   int64_t batched_mean_shape = mean_shape_[0] * input_dims.d[0];
   int64_t batched_variance_shape = variance_shape_[0] * input_dims.d[0];
 
-  std::vector<int> input_shape;
+  std::vector<int64_t> input_shape;
   input_shape.push_back(batch_size);
   for (int i = 0; i < input_dims.nbDims; i++) {
     input_shape.push_back(input_dims.d[i]);
   }
-  const auto input_ddim = phi::make_ddim(input_shape);
-  auto matrix_dim = phi::flatten_to_2d(input_ddim, begin_norm_axis);
+  const auto input_ddim = common::make_ddim(input_shape);
+  auto matrix_dim = common::flatten_to_2d(input_ddim, begin_norm_axis);
   int feature_size = static_cast<int>(matrix_dim[1]);
   PADDLE_ENFORCE_EQ(feature_size,
                     scale_.size(),
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "scale's size should be equal to the feature_size,"
                         "but got feature_size:%d, scale's size:%d.",
                         feature_size,
                         scale_.size()));
   PADDLE_ENFORCE_EQ(feature_size,
                     bias_.size(),
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "bias's size should be equal to the feature_size,"
                         "but got feature_size:%d, bias's size:%d.",
                         feature_size,
@@ -127,11 +127,10 @@ int LayerNormPlugin::enqueue(int batch_size,
 
   int device_id;
   cudaGetDevice(&device_id);
-  mean_t.Resize(phi::make_ddim({batched_mean_shape}));
-  variance_t.Resize(phi::make_ddim({batched_variance_shape}));
-  float *mean_d = mean_t.mutable_data<float>(platform::CUDAPlace(device_id));
-  float *variance_d =
-      variance_t.mutable_data<float>(platform::CUDAPlace(device_id));
+  mean_t.Resize(common::make_ddim({batched_mean_shape}));
+  variance_t.Resize(common::make_ddim({batched_variance_shape}));
+  float *mean_d = mean_t.mutable_data<float>(phi::GPUPlace(device_id));
+  float *variance_d = variance_t.mutable_data<float>(phi::GPUPlace(device_id));
   auto input_type = getDataType();
   if (input_type == nvinfer1::DataType::kFLOAT) {
     VLOG(1) << "TRT Plugin DataType selected. LayerNorm-->fp32";
@@ -164,7 +163,7 @@ int LayerNormPlugin::enqueue(int batch_size,
                begin_norm_axis,
                eps);
   } else {
-    PADDLE_THROW(platform::errors::Fatal(
+    PADDLE_THROW(common::errors::Fatal(
         "The LayerNorm TRT Plugin's input type should be float or half."));
   }
   return cudaGetLastError() != cudaSuccess;
@@ -210,15 +209,15 @@ bool LayerNormPluginDynamic::supportsFormatCombination(
     int nb_outputs) TRT_NOEXCEPT {
   PADDLE_ENFORCE_NOT_NULL(
       in_out,
-      platform::errors::InvalidArgument(
-          "The input of layernorm plugin shoule not be nullptr."));
+      common::errors::InvalidArgument(
+          "The input of layernorm plugin should not be nullptr."));
   PADDLE_ENFORCE_LT(
       pos,
       nb_inputs + nb_outputs,
-      platform::errors::InvalidArgument("The pos(%d) should be less than the "
-                                        "num(%d) of the input and the output.",
-                                        pos,
-                                        nb_inputs + nb_outputs));
+      common::errors::InvalidArgument("The pos(%d) should be less than the "
+                                      "num(%d) of the input and the output.",
+                                      pos,
+                                      nb_inputs + nb_outputs));
   const nvinfer1::PluginTensorDesc &in = in_out[pos];
   if (pos == 0) {
     if (with_fp16_) {
@@ -255,14 +254,14 @@ nvinfer1::DataType LayerNormPluginDynamic::getOutputDataType(
     int nb_inputs) const TRT_NOEXCEPT {
   PADDLE_ENFORCE_EQ(index,
                     0,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The LayerNormPlugin only has one input, so the "
                         "index value should be 0, but get %d.",
                         index));
   PADDLE_ENFORCE_EQ((input_types[0] == nvinfer1::DataType::kFLOAT ||
                      input_types[0] == nvinfer1::DataType::kHALF),
                     true,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The input type should be half or float"));
   return input_types[0];
 }
@@ -278,7 +277,7 @@ int LayerNormPluginDynamic::enqueue(
   int begin_norm_axis = begin_norm_axis_;
   float eps = eps_;
 
-  std::vector<int> input_shape;
+  std::vector<int64_t> input_shape;
   for (int i = 0; i < input_dims.nbDims; i++) {
     input_shape.push_back(input_dims.d[i]);
   }
@@ -286,42 +285,42 @@ int LayerNormPluginDynamic::enqueue(
   // the batch num should be involved in mean/variance shape
   PADDLE_ENFORCE_EQ(1,
                     mean_shape_.size(),
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Size of mean_shape vector should be equal to 1,"
                         "but got Size of mean_shape vector:%d",
                         mean_shape_.size()));
   PADDLE_ENFORCE_EQ(1,
                     variance_shape_.size(),
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Size of variance_shape vector should be equal to 1,"
                         "but got Size of mean_shape vector:%d",
                         mean_shape_.size()));
   PADDLE_ENFORCE_GE(mean_shape_[0],
                     0,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The size of mean vector should be positive,"
                         "but got:%d",
                         mean_shape_[0]));
   PADDLE_ENFORCE_GE(variance_shape_[0],
                     0,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The size of mean vector should be positive,"
                         "but got:%d",
                         variance_shape_[0]));
 
-  const auto input_ddim = phi::make_ddim(input_shape);
-  auto matrix_dim = phi::flatten_to_2d(input_ddim, begin_norm_axis);
+  const auto input_ddim = common::make_ddim(input_shape);
+  auto matrix_dim = common::flatten_to_2d(input_ddim, begin_norm_axis);
   int feature_size = static_cast<int>(matrix_dim[1]);
   PADDLE_ENFORCE_EQ(feature_size,
                     scale_.size(),
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "scale's size should be equal to the feature_size,"
                         "but got feature_size:%d, scale's size:%d.",
                         feature_size,
                         scale_.size()));
   PADDLE_ENFORCE_EQ(feature_size,
                     bias_.size(),
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "bias's size should be equal to the feature_size,"
                         "but got feature_size:%d, bias's size:%d.",
                         feature_size,
@@ -329,11 +328,10 @@ int LayerNormPluginDynamic::enqueue(
 
   int device_id;
   cudaGetDevice(&device_id);
-  mean_t.Resize(phi::make_ddim(mean_shape_));
-  variance_t.Resize(phi::make_ddim(variance_shape_));
-  float *mean_d = mean_t.mutable_data<float>(platform::CUDAPlace(device_id));
-  float *variance_d =
-      variance_t.mutable_data<float>(platform::CUDAPlace(device_id));
+  mean_t.Resize(common::make_ddim(mean_shape_));
+  variance_t.Resize(common::make_ddim(variance_shape_));
+  float *mean_d = mean_t.mutable_data<float>(phi::GPUPlace(device_id));
+  float *variance_d = variance_t.mutable_data<float>(phi::GPUPlace(device_id));
   auto input_type = input_desc[0].type;
   if (input_type == nvinfer1::DataType::kFLOAT) {
     VLOG(1) << "TRT Plugin DataType selected. LayerNorm-->fp32";
@@ -366,7 +364,7 @@ int LayerNormPluginDynamic::enqueue(
                begin_norm_axis,
                eps);
   } else {
-    PADDLE_THROW(platform::errors::Fatal(
+    PADDLE_THROW(common::errors::Fatal(
         "The LayerNorm TRT Plugin's input type should be float or half."));
   }
   return cudaGetLastError() != cudaSuccess;

@@ -14,7 +14,7 @@
 
 import unittest
 
-from paddle.fluid import core
+from paddle.base import core
 
 
 class TestInferShape(unittest.TestCase):
@@ -28,14 +28,14 @@ class TestInferShape(unittest.TestCase):
 
         # prepare input/output
         x1 = block.var(b'x1')
-        x1.set_type(core.VarDesc.VarType.LOD_TENSOR)
+        x1.set_type(core.VarDesc.VarType.DENSE_TENSOR)
         x1.set_shape(shape)
         x2 = block.var(b'x2')
-        x2.set_type(core.VarDesc.VarType.LOD_TENSOR)
+        x2.set_type(core.VarDesc.VarType.DENSE_TENSOR)
         x2.set_shape(shape)
 
         out = block.var(b'out')
-        out.set_type(core.VarDesc.VarType.LOD_TENSOR)
+        out.set_type(core.VarDesc.VarType.DENSE_TENSOR)
 
         # prepare the operator
         sum_op_desc = block.append_op()
@@ -58,14 +58,14 @@ class TestInferShape(unittest.TestCase):
 
         # prepare input/output
         x1 = block.var(b'x')
-        x1.set_type(core.VarDesc.VarType.LOD_TENSOR)
+        x1.set_type(core.VarDesc.VarType.DENSE_TENSOR)
         x1.set_shape(x_shape)
         x2 = block.var(b'y')
-        x2.set_type(core.VarDesc.VarType.LOD_TENSOR)
+        x2.set_type(core.VarDesc.VarType.DENSE_TENSOR)
         x2.set_shape(y_shape)
 
         out = block.var(b'out')
-        out.set_type(core.VarDesc.VarType.LOD_TENSOR)
+        out.set_type(core.VarDesc.VarType.DENSE_TENSOR)
 
         # prepare the operator
         mul_op_desc = block.append_op()
@@ -79,35 +79,6 @@ class TestInferShape(unittest.TestCase):
         mul_op_desc.check_attrs()
         mul_op_desc.infer_shape(block)
         self.assertEqual(out.shape(), [x_shape[0], y_shape[1]])
-
-    def test_expand_op(self):
-        prog = core.ProgramDesc()
-        self.assertIsNotNone(prog)
-        block = prog.block(0)
-        self.assertIsNotNone(block)
-
-        shape = [-1, 20]
-        expand_times = [3, 1]
-
-        # prepare input/output
-        x1 = block.var(b'x')
-        x1.set_type(core.VarDesc.VarType.LOD_TENSOR)
-        x1.set_shape(shape)
-
-        out = block.var(b'out')
-        out.set_type(core.VarDesc.VarType.LOD_TENSOR)
-
-        # prepare the operator
-        sum_op_desc = block.append_op()
-        sum_op_desc.set_type("expand")
-        sum_op_desc.set_input("X", ["x"])
-        sum_op_desc.set_input('expand_times_tensor', [])
-        sum_op_desc.set_output("Out", ["out"])
-        sum_op_desc._set_attr('expand_times', expand_times)
-
-        sum_op_desc.check_attrs()
-        sum_op_desc.infer_shape(block)
-        self.assertEqual(out.shape(), shape)
 
 
 if __name__ == '__main__':

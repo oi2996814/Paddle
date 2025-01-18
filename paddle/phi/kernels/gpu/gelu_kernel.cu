@@ -25,7 +25,7 @@
 #include "paddle/phi/kernels/gpu/gelu_funcs.h"
 // clang-format on
 
-DECLARE_bool(use_fast_math);
+COMMON_DECLARE_bool(use_fast_math);
 
 namespace phi {
 
@@ -64,7 +64,7 @@ void GeluKernel(const Context& dev_ctx,
   std::vector<const DenseTensor*> ins = {&x};
   std::vector<DenseTensor*> outs = {out};
   if (approximate) {
-#ifdef __NVCC__
+#if defined(__NVCC__) || defined(__HIPCC__)
     if (std::is_same<T, dtype::float16>::value) {
       size_t n = x.numel();
       const auto* in_ptr = reinterpret_cast<const __half*>(x.data<T>());

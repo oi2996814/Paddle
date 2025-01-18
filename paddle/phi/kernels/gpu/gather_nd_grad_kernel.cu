@@ -38,14 +38,14 @@ void GatherNdGradKernel(const Context &ctx,
   bool index_type_match =
       index_type == phi::DataType::INT32 || index_type == phi::DataType::INT64;
 
-  PADDLE_ENFORCE_EQ(
-      index_type_match,
-      true,
-      phi::errors::InvalidArgument("Index holds the wrong type, it holds [%s],"
-                                   "but desires to be [%s] or [%s].",
-                                   index_type,
-                                   phi::DataType::INT32,
-                                   phi::DataType::INT64));
+  PADDLE_ENFORCE_EQ(index_type_match,
+                    true,
+                    common::errors::InvalidArgument(
+                        "Index holds the wrong type, it holds [%s],"
+                        "but desires to be [%s] or [%s].",
+                        index_type,
+                        phi::DataType::INT32,
+                        phi::DataType::INT64));
 
   if (index_type == phi::DataType::INT32) {
     phi::funcs::GPUScatterNdAdd<T, int>(ctx, out_grad, index, x_grad);
@@ -64,5 +64,11 @@ PD_REGISTER_KERNEL(gather_nd_grad,
                    double,
                    int64_t,
                    int,
+                   uint8_t,
+                   int8_t,
+                   int16_t,
+                   bool,
                    phi::dtype::float16,
-                   phi::dtype::bfloat16) {}
+                   phi::dtype::bfloat16,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}

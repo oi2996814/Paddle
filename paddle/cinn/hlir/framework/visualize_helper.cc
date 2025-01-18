@@ -25,13 +25,12 @@
 #include <unordered_map>
 #include <vector>
 
-#include "paddle/cinn/hlir/framework/graph.h"
 #include "paddle/cinn/runtime/flags.h"
 #include "paddle/cinn/utils/dot_lang.h"
 #include "paddle/cinn/utils/string.h"
 
-DECLARE_string(cinn_pass_visualize_dir);
-DECLARE_string(cinn_check_fusion_accuracy_pass);
+PD_DECLARE_string(cinn_pass_visualize_dir);
+PD_DECLARE_string(cinn_check_fusion_accuracy_pass);
 namespace cinn {
 namespace hlir {
 namespace framework {
@@ -93,51 +92,6 @@ bool PassPrinter::PassEnd(const std::string& pass_name,
   return true;
 }
 
-bool PassPrinter::PassBegin(const std::string& pass_name, Graph* g) {
-  if (save_path_.empty()) {
-    return false;
-  }
-  const auto& graph_info = g->DebugGroupedGraph(fetch_ids_);
-  VLOG(3) << "Before " << pass_name << " Pass:\n" << graph_info;
-  const std::string& file_path = utils::StringFormat("%s/pass_%d_%s_before.txt",
-                                                     save_path_.c_str(),
-                                                     pass_id_,
-                                                     pass_name.c_str());
-  WriteToFile(file_path, graph_info);
-
-  const auto& dot_info = g->VisualizeGraph(fetch_ids_);
-  const std::string& dot_path = utils::StringFormat("%s/pass_%d_%s_before.dot",
-                                                    save_path_.c_str(),
-                                                    pass_id_,
-                                                    pass_name.c_str());
-  WriteToFile(dot_path, dot_info);
-  return true;
-}
-
-bool PassPrinter::PassEnd(const std::string& pass_name, Graph* g) {
-  if (save_path_.empty()) {
-    return false;
-  }
-  const auto& graph_info = g->DebugGroupedGraph(fetch_ids_);
-  VLOG(3) << "After " << pass_name << " Pass:\n" << graph_info;
-
-  const std::string& file_path = utils::StringFormat("%s/pass_%d_%s_after.txt",
-                                                     save_path_.c_str(),
-                                                     pass_id_,
-                                                     pass_name.c_str());
-  WriteToFile(file_path, graph_info);
-
-  const auto& dot_info = g->VisualizeGraph(fetch_ids_);
-  const std::string& dot_path = utils::StringFormat("%s/pass_%d_%s_after.dot",
-                                                    save_path_.c_str(),
-                                                    pass_id_,
-                                                    pass_name.c_str());
-  WriteToFile(dot_path, dot_info);
-
-  ++pass_id_;
-  return true;
-}
-
 bool PassPrinter::End() {
   ++graph_id_;
 
@@ -177,7 +131,7 @@ bool MakeDirectory(const std::string& dirname, mode_t mode) {
 std::string GenNodeDataLabel(
     const NodeData* node,
     const absl::flat_hash_map<std::string, shape_t>& shape_dict,
-    const absl::flat_hash_map<std::string, common::Type>& dtype_dict,
+    const absl::flat_hash_map<std::string, cinn::common::Type>& dtype_dict,
     const std::string dot_nodedata_id) {
   std::stringstream ss;
   ss << dot_nodedata_id;
@@ -194,7 +148,7 @@ std::string GenNodeDataLabel(
   }
   if (dtype_dict.count(node->id())) {
     ss << "\\n";
-    ss << common::Type2Str(dtype_dict.at(node->id()));
+    ss << cinn::common::Type2Str(dtype_dict.at(node->id()));
   }
 
   return ss.str();
@@ -344,7 +298,7 @@ void AddGroupNode(
     const std::string& dot_cluster_id,
     const std::unordered_set<std::string>& fetch_var_ids,
     const absl::flat_hash_map<std::string, shape_t>& shape_dict,
-    const absl::flat_hash_map<std::string, common::Type>& dtype_dict,
+    const absl::flat_hash_map<std::string, cinn::common::Type>& dtype_dict,
     std::unordered_map<std::string, int>* recompute_nodes,
     std::unordered_map<std::string, std::string>* outnode2dot_id,
     std::unordered_set<std::string>* nodedatas_set,

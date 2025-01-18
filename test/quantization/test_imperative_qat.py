@@ -14,14 +14,17 @@
 
 import logging
 import os
+import sys
 import tempfile
 import unittest
 
 import numpy as np
+
+sys.path.append("../../quantization")
 from imperative_test_utils import ImperativeLenet, fix_model_dict
 
 import paddle
-from paddle import fluid
+from paddle import base
 from paddle.framework import core, set_flags
 from paddle.nn import Conv2D, Conv2DTranspose
 from paddle.nn.quant.quant_layers import (
@@ -72,7 +75,7 @@ class TestImperativeQat(unittest.TestCase):
             onnx_format=self.onnx_format,
         )
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             # For CI coverage
             conv1 = Conv2D(
                 in_channels=3,
@@ -95,8 +98,7 @@ class TestImperativeQat(unittest.TestCase):
 
             seed = 1
             np.random.seed(seed)
-            paddle.static.default_main_program().random_seed = seed
-            paddle.static.default_startup_program().random_seed = seed
+            paddle.seed(seed)
 
             lenet = ImperativeLenet()
             lenet = fix_model_dict(lenet)
@@ -136,9 +138,7 @@ class TestImperativeQat(unittest.TestCase):
                     lenet.clear_gradients()
                     if batch_id % 100 == 0:
                         _logger.info(
-                            "Train | At epoch {} step {}: loss = {:}, acc= {:}".format(
-                                epoch, batch_id, avg_loss.numpy(), acc.numpy()
-                            )
+                            f"Train | At epoch {epoch} step {batch_id}: loss = {avg_loss.numpy()}, acc= {acc.numpy()}"
                         )
                     if batch_id == 500:  # For shortening CI time
                         break
@@ -169,12 +169,7 @@ class TestImperativeQat(unittest.TestCase):
                     if batch_id % 100 == 0:
                         eval_acc_top1_list.append(float(acc_top1.numpy()))
                         _logger.info(
-                            "Test | At epoch {} step {}: acc1 = {:}, acc5 = {:}".format(
-                                epoch,
-                                batch_id,
-                                acc_top1.numpy(),
-                                acc_top5.numpy(),
-                            )
+                            f"Test | At epoch {epoch} step {batch_id}: acc1 = {acc_top1.numpy()}, acc5 = {acc_top5.numpy()}"
                         )
 
                 # check eval acc
@@ -184,7 +179,7 @@ class TestImperativeQat(unittest.TestCase):
                 print('eval_acc_top1', eval_acc_top1)
                 self.assertTrue(
                     eval_acc_top1 > 0.9,
-                    msg="The test acc {%f} is less than 0.9." % eval_acc_top1,
+                    msg=f"The test acc {{{eval_acc_top1:f}}} is less than 0.9.",
                 )
 
             # test the correctness of `paddle.jit.save`
@@ -212,28 +207,29 @@ class TestImperativeQat(unittest.TestCase):
                     )
                 ],
             )
-            print('Quantized model saved in %s' % tmpdir)
+            print(f'Quantized model saved in {tmpdir}')
 
             if core.is_compiled_with_cuda():
                 place = core.CUDAPlace(0)
             else:
                 place = core.CPUPlace()
             exe = paddle.static.Executor(place)
-            [
-                inference_program,
-                feed_target_names,
-                fetch_targets,
-            ] = paddle.static.load_inference_model(
-                tmpdir,
-                executor=exe,
-                model_filename="lenet" + INFER_MODEL_SUFFIX,
-                params_filename="lenet" + INFER_PARAMS_SUFFIX,
-            )
-            (quant_out,) = exe.run(
-                inference_program,
-                feed={feed_target_names[0]: test_data},
-                fetch_list=fetch_targets,
-            )
+            with paddle.pir_utils.OldIrGuard():
+                [
+                    inference_program,
+                    feed_target_names,
+                    fetch_targets,
+                ] = paddle.static.load_inference_model(
+                    tmpdir,
+                    executor=exe,
+                    model_filename="lenet" + INFER_MODEL_SUFFIX,
+                    params_filename="lenet" + INFER_PARAMS_SUFFIX,
+                )
+                (quant_out,) = exe.run(
+                    inference_program,
+                    feed={feed_target_names[0]: test_data},
+                    fetch_list=fetch_targets,
+                )
             paddle.disable_static()
             quant_out = paddle.to_tensor(quant_out)
             quant_acc = paddle.metric.accuracy(quant_out, label).numpy()

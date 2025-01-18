@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 
 def compute_segment_sum(x, segment_ids):
@@ -123,10 +123,10 @@ class TestSegmentOps(OpTest):
         self.convert_bf16()
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
-        self.check_grad(["X"], "Out")
+        self.check_grad(["X"], "Out", check_pir=True)
 
     def convert_bf16(self):
         if self.dtype == np.uint16:
@@ -165,7 +165,9 @@ class TestSegmentMax(TestSegmentOps):
         self.attrs = {'pooltype': "MAX"}
 
     def test_check_grad(self):
-        self.check_grad(["X"], "Out", user_defined_grads=[self.gradient])
+        self.check_grad(
+            ["X"], "Out", user_defined_grads=[self.gradient], check_pir=True
+        )
 
 
 class TestSegmentMax2(TestSegmentMax):
@@ -220,11 +222,15 @@ class TestSegmentMean(TestSegmentOps):
 
     def test_check_output(self):
         if core.is_compiled_with_cuda():
-            self.check_output_with_place(core.CUDAPlace(0))
+            self.check_output_with_place(
+                core.CUDAPlace(0), check_pir=True, check_symbol_infer=False
+            )
         # due to CPU kernel not implement calculate 'SummedIds'
         # so cannot check 'SummedIds'
         del self.outputs['SummedIds']
-        self.check_output_with_place(core.CPUPlace())
+        self.check_output_with_place(
+            core.CPUPlace(), check_pir=True, check_symbol_infer=False
+        )
 
 
 class TestSegmentMean2(TestSegmentMean):
@@ -271,10 +277,12 @@ class TestSegmentSumBF16Op(TestSegmentOps):
         self.np_dtype = np.float32
 
     def test_check_output(self):
-        self.check_output_with_place(self.place)
+        self.check_output_with_place(
+            self.place, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
-        self.check_grad_with_place(self.place, ["X"], "Out")
+        self.check_grad_with_place(self.place, ["X"], "Out", check_pir=True)
 
 
 @unittest.skipIf(
@@ -289,11 +297,17 @@ class TestSegmentMaxBF16Op(TestSegmentMax):
         self.np_dtype = np.float32
 
     def test_check_output(self):
-        self.check_output_with_place(self.place)
+        self.check_output_with_place(
+            self.place, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         self.check_grad_with_place(
-            self.place, ["X"], "Out", user_defined_grads=[self.gradient]
+            self.place,
+            ["X"],
+            "Out",
+            user_defined_grads=[self.gradient],
+            check_pir=True,
         )
 
 
@@ -309,11 +323,17 @@ class TestSegmentMinBF16Op(TestSegmentMin):
         self.np_dtype = np.float32
 
     def test_check_output(self):
-        self.check_output_with_place(self.place)
+        self.check_output_with_place(
+            self.place, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         self.check_grad_with_place(
-            self.place, ["X"], "Out", user_defined_grads=[self.gradient]
+            self.place,
+            ["X"],
+            "Out",
+            user_defined_grads=[self.gradient],
+            check_pir=True,
         )
 
 
@@ -329,13 +349,16 @@ class TestSegmentMeanBF16Op(TestSegmentMean):
         self.np_dtype = np.float32
 
     def test_check_output(self):
-        self.check_output_with_place(self.place)
+        self.check_output_with_place(
+            self.place, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
-        self.check_grad_with_place(self.place, ["X"], "Out")
+        self.check_grad_with_place(self.place, ["X"], "Out", check_pir=True)
 
 
 class API_SegmentOpsTest(unittest.TestCase):
+
     def test_static(self):
         with paddle.static.program_guard(paddle.static.Program()):
             x = paddle.static.data(name="x", shape=[3, 3], dtype="float32")
@@ -365,7 +388,7 @@ class API_SegmentOpsTest(unittest.TestCase):
 
     def test_dygraph(self):
         device = paddle.CPUPlace()
-        with paddle.fluid.dygraph.guard(device):
+        with paddle.base.dygraph.guard(device):
             x = paddle.to_tensor(
                 [[1, 2, 3], [3, 2, 1], [4, 5, 6]], dtype='float32'
             )
@@ -389,6 +412,7 @@ class API_SegmentOpsTest(unittest.TestCase):
 
 
 class API_GeometricSegmentOpsTest(unittest.TestCase):
+
     def test_static(self):
         with paddle.static.program_guard(paddle.static.Program()):
             x = paddle.static.data(name="x", shape=[3, 3], dtype="float32")
@@ -418,7 +442,7 @@ class API_GeometricSegmentOpsTest(unittest.TestCase):
 
     def test_dygraph(self):
         device = paddle.CPUPlace()
-        with paddle.fluid.dygraph.guard(device):
+        with paddle.base.dygraph.guard(device):
             x = paddle.to_tensor(
                 [[1, 2, 3], [3, 2, 1], [4, 5, 6]], dtype='float32'
             )
@@ -442,7 +466,7 @@ class API_GeometricSegmentOpsTest(unittest.TestCase):
 
     def test_dygraph_cpu_float16(self):
         device = paddle.CPUPlace()
-        with paddle.fluid.dygraph.guard(device):
+        with paddle.base.dygraph.guard(device):
             x = paddle.to_tensor(
                 [[1, 2, 3], [3, 2, 1], [4, 5, 6]], dtype='float16'
             )
@@ -466,7 +490,7 @@ class API_GeometricSegmentOpsTest(unittest.TestCase):
     def test_dygraph_cuda_float16(self):
         if core.is_compiled_with_cuda():
             device = paddle.CUDAPlace(0)
-            with paddle.fluid.dygraph.guard(device):
+            with paddle.base.dygraph.guard(device):
                 x = paddle.to_tensor(
                     [[1, 2, 3], [3, 2, 1], [4, 5, 6]], dtype='float16'
                 )

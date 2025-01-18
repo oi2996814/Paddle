@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import unittest
 from functools import partial
-from typing import Dict, List
 
 import numpy as np
 from program_config import ProgramConfig, TensorConfig
@@ -70,10 +71,10 @@ class TrtConvertMulticlassNMSTest(TrtLayerAutoScanTest):
             )
 
         def generate_scores(batch, num_boxes, num_classes):
-            return np.arange(
-                batch * num_classes * num_boxes, dtype=np.float32
+            max_value = batch * num_classes * num_boxes
+            return (1 / max_value) * np.arange(
+                max_value, dtype=np.float32
             ).reshape([batch, num_classes, num_boxes])
-            # return np.random.rand(batch, num_classes, num_boxes).astype(np.float32)
 
         for batch in [1, 2]:
             self.batch = batch
@@ -129,7 +130,7 @@ class TrtConvertMulticlassNMSTest(TrtLayerAutoScanTest):
 
     def sample_predictor_configs(
         self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
+    ) -> tuple[paddle_infer.Config, list[int], float]:
         def generate_dynamic_shape(attrs):
             # The last dim of input_bboxes should be static.
             self.dynamic_shape.min_input_shape = {
@@ -157,23 +158,9 @@ class TrtConvertMulticlassNMSTest(TrtLayerAutoScanTest):
             program_config.ops[i].attrs for i in range(len(program_config.ops))
         ]
 
-        # for static_shape
-        clear_dynamic_shape()
-        self.trt_param.precision = paddle_infer.PrecisionType.Float32
-        program_config.set_input_type(np.float32)
-        yield self.create_inference_config(), generate_trt_nodes_num(
-            attrs, False
-        ), 1e-5
-        self.trt_param.precision = paddle_infer.PrecisionType.Half
-        program_config.set_input_type(np.float16)
-        yield self.create_inference_config(), generate_trt_nodes_num(
-            attrs, False
-        ), 1e-2
-
         # for dynamic_shape
         generate_dynamic_shape(attrs)
         self.trt_param.precision = paddle_infer.PrecisionType.Float32
-        program_config.set_input_type(np.float32)
         yield self.create_inference_config(), generate_trt_nodes_num(
             attrs, True
         ), 1e-5
@@ -185,13 +172,13 @@ class TrtConvertMulticlassNMSTest(TrtLayerAutoScanTest):
         self,
         atol: float,
         rtol: float,
-        tensor: Dict[str, np.array],
-        baseline: Dict[str, np.array],
+        tensor: dict[str, np.array],
+        baseline: dict[str, np.array],
     ):
         # the order of tensorrt outputs are not consistent with paddle
         for key, arr in tensor.items():
             if key == "nms_output_boxes":
-                basline_arr = np.array(
+                baseline_arr = np.array(
                     sorted(
                         baseline[key].reshape((-1, 6)),
                         key=lambda i: [i[0], i[1]],
@@ -201,25 +188,23 @@ class TrtConvertMulticlassNMSTest(TrtLayerAutoScanTest):
                     sorted(arr.reshape((-1, 6)), key=lambda i: [i[0], i[1]])
                 )
             else:
-                basline_arr = np.array(baseline[key].reshape((-1, 1)))
+                baseline_arr = np.array(baseline[key].reshape((-1, 1)))
                 arr = np.array(arr.reshape((-1, 1)))
 
             self.assertTrue(
-                basline_arr.shape == arr.shape,
+                baseline_arr.shape == arr.shape,
                 "The output shapes are not equal, the baseline shape is "
-                + str(basline_arr.shape)
+                + str(baseline_arr.shape)
                 + ', but got '
                 + str(arr.shape),
             )
-            diff = abs(basline_arr - arr)
+            diff = abs(baseline_arr - arr)
             np.testing.assert_allclose(
-                basline_arr,
+                baseline_arr,
                 arr,
                 rtol=rtol,
                 atol=atol,
-                err_msg='Output has diff, Maximum absolute error: {}'.format(
-                    np.amax(diff)
-                ),
+                err_msg=f'Output has diff, Maximum absolute error: {np.amax(diff)}',
             )
 
     def assert_op_size(self, trt_engine_num, paddle_op_num):

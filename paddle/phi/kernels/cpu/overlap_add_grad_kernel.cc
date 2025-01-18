@@ -30,15 +30,18 @@ void OverlapAddGradKernel(const Context& dev_ctx,
   const size_t out_grad_rank = out_grad.dims().size();
   const size_t x_grad_rank = x_grad->dims().size();
 
-  const int n_frames =
-      (axis == 0) ? x_grad->dims()[0] : x_grad->dims()[x_grad_rank - 1];
-  const int frame_length =
-      (axis == 0) ? x_grad->dims()[1] : x_grad->dims()[x_grad_rank - 2];
-  const int seq_length =
-      (axis == 0) ? out_grad.dims()[0] : out_grad.dims()[out_grad_rank - 1];
+  const int n_frames = static_cast<int>(
+      (axis == 0) ? x_grad->dims()[0]
+                  : x_grad->dims()[static_cast<int>(x_grad_rank) - 1]);
+  const int frame_length = static_cast<int>(
+      (axis == 0) ? x_grad->dims()[1]
+                  : x_grad->dims()[static_cast<int>(x_grad_rank) - 2]);
+  const int seq_length = static_cast<int>(
+      (axis == 0) ? out_grad.dims()[0]
+                  : out_grad.dims()[static_cast<int>(out_grad_rank) - 1]);
 
   // When the number of input dims is larger than 2, it needs to copy
-  // from x to resize input into 2d and output into 3d. Morevoer, output
+  // from x to resize input into 2d and output into 3d. Moreover, output
   // dims will be restored at the last step.
   DenseTensor out_grad_(out_grad.type());
   out_grad_ = out_grad;
@@ -50,15 +53,17 @@ void OverlapAddGradKernel(const Context& dev_ctx,
     phi::DDim x_grad_resized_dims;
     phi::DDim out_grad_resized_dims;
     if (axis == 0) {
-      preserved_dims = phi::slice_ddim(out_grad_.dims(), 1, out_grad_rank);
+      preserved_dims = common::slice_ddim(
+          out_grad_.dims(), 1, static_cast<int>(out_grad_rank));
       x_grad_resized_dims = {
-          n_frames, frame_length, phi::product(preserved_dims)};
-      out_grad_resized_dims = {seq_length, phi::product(preserved_dims)};
+          n_frames, frame_length, common::product(preserved_dims)};
+      out_grad_resized_dims = {seq_length, common::product(preserved_dims)};
     } else {
-      preserved_dims = phi::slice_ddim(out_grad_.dims(), 0, out_grad_rank - 1);
+      preserved_dims = common::slice_ddim(
+          out_grad_.dims(), 0, static_cast<int>(out_grad_rank) - 1);
       x_grad_resized_dims = {
-          phi::product(preserved_dims), frame_length, n_frames};
-      out_grad_resized_dims = {phi::product(preserved_dims), seq_length};
+          common::product(preserved_dims), frame_length, n_frames};
+      out_grad_resized_dims = {common::product(preserved_dims), seq_length};
     }
     x_grad->Resize(x_grad_resized_dims);
     out_grad_.Resize(out_grad_resized_dims);
@@ -73,31 +78,31 @@ void OverlapAddGradKernel(const Context& dev_ctx,
       trans_out_grad = out_grad_;
 
       std::vector<int> perm_x_grad{1, 0};
-      auto x_grad_dims_vec = phi::vectorize(x_grad->dims());
+      auto x_grad_dims_vec = common::vectorize(x_grad->dims());
       for (int i = 0; i < x_grad->dims().size(); ++i) {
         x_grad_dims_vec[i] = x_grad->dims()[perm_x_grad[i]];
       }
-      trans_x_grad.Resize(phi::make_ddim(x_grad_dims_vec));
+      trans_x_grad.Resize(common::make_ddim(x_grad_dims_vec));
       dev_ctx.template Alloc<T>(&trans_x_grad);
       phi::funcs::TransCompute<Context, T>(
           perm_x_grad.size(), dev_ctx, *x_grad, &trans_x_grad, perm_x_grad);
     } else {
       std::vector<int> perm_d_out{1, 0};
-      auto out_grad_dims_vec = phi::vectorize(out_grad_.dims());
+      auto out_grad_dims_vec = common::vectorize(out_grad_.dims());
       for (int i = 0; i < out_grad_.dims().size(); ++i) {
         out_grad_dims_vec[i] = out_grad_.dims()[perm_d_out[i]];
       }
-      trans_out_grad.Resize(phi::make_ddim(out_grad_dims_vec));
+      trans_out_grad.Resize(common::make_ddim(out_grad_dims_vec));
       dev_ctx.template Alloc<T>(&trans_out_grad);
       phi::funcs::TransCompute<Context, T>(
           perm_d_out.size(), dev_ctx, out_grad_, &trans_out_grad, perm_d_out);
 
       std::vector<int> perm_x_grad{2, 1, 0};
-      auto x_grad_dims_vec = phi::vectorize(x_grad->dims());
+      auto x_grad_dims_vec = common::vectorize(x_grad->dims());
       for (int i = 0; i < x_grad->dims().size(); ++i) {
         x_grad_dims_vec[i] = x_grad->dims()[perm_x_grad[i]];
       }
-      trans_x_grad.Resize(phi::make_ddim(x_grad_dims_vec));
+      trans_x_grad.Resize(common::make_ddim(x_grad_dims_vec));
       dev_ctx.template Alloc<T>(&trans_x_grad);
       phi::funcs::TransCompute<Context, T>(
           perm_x_grad.size(), dev_ctx, *x_grad, &trans_x_grad, perm_x_grad);
@@ -132,6 +137,7 @@ void OverlapAddGradKernel(const Context& dev_ctx,
   // Restore output dims when the number of dims is larger than 2.
   if (out_grad_rank > 2) {
     std::vector<int64_t> restored_x_grad_shape;
+    restored_x_grad_shape.reserve(preserved_dims.size());
     for (int i = 0; i < preserved_dims.size(); i++) {
       restored_x_grad_shape.push_back(preserved_dims[i]);
     }
@@ -146,7 +152,7 @@ void OverlapAddGradKernel(const Context& dev_ctx,
       restored_x_grad_shape.push_back(n_frames);
     }
 
-    x_grad->Resize(phi::make_ddim(restored_x_grad_shape));
+    x_grad->Resize(common::make_ddim(restored_x_grad_shape));
   }
 }
 

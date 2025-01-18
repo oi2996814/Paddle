@@ -14,12 +14,12 @@
 
 import unittest
 
-import eager_op_test
 import numpy as np
+import op_test
 
 import paddle
+from paddle.base import core
 from paddle.distributed.models.moe import utils
-from paddle.fluid import core
 
 
 def assign_pos(x, _cum_count):
@@ -43,7 +43,7 @@ def count(x, upper_num):
 
 
 # why defining the assert function specially?
-# Becasue assign_pos_op is multithread-op, which can make the order of numbers
+# Because assign_pos_op is multithread-op, which can make the order of numbers
 # in each counter(bin) is random. But the numbers set is certain in each counter(bin).
 np_allclose = np.allclose
 
@@ -72,12 +72,13 @@ def get_redefined_allclose(cum_count):
 @unittest.skipIf(
     not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
 )
-class TestAssignPosOpInt64(eager_op_test.OpTest):
+class TestAssignPosOpInt64(op_test.OpTest):
     def setUp(self):
         x = np.random.randint(0, 16, size=(100, 2)).astype("int64")
         y = count(x, 16)
         cum_count = np.cumsum(y).astype(x.dtype)
         self.op_type = "assign_pos"
+        self.python_api = utils._assign_pos
         self.inputs = {
             'X': x,
             "cum_count": cum_count,
@@ -87,8 +88,14 @@ class TestAssignPosOpInt64(eager_op_test.OpTest):
         self.cum_count = cum_count
 
     def test_forward(self):
+        paddle.enable_static()
         np.testing.assert_allclose = get_redefined_allclose(self.cum_count)
-        self.check_output_with_place(paddle.CUDAPlace(0))
+        self.check_output_with_place(
+            paddle.CUDAPlace(0),
+            check_dygraph=False,
+            check_pir=True,
+            check_symbol_infer=False,
+        )
 
 
 @unittest.skipIf(
@@ -116,14 +123,6 @@ class TestAssignPosAPI(unittest.TestCase):
                 fetch_list=[out],
             )
             assert_allclose(res[0], self.out, self.cum_count)
-
-    def test_api_dygraph(self):
-        paddle.disable_static()
-        x = paddle.to_tensor(self.x)
-        cum_count = paddle.to_tensor(self.cum_count).astype(x.dtype)
-
-        out = utils._assign_pos(x, cum_count)
-        assert_allclose(out.numpy(), self.out, self.cum_count)
 
 
 if __name__ == '__main__':

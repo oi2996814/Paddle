@@ -11,16 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License
-
 import logging
 
 import paddle
+from paddle.base.log_helper import get_logger
 from paddle.framework import core
 from paddle.utils import unique_name
 
-from ....utils.log_utils import get_logger
-
-_logger = get_logger(logging.INFO)
 from ...random import determinate_rng, is_enable_auto_rand_ctrl
 from ..utils import (
     naive_set_dist_op_attr_for_program_by_mesh_and_mapping,
@@ -32,6 +29,10 @@ from .common import (
     register_distributed_operator_impl_container,
 )
 from .dist_eltwise import DistributedDefaultImpl0, DistributedElementwiseImpl0
+
+_logger = get_logger(
+    __name__, logging.INFO, fmt='%(asctime)s-%(levelname)s: %(message)s'
+)
 
 
 class DistributedDropout(DistributedOperatorImplContainer):
@@ -73,7 +74,7 @@ class DistributedDropoutImpl0(DistributedElementwiseImpl0):
         if is_enable_auto_rand_ctrl() and not op_dist_attr.is_recompute:
             assert (
                 op_dist_attr is not None
-            ), f"forward op [{str(src_op)}] don't have dist attribute !"
+            ), f"forward op [{src_op}] don't have dist attribute !"
 
             assert 'seed_tensor' in kwargs, "input [{}] is not given".format(
                 'seed_tensor'
@@ -86,9 +87,7 @@ class DistributedDropoutImpl0(DistributedElementwiseImpl0):
                 and src_op.attr("seed")
             ):
                 _logger.info(
-                    "Auto Parallel Random Control Skipped Since manul seed is set by user: {}".format(
-                        src_op
-                    )
+                    f"Auto Parallel Random Control Skipped Since manual seed is set by user: {src_op}"
                 )
             elif rank_id not in op_dist_attr.process_mesh.process_ids:
                 pass
@@ -102,7 +101,7 @@ class DistributedDropoutImpl0(DistributedElementwiseImpl0):
                     assert (
                         pre_op.type == "seed"
                         and len(pre_op.attr("rng_name")) == 0
-                    ), f"found exception op {str(pre_op)}"
+                    ), f"found exception op {pre_op}"
 
                     # determinate rng
                     X_var = main_block._var_recursive(kwargs['x'][0])
@@ -119,9 +118,7 @@ class DistributedDropoutImpl0(DistributedElementwiseImpl0):
                     pre_op._set_attr("force_cpu", True)
                 else:
                     _logger.info(
-                        "Auto Parallel Random Control Skipped Since manul seed is set by user: {}".format(
-                            src_op
-                        )
+                        f"Auto Parallel Random Control Skipped Since manual seed is set by user: {src_op}"
                     )
             else:
                 # determinate rng
@@ -140,7 +137,7 @@ class DistributedDropoutImpl0(DistributedElementwiseImpl0):
                         ".".join(["tensor_parallel_seed", 'tmp'])
                     ),
                     dtype=paddle.int32,
-                    type=core.VarDesc.VarType.LOD_TENSOR,
+                    type=core.VarDesc.VarType.DENSE_TENSOR,
                     persistable=False,
                     stop_gradient=False,
                 )
@@ -148,7 +145,11 @@ class DistributedDropoutImpl0(DistributedElementwiseImpl0):
                 # set new seed_var's dist_attr
                 seed_var_dims_mapping = [-1]
                 seed_var_dist_attr = set_var_dist_attr(
-                    ctx, seed_var, seed_var_dims_mapping, process_mesh
+                    ctx,
+                    seed_var,
+                    seed_var_dims_mapping,
+                    process_mesh,
+                    chunk_id=op_dist_attr.chunk_id,
                 )
 
                 # adopt for recompute
@@ -165,7 +166,11 @@ class DistributedDropoutImpl0(DistributedElementwiseImpl0):
                 seed_op._set_attr('op_namescope', 'auto_tensor_parallel_seed')
                 # set new seed op's dist_attr
                 naive_set_dist_op_attr_for_program_by_mesh_and_mapping(
-                    seed_op, process_mesh, seed_var_dims_mapping, ctx
+                    seed_op,
+                    process_mesh,
+                    seed_var_dims_mapping,
+                    ctx,
+                    chunk_id=op_dist_attr.chunk_id,
                 )
 
                 # modify dropout op

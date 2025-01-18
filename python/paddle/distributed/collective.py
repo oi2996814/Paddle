@@ -11,29 +11,42 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import datetime
+import hashlib
+from typing import (
+    TYPE_CHECKING,
+    Literal,
+)
+
+from typing_extensions import TypeAlias
 
 import paddle
 
 # (TODO: GhostScreaming) It will be removed later.
-from paddle.fluid import core
+from paddle.base import core
 from paddle.framework import in_dynamic_mode
 
 from .communication.group import Group, _add_new_group, is_initialized
-from .fleet.layers.mpu.mp_ops import _c_concat  # noqa: F401
-from .fleet.layers.mpu.mp_ops import _c_identity  # noqa: F401
-from .fleet.layers.mpu.mp_ops import _c_lookup_table  # noqa: F401
-from .fleet.layers.mpu.mp_ops import _c_softmax_with_cross_entropy  # noqa: F401
-from .fleet.layers.mpu.mp_ops import _c_split  # noqa: F401
-from .fleet.layers.mpu.mp_ops import _Linear  # noqa: F401
-from .fleet.layers.mpu.mp_ops import _linear  # noqa: F401
-from .fleet.layers.mpu.mp_ops import _mp_allreduce  # noqa: F401
-from .fleet.layers.mpu.mp_ops import _parallel_embedding  # noqa: F401
-from .fleet.layers.mpu.mp_ops import _parallel_linear  # noqa: F401
-from .fleet.layers.mpu.mp_ops import _set_var_distributed  # noqa: F401
-from .fleet.layers.mpu.mp_ops import split  # noqa: F401
+from .fleet.layers.mpu.mp_ops import (  # noqa: F401
+    _c_concat,
+    _c_identity,
+    _c_lookup_table,
+    _c_softmax_with_cross_entropy,
+    _c_softmax_with_multi_label_cross_entropy,
+    _c_split,
+    _Linear,
+    _linear,
+    _mp_allreduce,
+    _parallel_embedding,
+    _parallel_linear,
+    _set_var_distributed,
+    split,
+)
 
+if TYPE_CHECKING:
+    _BackendList: TypeAlias = Literal["gloo", "nccl", "xccl", "bkcl"]
 __all__ = []
 
 _global_env = None
@@ -143,15 +156,22 @@ def _new_process_group_impl(
     group_name,
     pg_options,
     group_id=0,
+    nccl_comm_init_option=0,
 ):
     pg = None
     genv = _get_global_env()
-    assert backend in _valid_backend_list, "Unsupported backend: %s." % backend
+    assert backend in _valid_backend_list, f"Unsupported backend: {backend}."
     if backend == "gloo":
         pg = core.ProcessGroupGloo.create(store, rank, world_size, group_id)
     elif backend == "nccl":
-        pg = core.ProcessGroupNCCL.create(store, rank, world_size, group_id)
-
+        pg = core.ProcessGroupNCCL.create(
+            store,
+            rank,
+            world_size,
+            group_id,
+            genv.pg_timeout,
+            nccl_comm_init_option,
+        )
     elif backend == "xccl":
         pg = core.ProcessGroupCustom.create(
             store, genv.device_type, rank, world_size, group_id
@@ -172,7 +192,12 @@ def _set_custom_gid(gid):
     _custom_gid = gid
 
 
-def new_group(ranks=None, backend=None, timeout=_default_timeout):
+def new_group(
+    ranks: list[int] | None = None,
+    backend: Literal['nccl'] | None = None,
+    timeout: datetime.timedelta = _default_timeout,
+    nccl_comm_init_option: int = 0,
+) -> Group:
     """
 
     Creates a new distributed communication group.
@@ -188,12 +213,13 @@ def new_group(ranks=None, backend=None, timeout=_default_timeout):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> # doctest: +REQUIRES(env: DISTRIBUTED)
+            >>> import paddle
 
-            paddle.distributed.init_parallel_env()
-            tindata = paddle.randn(shape=[2, 3])
-            gp = paddle.distributed.new_group([2,4,6])
-            paddle.distributed.all_reduce(tindata, group=gp, sync_op=False)
+            >>> paddle.distributed.init_parallel_env()
+            >>> tindata = paddle.randn(shape=[2, 3])
+            >>> gp = paddle.distributed.new_group([2, 4, 6])
+            >>> paddle.distributed.all_reduce(tindata, group=gp, sync_op=False)
 
     """
     global _custom_gid
@@ -225,6 +251,7 @@ def new_group(ranks=None, backend=None, timeout=_default_timeout):
                 group_name,
                 pg_options=None,
                 group_id=gid,
+                nccl_comm_init_option=nccl_comm_init_option,
             )
         else:
             rank = -1
@@ -236,12 +263,6 @@ def new_group(ranks=None, backend=None, timeout=_default_timeout):
         # TODO: The method below is a new method for group management, will replace the previous
         # three in the future.
         _add_new_group(group)
-
-        # TODO(shenliang03): This is a temporary solution to solve the problem of
-        # hang caused by tcp
-        paddle.distributed.barrier(group=group)
-        if paddle.distributed.get_world_size() > 1:
-            paddle.distributed.barrier()
         return group
 
     if not backend:
@@ -300,7 +321,7 @@ def new_group(ranks=None, backend=None, timeout=_default_timeout):
     return gp
 
 
-def is_available():
+def is_available() -> bool:
     """
     Check whether the distributed package is available.
 
@@ -310,15 +331,14 @@ def is_available():
     Examples:
         .. code-block:: python
 
-            import paddle
-
-            print(paddle.distributed.is_available())
+            >>> import paddle
+            >>> print(paddle.distributed.is_available())
 
     """
     return core.is_compiled_with_dist()
 
 
-def _init_parallel_env(backend):
+def _init_parallel_env(backend: _BackendList) -> None:
     store = core.create_or_get_global_tcp_store()
     global_env = _get_global_env()
     rank = global_env.rank
@@ -330,7 +350,32 @@ def _init_parallel_env(backend):
             store, "0", rank, world_size
         )
     elif backend == "nccl":
-        core.CommContextManager.set_cuda_device_id(dev_id)
+        endpoints_str = ""
+        for endpoint in global_env.trainer_endpoints:
+            endpoints_str += endpoint
+        endpoints_str += "ring_id:{}".format("0")
+        endpoints_str_hash = hashlib.md5(
+            endpoints_str.encode(encoding='UTF-8')
+        ).hexdigest()
+        core.CommContextManager.set_device_id(dev_id)
         core.CommContextManager.create_nccl_comm_context(
-            store, "0", rank, world_size
+            store, "0", rank, world_size, endpoints_str_hash
+        )
+    elif backend == "xccl":
+        dev_type = global_env.device_type
+        paddle.device.set_device(f"{dev_type}:{dev_id}")
+        core.CommContextManager.create_xccl_comm_context(
+            store, "0", rank, world_size, dev_type
+        )
+    elif backend == "bkcl":
+        endpoints_str = ""
+        for endpoint in global_env.trainer_endpoints:
+            endpoints_str += endpoint
+        endpoints_str += "ring_id:{}".format("0")
+        endpoints_str_hash = hashlib.md5(
+            endpoints_str.encode(encoding='UTF-8')
+        ).hexdigest()
+        core.CommContextManager.set_device_id(dev_id)
+        core.CommContextManager.create_bkcl_comm_context(
+            store, "0", rank, world_size, endpoints_str_hash
         )

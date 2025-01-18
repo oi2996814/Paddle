@@ -16,12 +16,13 @@ import unittest
 
 import numpy as np
 from decorator_helper import prog_scope
-from eager_op_test import OpTest, skip_check_grad_ci
 from gradient_checker import grad_check
+from op_test import OpTest, skip_check_grad_ci
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
+from paddle.base.backward import _as_list
 
 
 @skip_check_grad_ci(
@@ -40,7 +41,8 @@ class TestCholeskyOp(OpTest):
         self._input_shape = (2, 32, 32)
         self._upper = True
         self.init_config()
-        self.trans_dims = list(range(len(self._input_shape) - 2)) + [
+        self.trans_dims = [
+            *range(len(self._input_shape) - 2),
             len(self._input_shape) - 1,
             len(self._input_shape) - 2,
         ]
@@ -58,12 +60,12 @@ class TestCholeskyOp(OpTest):
         self.outputs = {"Out": output_data}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
-        places = [fluid.CPUPlace()]
+        places = [base.CPUPlace()]
         if core.is_compiled_with_cuda() and (not core.is_compiled_with_rocm()):
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
@@ -71,15 +73,71 @@ class TestCholeskyOp(OpTest):
     def func(self, place):
         # use small size since Jacobian gradients is time consuming
         root_data = self.root_data[..., :3, :3]
-        prog = fluid.Program()
-        with fluid.program_guard(prog):
-            root = paddle.create_parameter(
-                dtype=root_data.dtype, shape=root_data.shape
-            )
+        prog = paddle.static.Program()
+        with paddle.static.program_guard(prog):
+            if paddle.framework.in_pir_mode():
+                root = paddle.static.data(
+                    dtype=root_data.dtype, shape=root_data.shape, name="root"
+                )
+            else:
+                root = paddle.create_parameter(
+                    dtype=root_data.dtype, shape=root_data.shape
+                )
+            root.stop_gradient = False
+            root.persistable = True
             root_t = paddle.transpose(root, self.trans_dims)
             x = paddle.matmul(x=root, y=root_t) + 1e-05
             out = paddle.cholesky(x, upper=self.attrs["upper"])
-            grad_check(root, out, x_init=root_data, place=place)
+            # check input arguments
+            root = _as_list(root)
+            out = _as_list(out)
+
+            for u in out:
+                u.stop_gradient = False
+                u.persistable = True
+
+            # init variable in startup program
+            scope = base.executor.global_scope()
+            exe = base.Executor(place)
+            exe.run(paddle.static.default_startup_program())
+
+            x_init = _as_list(root_data)
+            # init inputs if x_init is not None
+            if x_init:
+                if len(x_init) != len(root):
+                    raise ValueError(
+                        f'len(x_init) (={len(x_init)}) is not the same'
+                        f' as len(x) (={len(root)})'
+                    )
+                # init variable in main program
+                for var, arr in zip(root, x_init):
+                    assert tuple(var.shape) == tuple(arr.shape)
+                feeds = {k.name: v for k, v in zip(root, x_init)}
+                exe.run(prog, feed=feeds, scope=scope)
+            fetch_list = None
+            if paddle.framework.in_pir_mode():
+                dys = []
+                for i in range(len(out)):
+                    yi = out[i]
+                    dy = paddle.static.data(
+                        name=f'dys_{i}',
+                        shape=yi.shape,
+                        dtype=root_data.dtype,
+                    )
+                    dy.stop_gradient = False
+                    dy.persistable = True
+                    value = np.zeros(yi.shape, dtype=root_data.dtype)
+                    feeds.update({f'dys_{i}': value})
+                    dys.append(dy)
+                fetch_list = base.gradients(out, root, dys)
+            grad_check(
+                x=root,
+                y=out,
+                fetch_list=fetch_list,
+                feeds=feeds,
+                place=place,
+                program=prog,
+            )
 
     def init_config(self):
         self._upper = True
@@ -95,10 +153,15 @@ class TestCholeskyOp2D(TestCholeskyOp):
         self._input_shape = (32, 32)
 
 
+class TestCholeskyOpZeroSize(TestCholeskyOp):
+    def init_config(self):
+        self._input_shape = (0, 0)
+
+
 class TestDygraph(unittest.TestCase):
     def test_dygraph(self):
         if core.is_compiled_with_rocm():
-            paddle.disable_static(place=fluid.CPUPlace())
+            paddle.disable_static(place=base.CPUPlace())
         else:
             paddle.disable_static()
         a = np.random.rand(3, 3)
@@ -110,23 +173,24 @@ class TestDygraph(unittest.TestCase):
 
 class TestCholeskySingularAPI(unittest.TestCase):
     def setUp(self):
-        self.places = [fluid.CPUPlace()]
+        self.places = [base.CPUPlace()]
         if core.is_compiled_with_cuda() and (not core.is_compiled_with_rocm()):
-            self.places.append(fluid.CUDAPlace(0))
+            self.places.append(base.CUDAPlace(0))
 
-    def check_static_result(self, place, with_out=False):
-        with fluid.program_guard(fluid.Program(), fluid.Program()):
+    def check_static_result(self, place, input_shape, with_out=False):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             input = paddle.static.data(
-                name="input", shape=[4, 4], dtype="float64"
+                name="input", shape=input_shape, dtype="float64"
             )
             result = paddle.cholesky(input)
 
-            input_np = np.zeros([4, 4]).astype("float64")
+            input_np = np.zeros(input_shape).astype("float64")
 
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             try:
                 fetches = exe.run(
-                    fluid.default_main_program(),
                     feed={"input": input_np},
                     fetch_list=[result],
                 )
@@ -137,20 +201,25 @@ class TestCholeskySingularAPI(unittest.TestCase):
 
     def test_static(self):
         for place in self.places:
-            self.check_static_result(place=place)
+            self.check_static_result(place=place, input_shape=[4, 4])
+            self.check_static_result(place=place, input_shape=[0, 0])
+            self.check_static_result(place=place, input_shape=[5, 0, 0])
 
     def test_dygraph(self):
         for place in self.places:
-            with fluid.dygraph.guard(place):
+            with base.dygraph.guard(place):
                 input_np = np.array(
                     [
                         [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
                         [[10, 11, 12], [13, 14, 15], [16, 17, 18]],
                     ]
                 ).astype("float64")
-                input = fluid.dygraph.to_variable(input_np)
+                input_np_zero = np.zeros((0, 3, 3), dtype="float64")
+                input = paddle.to_tensor(input_np)
+                input_zero = paddle.to_tensor(input_np_zero)
                 try:
                     result = paddle.cholesky(input)
+                    result_zero = paddle.cholesky(input_zero)
                 except RuntimeError as ex:
                     print("The mat is singular")
                 except ValueError as ex:

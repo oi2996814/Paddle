@@ -22,8 +22,10 @@ from test_imperative_base import new_program_scope
 
 import paddle
 import paddle.optimizer as opt
-from paddle import fluid, nn
-from paddle.fluid import framework
+from paddle import base, nn
+from paddle.base import framework
+from paddle.framework import in_pir_mode
+from paddle.framework.io_utils import get_value, is_pir_fetch_var, set_value
 from paddle.optimizer import Adam
 from paddle.optimizer.lr import LRScheduler
 
@@ -168,9 +170,11 @@ class TestSaveLoadAny(unittest.TestCase):
 
     def set_zero(self, prog, place, scope=None):
         if scope is None:
-            scope = fluid.global_scope()
+            scope = base.global_scope()
         for var in prog.list_vars():
             if isinstance(var, framework.Parameter) or var.persistable:
+                if is_pir_fetch_var(var):
+                    continue
                 ten = scope.find_var(var.name).get_tensor()
                 if ten is not None:
                     ten.set(np.zeros_like(np.array(ten)), place)
@@ -178,31 +182,34 @@ class TestSaveLoadAny(unittest.TestCase):
                     self.assertTrue(np.sum(np.abs(new_t)) == 0)
 
     def replace_static_save(self, program, model_path, pickle_protocol=2):
+        scope = base.global_scope()
         with self.assertRaises(TypeError):
             program.state_dict(1)
         with self.assertRaises(TypeError):
             program.state_dict(scope=1)
         with self.assertRaises(ValueError):
-            program.state_dict('x')
-        state_dict_param = program.state_dict('param')
+            program.state_dict('x', scope)
+        state_dict_param = program.state_dict('param', scope)
         paddle.save(state_dict_param, model_path + '.pdparams')
-        state_dict_opt = program.state_dict('opt')
+        state_dict_opt = program.state_dict('opt', scope)
         paddle.save(state_dict_opt, model_path + '.pdopt')
-        state_dict_all = program.state_dict()
+        state_dict_all = program.state_dict('all', scope)
         paddle.save(state_dict_opt, model_path + '.pdall')
 
     def replace_static_load(self, program, model_path):
         with self.assertRaises(TypeError):
             program.set_state_dict(1)
+        scope = base.global_scope()
         state_dict_param = paddle.load(model_path + '.pdparams')
-        state_dict_param['fake_var_name.@@'] = np.random.randn(1, 2)
-        state_dict_param['static_x'] = 'UserWarning'
-        program.set_state_dict(state_dict_param)
-        state_dict_param['static_x'] = np.random.randn(1, 2)
-        program.set_state_dict(state_dict_param)
-        program.set_state_dict(state_dict_param)
+        if not in_pir_mode():
+            state_dict_param['fake_var_name.@@'] = np.random.randn(1, 2)
+            state_dict_param['static_x'] = 'UserWarning'
+            program.set_state_dict(state_dict_param)
+            state_dict_param['static_x'] = np.random.randn(1, 2)
+            program.set_state_dict(state_dict_param)
+        program.set_state_dict(state_dict_param, scope)
         state_dict_opt = paddle.load(model_path + '.pdopt')
-        program.set_state_dict(state_dict_opt)
+        program.set_state_dict(state_dict_opt, scope)
 
     def test_replace_static_save_load(self):
         paddle.enable_static()
@@ -224,32 +231,38 @@ class TestSaveLoadAny(unittest.TestCase):
             base_map = {}
             for var in prog.list_vars():
                 if isinstance(var, framework.Parameter) or var.persistable:
+                    if is_pir_fetch_var(var):
+                        continue
                     t = np.array(
-                        fluid.global_scope().find_var(var.name).get_tensor()
+                        base.global_scope().find_var(var.name).get_tensor()
                     )
                     base_map[var.name] = t
             path = os.path.join(
                 self.temp_dir.name, "test_replace_static_save_load", "model"
             )
-            # paddle.save, legacy paddle.fluid.load
+            # paddle.save, legacy paddle.base.load
             self.replace_static_save(prog, path)
             self.set_zero(prog, place)
             paddle.static.load(prog, path)
             for var in prog.list_vars():
                 if isinstance(var, framework.Parameter) or var.persistable:
+                    if is_pir_fetch_var(var):
+                        continue
                     new_t = np.array(
-                        fluid.global_scope().find_var(var.name).get_tensor()
+                        base.global_scope().find_var(var.name).get_tensor()
                     )
                     base_t = base_map[var.name]
                     np.testing.assert_array_equal(new_t, np.array(base_t))
-            # legacy paddle.fluid.save, paddle.load
+            # legacy paddle.base.save, paddle.load
             paddle.static.save(prog, path)
             self.set_zero(prog, place)
             self.replace_static_load(prog, path)
             for var in prog.list_vars():
                 if isinstance(var, framework.Parameter) or var.persistable:
+                    if is_pir_fetch_var(var):
+                        continue
                     new_t = np.array(
-                        fluid.global_scope().find_var(var.name).get_tensor()
+                        base.global_scope().find_var(var.name).get_tensor()
                     )
                     base_t = base_map[var.name]
                     np.testing.assert_array_equal(new_t, base_t)
@@ -257,35 +270,45 @@ class TestSaveLoadAny(unittest.TestCase):
             path_vars = 'test_replace_save_load_return_tensor_static/model'
             for var in prog.list_vars():
                 if var.persistable:
-                    tensor = var.get_value(fluid.global_scope())
+                    if is_pir_fetch_var(var):
+                        continue
+                    tensor = base.global_scope().find_var(var.name).get_tensor()
                     paddle.save(
                         tensor,
                         os.path.join(self.temp_dir.name, path_vars, var.name),
                     )
+
+            # Pir value currently does not have .set_value() and .get_value()
+            # Instead, use new functions to replace them
             with self.assertRaises(TypeError):
-                var.get_value('fluid.global_scope()')
-            with self.assertRaises(ValueError):
-                x.get_value()
+                get_value(var, 'base.global_scope()')
+            # Pir get_value() currently does not raise ValueError
+            # Maybe fix it later
+            if not in_pir_mode():
+                with self.assertRaises(ValueError):
+                    x.get_value()
             with self.assertRaises(TypeError):
-                x.set_value('1')
+                set_value(x, '1')
             fake_data = np.zeros([3, 2, 1, 2, 3])
             with self.assertRaises(TypeError):
-                x.set_value(fake_data, '1')
+                set_value(x, fake_data, '1')
             with self.assertRaises(ValueError):
-                x.set_value(fake_data)
+                set_value(x, fake_data)
             with self.assertRaises(ValueError):
-                var.set_value(fake_data)
+                set_value(var, fake_data)
             # set var to zero
             self.set_zero(prog, place)
             for var in prog.list_vars():
                 if var.persistable:
+                    if is_pir_fetch_var(var):
+                        continue
                     tensor = paddle.load(
                         os.path.join(self.temp_dir.name, path_vars, var.name),
                         return_numpy=False,
                     )
-                    var.set_value(tensor)
+                    set_value(var, tensor)
                     new_t = np.array(
-                        fluid.global_scope().find_var(var.name).get_tensor()
+                        base.global_scope().find_var(var.name).get_tensor()
                     )
                     base_t = base_map[var.name]
                     np.testing.assert_array_equal(new_t, base_t)
@@ -360,7 +383,7 @@ class TestSaveLoadAny(unittest.TestCase):
         self.assertTrue(
             isinstance(
                 t_dygraph,
-                paddle.fluid.core.eager.Tensor,
+                paddle.base.core.eager.Tensor,
             )
         )
         np.testing.assert_array_equal(tensor.numpy(), np_dygraph)
@@ -368,7 +391,7 @@ class TestSaveLoadAny(unittest.TestCase):
         paddle.enable_static()
         lod_static = paddle.load(path)
         np_static = paddle.load(path, return_numpy=True)
-        self.assertTrue(isinstance(lod_static, paddle.fluid.core.LoDTensor))
+        self.assertTrue(isinstance(lod_static, paddle.base.core.DenseTensor))
         np.testing.assert_array_equal(tensor.numpy(), np_static)
         np.testing.assert_array_equal(tensor.numpy(), np.array(lod_static))
 
@@ -383,18 +406,18 @@ class TestSaveLoadAny(unittest.TestCase):
             z = paddle.static.nn.fc(x, 128)
             loss = paddle.mean(z)
             place = (
-                fluid.CPUPlace()
-                if not paddle.fluid.core.is_compiled_with_cuda()
-                else fluid.CUDAPlace(0)
+                base.CPUPlace()
+                if not paddle.base.core.is_compiled_with_cuda()
+                else base.CUDAPlace(0)
             )
             exe = paddle.static.Executor(place)
             exe.run(paddle.static.default_startup_program())
             prog = paddle.static.default_main_program()
             for var in prog.list_vars():
                 if list(var.shape) == [IMAGE_SIZE, 128]:
-                    tensor = var.get_value()
+                    tensor = get_value(var)
                     break
-            scope = fluid.global_scope()
+            scope = base.global_scope()
         origin_tensor = np.array(tensor)
         path = os.path.join(
             self.temp_dir.name, 'test_single_pickle_var_static/var'
@@ -405,11 +428,11 @@ class TestSaveLoadAny(unittest.TestCase):
         lod_static = paddle.load(path)
         np_static = paddle.load(path, return_numpy=True)
         # set_tensor(np.ndarray)
-        var.set_value(np_static, scope)
+        set_value(var, np_static, scope)
         np.testing.assert_array_equal(origin_tensor, np.array(tensor))
-        # set_tensor(LoDTensor)
+        # set_tensor(DenseTensor)
         self.set_zero(prog, place, scope)
-        var.set_value(lod_static, scope)
+        set_value(var, lod_static, scope)
         np.testing.assert_array_equal(origin_tensor, np.array(tensor))
         # enable dygraph mode
         paddle.disable_static()
@@ -418,7 +441,7 @@ class TestSaveLoadAny(unittest.TestCase):
         np.testing.assert_array_equal(np.array(tensor), np_dygraph)
         np.testing.assert_array_equal(np.array(tensor), var_dygraph.numpy())
 
-    def test_dygraph_save_static_load(self):
+    def test_dygraph_save_static_load_pir(self):
         inps = np.random.randn(1, IMAGE_SIZE).astype('float32')
         path = os.path.join(
             self.temp_dir.name,
@@ -430,27 +453,34 @@ class TestSaveLoadAny(unittest.TestCase):
             state_dict_dy = layer.state_dict()
             paddle.save(state_dict_dy, path)
         paddle.enable_static()
-        with new_program_scope():
-            layer = LinearNet()
-            data = paddle.static.data(
-                name='x_static_save', shape=(None, IMAGE_SIZE), dtype='float32'
-            )
-            y_static = layer(data)
-            program = paddle.static.default_main_program()
-            place = (
-                fluid.CPUPlace()
-                if not paddle.fluid.core.is_compiled_with_cuda()
-                else fluid.CUDAPlace(0)
-            )
-            exe = paddle.static.Executor(paddle.CPUPlace())
-            exe.run(paddle.static.default_startup_program())
-            state_dict = paddle.load(path, keep_name_table=True)
-            program.set_state_dict(state_dict)
-            state_dict_param = program.state_dict("param")
-            for name, tensor in state_dict_dy.items():
-                np.testing.assert_array_equal(
-                    tensor.numpy(), np.array(state_dict_param[tensor.name])
+        with paddle.pir_utils.IrGuard():
+            with new_program_scope():
+                layer = LinearNet()
+                data = paddle.static.data(
+                    name='x_static_save',
+                    shape=(None, IMAGE_SIZE),
+                    dtype='float32',
                 )
+                y_static = layer(data)
+                program = paddle.static.default_main_program()
+                place = (
+                    base.CPUPlace()
+                    if not paddle.base.core.is_compiled_with_cuda()
+                    else base.CUDAPlace(0)
+                )
+                exe = paddle.static.Executor(paddle.CPUPlace())
+                exe.run(paddle.static.default_startup_program())
+                state_dict = paddle.load(path, keep_name_table=True)
+                paddle.pir.core.set_state_dict(
+                    program, state_dict, paddle.static.global_scope()
+                )
+                state_dict_param = program.state_dict(
+                    "param", paddle.static.global_scope()
+                )
+                for name, tensor in state_dict_dy.items():
+                    np.testing.assert_array_equal(
+                        tensor.numpy(), np.array(state_dict_param[tensor.name])
+                    )
 
     def test_save_load_complex_object_dygraph_save(self):
         paddle.disable_static()
@@ -571,7 +601,7 @@ class TestSaveLoadAny(unittest.TestCase):
         self.assertTrue(load_tensor2['epoch'] == 123)
 
         self.assertTrue(
-            isinstance(load_tensor3[0], paddle.fluid.core.LoDTensor)
+            isinstance(load_tensor3[0], paddle.base.core.DenseTensor)
         )
         np.testing.assert_array_equal(
             np.array(load_tensor3[0]), obj3[0].numpy()
@@ -582,7 +612,7 @@ class TestSaveLoadAny(unittest.TestCase):
             self.assertTrue(
                 isinstance(
                     load_tensor3[2]["state_dict"][k],
-                    paddle.fluid.core.LoDTensor,
+                    paddle.base.core.DenseTensor,
                 )
             )
             np.testing.assert_array_equal(
@@ -592,14 +622,14 @@ class TestSaveLoadAny(unittest.TestCase):
         for k, v in state_dict.items():
             self.assertTrue(
                 isinstance(
-                    load_tensor3[2]["opt"][k], paddle.fluid.core.LoDTensor
+                    load_tensor3[2]["opt"][k], paddle.base.core.DenseTensor
                 )
             )
             np.testing.assert_array_equal(
                 np.array(load_tensor3[2]['opt'][k]), v.numpy()
             )
 
-        self.assertTrue(load_tensor4[0], paddle.fluid.core.LoDTensor)
+        self.assertTrue(load_tensor4[0], paddle.base.core.DenseTensor)
         np.testing.assert_array_equal(np.array(load_tensor4[0]), obj4[0])
 
         load_array1 = paddle.load(path1, return_numpy=True)
@@ -641,15 +671,15 @@ class TestSaveLoadAny(unittest.TestCase):
             z = paddle.static.nn.fc(z, 128, bias_attr=False)
             loss = paddle.mean(z)
             place = (
-                fluid.CPUPlace()
-                if not paddle.fluid.core.is_compiled_with_cuda()
-                else fluid.CUDAPlace(0)
+                base.CPUPlace()
+                if not paddle.base.core.is_compiled_with_cuda()
+                else base.CUDAPlace(0)
             )
             prog = paddle.static.default_main_program()
             exe = paddle.static.Executor(place)
             exe.run(paddle.static.default_startup_program())
 
-            state_dict = prog.state_dict()
+            state_dict = prog.state_dict('all', base.global_scope())
             keys = list(state_dict.keys())
             obj1 = [
                 state_dict[keys[0]],
@@ -705,15 +735,15 @@ class TestSaveLoadAny(unittest.TestCase):
                 )
             self.assertTrue(load_tensor2['epoch'] == 123)
 
-            self.assertTrue(isinstance(load_tensor3[0], fluid.core.LoDTensor))
+            self.assertTrue(isinstance(load_tensor3[0], base.core.DenseTensor))
             np.testing.assert_array_equal(np.array(load_tensor3[0]), obj3[0])
-            self.assertTrue(isinstance(load_tensor3[1], fluid.core.LoDTensor))
+            self.assertTrue(isinstance(load_tensor3[1], base.core.DenseTensor))
             np.testing.assert_array_equal(np.array(load_tensor3[1]), obj3[1])
 
             for k, v in state_dict.items():
                 self.assertTrue(
                     isinstance(
-                        load_tensor3[2]["state_dict"][k], fluid.core.LoDTensor
+                        load_tensor3[2]["state_dict"][k], base.core.DenseTensor
                     )
                 )
                 np.testing.assert_array_equal(
@@ -722,13 +752,13 @@ class TestSaveLoadAny(unittest.TestCase):
 
             for k, v in state_dict.items():
                 self.assertTrue(
-                    isinstance(load_tensor3[2]["opt"][k], fluid.core.LoDTensor)
+                    isinstance(load_tensor3[2]["opt"][k], base.core.DenseTensor)
                 )
                 np.testing.assert_array_equal(
                     np.array(load_tensor3[2]['opt'][k]), np.array(v)
                 )
 
-            self.assertTrue(isinstance(load_tensor4[0], fluid.core.LoDTensor))
+            self.assertTrue(isinstance(load_tensor4[0], base.core.DenseTensor))
             np.testing.assert_array_equal(np.array(load_tensor4[0]), obj4[0])
 
             load_array1 = paddle.load(path1, return_numpy=True)
@@ -788,14 +818,14 @@ class TestSaveLoadAny(unittest.TestCase):
             self.assertTrue(
                 isinstance(
                     load_tensor3[0],
-                    fluid.core.eager.Tensor,
+                    base.core.eager.Tensor,
                 )
             )
             np.testing.assert_array_equal(load_tensor3[0].numpy(), obj3[0])
             self.assertTrue(
                 isinstance(
                     load_tensor3[1],
-                    fluid.core.eager.Tensor,
+                    base.core.eager.Tensor,
                 )
             )
             np.testing.assert_array_equal(load_tensor3[1].numpy(), obj3[1])
@@ -804,7 +834,7 @@ class TestSaveLoadAny(unittest.TestCase):
                 self.assertTrue(
                     isinstance(
                         load_tensor3[2]["state_dict"][k],
-                        fluid.core.eager.Tensor,
+                        base.core.eager.Tensor,
                     )
                 )
                 np.testing.assert_array_equal(
@@ -815,7 +845,7 @@ class TestSaveLoadAny(unittest.TestCase):
                 self.assertTrue(
                     isinstance(
                         load_tensor3[2]["opt"][k],
-                        fluid.core.eager.Tensor,
+                        base.core.eager.Tensor,
                     )
                 )
                 np.testing.assert_array_equal(
@@ -825,7 +855,7 @@ class TestSaveLoadAny(unittest.TestCase):
             self.assertTrue(
                 isinstance(
                     load_tensor4[0],
-                    fluid.core.eager.Tensor,
+                    base.core.eager.Tensor,
                 )
             )
             np.testing.assert_array_equal(load_tensor4[0].numpy(), obj4[0])
@@ -874,8 +904,8 @@ class TestSaveLoadAny(unittest.TestCase):
         load_tensor = paddle.load(path, return_numpy=False)
         origin_array = varbase.numpy()
         load_tensor_array = load_tensor.numpy()
-        if paddle.fluid.core.is_compiled_with_cuda():
-            fluid.core._cuda_synchronize(paddle.CUDAPlace(0))
+        if paddle.base.core.is_compiled_with_cuda():
+            base.core._cuda_synchronize(paddle.CUDAPlace(0))
         np.testing.assert_array_equal(origin_array, load_array)
         np.testing.assert_array_equal(origin_array, load_tensor_array)
 
@@ -904,50 +934,6 @@ class TestSaveLoadToMemory(unittest.TestCase):
             paddle.save(state_dict, '')
         with self.assertRaises(ValueError):
             paddle.framework.io_utils._open_file_buffer('temp', 'b')
-
-    def test_static_save_to_memory(self):
-        paddle.enable_static()
-        with new_program_scope():
-            # create network
-            x = paddle.static.data(
-                name="x", shape=[None, IMAGE_SIZE], dtype='float32'
-            )
-            z = paddle.static.nn.fc(x, 10, bias_attr=False)
-            z = paddle.static.nn.fc(z, 128, bias_attr=False)
-            loss = paddle.mean(z)
-            place = (
-                fluid.CPUPlace()
-                if not paddle.fluid.core.is_compiled_with_cuda()
-                else fluid.CUDAPlace(0)
-            )
-            prog = paddle.static.default_main_program()
-            exe = paddle.static.Executor(place)
-            exe.run(paddle.static.default_startup_program())
-
-            state_dict = prog.state_dict()
-            keys = list(state_dict.keys())
-            tensor = state_dict[keys[0]]
-
-            byio = BytesIO()
-            byio2 = BytesIO()
-            paddle.save(prog, byio2)
-            paddle.save(tensor, byio)
-            paddle.save(state_dict, byio)
-            byio.seek(0)
-            byio2.seek(0)
-
-            prog_load = paddle.load(byio2)
-            self.assertTrue(
-                prog.desc.serialize_to_string()
-                == prog_load.desc.serialize_to_string()
-            )
-
-            tensor_load = paddle.load(byio, return_numpy=True)
-            np.testing.assert_array_equal(tensor_load, np.array(tensor))
-
-            state_dict_load = paddle.load(byio, return_numpy=True)
-            for k, v in state_dict.items():
-                np.testing.assert_array_equal(np.array(v), state_dict_load[k])
 
 
 class TestSaveLoad(unittest.TestCase):
@@ -989,6 +975,7 @@ class TestSaveLoad(unittest.TestCase):
             np.testing.assert_array_equal(value.numpy(), load_value)
 
     def test_save_load(self):
+        paddle.disable_static()
         layer, opt = self.build_and_train_model()
 
         # save
@@ -1049,38 +1036,126 @@ class TestSaveLoad(unittest.TestCase):
             )
 
 
-class TestSaveLoadProgram(unittest.TestCase):
-    def test_save_load_program(self):
+class TestAsyncSaveLoad(unittest.TestCase):
+    def setUp(self):
+        # enable dygraph mode
+        paddle.disable_static()
+
+        # config seed
+        paddle.seed(SEED)
+        paddle.framework.random._manual_program_seed(SEED)
+        self.temp_dir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def build_and_train_model(self):
+        # create network
+        layer = LinearNet()
+        loss_fn = nn.CrossEntropyLoss()
+
+        adam = opt.Adam(learning_rate=0.001, parameters=layer.parameters())
+
+        # create data loader
+        # TODO: using new DataLoader cause unknown Timeout on windows, replace it
+        loader = random_batch_reader()
+
+        # train
+        train(layer, loader, loss_fn, adam)
+
+        return layer, adam
+
+    def check_load_state_dict(self, orig_dict, load_dict):
+        for var_name, value in orig_dict.items():
+            load_value = (
+                load_dict[var_name].numpy()
+                if hasattr(load_dict[var_name], 'numpy')
+                else np.array(load_dict[var_name])
+            )
+            np.testing.assert_array_equal(value.numpy(), load_value)
+
+    def test_async_save_load(self):
+        layer, opt = self.build_and_train_model()
+
+        # save
+        layer_save_path = os.path.join(
+            self.temp_dir.name, "test_paddle_async_save_load.linear.pdparams"
+        )
+        opt_save_path = os.path.join(
+            self.temp_dir.name, "test_paddle_async_save_load.linear.pdopt"
+        )
+        layer_state_dict = layer.state_dict()
+        opt_state_dict = opt.state_dict()
+
+        paddle.async_save(
+            layer_state_dict, layer_save_path, sync_other_task=True
+        )
+        paddle.async_save(opt_state_dict, opt_save_path)
+        paddle.clear_async_save_task_queue()
+
+        # load
+        load_layer_state_dict = paddle.load(layer_save_path)
+        load_opt_state_dict = paddle.load(opt_save_path)
+
+        self.check_load_state_dict(layer_state_dict, load_layer_state_dict)
+        self.check_load_state_dict(opt_state_dict, load_opt_state_dict)
+
+        # test assertion on illegal object
+        some_tuple_obj = (1, 2, 3)
+        tuple_save_path = os.path.join(
+            self.temp_dir.name, "test_paddle_async_save_load.tuple.pdparams"
+        )
+        with self.assertRaises(TypeError):
+            paddle.async_save(some_tuple_obj, tuple_save_path)
+
+        # test assertion on static graph
         paddle.enable_static()
-        temp_dir = tempfile.TemporaryDirectory()
+        static_save_path = os.path.join(
+            self.temp_dir.name,
+            "static_mode_test/test_paddle_async_save_load.linear.pdparams",
+        )
+        with self.assertRaises(ValueError):
+            paddle.async_save(layer_state_dict, static_save_path)
 
-        with new_program_scope():
-            layer = LinearNet()
-            data = paddle.static.data(
-                name='x_static_save', shape=(None, IMAGE_SIZE), dtype='float32'
-            )
-            y_static = layer(data)
-            main_program = paddle.static.default_main_program()
-            startup_program = paddle.static.default_startup_program()
-            origin_main = main_program.desc.serialize_to_string()
-            origin_startup = startup_program.desc.serialize_to_string()
-            path1 = os.path.join(
-                temp_dir.name,
-                "test_paddle_save_load_program/main_program.pdmodel",
-            )
-            path2 = os.path.join(
-                temp_dir.name,
-                "test_paddle_save_load_program/startup_program.pdmodel",
-            )
-            paddle.save(main_program, path1)
-            paddle.save(startup_program, path2)
 
-        with new_program_scope():
-            load_main = paddle.load(path1).desc.serialize_to_string()
-            load_startup = paddle.load(path2).desc.serialize_to_string()
-            self.assertTrue(origin_main == load_main)
-            self.assertTrue(origin_startup == load_startup)
-        temp_dir.cleanup()
+class TestSaveLoadProgram(unittest.TestCase):
+    def test_save_load_program_pir(self):
+        paddle.enable_static()
+        with paddle.pir_utils.IrGuard():
+            temp_dir = tempfile.TemporaryDirectory()
+            with new_program_scope():
+                layer = LinearNet()
+                data = paddle.static.data(
+                    name='x_static_save',
+                    shape=(None, IMAGE_SIZE),
+                    dtype='float32',
+                )
+                y_static = layer(data)
+                main_program = paddle.static.default_main_program()
+                startup_program = paddle.static.default_startup_program()
+                path1 = os.path.join(
+                    temp_dir.name,
+                    "test_paddle_save_load_program/main_program.json",
+                )
+                path2 = os.path.join(
+                    temp_dir.name,
+                    "test_paddle_save_load_program/startup_program.json",
+                )
+                paddle.save(main_program, path1)
+                paddle.save(startup_program, path2)
+
+            with new_program_scope():
+                load_main = paddle.load(path1)
+                load_startup = paddle.load(path2)
+                self.assertTrue(
+                    len(main_program.global_block().ops)
+                    == len(load_main.global_block().ops)
+                )
+                self.assertTrue(
+                    len(startup_program.global_block().ops)
+                    == len(load_startup.global_block().ops)
+                )
+            temp_dir.cleanup()
 
 
 class TestSaveLoadLayer(unittest.TestCase):

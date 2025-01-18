@@ -25,6 +25,7 @@ from PIL import Image
 
 import paddle
 from paddle.dataset.common import download
+from paddle.io import Dataset
 from paddle.static.log_helper import get_logger
 from paddle.static.quantization import PostTrainingQuantization
 
@@ -116,6 +117,33 @@ def val(data_dir=DATA_DIR):
     return _reader_creator(file_list, 'val', shuffle=False, data_dir=data_dir)
 
 
+class ImageNetDataset(Dataset):
+    def __init__(self, data_dir=DATA_DIR, shuffle=False, need_label=False):
+        super().__init__()
+        self.need_label = need_label
+        self.data_dir = data_dir
+        val_file_list = os.path.join(data_dir, 'val_list.txt')
+        with open(val_file_list) as flist:
+            lines = [line.strip() for line in flist]
+            if shuffle:
+                np.random.shuffle(lines)
+            self.data = [line.split() for line in lines]
+
+    def __getitem__(self, index):
+        sample = self.data[index]
+        data_path = os.path.join(self.data_dir, sample[0])
+        data, label = process_image(
+            [data_path, sample[1]], mode='val', color_jitter=False, rotate=False
+        )
+        if self.need_label:
+            return data, np.array([label]).astype('int64')
+        else:
+            return data
+
+    def __len__(self):
+        return len(self.data)
+
+
 class TestPostTrainingQuantization(unittest.TestCase):
     def setUp(self):
         self.int8_download = 'int8/download'
@@ -168,8 +196,8 @@ class TestPostTrainingQuantization(unittest.TestCase):
 
     def cache_unzipping(self, target_folder, zip_path):
         if not os.path.exists(target_folder):
-            cmd = 'mkdir {0} && tar xf {1} -C {0}'.format(
-                target_folder, zip_path
+            cmd = (
+                f'mkdir {target_folder} && tar xf {zip_path} -C {target_folder}'
             )
             os.system(cmd)
 
@@ -267,7 +295,7 @@ class TestPostTrainingQuantization(unittest.TestCase):
         throughput = cnt / np.sum(periods)
         latency = np.average(periods)
         acc1 = np.sum(test_info) / cnt
-        return (throughput, latency, acc1)
+        return (throughput, latency, acc1, feed_dict)
 
     def generate_quantized_model(
         self,
@@ -284,20 +312,40 @@ class TestPostTrainingQuantization(unittest.TestCase):
         batch_nums=1,
         onnx_format=False,
         deploy_backend=None,
+        feed_name="inputs",
     ):
         try:
             os.system("mkdir " + self.int8_model)
         except Exception as e:
-            _logger.info(f"Failed to create {self.int8_model} due to {str(e)}")
+            _logger.info(f"Failed to create {self.int8_model} due to {e}")
             sys.exit(-1)
 
         place = paddle.CPUPlace()
         exe = paddle.static.Executor(place)
-        val_reader = val()
+        image = paddle.static.data(
+            name=feed_name[0], shape=[None, 3, 224, 224], dtype='float32'
+        )
+        feed_list = [image]
+        if len(feed_name) == 2:
+            label = paddle.static.data(
+                name='label', shape=[None, 1], dtype='int64'
+            )
+            feed_list.append(label)
+
+        val_dataset = ImageNetDataset(need_label=len(feed_list) == 2)
+        data_loader = paddle.io.DataLoader(
+            val_dataset,
+            places=place,
+            feed_list=feed_list,
+            drop_last=False,
+            return_list=False,
+            batch_size=2,
+            shuffle=False,
+        )
 
         ptq = PostTrainingQuantization(
             executor=exe,
-            sample_generator=val_reader,
+            data_loader=data_loader,
             model_dir=model_path,
             model_filename=model_filename,
             params_filename=params_filename,
@@ -344,11 +392,14 @@ class TestPostTrainingQuantization(unittest.TestCase):
         model_cache_folder = self.download_data(data_urls, data_md5s, model)
         model_path = os.path.join(model_cache_folder, data_name)
         _logger.info(
-            "Start FP32 inference for {} on {} images ...".format(
-                model, infer_iterations * batch_size
-            )
+            f"Start FP32 inference for {model} on {infer_iterations * batch_size} images ..."
         )
-        (fp32_throughput, fp32_latency, fp32_acc1) = self.run_program(
+        (
+            fp32_throughput,
+            fp32_latency,
+            fp32_acc1,
+            feed_name,
+        ) = self.run_program(
             model_path,
             model_filename,
             params_filename,
@@ -370,14 +421,13 @@ class TestPostTrainingQuantization(unittest.TestCase):
             batch_nums,
             onnx_format,
             deploy_backend,
+            feed_name,
         )
 
         _logger.info(
-            "Start INT8 inference for {} on {} images ...".format(
-                model, infer_iterations * batch_size
-            )
+            f"Start INT8 inference for {model} on {infer_iterations * batch_size} images ..."
         )
-        (int8_throughput, int8_latency, int8_acc1) = self.run_program(
+        (int8_throughput, int8_latency, int8_acc1, _) = self.run_program(
             self.int8_model,
             model_filename,
             params_filename,
@@ -387,14 +437,10 @@ class TestPostTrainingQuantization(unittest.TestCase):
 
         _logger.info(f"---Post training quantization of {algo} method---")
         _logger.info(
-            "FP32 {}: batch_size {}, throughput {} images/second, latency {} second, accuracy {}.".format(
-                model, batch_size, fp32_throughput, fp32_latency, fp32_acc1
-            )
+            f"FP32 {model}: batch_size {batch_size}, throughput {fp32_throughput} images/second, latency {fp32_latency} second, accuracy {fp32_acc1}."
         )
         _logger.info(
-            "INT8 {}: batch_size {}, throughput {} images/second, latency {} second, accuracy {}.\n".format(
-                model, batch_size, int8_throughput, int8_latency, int8_acc1
-            )
+            f"INT8 {model}: batch_size {batch_size}, throughput {int8_throughput} images/second, latency {int8_latency} second, accuracy {int8_acc1}.\n"
         )
         sys.stdout.flush()
 
@@ -421,7 +467,7 @@ class TestPostTrainingKLForMobilenetv1(TestPostTrainingQuantization):
         is_use_cache_file = False
         is_optimize_model = True
         diff_threshold = 0.025
-        batch_nums = 1
+        batch_nums = 2
         self.run_test(
             model,
             'inference.pdmodel',
@@ -466,6 +512,152 @@ class TestPostTrainingavgForMobilenetv1(TestPostTrainingQuantization):
             data_urls,
             data_md5s,
             "MobileNetV1_infer",
+            quantizable_op_type,
+            is_full_quantize,
+            is_use_cache_file,
+            is_optimize_model,
+            diff_threshold,
+            batch_nums=2,
+        )
+
+
+class TestPostTrainingavgForPwganCsmsc(TestPostTrainingQuantization):
+    def setUp(self):
+        self.int8_download = 'int8/download'
+        self.cache_folder = os.path.expanduser(
+            '~/.cache/paddle/dataset/' + self.int8_download
+        )
+        self.data_cache_folder = ''
+        data_urls = []
+        data_md5s = []
+        if os.environ.get('DATASET') == 'full':
+            data_urls.append(
+                'https://paddlespeech.bj.bcebos.com/tmp/csmsc_voc1.npy'
+            )
+            data_md5s.append('47950146167ca8d885a78d71e74f1a2b')
+            self.data_cache_folder = self.download_data(
+                data_urls, data_md5s, "full_data", False
+            )
+        else:
+            data_urls.append(
+                'https://paddlespeech.bj.bcebos.com/tmp/csmsc_voc1.npy'
+            )
+            data_md5s.append('47950146167ca8d885a78d71e74f1a2b')
+            self.data_cache_folder = self.download_data(
+                data_urls, data_md5s, "small_data", False
+            )
+
+        # reader/decorator.py requires the relative path to the data folder
+        if not os.path.exists("./data/BZNSYP"):
+            cmd = 'rm -rf {0} && ln -s {1} {0}'.format(
+                "data", self.data_cache_folder
+            )
+            os.system(cmd)
+
+        self.batch_size = 1 if os.environ.get('DATASET') == 'full' else 50
+        self.infer_iterations = (
+            50000 if os.environ.get('DATASET') == 'full' else 2
+        )
+
+        self.root_path = tempfile.TemporaryDirectory()
+        self.int8_model = os.path.join(
+            self.root_path.name, "post_training_quantization"
+        )
+
+    def cache_unzipping(self, target_folder, zip_path):
+        if not os.path.exists(target_folder):
+            if zip_path.endswith('.tar.gz'):
+                cmd = f'mkdir {target_folder} && tar xf {zip_path} -C {target_folder}'
+            elif zip_path.endswith('.zip'):
+                cmd = f'mkdir {target_folder} && unzip -o {zip_path} -d {target_folder}'
+            else:
+                cmd = f'mkdir {target_folder}'
+            os.system(cmd)
+
+    def generate_quantized_model(
+        self,
+        model_path,
+        model_filename,
+        params_filename,
+        quantizable_op_type,
+        batch_size,
+        algo="avg",
+        round_type="round",
+        is_full_quantize=False,
+        is_use_cache_file=False,
+        is_optimize_model=False,
+        batch_nums=1,
+        onnx_format=False,
+        deploy_backend=None,
+        feed_name="inputs",
+    ):
+        try:
+            os.system("mkdir " + self.int8_model)
+        except Exception as e:
+            _logger.info(f"Failed to create {self.int8_model} due to {e}")
+            sys.exit(-1)
+
+        place = paddle.CPUPlace()
+        exe = paddle.static.Executor(place)
+        val_dataset = "~/.cache/paddle/dataset/int8/download/csmsc_voc1.npy"
+        data_loader = paddle.io.DataLoader(
+            val_dataset,
+            places=place,
+            drop_last=False,
+            batch_size=2,
+        )
+        ptq = PostTrainingQuantization(
+            executor=exe,
+            data_loader=data_loader,
+            model_dir=model_path,
+            model_filename=model_filename,
+            params_filename=params_filename,
+            batch_size=batch_size,
+            batch_nums=batch_nums,
+            algo=algo,
+            quantizable_op_type=quantizable_op_type,
+            round_type=round_type,
+            is_full_quantize=is_full_quantize,
+            optimize_model=is_optimize_model,
+            onnx_format=onnx_format,
+            is_use_cache_file=is_use_cache_file,
+            deploy_backend=deploy_backend,
+        )
+        ptq.quantize()
+        ptq.save_quantized_model(
+            self.int8_model,
+            model_filename=model_filename,
+            params_filename=params_filename,
+        )
+
+
+class TestPostTraininghistForNoneShape(TestPostTrainingavgForPwganCsmsc):
+    def test_post_training_avg_pwgancsmsc(self):
+        model = "pwg_baker_static_0.4"
+        algo = "avg"
+        round_type = "round"
+        data_urls = [
+            'https://paddlespeech.bj.bcebos.com/Parakeet/released_models/pwgan/pwg_baker_static_0.4.zip'
+        ]
+        data_md5s = ['e3504aed9c5a290be12d1347836d2742']
+        quantizable_op_type = [
+            "conv2d",
+            "depthwise_conv2d",
+            "mul",
+        ]
+        is_full_quantize = False
+        is_use_cache_file = False
+        is_optimize_model = True
+        diff_threshold = 0.05
+        self.run_test(
+            model,
+            'pwgan_csmsc.pdmodel',
+            'pwgan_csmsc.pdiparams',
+            algo,
+            round_type,
+            data_urls,
+            data_md5s,
+            "pwg_baker_static_0.4",
             quantizable_op_type,
             is_full_quantize,
             is_use_cache_file,
@@ -607,7 +799,7 @@ class TestPostTrainingAvgONNXFormatForMobilenetv1TensorRT(
         is_optimize_model = False
         onnx_format = True
         diff_threshold = 0.05
-        batch_nums = 2
+        batch_nums = 12
         deploy_backend = "tensorrt"
         self.run_test(
             model,
@@ -650,7 +842,7 @@ class TestPostTrainingKLONNXFormatForMobilenetv1MKLDNN(
         is_optimize_model = False
         onnx_format = True
         diff_threshold = 0.05
-        batch_nums = 1
+        batch_nums = 12
         deploy_backend = "mkldnn"
         self.run_test(
             model,

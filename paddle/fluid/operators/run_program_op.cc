@@ -12,12 +12,13 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include "paddle/fluid/operators/run_program_op.h"
-
 #include <string>
 
-namespace paddle {
-namespace operators {
+#include "paddle/fluid/framework/op_registry.h"
+
+namespace paddle::operators {
+
+using BlockDesc = framework::BlockDesc;
 
 class RunProgramOp : public framework::OperatorWithKernel {
  public:
@@ -26,11 +27,11 @@ class RunProgramOp : public framework::OperatorWithKernel {
   void InferShape(framework::InferShapeContext* ctx) const override {
     PADDLE_ENFORCE_EQ(ctx->HasInputs("X"),
                       true,
-                      platform::errors::NotFound(
+                      common::errors::NotFound(
                           "Input(X) of RunProgramOp should not be null."));
     PADDLE_ENFORCE_EQ(ctx->HasOutputs("Out"),
                       true,
-                      platform::errors::NotFound(
+                      common::errors::NotFound(
                           "Output(Out) of RunProgramOp should not be null."));
   }
 
@@ -71,7 +72,7 @@ class RunProgramOpMaker : public framework::OpProtoAndCheckerMaker {
              "of loaded program.")
         .AsDuplicable();
     AddInput("Params",
-             "(vector<phi::DenseTensor or SelecetedRows>)"
+             "(vector<phi::DenseTensor or SelectedRows>)"
              "The input parameter of RunProgram operator, also the parameters "
              "of the loaded program.")
         .AsDuplicable()
@@ -109,6 +110,10 @@ class RunProgramOpMaker : public framework::OpProtoAndCheckerMaker {
                   "(bool, default false) Set to true for inference only, false "
                   "for training.")
         .SetDefault(false);
+    AddAttr<bool>(
+        "in_pir_pt_mode",
+        "(bool, default false) Set to true when need to run in pir mode")
+        .SetDefault(false);
     AddAttr<int64_t>(
         "program_id",
         "(int64_t)"
@@ -139,6 +144,10 @@ class RunProgramOpMaker : public framework::OpProtoAndCheckerMaker {
                                       "std::vector<std::string>"
                                       "The names of output gradients.")
         .SetDefault({});
+    AddAttr<std::vector<std::string>>("x_names",
+                                      "std::vector<std::string>"
+                                      "The names of input tensors.")
+        .SetDefault({});
     AddAttr<std::vector<std::string>>("x_grad_names",
                                       "std::vector<std::string>"
                                       "The names of input gradients.")
@@ -165,12 +174,12 @@ class RunProgramGradOp : public framework::OperatorWithKernel {
   void InferShape(framework::InferShapeContext* ctx) const override {
     PADDLE_ENFORCE_EQ(ctx->HasInputs("X"),
                       true,
-                      platform::errors::NotFound(
+                      common::errors::NotFound(
                           "Input(X) of RunProgramGradOp should not be null."));
     PADDLE_ENFORCE_EQ(
         ctx->HasInputs(framework::GradVarName("Out")),
         true,
-        platform::errors::NotFound(
+        common::errors::NotFound(
             "Input(Out@GRAD) of RunProgramGradOp should not be null."));
     // NOTE: The X@GRAD and Params@GRAD may not exist,
     // because they can be set stop_gradient = True
@@ -245,8 +254,7 @@ class RunProgramGradOpMaker : public framework::SingleGradOpMaker<T> {
   }
 };
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
 REGISTER_OPERATOR(run_program,
@@ -255,9 +263,3 @@ REGISTER_OPERATOR(run_program,
                   ops::RunProgramGradOpMaker<paddle::framework::OpDesc>,
                   ops::RunProgramGradOpMaker<paddle::imperative::OpBase>);
 REGISTER_OPERATOR(run_program_grad, ops::RunProgramGradOp);
-
-/* see [Why use single type kernel] */
-PD_REGISTER_STRUCT_KERNEL(
-    run_program, CPU, ALL_LAYOUT, ops::RunProgramOpKernel, float) {}
-PD_REGISTER_STRUCT_KERNEL(
-    run_program_grad, CPU, ALL_LAYOUT, ops::RunProgramGradOpKernel, float) {}

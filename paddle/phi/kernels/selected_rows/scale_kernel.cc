@@ -19,14 +19,13 @@ limitations under the License. */
 #include "paddle/phi/common/bfloat16.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/scale_kernel.h"
-namespace phi {
-namespace sr {
+namespace phi::sr {
 
 template <typename T, typename Context>
 void ScaleKernel(const Context& dev_ctx,
                  const SelectedRows& x,
                  const Scalar& scale,
-                 float bias,
+                 const Scalar& bias,
                  bool bias_after_scale,
                  SelectedRows* out) {
   if (x.value().Holder() != out->value().Holder() ||
@@ -38,8 +37,7 @@ void ScaleKernel(const Context& dev_ctx,
       dev_ctx, x.value(), scale, bias, bias_after_scale, out->mutable_value());
 }
 
-}  // namespace sr
-}  // namespace phi
+}  // namespace phi::sr
 
 PD_REGISTER_KERNEL(scale_sr,
                    CPU,

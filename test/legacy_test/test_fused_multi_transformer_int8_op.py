@@ -20,13 +20,12 @@ from test_sparse_attention_op import get_cuda_version
 import paddle
 import paddle.nn.functional as F
 from paddle import _legacy_C_ops, tensor
-from paddle.fluid import core
-from paddle.fluid.framework import default_main_program
+from paddle.base import core
 from paddle.nn.layer.common import Dropout
 from paddle.nn.layer.norm import LayerNorm
 from paddle.nn.layer.transformer import _convert_attention_mask
 
-default_main_program().random_seed = 42
+paddle.seed(42)
 np.random.seed(0)
 
 

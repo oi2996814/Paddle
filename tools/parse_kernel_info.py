@@ -80,7 +80,7 @@ class KernelRegistryStatistics:
                     percent = float(self.num_ops_for_dtypes[dtype]) / float(
                         num_floats
                     )
-                    res += "({:.2f}%)".format(percent * 100)
+                    res += f"({percent * 100:.2f}%)"
                 else:
                     res += f"({0:.2f}%)"
             res += " "
@@ -94,13 +94,11 @@ def parse_paddle_kernels(lib="phi", kernel_type="function", print_detail=False):
     if lib == "phi":
         assert kernel_type in ["function", "structure", "all"]
         # phi kernel type can be: function, structure, all
-        kernel_infos = paddle.fluid.core._get_registered_phi_kernels(
-            kernel_type
-        )
+        kernel_infos = paddle.base.core._get_registered_phi_kernels(kernel_type)
     else:
         # fluid, phi, all
         assert kernel_type in ["fluid", "phi", "all"]
-        kernel_infos = paddle.fluid.core._get_all_register_op_kernels(
+        kernel_infos = paddle.base.core._get_all_register_op_kernels(
             kernel_type
         )
 
@@ -121,9 +119,7 @@ def parse_paddle_kernels(lib="phi", kernel_type="function", print_detail=False):
 
     if print_detail:
         print(
-            "==================== lib={}, kernel_type={} ====================".format(
-                lib, kernel_type
-            )
+            f"==================== lib={lib}, kernel_type={kernel_type} ===================="
         )
         print(
             "{} : {}".format(
@@ -133,12 +129,9 @@ def parse_paddle_kernels(lib="phi", kernel_type="function", print_detail=False):
         )
         for key, value in sorted(kernel_info_dict.items()):
             print(
-                "{} : {}".format(
-                    value.op_type.ljust(max_op_type_lengths + 4),
-                    value.supported_dtypes,
-                )
+                f"{value.op_type.ljust(max_op_type_lengths + 4)} : {value.supported_dtypes}"
             )
-        print("")
+        print()
     return stats
 
 
@@ -162,7 +155,7 @@ def main(lib):
         print(f"phi function  kernels : {phi_function_kernels_stats}")
         print(f"phi structure kernels : {phi_structure_kernels_stats}")
         print(f"phi all       kernels : {phi_all_kernels_stats}")
-        print("")
+        print()
     else:
         fluid_ops_stats = parse_paddle_kernels(lib, "fluid", print_detail=False)
         phi_ops_stats = parse_paddle_kernels(lib, "phi", print_detail=False)
@@ -175,7 +168,7 @@ def main(lib):
         print(f"fluid operators : {fluid_ops_stats}")
         print(f"phi   operators : {phi_ops_stats}")
         print(f"all   operators : {all_ops_stats}")
-        print("")
+        print()
 
 
 main(lib="fluid")

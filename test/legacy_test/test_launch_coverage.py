@@ -21,6 +21,7 @@ from paddle.distributed.utils.launch_utils import (
     get_cluster_from_args,
     get_gpus,
 )
+from paddle.distributed.utils.process_utils import set_affinity
 
 
 def _parse_args():
@@ -52,7 +53,7 @@ POD_IP (current node ip address, not needed for local training)
     parser.add_argument(
         "--use_paddlecloud",
         action='store_true',
-        help="wheter to use paddlecloud platform to run your multi-process job. If false, no need to set this argument.",
+        help="whether to use paddle cloud platform to run your multi-process job. If false, no need to set this argument.",
     )
     parser.add_argument(
         "--started_port",
@@ -118,6 +119,9 @@ class TestCoverage(unittest.TestCase):
 
     def test_find_free_ports(self):
         find_free_ports(2)
+
+    def test_set_affinity(self):
+        set_affinity()
 
 
 if __name__ == '__main__':

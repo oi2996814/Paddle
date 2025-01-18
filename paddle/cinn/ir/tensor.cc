@@ -16,20 +16,23 @@
 
 #include <cstring>
 
+#include "paddle/cinn/ast_gen_ius/tensor_group.h"
 #include "paddle/cinn/cinn.h"
-#include "paddle/cinn/common/arithmatic.h"
+#include "paddle/cinn/common/arithmetic.h"
 #include "paddle/cinn/common/axis.h"
 #include "paddle/cinn/common/cas.h"
 #include "paddle/cinn/common/common.h"
 #include "paddle/cinn/common/ir_util.h"
 #include "paddle/cinn/ir/buffer.h"
+#include "paddle/cinn/ir/ir_printer.h"
+#include "paddle/cinn/ir/ir_utils.h"
+#include "paddle/cinn/ir/ir_visitor.h"
 #include "paddle/cinn/ir/op/ir_operators.h"
 #include "paddle/cinn/ir/operation.h"
-#include "paddle/cinn/ir/utils/ir_printer.h"
-#include "paddle/cinn/ir/utils/ir_visitor.h"
 #include "paddle/cinn/lang/compute.h"
 #include "paddle/cinn/poly/isl_utils.h"
 #include "paddle/cinn/poly/stage.h"
+#include "paddle/common/enforce.h"
 
 namespace cinn {
 namespace ir {
@@ -40,14 +43,99 @@ Tensor _Tensor_::Make(const std::string &name,
                       const std::vector<Expr> &domain,
                       FunctionRef fn,
                       const std::vector<Var> &reduce_axis) {
-  CHECK(!name.empty()) << "Tensor name is set empty";
+  PADDLE_ENFORCE_EQ(name.empty(),
+                    false,
+                    ::common::errors::InvalidArgument(
+                        "Required tensor name shall not be empty."));
   auto n = make_shared<_Tensor_>();
   n->name = name;
-  n->shape = shape;
+  n->shape = utils::GetCompatibleShape(shape);
   n->domain = domain;
   n->reduce_axis = reduce_axis;
   n->set_type(dtype);
   n->operation = fn;
+  n->InitAxis();
+
+  return Tensor(n);
+}
+Tensor _Tensor_::Make(const std::string &name,
+                      Type dtype,
+                      const std::vector<Expr> &shape,
+                      const std::vector<Expr> &domain,
+                      const std::vector<Var> &reduce_axis) {
+  PADDLE_ENFORCE_EQ(name.empty(),
+                    false,
+                    ::common::errors::InvalidArgument(
+                        "Required tensor name shall not be empty."));
+  auto n = make_shared<_Tensor_>();
+  n->name = name;
+  n->shape = utils::GetCompatibleShape(shape);
+  n->domain = domain;
+  n->reduce_axis = reduce_axis;
+  n->operation = PlaceholderOp::Make(n->name, n->shape, Float(32));
+  n->set_type(dtype);
+  n->InitAxis();
+
+  return Tensor(n);
+}
+
+Tensor _Tensor_::Make(const std::string &name,
+                      Type dtype,
+                      const std::vector<Dim> &sym_shape,
+                      const std::vector<Dim> &sym_domain,
+                      FunctionRef fn,
+                      const std::vector<Var> &reduce_axis) {
+  PADDLE_ENFORCE_EQ(name.empty(),
+                    false,
+                    ::common::errors::InvalidArgument(
+                        "Required tensor name shall not be empty."));
+  PADDLE_ENFORCE_EQ(sym_shape.empty(),
+                    false,
+                    ::common::errors::InvalidArgument(
+                        "Required tensor sym_shape shall not be empty."));
+  auto n = make_shared<_Tensor_>();
+  n->name = name;
+  n->sym_shape = sym_shape;
+  for (int i = 0; i < sym_shape.size(); i++) {
+    n->shape.emplace_back(sym_shape[i]->dim_expr);
+  }
+  n->sym_domain = sym_domain;
+  for (int i = 0; i < sym_domain.size(); i++) {
+    n->domain.emplace_back(sym_domain[i]->dim_expr);
+  }
+  n->reduce_axis = reduce_axis;
+  n->set_type(dtype);
+  n->operation = fn;
+  n->InitAxis();
+
+  return Tensor(n);
+}
+Tensor _Tensor_::Make(const std::string &name,
+                      Type dtype,
+                      const std::vector<Dim> &sym_shape,
+                      const std::vector<Dim> &sym_domain,
+                      const std::vector<Var> &reduce_axis) {
+  PADDLE_ENFORCE_EQ(name.empty(),
+                    false,
+                    ::common::errors::InvalidArgument(
+                        "Required tensor name shall not be empty."));
+  PADDLE_ENFORCE_EQ(sym_shape.empty(),
+                    false,
+                    ::common::errors::InvalidArgument(
+                        "Required tensor sym_shape shall not be empty."));
+  auto n = make_shared<_Tensor_>();
+  n->name = name;
+  n->sym_shape = sym_shape;
+  for (int i = 0; i < sym_shape.size(); i++) {
+    n->shape.emplace_back(sym_shape[i]->dim_expr);
+  }
+  n->sym_domain = sym_domain;
+  for (int i = 0; i < sym_domain.size(); i++) {
+    n->domain.emplace_back(sym_domain[i]->dim_expr);
+  }
+  n->reduce_axis = reduce_axis;
+  n->operation = PlaceholderOp::Make(n->name, n->shape, Float(32));
+  n->set_type(dtype);
   n->InitAxis();
 
   return Tensor(n);
@@ -59,7 +147,7 @@ std::set<std::string> _Tensor_::GetDependTensorNames() const {
   std::set<std::string> names;
 
   auto add_depend_tensors_from_expr = [&](Expr expr) {
-    auto tensors = CollectIRNodes(expr, [&](const Expr *x) {
+    auto tensors = ir::ir_utils::CollectIRNodes(expr, [&](const Expr *x) {
       return x->as_tensor() && x->as_tensor()->name != this->name;
     });
     for (auto &e : tensors) {
@@ -83,18 +171,26 @@ std::set<std::string> _Tensor_::GetDependTensorNames() const {
 }
 
 Expr Tensor::operator()(const std::vector<Expr> &indices) const {
-  CHECK(!self()->is_tuple()) << "should extract a specific value from the "
-                                "tuple and operate on that instead";
+  PADDLE_ENFORCE_EQ(self()->is_tuple(),
+                    false,
+                    ::common::errors::PreconditionNotMet(
+                        "Required tensor shall not be tuple type."));
   auto *node = operator->();
+  const auto compatible_indices =
+      utils::GetCompatibleStoreLoadIndices(*this, indices);
 
-  CHECK_EQ(indices.size(), ndims())
-      << "number of indices not match the dimension";
-
-  return Load::Make(*this, indices);
+  PADDLE_ENFORCE_EQ(compatible_indices.size(),
+                    ndims(),
+                    ::common::errors::PreconditionNotMet(
+                        "number of indices not match the dimension"));
+  return Load::Make(*this, compatible_indices);
 }
 
 Expr _Tensor_::inline_expanded(const std::vector<Expr> &indices) {
-  CHECK(is_compute_node());
+  PADDLE_ENFORCE_EQ(is_compute_node(),
+                    true,
+                    ::common::errors::PreconditionNotMet(
+                        "Required tensor shall be compute node."));
   return get_compute_op()->producer_fn(indices);
 }
 
@@ -141,39 +237,12 @@ PlaceholderOp *_Tensor_::get_placeholder_op() const {
 }
 
 void _Tensor_::InitAxis() const {
-  // CHECK(!domain_without_reduce_axis().empty());
-  axis_ = common::GenDefaultAxis(domain_without_reduce_axis().size());
+  axis_ = cinn::common::GenDefaultAxis(domain_without_reduce_axis().size());
 }
 
 bool _Tensor_::has_expression() const {
   return (!is_placeholder_node()) && (!is_tuple_get()) &&
          (!is_buffer_shared_node());
-}
-
-isl::set _Tensor_::GenerateIslDomain() const {
-  // include the reduce axis.
-  std::vector<poly::Dim> dims;
-
-  if (has_expression()) {
-    if (axis_.empty()) InitAxis();
-    auto domain = domain_with_reduce_axis();
-    CHECK_EQ(axis_with_reduce().size(), domain.size());
-    auto _axis_with_reduce = axis_with_reduce();
-    for (int i = 0; i < domain.size(); i++) {
-      auto dim = domain[i];
-      if (dim.is_constant()) {
-        dims.emplace_back(_axis_with_reduce[i]->name, 0, dim.as_int32() - 1);
-      } else {
-        dims.emplace_back(_axis_with_reduce[i]->name,
-                          Expr(0),
-                          Sub::Make(dim, common::make_const(1)));
-      }
-    }
-  }
-
-  poly::Domain isl_domain(Context::isl_ctx(), name, dims);
-  VLOG(1) << "name:" << this->name << ", domain: " << isl_domain.__str__();
-  return isl_domain.to_isl();
 }
 
 std::vector<Expr *> _Tensor_::expr_fields() {
@@ -250,101 +319,16 @@ Expr *_Tensor_::mutable_body() {
   CINN_NOT_IMPLEMENTED
 }
 
-ir::Tensor _Tensor_::InitReduction(poly::StageMap stages,
-                                   const Target &target) const {
-  CHECK(contains_reduce_axis())
-      << "InitReduction only works on a reduce tensor";
-  // return if already rexists.
-  std::string init_reduce_tensor_name = GenReduceInitTensorNameOf(name);
-  if (stages->Lookup(init_reduce_tensor_name))
-    return stages[this]->LookupCtrlDepend(init_reduce_tensor_name);
-
-  // create a new init tensor.
-  auto init_tensor = lang::Compute(
-      domain,
-      [=](const std::vector<Expr> &axis) { return GetReduceInitVal(); },
-      init_reduce_tensor_name);
-  stages->InsertLazily(init_tensor);
-  std::string this_transform = isl_map_to_str(stages[this]->transform().get());
-  isl::ctx this_ctx = stages[this]->transform().ctx();
-  isl::map temp_transform(this_ctx, this_transform);
-  int reduce_axis_num = this->reduce_axis.size();
-  auto dim_out_names =
-      poly::isl_get_dim_names(stages[this]->transform(), isl_dim_out);
-  auto dim_in_size = isl_map_dim(stages[this]->transform().get(), isl_dim_in);
-  auto dim_in_names =
-      poly::isl_get_dim_names(stages[this]->transform(), isl_dim_in);
-  std::vector<std::string> reduce_axis_input =
-      stages[this]->origin_reduce_axis_names();
-  auto origin_domain = stages[this]->domain();
-  auto reduce_axis_output = poly::GetRelatedOutputAxies(
-      temp_transform, origin_domain, reduce_axis_input);
-  std::set<std::string> reduce_axis_output_set;
-  for (auto &i : reduce_axis_output) {
-    reduce_axis_output_set.insert(i);
-  }
-  int compute_at_axis = -1;
-  for (auto &i : dim_out_names) {
-    if (reduce_axis_output_set.count(i) == 0) {
-      compute_at_axis++;
-    } else {
-      break;
-    }
-  }
-
-  temp_transform = poly::RemoveAxiesByOutputNames(
-      temp_transform, origin_domain, reduce_axis_output);
-
-  //! When the first axis is not reduce axis, do ComputeAt.
-  if (compute_at_axis >= 0) {
-    stages[init_tensor]->ComputeAt2(stages[this], compute_at_axis);
-    init_tensor->new_indices = this->new_indices;
-    stages[this]->CtrlDepend(init_tensor);
-    stages[init_tensor]->ShareBufferWith(stages[this]);
-    init_tensor->shape = shape;
-    return init_tensor;
-  }
-  //! When reduce axies are reordered to front, ComputeAt is illegal.
-  //! So we just copy transform and forloopInfo.
-  isl_map_set_tuple_name(
-      temp_transform.get(), isl_dim_in, init_reduce_tensor_name.c_str());
-  isl_map_set_tuple_name(
-      temp_transform.get(), isl_dim_out, init_reduce_tensor_name.c_str());
-  stages[init_tensor]->SetTransform(temp_transform);
-  auto init_dim_out_names =
-      poly::isl_get_dim_names(temp_transform, isl_dim_out);
-  std::map<int, poly::StageForloopInfo> temp_forloop_info =
-      stages[this]->forloop_infos();
-  std::map<int, poly::StageForloopInfo> init_forloop_info;
-  for (auto &i : temp_forloop_info) {
-    for (int j = 0; j < init_dim_out_names.size(); j++) {
-      if (i.first < 0) continue;
-      int new_i = poly::isl_get_original_axes_from_optimized_level(
-          stages[this]->transformed_domain().get(), i.first);
-      if (dim_out_names[new_i] == init_dim_out_names[j]) {
-        stages[init_tensor]->AddForloopInfo(j, i.second);
-      }
-    }
-  }
-  init_tensor->new_indices = this->new_indices;
-  stages[this]->CtrlDepend(init_tensor);
-  stages[init_tensor]->ShareBufferWith(stages[this]);
-  init_tensor->shape = shape;
-  return init_tensor;
-}
-
-ir::Tensor _Tensor_::GetInitTensor(poly::StageMap stages,
-                                   const Target &target) const {
-  return InitReduction(stages, target);
-}
-
 Expr _Tensor_::tensor_store_expanded_body() {
-  CHECK(!is_placeholder_node()) << "placeholder should not expand store";
+  PADDLE_ENFORCE_EQ(is_placeholder_node(),
+                    false,
+                    ::common::errors::PreconditionNotMet(
+                        "Placeholder should not expand store."));
 
   Expr final_body = body();
   if (shape.empty()) return final_body;
 
-  std::vector<Expr> g_axis = common::GenDefaultAxisAsExpr(shape.size());
+  std::vector<Expr> g_axis = cinn::common::GenDefaultAxisAsExpr(shape.size());
   if (!new_indices.empty()) {
     g_axis = new_indices;
   }
@@ -382,20 +366,28 @@ Expr _Tensor_::tensor_store_expanded_body() {
 }
 
 void _Tensor_::Bind(lang::Buffer &buffer) {
-  // CHECK(!inlined()) << "Inlined tensor should bing buffer";
-  CHECK(!buffer->type().is_void());
+  PADDLE_ENFORCE_EQ(buffer->type().is_void(),
+                    false,
+                    ::common::errors::PreconditionNotMet(
+                        "Required buffer type shall not be void()."));
   if (this->buffer.defined()) {
     // remove the old buffer
     if (this->buffer == buffer.buffer()) return;
     this->buffer->Unbind(this);
   }
-  // Extract the tensors thouse has binded to this buffer.
+  // Extract the tensors those has binded to this buffer.
   buffer_depended_tensor_names_ = buffer.buffer()->binded_tensor_names();
 
   buffer.buffer()->BindTo(this);
-  CHECK(!buffer->binded_tensor_names().empty());
+  PADDLE_ENFORCE_EQ(buffer->binded_tensor_names().empty(),
+                    false,
+                    ::common::errors::PreconditionNotMet(
+                        "Required binded_tensor_names shall not be empty."));
   this->buffer = buffer.buffer();
-  CHECK(this->buffer.defined());
+  PADDLE_ENFORCE_EQ(this->buffer.defined(),
+                    true,
+                    ::common::errors::PreconditionNotMet(
+                        "Required buffer shall be defined."));
 }
 
 void _Tensor_::Bind(const Buffer &buffer) {
@@ -406,7 +398,7 @@ void _Tensor_::Bind(const Buffer &buffer) {
 void _Tensor_::WithBuffer(const Type &type) {
   Type buf_type = type.is_void() ? type_ : type;
   lang::Buffer buf(buf_type);
-  buf->target = common::DefaultHostTarget();
+  buf->target = cinn::common::DefaultHostTarget();
   Bind(buf);
 }
 
@@ -424,11 +416,13 @@ void _Tensor_::WithBuffer(const std::string &memory_type,
     } else if (memory_type == "global") {
       this->buffer->memory_type = MemoryType::Heap;
     } else {
-      LOG(FATAL) << "Not supported memory type " << memory_type;
+      std::stringstream ss;
+      ss << "Not supported memory type " << memory_type;
+      PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
     }
   } else {
     lang::Buffer buf(buf_type, buffer_name);
-    buf->target = common::DefaultHostTarget();
+    buf->target = cinn::common::DefaultHostTarget();
     Bind(buf);
 
     if (memory_type == "shared") {
@@ -438,7 +432,9 @@ void _Tensor_::WithBuffer(const std::string &memory_type,
     } else if (memory_type == "global") {
       buf->memory_type = MemoryType::Heap;
     } else {
-      LOG(FATAL) << "Not supported memory type " << memory_type;
+      std::stringstream ss;
+      ss << "Not supported memory type " << memory_type;
+      PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
     }
   }
 }
@@ -447,8 +443,8 @@ bool _Tensor_::HasSameShapeWith(const Tensor &other) const {
   if (shape.size() != other->shape.size()) return false;
 
   for (int i = 0; i < shape.size(); i++) {
-    Expr dim0 = common::AutoSimplify(shape[i]);
-    Expr dim1 = common::AutoSimplify(other->shape[i]);
+    Expr dim0 = optim::ArithSimplify(shape[i]);
+    Expr dim1 = optim::ArithSimplify(other->shape[i]);
 
     if (dim0 != dim1) return false;
   }
@@ -456,9 +452,16 @@ bool _Tensor_::HasSameShapeWith(const Tensor &other) const {
 }
 
 Tensor _Tensor_::TupleGet(int offset) const {
-  CHECK(is_tuple());
+  PADDLE_ENFORCE_EQ(is_tuple(),
+                    true,
+                    ::common::errors::PreconditionNotMet(
+                        "Required Tensor shall be tuple type."));
   auto *call = body().As<ir::Call>();
-  CHECK_LT(offset, call->write_args.size());
+  PADDLE_ENFORCE_LT(
+      offset,
+      call->write_args.size(),
+      ::common::errors::PreconditionNotMet(
+          "Required offset shall be less than call->write_args.size()."));
   auto tensor = call->write_args[offset].as_tensor_ref();
   tensor->WithBuffer();
   return tensor;
@@ -475,7 +478,11 @@ std::vector<Expr> _Tensor_::domain_with_reduce_axis() const {
   if (reduce_axis.empty()) return domain;
   auto res = domain;
   for (const Var &axis : reduce_axis) {
-    CHECK(axis->upper_bound.type().is_int(32)) << axis->upper_bound;
+    PADDLE_ENFORCE_EQ(axis->upper_bound.type().is_int(32) ||
+                          axis->upper_bound.type().is_int(64),
+                      true,
+                      ::common::errors::PreconditionNotMet(
+                          "Required upper_bound shall be int32 or int64."));
     res.push_back(axis->upper_bound);
   }
   return res;
@@ -491,6 +498,16 @@ Tensor::Tensor(const std::string &name,
                const std::vector<Var> &reduce_axis)
     : IrNodeRef(
           _Tensor_::Make(name, dtype, shape, domain, fn, reduce_axis).self()) {}
+
+Tensor::Tensor(const std::string &name,
+               Type dtype,
+               const std::vector<Dim> &sym_shape,
+               const std::vector<Dim> &sym_domain,
+               FunctionRef fn,
+               const std::vector<Var> &reduce_axis)
+    : IrNodeRef(
+          _Tensor_::Make(name, dtype, sym_shape, sym_domain, fn, reduce_axis)
+              .self()) {}
 
 bool _Tensor_::is_tuple_get() const {
   return is_call_node() && operation.defined() &&
@@ -514,7 +531,7 @@ bool _Tensor_::IsDependOnStatement(absl::string_view statement) {
 std::set<std::string> _Tensor_::DependingTensorNames() {
   std::set<std::string> res;
   if (body().defined()) {
-    auto depend_tensors = ir::CollectIRNodes(
+    auto depend_tensors = ir::ir_utils::CollectIRNodes(
         body(), [](const Expr *x) -> bool { return x->as_tensor(); });
     for (const auto &x : depend_tensors) {
       if (x.get() != this) {
@@ -526,7 +543,11 @@ std::set<std::string> _Tensor_::DependingTensorNames() {
 }
 
 const std::vector<Var> &_Tensor_::axis() const {
-  CHECK_EQ(axis_.size(), domain_without_reduce_axis().size());
+  PADDLE_ENFORCE_EQ(axis_.size(),
+                    domain_without_reduce_axis().size(),
+                    ::common::errors::PreconditionNotMet(
+                        "Required axis_ shall have same size with "
+                        "domain_without_reduce_axis."));
   return axis_;
 }
 
@@ -537,7 +558,7 @@ std::vector<Var> _Tensor_::axis_with_reduce() const {
 }
 
 bool _Tensor_::Uses(const Tensor &other) const {
-  auto loads = ir::CollectIRNodes(body(), [&](const Expr *x) {
+  auto loads = ir::ir_utils::CollectIRNodes(body(), [&](const Expr *x) {
     auto *loadn = x->As<ir::Load>();
     if (!loadn) return false;
     return loadn->tensor.as_tensor()->name == other->name;
@@ -545,9 +566,7 @@ bool _Tensor_::Uses(const Tensor &other) const {
   return !loads.empty();
 }
 
-ir::Tensor _Tensor_::Reshape(const std::vector<Expr> &shape,
-                             poly::StageMap stages) const {
-  CHECK(!stages[this]->inlined());
+ir::Tensor _Tensor_::Reshape(const std::vector<Expr> &shape) const {
   auto op = BufferShareOp::Make();
   auto n = make_shared<_Tensor_>();
   auto selft = Tensor(const_cast<ir::_Tensor_ *>(this));
@@ -563,7 +582,11 @@ ir::Tensor _Tensor_::Reshape(const std::vector<Expr> &shape,
       num_elements = num_elements * e.as_int32();
     }
 
-    CHECK_EQ(this_num_elements, num_elements) << "number of elements mismatch.";
+    PADDLE_ENFORCE_EQ(
+        this_num_elements,
+        num_elements,
+        ::common::errors::PreconditionNotMet(
+            "Required this_num_elements shall be equal to num_elements."));
   }
 
   n->name = Context::Global().NewName(name + "_reshape");
@@ -574,33 +597,51 @@ ir::Tensor _Tensor_::Reshape(const std::vector<Expr> &shape,
   n->InitAxis();
 
   auto t = Tensor(n);
-  stages->InsertLazily(t);
-
-  stages[n]->ShareBufferWith(stages[this]);
-  stages[n]->CtrlDepend(selft);
   return t;
 }
 
-ir::Tensor _Tensor_::ReshapeCopied(const std::vector<Expr> &shape,
-                                   poly::StageMap stages) const {
+ir::Tensor _Tensor_::ReshapeCopied(const std::vector<Expr> &shape) const {
   auto t = ir::Tensor(const_cast<ir::_Tensor_ *>(this));
   auto copied = Compute(
       domain,
       [=](const std::vector<Expr> &axis) { return t(axis); },
       Context::Global().NewName(this->name + "_copied"));
-  stages->InsertLazily(copied);
-  auto res = copied->Reshape(shape, stages);
-  stages->InsertLazily(res);
+  auto res = copied->Reshape(shape);
   return res;
 }
 
 Shared<poly::Stage> CreateStage(Tensor tensor) {
-  auto isl_domain = tensor->GenerateIslDomain();
+  isl::set isl_domain;
+  // We will remove isl, and the subsequent compilation process will no longer
+  // use it. But it has not been completely removed in the process. it cannot be
+  // supported here under dynamic shape. Therefore, we temporarily use fake
+  // domain.
+  poly::Domain fake_domain(Context::isl_ctx(), "fake_domain", {});
+  isl_domain = fake_domain.to_isl();
+
   return poly::Stage::New(isl_domain, tensor->body(), tensor.self());
 }
 
+static constexpr char kReduceInitSuffix[] = "__reduce_init";
+
 std::string GenReduceInitTensorNameOf(const std::string &tensor_name) {
-  return tensor_name + "__reduce_init";
+  return tensor_name + kReduceInitSuffix;
+}
+
+bool IsReduceInitTensorName(const std::string &tensor_name) {
+  std::string reduce_init_suffix(kReduceInitSuffix);
+  return tensor_name.length() > reduce_init_suffix.size() &&
+         tensor_name.substr(tensor_name.length() - reduce_init_suffix.size(),
+                            reduce_init_suffix.size()) == reduce_init_suffix;
+}
+
+std::string GetOriginalReduceTensorName(const std::string &tensor_name) {
+  std::string reduce_init_suffix(kReduceInitSuffix);
+  if (IsReduceInitTensorName(tensor_name)) {
+    return tensor_name.substr(0,
+                              tensor_name.length() - reduce_init_suffix.size());
+  }
+  return tensor_name;
 }
 
 bool _Tensor_::is_reduce_sum() const {
@@ -615,18 +656,26 @@ bool _Tensor_::is_reduce_mul() const {
 }
 
 Expr _Tensor_::GetReduceInitVal() const {
-  CHECK(is_reduce_tensor());
+  PADDLE_ENFORCE_EQ(is_reduce_tensor(),
+                    true,
+                    ::common::errors::PreconditionNotMet(
+                        "Required tensor is a reduce type."));
   return body().As<ir::Reduce>()->init;
 }
 
-bool _Tensor_::IsReduceInited(poly::StageMap stages) const {
-  return stages->Lookup(GenReduceInitTensorNameOf(name));
-}
-
 void _Tensor_::Verify() const {
-  CHECK(!shape.empty());
-  CHECK(!domain.empty());
-  CHECK(!name.empty()) << "Name of tensor should be set";
+  PADDLE_ENFORCE_EQ(shape.empty(),
+                    false,
+                    ::common::errors::PreconditionNotMet(
+                        "Required shape shall not be empty."));
+  PADDLE_ENFORCE_EQ(domain.empty(),
+                    false,
+                    ::common::errors::PreconditionNotMet(
+                        "Required domain shall not be empty."));
+  PADDLE_ENFORCE_EQ(name.empty(),
+                    false,
+                    ::common::errors::PreconditionNotMet(
+                        "Required name shall not be empty."));
 }
 
 }  // namespace ir

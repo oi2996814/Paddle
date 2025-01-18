@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 import paddle
-import paddle.fluid.dygraph as dg
+import paddle.base.dygraph as dg
 
 
 class TestComplexAbsOp(OpTest):
@@ -30,7 +31,7 @@ class TestComplexAbsOp(OpTest):
         self.shape = (2, 3, 4, 5)
         self.init_input_output()
 
-        self.inputs = {'X': OpTest.np_dtype_to_fluid_dtype(self.x)}
+        self.inputs = {'X': OpTest.np_dtype_to_base_dtype(self.x)}
         self.outputs = {'Out': self.out}
 
     def init_input_output(self):
@@ -58,7 +59,7 @@ class TestComplexAbsOpZeroValues(OpTest):
         self.shape = (2, 3, 4, 5)
         self.init_input_output()
 
-        self.inputs = {'X': OpTest.np_dtype_to_fluid_dtype(self.x)}
+        self.inputs = {'X': OpTest.np_dtype_to_base_dtype(self.x)}
         self.outputs = {'Out': self.out}
 
     def init_input_output(self):
@@ -80,7 +81,13 @@ class TestComplexAbsOpZeroValues(OpTest):
 class TestAbs(unittest.TestCase):
     def setUp(self):
         self._dtypes = ["float32", "float64"]
-        self._places = [paddle.CPUPlace()]
+        self._places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.is_compiled_with_cuda()
+        ):
+            self._places.append(paddle.CPUPlace())
         if paddle.is_compiled_with_cuda():
             self._places.append(paddle.CUDAPlace(0))
 
@@ -102,7 +109,7 @@ class TestRealAbsOp(OpTest):
         self.shape = (2, 3, 4, 5)
         self.init_input_output()
 
-        self.inputs = {'X': OpTest.np_dtype_to_fluid_dtype(self.x)}
+        self.inputs = {'X': OpTest.np_dtype_to_base_dtype(self.x)}
         self.outputs = {'Out': self.out}
 
     def init_input_output(self):

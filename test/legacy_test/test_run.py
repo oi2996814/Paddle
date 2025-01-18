@@ -22,7 +22,7 @@ from os import listdir
 from os.path import isfile, join
 
 pyname = 'train.py'
-colpyfile = '''# train.py for unitest
+colpyfile = '''# train.py for unittest
 import os
 env = os.environ.copy()
 if "PADDLE_AUTO_PARALLEL_CONFIG" not in env:
@@ -33,7 +33,7 @@ assert "PADDLE_GLOBAL_SIZE" in env
 assert "PADDLE_LOCAL_SIZE" in env
 '''
 
-pspyfile = '''# train.py for unitest
+pspyfile = '''# train.py for unittest
 import os
 env = os.environ.copy()
 assert "PADDLE_PSERVERS_IP_PORT_LIST" in env
@@ -89,9 +89,7 @@ class Collective_Test(unittest.TestCase):
 
     def test_collective_2(self):
         log_dir = tempfile.TemporaryDirectory()
-        args = "--job_id test2 --devices 0,1,2 --log_dir {}".format(
-            log_dir.name
-        )
+        args = f"--job_id test2 --devices 0,1,2 --log_dir {log_dir.name}"
         p = self.pdrun(args)
         p.wait()
         self.assertTrue(p.poll() == 0)
@@ -124,7 +122,7 @@ class Collective_Test(unittest.TestCase):
         config_path = os.path.join(config_dir.name, 'auto_parallel_config.json')
         with open(config_path, 'w') as wobj:
             wobj.write(
-                '{\"tuner_save_path\":\"parallel_strategy.pkl\",\"tuner_load_path\":\"parallel_strategy.pkl\",\"tuner_run_mode\":\"tuner_and_run\"}'
+                '{"tuner_save_path":"parallel_strategy.pkl","tuner_load_path":"parallel_strategy.pkl","tuner_run_mode":"tuner_and_run"}'
             )
         port = random.randrange(6000, 8000)
         args = "--job_id test4 --devices 0,1 --log_dir {} --auto_parallel_config {}"
@@ -166,11 +164,7 @@ class PS_Test(unittest.TestCase):
 
     def test_ps_2(self):
         log_dir = tempfile.TemporaryDirectory()
-        args = (
-            "--job_id ps2 --server_num=2 --trainer_num=2 --log_dir {}".format(
-                log_dir.name
-            )
-        )
+        args = f"--job_id ps2 --server_num=2 --trainer_num=2 --log_dir {log_dir.name}"
         p = self.pdrun(args)
         p.wait()
         self.assertTrue(p.poll() == 0)
@@ -199,9 +193,7 @@ class PS_Test(unittest.TestCase):
 
     def test_ps_4(self):
         log_dir = tempfile.TemporaryDirectory()
-        args = "--job_id ps4 --log_dir {} --servers 127.0.0.1:8900,127.0.0.1:8901 --trainers 127.0.0.1:8902,127.0.0.1:8903".format(
-            log_dir.name
-        )
+        args = f"--job_id ps4 --log_dir {log_dir.name} --servers 127.0.0.1:8900,127.0.0.1:8901 --trainers 127.0.0.1:8902,127.0.0.1:8903"
         p1 = self.pdrun(args)
         p1.wait()
         self.assertTrue(p1.poll() == 0)

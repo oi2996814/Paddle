@@ -13,9 +13,12 @@
 # limitations under the License.
 import warnings
 
-from paddle import _legacy_C_ops
-from paddle.fluid import framework
-from paddle.fluid.framework import in_dygraph_mode
+from paddle import _C_ops, _legacy_C_ops, pir
+from paddle.base import framework
+from paddle.framework import (
+    in_dynamic_mode,
+    in_pir_mode,
+)
 from paddle.optimizer import Optimizer
 
 
@@ -44,14 +47,14 @@ class LarsMomentumOptimizer(Optimizer):
             This parameter is required in dygraph mode. \
             The default value is None in static graph mode, at this time all parameters will be updated.
         regularization (WeightDecayRegularizer, optional): The strategy of regularization. There are two method: \
-             :ref:`api_fluid_regularizer_L1Decay` , :ref:`api_fluid_regularizer_L2Decay` . If a parameter has set \
-            regularizer using :ref:`api_fluid_ParamAttr` already, the regularization setting here in optimizer will be \
+             :ref:`api_paddle_regularizer_L1Decay` , :ref:`api_paddle_regularizer_L2Decay` . If a parameter has set \
+            regularizer using :ref:`api_paddle_ParamAttr` already, the regularization setting here in optimizer will be \
             ignored for this parameter. Otherwise, the regularization setting here in optimizer will take effect.  \
             Default None, meaning there is no regularization.
-        grad_clip (GradientClipBase, optional): Gradient cliping strategy, it's an instance of
-            some derived class of ``GradientClipBase`` . There are three cliping strategies
-            ( :ref:`api_fluid_clip_GradientClipByGlobalNorm` , :ref:`api_fluid_clip_GradientClipByNorm` ,
-            :ref:`api_fluid_clip_GradientClipByValue` ). Default None, meaning there is no gradient clipping.
+        grad_clip (GradientClipBase, optional): Gradient clipping strategy, it's an instance of
+            some derived class of ``GradientClipBase`` . There are three clipping strategies
+            ( :ref:`api_paddle_nn_ClipGradByGlobalNorm` , :ref:`api_paddle_nn_ClipGradByNorm` ,
+            :ref:`api_paddle_nn_ClipGradByValue` ). Default None, meaning there is no gradient clipping.
         name (str, optional): This parameter is used by developers to print debugging information. \
             For details, please refer to :ref:`api_guide_Name`. Default is None.
         exclude_from_weight_decay (list[str], optional): Name string of layers which will be exclude from lars weight decay. Default is None.
@@ -63,25 +66,25 @@ class LarsMomentumOptimizer(Optimizer):
     Examples:
         .. code-block:: python
 
-            import paddle
-            import paddle.fluid as fluid
-            import numpy as np
+            >>> import paddle
+            >>> import numpy as np
 
-            paddle.enable_static()
-            np_inp = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
-            inp = paddle.static.data(
-                name="inp", shape=[2, 2], dtype='float32')
-            out = paddle.static.nn.fc(inp, size=3)
-            out = paddle.sum(out)
-            optimizer = fluid.optimizer.LarsMomentumOptimizer(learning_rate=0.001, momentum=0.9)
-            optimizer.minimize(out)
+            >>> paddle.enable_static()
+            >>> np_inp = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+            >>> inp = paddle.static.data(
+            ...     name="inp", shape=[2, 2], dtype='float32')
+            >>> out = paddle.static.nn.fc(inp, size=3)
+            >>> out = paddle.sum(out)
+            >>> optimizer = paddle.incubate.optimizer.LarsMomentumOptimizer(learning_rate=0.001, momentum=0.9)
+            >>> optimizer.minimize(out)
 
-            exe = fluid.Executor(fluid.CPUPlace())
-            exe.run(fluid.default_startup_program())
-            exe.run(
-                feed={"inp": np_inp},
-                fetch_list=[out.name])
+            >>> exe = paddle.static.Executor(paddle.CPUPlace())
+            >>> exe.run(paddle.static.default_startup_program())
+            >>> exe.run(
+            ...     feed={"inp": np_inp},
+            ...     fetch_list=[out.name])
     """
+
     _velocity_acc_str = "velocity"
 
     def __init__(
@@ -122,8 +125,8 @@ class LarsMomentumOptimizer(Optimizer):
         self._master_weights = {}
 
     def _create_accumulators(self, block, parameters):
-        assert isinstance(block, framework.Block)
-
+        if not isinstance(block, (framework.Block, pir.Block)):
+            raise TypeError("block is not instance of Block.")
         for p in parameters:
             if self._multi_precision and self._is_dtype_fp16_or_bf16(p.dtype):
                 master_p = self._create_master_weight(p)
@@ -140,7 +143,8 @@ class LarsMomentumOptimizer(Optimizer):
             self._add_accumulator(self._velocity_acc_str, p)
 
     def _append_optimize_op(self, block, param_and_grad):
-        assert isinstance(block, framework.Block)
+        if not isinstance(block, (framework.Block, pir.Block)):
+            raise TypeError("block is not instance of Block.")
         _lars_weight_decay = self._lars_weight_decay
         param_name = param_and_grad[0].name
         if len(self._exclude_from_weight_decay) > 0:
@@ -185,7 +189,7 @@ class LarsMomentumOptimizer(Optimizer):
             inputs["MasterParam"] = master_weight
             outputs["MasterParamOut"] = master_weight
 
-        if in_dygraph_mode():
+        if in_dynamic_mode():
             tmp, tmp2 = _legacy_C_ops.lars_momentum(
                 [param_and_grad[0]],
                 [param_and_grad[1]],
@@ -206,6 +210,23 @@ class LarsMomentumOptimizer(Optimizer):
                 "rescale_grad",
                 self._rescale_grad,
             )
+        elif in_pir_mode():
+            if isinstance(master_weight, pir.Value):
+                master_weight = [master_weight]
+            _, _, _ = _C_ops.lars_momentum_(
+                [param_and_grad[0]],
+                [param_and_grad[1]],
+                [velocity_acc],
+                [lr],
+                master_weight,
+                self._momentum,
+                self._lars_coeff,
+                [_lars_weight_decay],
+                self._epsilon,
+                find_master,
+                self._rescale_grad,
+            )
+            return None
         else:
             # create the momentum optimize op
             momentum_op = block.append_op(

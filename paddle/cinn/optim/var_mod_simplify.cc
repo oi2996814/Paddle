@@ -17,8 +17,8 @@
 #include <absl/container/flat_hash_map.h>
 
 #include "paddle/cinn/common/cas.h"
-#include "paddle/cinn/ir/utils/ir_mutator.h"
-#include "paddle/cinn/ir/utils/ir_printer.h"
+#include "paddle/cinn/ir/ir_mutator.h"
+#include "paddle/cinn/ir/ir_printer.h"
 
 namespace cinn::optim {
 
@@ -51,8 +51,12 @@ struct ReplaceDivWithVarMutator : public ir::IRMutator<> {
     if (a.is_var() && b.is_constant()) {
       auto a_var = a.As<_Var_>();
       auto b_int = b.As<IntImm>();
-      CHECK(a_var);
-      CHECK(b_int);
+      PADDLE_ENFORCE_NOT_NULL(a_var,
+                              ::common::errors::InvalidArgument(
+                                  "The node->operand(0) should be var"));
+      PADDLE_ENFORCE_NOT_NULL(b_int,
+                              ::common::errors::InvalidArgument(
+                                  "The node->operand(1) should be int"));
       std::string var_name = a_var->name + "/" + std::to_string(b_int->value);
       div_var_map_[var_name] = ir::Div::Make(a, b);
       *expr = Var(var_name);
@@ -70,7 +74,9 @@ struct ReplaceVarWithDivMutator : public ir::IRMutator<> {
 
   void Visit(const _Var_* op, Expr* expr) override {
     auto* node = expr->As<_Var_>();
-    CHECK(node);
+    PADDLE_ENFORCE_NOT_NULL(node,
+                            ::common::errors::InvalidArgument(
+                                "Sorry, but the node expr is nullptr"));
     if (div_var_map_.count(node->name)) {
       *expr = div_var_map_[node->name];
     }
@@ -80,11 +86,11 @@ struct ReplaceVarWithDivMutator : public ir::IRMutator<> {
 }  // namespace
 
 void VarModSimplify(Expr* e) {
-  *e = common::AutoSimplify(*e);
+  *e = cinn::common::AutoSimplify(*e);
   ReplaceModWithDivMutator()(e);
   ReplaceDivWithVarMutator mutator;
   mutator(e);
-  *e = common::AutoSimplify(*e);
+  *e = cinn::common::AutoSimplify(*e);
   auto div_var_map = mutator.div_var_map_;
   ReplaceVarWithDivMutator()(e, mutator.div_var_map_);
 }

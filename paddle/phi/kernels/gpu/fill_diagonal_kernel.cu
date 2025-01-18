@@ -50,11 +50,7 @@ void FillDiagonalKernel(const Context& ctx,
                         int offset,
                         bool wrap,
                         DenseTensor* out) {
-#ifdef __HIPCC__
-  const int64_t kMaxBlockDim = 256;
-#else
   const int64_t kMaxBlockDim = 512;
-#endif
   phi::Copy(ctx, x, ctx.GetPlace(), false, out);
 
   T* out_data = ctx.template Alloc<T>(out);
@@ -65,7 +61,7 @@ void FillDiagonalKernel(const Context& ctx,
   auto out_dims = out->dims();
   auto strides = funcs::CalStride(out_dims);
 
-  // The wrap mode supported only the dims equels to 2; In wrap mode, the
+  // The wrap mode supported only the dims equals to 2; In wrap mode, the
   // value will be filled in cycles
   if (!wrap) {
     size = std::min(size, out_dims[1] * out_dims[1]);

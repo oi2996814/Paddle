@@ -19,25 +19,26 @@ from functools import reduce
 import numpy as np
 
 import paddle
+from paddle.base import core, unique_name
+from paddle.base.data_feeder import check_dtype
+from paddle.base.framework import (
+    Program,
+    Variable,
+    default_main_program,
+    in_dygraph_mode,
+    in_dynamic_or_pir_mode,
+    in_pir_mode,
+    name_scope,
+    program_guard,
+    static_only,
+)
+from paddle.base.param_attr import ParamAttr
+from paddle.base.wrapped_decorator import signature_safe_contextmanager
 from paddle.common_ops_import import (
     LayerHelper,
     check_type,
     check_variable_and_dtype,
 )
-from paddle.fluid import core, unique_name
-from paddle.fluid.data_feeder import check_dtype
-from paddle.fluid.framework import (
-    Program,
-    Variable,
-    default_main_program,
-    in_dygraph_mode,
-    name_scope,
-    program_guard,
-    static_only,
-)
-from paddle.fluid.layers.layer_function_generator import templatedoc
-from paddle.fluid.param_attr import ParamAttr
-from paddle.fluid.wrapped_decorator import signature_safe_contextmanager
 from paddle.nn.initializer import Constant, Normal
 
 __all__ = []
@@ -152,37 +153,36 @@ def fc(
     Examples:
         .. code-block:: python
 
-          import paddle
-          paddle.enable_static()
+            >>> # doctest: +SKIP("This has diff in xdoctest env")
+            >>> import paddle
+            >>> paddle.enable_static()
 
-          # When input is a single tensor
-          x = paddle.static.data(name="x", shape=[1, 2, 2], dtype="float32")
-          # x: [[[0.1 0.2]
-          #      [0.3 0.4]]]
-          out = paddle.static.nn.fc(
-              x=x,
-              size=1,
-              num_flatten_dims=2,
-              weight_attr=paddle.ParamAttr(initializer=paddle.nn.initializer.Constant(value=0.5)),
-              bias_attr=paddle.ParamAttr(initializer=paddle.nn.initializer.Constant(value=1.0)))
-          # out: [[[1.15]
-          #        [1.35]]]
+            >>> # When input is a single tensor
+            >>> x = paddle.static.data(name="x", shape=[1, 2, 2], dtype="float32")
+            >>> out = paddle.static.nn.fc(
+            ...     x=x,
+            ...     size=1,
+            ...     num_flatten_dims=2,
+            ...     weight_attr=paddle.ParamAttr(initializer=paddle.nn.initializer.Constant(value=0.5)),
+            ...     bias_attr=paddle.ParamAttr(initializer=paddle.nn.initializer.Constant(value=1.0)))
+            >>> print(out)
+            var fc_0.tmp_1 : DENSE_TENSOR.shape(1, 2, 1).dtype(float32).stop_gradient(False)
 
-          # When input is multiple tensors
-          x0 = paddle.static.data(name="x0", shape=[1, 2, 2], dtype="float32")
-          # x0: [[[0.1 0.2]
-          #       [0.3 0.4]]]
-          x1 = paddle.static.data(name="x1", shape=[1, 1, 3], dtype="float32")
-          # x1: [[[0.1 0.2 0.3]]]
-          out = paddle.static.nn.fc(
-              x=[x0, x1],
-              size=2,
-              weight_attr=paddle.ParamAttr(initializer=paddle.nn.initializer.Constant(value=0.5)),
-              bias_attr=paddle.ParamAttr(initializer=paddle.nn.initializer.Constant(value=1.0)))
-          # out: [[1.8 1.8]]
+            >>> # When input is multiple tensors
+            >>> x0 = paddle.static.data(name="x0", shape=[1, 2, 2], dtype="float32")
+            >>> x1 = paddle.static.data(name="x1", shape=[1, 1, 3], dtype="float32")
+
+            >>> out = paddle.static.nn.fc(
+            ...     x=[x0, x1],
+            ...     size=2,
+            ...     weight_attr=paddle.ParamAttr(initializer=paddle.nn.initializer.Constant(value=0.5)),
+            ...     bias_attr=paddle.ParamAttr(initializer=paddle.nn.initializer.Constant(value=1.0)))
+            >>> print(out)
+            var fc_1.tmp_3 : DENSE_TENSOR.shape(1, 2).dtype(float32).stop_gradient(False)
+
     """
 
-    def fc_fluid(
+    def fc_base(
         input,
         size,
         num_flatten_dims=1,
@@ -192,10 +192,17 @@ def fc(
         name=None,
     ):
         helper = LayerHelper("fc", **locals())
-        check_type(input, 'input', (list, tuple, Variable), 'fc')
+        check_type(
+            input, 'input', (list, tuple, Variable, paddle.pir.Value), 'fc'
+        )
         if isinstance(input, (list, tuple)):
             for i, input_x in enumerate(input):
-                check_type(input_x, 'input[' + str(i) + ']', Variable, 'fc')
+                check_type(
+                    input_x,
+                    'input[' + str(i) + ']',
+                    (Variable, paddle.pir.Value),
+                    'fc',
+                )
         dtype = helper.input_dtype()
         check_dtype(
             dtype, 'input', ['float16', 'uint16', 'float32', 'float64'], 'fc'
@@ -206,30 +213,43 @@ def fc(
             if num_flatten_dims == -1:
                 num_flatten_dims = len(input_shape) - 1
             param_shape = [
-                reduce(lambda a, b: a * b, input_shape[num_flatten_dims:], 1)
-            ] + [size]
-
+                reduce(lambda a, b: a * b, input_shape[num_flatten_dims:], 1),
+                size,
+            ]
             w = helper.create_parameter(
                 attr=param_attr, shape=param_shape, dtype=dtype, is_bias=False
             )
-            tmp = helper.create_variable_for_type_inference(dtype)
-            helper.append_op(
-                type="mul",
-                inputs={"X": input_var, "Y": w},
-                outputs={"Out": tmp},
-                attrs={"x_num_col_dims": num_flatten_dims, "y_num_col_dims": 1},
-            )
+            if in_pir_mode():
+                if len(input_var.shape) > 2:
+                    new_shape = input_var.shape[:num_flatten_dims] + [
+                        np.prod(input_var.shape[num_flatten_dims:])
+                    ]
+                    input_var = paddle.reshape(input_var, new_shape)
+                tmp = paddle.matmul(input_var, w)
+            else:
+                tmp = helper.create_variable_for_type_inference(dtype)
+                helper.append_op(
+                    type="mul",
+                    inputs={"X": input_var, "Y": w},
+                    outputs={"Out": tmp},
+                    attrs={
+                        "x_num_col_dims": num_flatten_dims,
+                        "y_num_col_dims": 1,
+                    },
+                )
             mul_results.append(tmp)
 
         if len(mul_results) == 1:
             pre_bias = mul_results[0]
+        elif in_pir_mode():
+            pre_bias = paddle.add_n(mul_results)
         else:
             pre_bias = helper.create_variable_for_type_inference(dtype)
             helper.append_op(
                 type="sum",
                 inputs={"X": mul_results},
                 outputs={"Out": pre_bias},
-                attrs={"use_mkldnn": False},
+                attrs={},
             )
         # add bias
         pre_activation = helper.append_bias_op(
@@ -238,7 +258,7 @@ def fc(
         # add activation
         return helper.append_activation(pre_activation)
 
-    return fc_fluid(
+    return fc_base(
         input=x,
         size=size,
         num_flatten_dims=num_flatten_dims,
@@ -286,17 +306,17 @@ def instance_norm(
         epsilon(float, Default 1e-05): A value added to the denominator for
             numerical stability. Default is 1e-5.
         param_attr(ParamAttr|None|bool, optional): The parameter attribute for Parameter `scale`
-             of instance_norm. If it is set to None or one attribute of ParamAttr, instance_norm
-         will create ParamAttr as param_attr, the name of scale can be set in ParamAttr.
-         If the Initializer of the param_attr is not set, the parameter is initialized
-         with Xavier. If the param_attr is set to False, instance_norm will not create param_attr.
-             Default: None.
+            of instance_norm. If it is set to None or one attribute of ParamAttr, instance_norm
+            will create ParamAttr as param_attr, the name of scale can be set in ParamAttr.
+            If the Initializer of the param_attr is not set, the parameter is initialized
+            with Xavier. If the param_attr is set to False, instance_norm will not create param_attr.
+            Default: None.
         bias_attr(ParamAttr|None|bool, optional): The parameter attribute for the bias of instance_norm.
-             If it is set to None or one attribute of ParamAttr, instance_norm
-         will create ParamAttr as bias_attr, the name of bias can be set in ParamAttr.
-         If the Initializer of the bias_attr is not set, the bias is initialized zero.
-             If the bias_attr is set to False, instance_norm will not create bias_attr.
-         Default: None.
+            If it is set to None or one attribute of ParamAttr, instance_norm
+            will create ParamAttr as bias_attr, the name of bias can be set in ParamAttr.
+            If the Initializer of the bias_attr is not set, the bias is initialized zero.
+            If the bias_attr is set to False, instance_norm will not create bias_attr.
+            Default: None.
         name(string, Default None): A name for this layer(optional). If set None, the layer
             will be named automatically.
 
@@ -308,11 +328,11 @@ def instance_norm(
 
         .. code-block:: python
 
-            import paddle
-            paddle.enable_static()
-            x = paddle.static.data(name='x', shape=[3, 7, 3, 7], dtype='float32')
-            hidden1 = paddle.static.nn.fc(x, size=200)
-            hidden2 = paddle.static.nn.instance_norm(hidden1)
+            >>> import paddle
+            >>> paddle.enable_static()
+            >>> x = paddle.static.data(name='x', shape=[3, 7, 3, 7], dtype='float32')
+            >>> hidden1 = paddle.static.nn.fc(x, size=200)
+            >>> hidden2 = paddle.static.nn.instance_norm(hidden1)
     """
     check_variable_and_dtype(
         input,
@@ -329,15 +349,13 @@ def instance_norm(
     dtype = helper.input_dtype()
 
     # use fp32 for in parameter
-    if dtype == paddle.framework.core.VarDesc.VarType.FP16:
-        dtype = paddle.framework.core.VarDesc.VarType.FP32
+    if dtype == paddle.float16:
+        dtype = paddle.float32
 
     input_shape = input.shape
     if len(input.shape) < 2 or len(input.shape) > 5:
         raise ValueError(
-            'expected 2D or 3D or 4D or 5D input (got {}D input, input shape is: {})'.format(
-                len(input.shape), input_shape
-            )
+            f'expected 2D or 3D or 4D or 5D input (got {len(input.shape)}D input, input shape is: {input_shape})'
         )
     channel_num = input_shape[1]
 
@@ -401,29 +419,29 @@ def continuous_value_model(input, cvm, use_cvm=True):
     If :attr:`use_cvm` is False, it will remove show and click from :attr:`input` , and output shape is :math:`[N, D - 2]` .
     :attr:`cvm` is show_click info, whose shape is :math:`[N, 2]` .
     Args:
-        input (Variable): The input variable. A 2-D LoDTensor with shape :math:`[N, D]` , where N is the batch size, D is `2 + the embedding dim` . `lod level = 1` .
+        input (Variable): The input variable. A 2-D DenseTensor with shape :math:`[N, D]` , where N is the batch size, D is `2 + the embedding dim` . `lod level = 1` .
         A Tensor with type float32, float64.
         cvm (Variable): Show and click variable. A 2-D Tensor with shape :math:`[N, 2]` , where N is the batch size, 2 is show and click.
         A Tensor with type float32, float64.
         use_cvm  (bool):  Use show_click or not. if use, the output dim is the same as input.
                           if not use, the output dim is `input dim - 2` (remove show and click)
     Returns:
-        Variable: A 2-D LodTensor with shape :math:`[N, M]` . if :attr:`use_cvm` = True, M is equal to input dim D. if False, M is equal to `D - 2`. \
+        Variable: A 2-D DenseTensor with shape :math:`[N, M]` . if :attr:`use_cvm` = True, M is equal to input dim D. if False, M is equal to `D - 2`. \
         A Tensor with same type as input.
     Examples:
         .. code-block:: python
-          import paddle.fluid as fluid
-          import paddle
-          input = paddle.static.data(name="input", shape=[64, 1], dtype="int64")
-          label = paddle.static.data(name="label", shape=[64, 1], dtype="int64")
-          w0 = paddle.full(shape=(100, 1), fill_value=2).astype(paddle.float32)
-          embed = paddle.nn.functional.embedding(
-                            input,
-                            w0)
-          ones = paddle.full_like(label, 1, dtype="int64")
-          show_clk = paddle.cast(paddle.concat([ones, label], axis=1), dtype='float32')
-          show_clk.stop_gradient = True
-          input_with_cvm = paddle.static.nn.continuous_value_model(embed, show_clk, True)
+
+            >>> import paddle
+
+            >>> paddle.enable_static()
+            >>> input = paddle.static.data(name="input", shape=[64, 1], dtype="int64")
+            >>> label = paddle.static.data(name="label", shape=[64, 1], dtype="int64")
+            >>> w0 = paddle.full(shape=(100, 1), fill_value=2).astype(paddle.float32)
+            >>> embed = paddle.nn.functional.embedding(input, w0)
+            >>> ones = paddle.full_like(label, 1, dtype="int64")
+            >>> show_clk = paddle.cast(paddle.concat([ones, label], axis=1), dtype='float32')
+            >>> show_clk.stop_gradient = True
+            >>> input_with_cvm = paddle.static.nn.continuous_value_model(embed[:, 0], show_clk, True)
     """
     helper = LayerHelper('cvm', **locals())
     out = helper.create_variable(dtype=input.dtype)
@@ -498,7 +516,7 @@ def data_norm(
             should do model average when model average is enabled. Default: True.
         slot_dim (int, optional): The embedding dimension of one slot. Slot is a set of one specific feature. In pslib mode,
             we distinguish feature ids by slot and pull their embeddings from parameter server (pslib). The first
-            place of the embedding is the historical show number (occurence time of this feature id with a label 0).
+            place of the embedding is the historical show number (occurrence time of this feature id with a label 0).
             If the input of this op is concated by slot-wise embeddings, and the show number is zero when this slot
             is new or empty, the normalization result may be impractical. To avoid this, we add slot_dim to locate
             the show number and judge if the show number is zero. If so, we choose to skip normalization on this
@@ -515,11 +533,11 @@ def data_norm(
 
         .. code-block:: python
 
-            import paddle
-            paddle.enable_static()
+            >>> import paddle
+            >>> paddle.enable_static()
 
-            x = paddle.randn(shape=[32,100])
-            hidden2 = paddle.static.nn.data_norm(input=x)
+            >>> x = paddle.randn(shape=[32, 100])
+            >>> hidden2 = paddle.static.nn.data_norm(input=x)
     """
     helper = LayerHelper('data_norm', **locals())
     dtype = helper.input_dtype()
@@ -527,9 +545,7 @@ def data_norm(
     input_shape = input.shape
     if len(input_shape) < 2:
         raise ValueError(
-            "The shape pf Input < 2 (got {}D input, input shape is: {})".format(
-                len(input_shape), input_shape
-            )
+            f"The shape pf Input < 2 (got {len(input_shape)}D input, input shape is: {input_shape})"
         )
     if data_layout == 'NCHW':
         channel_num = input_shape[1]
@@ -649,7 +665,6 @@ def data_norm(
     return helper.append_activation(data_norm_out)
 
 
-@templatedoc()
 def group_norm(
     input,
     groups,
@@ -694,12 +709,13 @@ def group_norm(
     Examples:
        .. code-block:: python
 
-            import paddle
-            paddle.enable_static()
+            >>> import paddle
+            >>> paddle.enable_static()
 
-            data = paddle.static.data(name='data', shape=[2, 8, 32, 32], dtype='float32')
-            x = paddle.static.nn.group_norm(input=data, groups=4)
-            print(x.shape) # [2, 8, 32, 32]
+            >>> data = paddle.static.data(name='data', shape=[2, 8, 32, 32], dtype='float32')
+            >>> x = paddle.static.nn.group_norm(input=data, groups=4)
+            >>> print(x.shape)
+            (2, 8, 32, 32)
     """
     helper = LayerHelper('group_norm', **locals())
     dtype = helper.input_dtype()
@@ -709,7 +725,7 @@ def group_norm(
         ['float16', 'uint16', 'float32', 'float64'],
         'group_norm',
     )
-    # create intput and parameters
+    # create input and parameters
     inputs = {'X': input}
     input_shape = input.shape
     if len(input_shape) < 2:
@@ -861,7 +877,7 @@ def conv2d(
             of conv2d. If it is set to None or one attribute of ParamAttr, conv2d
             will create ParamAttr as param_attr. If the Initializer of the param_attr
             is not set, the parameter is initialized with :math:`Normal(0.0, std)`,
-            and the :math:`std` is :math:`(\\frac{2.0 }{filter\_elem\_num})^{0.5}`. Default: None.
+            and the :math:`std` is :math:`(\frac{2.0 }{filter\_elem\_num})^{0.5}`. Default: None.
         bias_attr (ParamAttr|bool|None, optional): The parameter attribute for the bias of conv2d.
             If it is set to False, no bias will be added to the output units.
             If it is set to None or one attribute of ParamAttr, conv2d
@@ -888,12 +904,13 @@ def conv2d(
     Examples:
         .. code-block:: python
 
-          import paddle
-          paddle.enable_static()
+            >>> import paddle
+            >>> paddle.enable_static()
 
-          data = paddle.static.data(name='data', shape=[None, 3, 32, 32], dtype='float32')
-          conv2d = paddle.static.nn.conv2d(input=data, num_filters=2, filter_size=3, act="relu")
-          print(conv2d.shape) # [-1, 2, 30, 30]
+            >>> data = paddle.static.data(name='data', shape=[None, 3, 32, 32], dtype='float32')
+            >>> conv2d = paddle.static.nn.conv2d(input=data, num_filters=2, filter_size=3, act="relu")
+            >>> print(conv2d.shape)
+            (-1, 2, 30, 30)
     """
 
     check_variable_and_dtype(
@@ -901,28 +918,27 @@ def conv2d(
     )
     if len(input.shape) != 4:
         raise ValueError(
-            "Input size should be 4, "
-            "but received {}".format(len(input.shape))
+            "Input size should be 4, " f"but received {len(input.shape)}"
         )
     num_channels = input.shape[1]
     if not isinstance(use_cudnn, bool):
         raise ValueError(
             "Attr(use_cudnn) should be True or False. Received "
-            "Attr(use_cudnn): %s. " % str(use_cudnn)
+            f"Attr(use_cudnn): {use_cudnn}. "
         )
 
     if data_format not in ["NCHW", "NHWC"]:
         raise ValueError(
             "Attr(data_format) should be 'NCHW' or 'NHWC'. Received "
-            "Attr(data_format): %s." % str(data_format)
+            f"Attr(data_format): {data_format}."
         )
 
     channel_last = data_format == "NHWC"
     num_channels = input.shape[3] if channel_last else input.shape[1]
     if num_channels < 0:
         raise ValueError(
-            "The channel dimmention of the input({}) should be defined. "
-            "Received: {}.".format(str(input.shape), str(num_channels))
+            f"The channel dimension of the input({input.shape}) should be defined. "
+            f"Received: {num_channels}."
         )
     assert param_attr is not False, "param_attr should not be False here."
 
@@ -931,14 +947,14 @@ def conv2d(
     elif groups <= 0:
         raise ValueError(
             "the groups of input must be greater than 0, "
-            "but received the groups of input is {}".format(groups)
+            f"but received the groups of input is {groups}"
         )
     else:
         if num_channels % groups != 0:
             raise ValueError(
                 "the channel of input must be divisible by groups,"
-                "received: the channel of input is {}, the shape of input is {}"
-                ", the groups is {}".format(num_channels, input.shape, groups)
+                f"received: the channel of input is {num_channels}, the shape of input is {input.shape}"
+                f", the groups is {groups}"
             )
         num_filter_channels = num_channels // groups
 
@@ -972,8 +988,8 @@ def conv2d(
             ):
                 if not (padding[0] == [0, 0] and padding[1] == [0, 0]):
                     raise ValueError(
-                        "Non-zero padding(%s) in the batch or channel dimensions "
-                        "is not supported." % str(padding)
+                        f"Non-zero padding({padding}) in the batch or channel dimensions "
+                        "is not supported."
                     )
                 padding = padding[2:4]
                 padding = [ele for a_list in padding for ele in a_list]
@@ -982,8 +998,8 @@ def conv2d(
             ):
                 if not (padding[0] == [0, 0] and padding[3] == [0, 0]):
                     raise ValueError(
-                        "Non-zero padding(%s) in the batch or channel dimensions "
-                        "is not supported." % str(padding)
+                        f"Non-zero padding({padding}) in the batch or channel dimensions "
+                        "is not supported."
                     )
                 padding = padding[1:3]
                 padding = [ele for a_list in padding for ele in a_list]
@@ -1001,8 +1017,7 @@ def conv2d(
         padding = padding.upper()
         if padding not in ["SAME", "VALID"]:
             raise ValueError(
-                "Unknown padding: '%s'. It can only be 'SAME' or 'VALID'."
-                % str(padding)
+                f"Unknown padding: '{padding}'. It can only be 'SAME' or 'VALID'."
             )
         if padding == "VALID":
             padding_algorithm = "VALID"
@@ -1013,15 +1028,15 @@ def conv2d(
 
     padding = _update_padding(padding, data_format)
 
-    filter_shape = [num_filters, int(num_filter_channels)] + filter_size
+    filter_shape = [num_filters, int(num_filter_channels), *filter_size]
 
     def _get_default_param_initializer():
         filter_elem_num = filter_size[0] * filter_size[1] * num_channels
         if filter_elem_num <= 0:
             raise ValueError(
                 "Invalid filter number, excepted number is larger than 0, but"
-                " received {}, please check the input shape and "
-                "filter size.".format(filter_elem_num)
+                f" received {filter_elem_num}, please check the input shape and "
+                "filter size."
             )
         std = (2.0 / filter_elem_num) ** 0.5
         return Normal(0.0, std)
@@ -1037,7 +1052,7 @@ def conv2d(
 
     if (
         core.is_compiled_with_cuda()
-        and paddle.fluid.get_flags("FLAGS_conv2d_disable_cudnn")[
+        and paddle.base.get_flags("FLAGS_conv2d_disable_cudnn")[
             "FLAGS_conv2d_disable_cudnn"
         ]
     ):
@@ -1056,7 +1071,6 @@ def conv2d(
             'dilations': dilation,
             'groups': groups,
             'use_cudnn': use_cudnn,
-            'use_mkldnn': False,
             'fuse_relu_before_depthwise_conv': False,
             "padding_algorithm": padding_algorithm,
             "data_format": data_format,
@@ -1092,7 +1106,7 @@ def conv3d(
     and strides, paddings, dilations, groups parameters. Input(Input) and
     Output(Output) are in NCDHW or NDHWC format. Where N is batch size C is the number of
     channels, D is the depth of the feature, H is the height of the feature,
-    and W is the width of the feature. Convlution3D is similar with Convlution2D
+    and W is the width of the feature. Convolution3D is similar with Convolution2D
     but adds one dimension(depth). If bias attribution and activation type are
     provided, bias is added to the output of the convolution, and the
     corresponding activation function is applied to the final result.
@@ -1193,19 +1207,22 @@ def conv3d(
     Examples:
         .. code-block:: python
 
-          import paddle
-          import numpy as np
+            >>> import paddle
+            >>> import numpy as np
 
-          paddle.enable_static()
-          data = paddle.static.data(name='data', shape=[None, 3, 12, 32, 32], dtype='float32')
-          param_attr = paddle.framework.ParamAttr(name='conv3d.weight', initializer=paddle.nn.initializer.XavierNormal(), learning_rate=0.001)
-          res = paddle.static.nn.conv3d(input=data, num_filters=2, filter_size=3, act="relu", param_attr=param_attr)
-          place = paddle.CPUPlace()
-          exe = paddle.static.Executor(place)
-          exe.run(paddle.static.default_startup_program())
-          x = np.random.rand(1, 3, 12, 32, 32).astype("float32")
-          output = exe.run(feed={"data": x}, fetch_list=[res])
-          print(output)
+            >>> np.random.seed(1107)
+            >>> paddle.seed(1107)
+            >>> paddle.enable_static()
+            >>> data = paddle.static.data(name='data', shape=[None, 3, 12, 32, 32], dtype='float32')
+            >>> param_attr = paddle.framework.ParamAttr(name='conv3d.weight', initializer=paddle.nn.initializer.XavierNormal(), learning_rate=0.001)
+            >>> res = paddle.static.nn.conv3d(input=data, num_filters=2, filter_size=3, act="relu", param_attr=param_attr)
+            >>> place = paddle.CPUPlace()
+            >>> exe = paddle.static.Executor(place)
+            >>> exe.run(paddle.static.default_startup_program())
+            >>> x = np.random.rand(1, 3, 12, 32, 32).astype("float32")
+            >>> output,  = exe.run(feed={"data": x}, fetch_list=[res])
+            >>> print(output.shape)
+            (1, 2, 10, 30, 30)
     """
 
     l_type = 'conv3d'
@@ -1216,44 +1233,38 @@ def conv3d(
     if not isinstance(use_cudnn, bool):
         raise ValueError(
             "Attr(use_cudnn) should be True or False. Received "
-            "Attr(use_cudnn): %s. " % str(use_cudnn)
+            f"Attr(use_cudnn): {use_cudnn}. "
         )
 
     if data_format not in ["NCDHW", "NDHWC"]:
         raise ValueError(
             "Attr(data_format) should be 'NCDHW' or 'NDHWC'. Received "
-            "Attr(data_format): %s." % str(data_format)
+            f"Attr(data_format): {data_format}."
         )
 
     channel_last = data_format == "NDHWC"
     if len(input.shape) != 5:
         raise ValueError(
-            "Input should be 5D tensor, but received input with the shape of {}".format(
-                input.shape
-            )
+            f"Input should be 5D tensor, but received input with the shape of {input.shape}"
         )
     num_channels = input.shape[4] if channel_last else input.shape[1]
     if num_channels < 0:
         raise ValueError(
-            "The channel dimmention of the input({}) should be defined. "
-            "Received: {}.".format(str(input.shape), str(num_channels))
+            f"The channel dimension of the input({input.shape}) should be defined. "
+            f"Received: {num_channels}."
         )
 
     if groups is None:
         num_filter_channels = num_channels
     elif groups <= 0:
         raise ValueError(
-            "the groups of conv3d should be greater than 0. Received groups: {}".format(
-                groups
-            )
+            f"the groups of conv3d should be greater than 0. Received groups: {groups}"
         )
     else:
         if num_channels % groups != 0:
             raise ValueError(
                 "The number of input channels must be divisible by Attr(groups). "
-                "Received: number of channels({}), groups({}).".format(
-                    str(num_channels), str(groups)
-                )
+                f"Received: number of channels({num_channels}), groups({groups})."
             )
         num_filter_channels = num_channels // groups
 
@@ -1268,8 +1279,8 @@ def conv3d(
             ):
                 if not (padding[0] == [0, 0] and padding[1] == [0, 0]):
                     raise ValueError(
-                        "Non-zero padding(%s) in the batch or channel dimensions "
-                        "is not supported." % str(padding)
+                        f"Non-zero padding({padding}) in the batch or channel dimensions "
+                        "is not supported."
                     )
                 padding = padding[2:5]
                 padding = [ele for a_list in padding for ele in a_list]
@@ -1278,8 +1289,8 @@ def conv3d(
             ):
                 if not (padding[0] == [0, 0] and padding[4] == [0, 0]):
                     raise ValueError(
-                        "Non-zero padding(%s) in the batch or channel dimensions "
-                        "is not supported." % str(padding)
+                        f"Non-zero padding({padding}) in the batch or channel dimensions "
+                        "is not supported."
                     )
                 padding = padding[1:4]
                 padding = [ele for a_list in padding for ele in a_list]
@@ -1300,8 +1311,7 @@ def conv3d(
         padding = padding.upper()
         if padding not in ["SAME", "VALID"]:
             raise ValueError(
-                "Unknown padding: '%s'. It can only be 'SAME' or 'VALID'."
-                % str(padding)
+                f"Unknown padding: '{padding}'. It can only be 'SAME' or 'VALID'."
             )
         if padding == "VALID":
             padding_algorithm = "VALID"
@@ -1313,7 +1323,7 @@ def conv3d(
     padding = _update_padding(padding, data_format)
 
     input_shape = input.shape
-    filter_shape = [num_filters, num_filter_channels] + filter_size
+    filter_shape = [num_filters, num_filter_channels, *filter_size]
 
     def _get_default_param_initializer():
         filter_elem_num = (
@@ -1322,8 +1332,8 @@ def conv3d(
         if filter_elem_num <= 0:
             raise ValueError(
                 "Invalid filter number, excepted number is larger than 0, but"
-                " received {}, please check the input shape and "
-                "filter size.".format(filter_elem_num)
+                f" received {filter_elem_num}, please check the input shape and "
+                "filter size."
             )
 
         std = (2.0 / filter_elem_num) ** 0.5
@@ -1351,7 +1361,6 @@ def conv3d(
             'dilations': dilation,
             'groups': groups,
             'use_cudnn': use_cudnn,
-            'use_mkldnn': False,
             "padding_algorithm": padding_algorithm,
             "data_format": data_format,
         },
@@ -1500,7 +1509,7 @@ def conv2d_transpose(
             is not set, the parameter is initialized with Xavier. Default: None.
         bias_attr (ParamAttr|bool, optional): Specifies the object for the bias parameter attribute.
             The default value is None, which means that the default bias parameter attribute is used.
-            For detailed information, please refer to :ref:`paramattr`.
+            For detailed information, please refer to :ref:`api_paddle_ParamAttr`.
             The default bias initialisation for the conv2d_transpose operator is 0.0.
         use_cudnn(bool, optional): Use cudnn kernel or not, it is valid only when the cudnn
             library is installed. Default: True.
@@ -1536,22 +1545,22 @@ def conv2d_transpose(
         ShapeError: If the size of `output_size` is not equal to that of `stride`.
 
     Examples:
-       .. code-block:: python
+        .. code-block:: python
 
-          import paddle
-          paddle.enable_static()
+            >>> import paddle
+            >>> paddle.enable_static()
 
-          data = paddle.static.data(name='data', shape=[None, 3, 32, 32], dtype='float32')
-          conv2d_transpose = paddle.static.nn.conv2d_transpose(input=data, num_filters=2, filter_size=3)
-          print(conv2d_transpose.shape) # [-1, 2, 34, 34]
+            >>> data = paddle.static.data(name='data', shape=[None, 3, 32, 32], dtype='float32')
+            >>> conv2d_transpose = paddle.static.nn.conv2d_transpose(input=data, num_filters=2, filter_size=3)
+            >>> print(conv2d_transpose.shape)
+            (-1, 2, 34, 34)
     """
     assert (
         param_attr is not False
     ), "param_attr should not be False in conv2d_transpose."
     if len(input.shape) != 4:
         raise ValueError(
-            "Input size should be 4, "
-            "but received {}".format(len(input.shape))
+            "Input size should be 4, " f"but received {len(input.shape)}"
         )
 
     if num_filters == 0:
@@ -1590,8 +1599,8 @@ def conv2d_transpose(
             ):
                 if not (padding[0] == [0, 0] and padding[1] == [0, 0]):
                     raise ValueError(
-                        "Non-zero padding(%s) in the batch or channel dimensions "
-                        "is not supported." % str(padding)
+                        f"Non-zero padding({padding}) in the batch or channel dimensions "
+                        "is not supported."
                     )
                 padding = padding[2:4]
                 padding = [ele for a_list in padding for ele in a_list]
@@ -1600,8 +1609,8 @@ def conv2d_transpose(
             ):
                 if not (padding[0] == [0, 0] and padding[3] == [0, 0]):
                     raise ValueError(
-                        "Non-zero padding(%s) in the batch or channel dimensions "
-                        "is not supported." % str(padding)
+                        f"Non-zero padding({padding}) in the batch or channel dimensions "
+                        "is not supported."
                     )
                 padding = padding[1:3]
                 padding = [ele for a_list in padding for ele in a_list]
@@ -1616,8 +1625,7 @@ def conv2d_transpose(
         padding = padding.upper()
         if padding not in ["SAME", "VALID"]:
             raise ValueError(
-                "Unknown padding: '%s'. It can only be 'SAME' or 'VALID'."
-                % str(padding)
+                f"Unknown padding: '{padding}'. It can only be 'SAME' or 'VALID'."
             )
         if padding == "VALID":
             padding_algorithm = "VALID"
@@ -1661,7 +1669,7 @@ def conv2d_transpose(
         )
 
     if filter_size is None:
-        if output_size is []:
+        if output_size == []:
             raise ValueError("output_size must be set when filter_size is None")
         if not in_dygraph_mode():
             if isinstance(output_size, Variable) or paddle.utils._contain_var(
@@ -1708,10 +1716,10 @@ def conv2d_transpose(
     elif groups <= 0:
         raise ValueError(
             "the groups of input must be greater than 0, "
-            "but received the groups of input is {}".format(groups)
+            f"but received the groups of input is {groups}"
         )
 
-    filter_shape = [input_channel, num_filters // groups] + filter_size
+    filter_shape = [input_channel, num_filters // groups, *filter_size]
 
     img_filter = helper.create_parameter(
         dtype=input.dtype, shape=filter_shape, attr=helper.param_attr
@@ -1907,21 +1915,24 @@ def conv3d_transpose(
         variable storing transposed convolution and non-linearity activation result.
 
     Examples:
-       .. code-block:: python
+        .. code-block:: python
 
-          import paddle
-          import numpy as np
+            >>> import paddle
+            >>> import numpy as np
 
-          paddle.enable_static()
-          data = paddle.static.data(name='data', shape=[None, 3, 12, 32, 32], dtype='float32')
-          param_attr = paddle.framework.ParamAttr(name='conv3d.weight', initializer=paddle.nn.initializer.XavierNormal(), learning_rate=0.001)
-          res = paddle.static.nn.conv3d_transpose(input=data, num_filters=2, filter_size=3, act="relu", param_attr=param_attr)
-          place = paddle.CPUPlace()
-          exe = paddle.static.Executor(place)
-          exe.run(paddle.static.default_startup_program())
-          x = np.random.rand(1, 3, 12, 32, 32).astype("float32")
-          output = exe.run(feed={"data": x}, fetch_list=[res])
-          print(output)
+            >>> paddle.seed(1107)
+            >>> np.random.seed(1107)
+            >>> paddle.enable_static()
+            >>> data = paddle.static.data(name='data', shape=[None, 3, 12, 32, 32], dtype='float32')
+            >>> param_attr = paddle.framework.ParamAttr(name='conv3d.weight', initializer=paddle.nn.initializer.XavierNormal(), learning_rate=0.001)
+            >>> res = paddle.static.nn.conv3d_transpose(input=data, num_filters=2, filter_size=3, act="relu", param_attr=param_attr)
+            >>> place = paddle.CPUPlace()
+            >>> exe = paddle.static.Executor(place)
+            >>> exe.run(paddle.static.default_startup_program())
+            >>> x = np.random.rand(1, 3, 12, 32, 32).astype("float32")
+            >>> output = exe.run(feed={"data": x}, fetch_list=[res.mean()])
+            >>> print(output)
+            [array(0.5148856, dtype=float32)]
     """
     assert (
         param_attr is not False
@@ -1939,9 +1950,7 @@ def conv3d_transpose(
         raise TypeError("Input of conv3d_transpose must be Tensor")
     if len(input.shape) != 5:
         raise ValueError(
-            "Input should be 5D tensor, but received input with the shape of {}".format(
-                input.shape
-            )
+            f"Input should be 5D tensor, but received input with the shape of {input.shape}"
         )
     input_channel = (
         input.shape[1] if data_format == 'NCDHW' else input.shape[-1]
@@ -1960,8 +1969,8 @@ def conv3d_transpose(
             ):
                 if not (padding[0] == [0, 0] and padding[1] == [0, 0]):
                     raise ValueError(
-                        "Non-zero padding(%s) in the batch or channel dimensions "
-                        "is not supported." % str(padding)
+                        f"Non-zero padding({padding}) in the batch or channel dimensions "
+                        "is not supported."
                     )
                 padding = padding[2:5]
                 padding = [ele for a_list in padding for ele in a_list]
@@ -1970,8 +1979,8 @@ def conv3d_transpose(
             ):
                 if not (padding[0] == [0, 0] and padding[4] == [0, 0]):
                     raise ValueError(
-                        "Non-zero padding(%s) in the batch or channel dimensions "
-                        "is not supported." % str(padding)
+                        f"Non-zero padding({padding}) in the batch or channel dimensions "
+                        "is not supported."
                     )
                 padding = padding[1:4]
                 padding = [ele for a_list in padding for ele in a_list]
@@ -1997,8 +2006,7 @@ def conv3d_transpose(
         padding = padding.upper()
         if padding not in ["SAME", "VALID"]:
             raise ValueError(
-                "Unknown padding: '%s'. It can only be 'SAME' or 'VALID'."
-                % str(padding)
+                f"Unknown padding: '{padding}'. It can only be 'SAME' or 'VALID'."
             )
         if padding == "VALID":
             padding_algorithm = "VALID"
@@ -2061,19 +2069,15 @@ def conv3d_transpose(
     groups = 1 if groups is None else groups
     if groups <= 0:
         raise ValueError(
-            "the groups of conv3d_transpose should be greater than 0. Received groups: {}".format(
-                groups
-            )
+            f"the groups of conv3d_transpose should be greater than 0. Received groups: {groups}"
         )
     if num_filters % groups != 0:
         raise ValueError(
             "Attr(num_filters) must be divisible by groups,"
-            "Received: Attr(num_filters) is {}, the groups is {}".format(
-                num_filters, groups
-            )
+            f"Received: Attr(num_filters) is {num_filters}, the groups is {groups}"
         )
 
-    filter_shape = [input_channel, num_filters // groups] + filter_size
+    filter_shape = [input_channel, num_filters // groups, *filter_size]
     img_filter = helper.create_parameter(
         dtype=input.dtype, shape=filter_shape, attr=helper.param_attr
     )
@@ -2226,28 +2230,26 @@ def deformable_conv(
     Examples:
         .. code-block:: python
 
-          #deformable conv v2:
+            >>> # deformable conv v2:
+            >>> import paddle
+            >>> paddle.enable_static()
 
-              import paddle
-              paddle.enable_static()
+            >>> C_in, H_in, W_in = 3, 32, 32
+            >>> filter_size, deformable_groups = 3, 1
+            >>> data = paddle.static.data(name='data', shape=[None, C_in, H_in, W_in], dtype='float32')
+            >>> offset = paddle.static.data(name='offset', shape=[None, 2*deformable_groups*filter_size**2, H_in, W_in], dtype='float32')
+            >>> mask = paddle.static.data(name='mask', shape=[None, deformable_groups*filter_size**2, H_in, W_in], dtype='float32')
+            >>> out = paddle.static.nn.common.deformable_conv(input=data, offset=offset, mask=mask,
+            ...                                     num_filters=2, filter_size=filter_size, padding=1, modulated=True)
 
-              C_in, H_in, W_in = 3, 32, 32
-              filter_size, deformable_groups = 3, 1
-              data = paddle.static.data(name='data', shape=[None, C_in, H_in, W_in], dtype='float32')
-              offset = paddle.static.data(name='offset', shape=[None, 2*deformable_groups*filter_size**2, H_in, W_in], dtype='float32')
-              mask = paddle.static.data(name='mask', shape=[None, deformable_groups*filter_size**2, H_in, W_in], dtype='float32')
-              out = paddle.static.layers.common.deformable_conv(input=data, offset=offset, mask=mask,
-                                                 num_filters=2, filter_size=filter_size, padding=1, modulated=True)
-
-              #deformable conv v1:
-
-              import paddle
-              C_in, H_in, W_in = 3, 32, 32
-              filter_size, deformable_groups = 3, 1
-              data = paddle.static.data(name='data', shape=[None, C_in, H_in, W_in], dtype='float32')
-              offset = paddle.static.data(name='offset', shape=[None, 2*deformable_groups*filter_size**2, H_in, W_in], dtype='float32')
-              out = paddle.static.layers.common.deformable_conv(input=data, offset=offset, mask=None,
-                                                 num_filters=2, filter_size=filter_size, padding=1, modulated=False)
+            >>> # deformable conv v1:
+            >>> import paddle
+            >>> C_in, H_in, W_in = 3, 32, 32
+            >>> filter_size, deformable_groups = 3, 1
+            >>> data = paddle.static.data(name='data', shape=[None, C_in, H_in, W_in], dtype='float32')
+            >>> offset = paddle.static.data(name='offset', shape=[None, 2*deformable_groups*filter_size**2, H_in, W_in], dtype='float32')
+            >>> out = paddle.static.nn.common.deformable_conv(input=data, offset=offset, mask=None,
+            ...                                     num_filters=2, filter_size=filter_size, padding=1, modulated=False)
     """
 
     check_variable_and_dtype(
@@ -2291,15 +2293,15 @@ def deformable_conv(
     dilation = paddle.utils.convert_to_list(dilation, 2, 'dilation')
 
     input_shape = input.shape
-    filter_shape = [num_filters, int(num_filter_channels)] + filter_size
+    filter_shape = [num_filters, int(num_filter_channels), *filter_size]
 
     def _get_default_param_initializer():
         filter_elem_num = filter_size[0] * filter_size[1] * num_channels
         if filter_elem_num <= 0:
             raise ValueError(
                 "Invalid filter number, excepted number is larger than 0, but"
-                " received {}, please check the input shape and "
-                "filter size.".format(filter_elem_num)
+                f" received {filter_elem_num}, please check the input shape and "
+                "filter size."
             )
         std = (2.0 / filter_elem_num) ** 0.5
         return paddle.nn.initializer.normal.Normal(0.0, std)
@@ -2471,30 +2473,28 @@ def deform_conv2d(
     Examples:
         .. code-block:: python
 
-          #deformable conv v2:
+            >>> # deformable conv v2:
+            >>> import paddle
+            >>> paddle.enable_static()
 
-          import paddle
-          paddle.enable_static()
+            >>> C_in, H_in, W_in = 3, 32, 32
+            >>> filter_size, deformable_groups = 3, 1
+            >>> data = paddle.static.data(name='data', shape=[None, C_in, H_in, W_in], dtype='float32')
+            >>> offset = paddle.static.data(name='offset', shape=[None, 2*deformable_groups*filter_size**2, H_in, W_in], dtype='float32')
+            >>> mask = paddle.static.data(name='mask', shape=[None, deformable_groups*filter_size**2, H_in, W_in], dtype='float32')
+            >>> out = paddle.static.nn.deform_conv2d(x=data, offset=offset, mask=mask,
+            ...                                      num_filters=2, filter_size=filter_size, padding=1)
 
-          C_in, H_in, W_in = 3, 32, 32
-          filter_size, deformable_groups = 3, 1
-          data = paddle.static.data(name='data', shape=[None, C_in, H_in, W_in], dtype='float32')
-          offset = paddle.static.data(name='offset', shape=[None, 2*deformable_groups*filter_size**2, H_in, W_in], dtype='float32')
-          mask = paddle.static.data(name='mask', shape=[None, deformable_groups*filter_size**2, H_in, W_in], dtype='float32')
-          out = paddle.static.nn.deform_conv2d(x=data, offset=offset, mask=mask,
-                                             num_filters=2, filter_size=filter_size, padding=1)
+            >>> # deformable conv v1:
+            >>> import paddle
+            >>> paddle.enable_static()
 
-          #deformable conv v1:
-
-          import paddle
-          paddle.enable_static()
-
-          C_in, H_in, W_in = 3, 32, 32
-          filter_size, deformable_groups = 3, 1
-          data = paddle.static.data(name='data', shape=[None, C_in, H_in, W_in], dtype='float32')
-          offset = paddle.static.data(name='offset', shape=[None, 2*deformable_groups*filter_size**2, H_in, W_in], dtype='float32')
-          out = paddle.static.nn.deform_conv2d(x=data, offset=offset, mask=None,
-                                             num_filters=2, filter_size=filter_size, padding=1)
+            >>> C_in, H_in, W_in = 3, 32, 32
+            >>> filter_size, deformable_groups = 3, 1
+            >>> data = paddle.static.data(name='data', shape=[None, C_in, H_in, W_in], dtype='float32')
+            >>> offset = paddle.static.data(name='offset', shape=[None, 2*deformable_groups*filter_size**2, H_in, W_in], dtype='float32')
+            >>> out = paddle.static.nn.deform_conv2d(x=data, offset=offset, mask=None,
+            ...                                      num_filters=2, filter_size=filter_size, padding=1)
     """
 
     if mask is None:
@@ -2563,10 +2563,10 @@ def bilinear_tensor_product(
             :ref:`api_guide_Name` . Usually name is no need to set and None by default.
         param_attr (ParamAttr|None): To specify the weight parameter attribute.
             Default: None, which means the default weight parameter property is
-            used. See usage for details in :ref:`api_fluid_ParamAttr` .
+            used. See usage for details in :ref:`api_paddle_ParamAttr` .
         bias_attr (ParamAttr|None): To specify the bias parameter attribute.
             Default: None, which means the default bias parameter property is
-            used. See usage for details in :ref:`api_fluid_ParamAttr` .
+            used. See usage for details in :ref:`api_paddle_ParamAttr` .
 
     Returns:
         Tensor, A 2-D Tensor of shape [batch_size, size]. Data type is the same as input **x**.
@@ -2574,21 +2574,19 @@ def bilinear_tensor_product(
     Examples:
         .. code-block:: python
 
-            import paddle
-            paddle.enable_static()
+            >>> import paddle
+            >>> paddle.enable_static()
 
-            x = paddle.static.data("t1", shape=[-1, 5], dtype="float32")
-            y = paddle.static.data("t2", shape=[-1, 4], dtype="float32")
-            tensor = paddle.static.nn.bilinear_tensor_product(x, y, size=1000)
+            >>> x = paddle.static.data("t1", shape=[-1, 5], dtype="float32")
+            >>> y = paddle.static.data("t2", shape=[-1, 4], dtype="float32")
+            >>> tensor = paddle.static.nn.bilinear_tensor_product(x, y, size=1000)
 
     """
     helper = LayerHelper('bilinear_tensor_product', **locals())
     dtype = helper.input_dtype('x')
     if len(x.shape) != 2 or len(y.shape) != 2:
         raise ValueError(
-            "Input x and y should be 2D tensor, but received x with the shape of {}, y with the shape of {}".format(
-                x.shape, y.shape
-            )
+            f"Input x and y should be 2D tensor, but received x with the shape of {x.shape}, y with the shape of {y.shape}"
         )
     param_shape = [size, x.shape[1], y.shape[1]]
 
@@ -2643,19 +2641,19 @@ def batch_norm(
     Internal Covariate Shift <https://arxiv.org/pdf/1502.03167.pdf>`_
     for more details.
 
-    :math:input is the input features over a mini-batch.
+    :math:`input` is the input features over a mini-batch.
 
     ..  math::
 
-        \\mu_{\\beta} &\\gets \\frac{1}{m} \\sum_{i=1}^{m} x_i \\qquad &//\\
-        \ mini-batch\ mean \\\\
-        \\sigma_{\\beta}^{2} &\\gets \\frac{1}{m} \\sum_{i=1}^{m}(x_i - \\
-        \\mu_{\\beta})^2 \\qquad &//\ mini-batch\ variance \\\\
-        \\hat{x_i} &\\gets \\frac{x_i - \\mu_\\beta} {\\sqrt{\\
-        \\sigma_{\\beta}^{2} + \\epsilon}} \\qquad &//\ normalize \\\\
-        y_i &\\gets \\gamma \\hat{x_i} + \\beta \\qquad &//\ scale\ and\ shift
+        \mu_{\beta} &\gets \frac{1}{m} \sum_{i=1}^{m} x_i \qquad &//
+        \ mini-batch\ mean \\
+        \sigma_{\beta}^{2} &\gets \frac{1}{m} \sum_{i=1}^{m}(x_i -
+        \mu_{\\beta})^2 \qquad &//\ mini-batch\ variance \\
+        \hat{x_i} &\gets \frac{x_i - \mu_\beta} {\sqrt{
+        \sigma_{\beta}^{2} + \epsilon}} \qquad &//\ normalize \\
+        y_i &\gets \gamma \hat{x_i} + \beta \qquad &//\ scale\ and\ shift
 
-        moving\_mean = moving\_mean * momentum + mini-batch\_mean * (1. - momentum) \\\\
+        moving\_mean = moving\_mean * momentum + mini-batch\_mean * (1. - momentum) \\
         moving\_var = moving\_var * momentum + mini-batch\_var * (1. - momentum)
 
 
@@ -2669,9 +2667,9 @@ def batch_norm(
 
     ..  math::
 
-        \\hat{x_i} &\\gets \\frac{x_i - \\mu_\\beta} {\\sqrt{\\
-        \\sigma_{\\beta}^{2} + \\epsilon}}  \\\\
-        y_i &\\gets \\gamma \\hat{x_i} + \\beta
+        \hat{x_i} &\gets \frac{x_i - \mu_\beta} {\sqrt{
+        \sigma_{\beta}^{2} + \epsilon}}  \\
+        y_i &\gets \gamma \hat{x_i} + \beta
 
     Note:
         if build_strategy.sync_batch_norm=True, the batch_norm in network will use
@@ -2685,8 +2683,8 @@ def batch_norm(
         is_test (bool, Default False): A flag indicating whether it is in
             test phrase or not.
         momentum(float|Tensor, Default 0.9): The value used for the moving_mean and
-            moving_var computation. This should be a float number or a Tensor with
-            shape [1] and data type as float32. The updated formula is:
+            moving_var computation. This should be a float number or a 0-D Tensor with
+            shape [] and data type as float32. The updated formula is:
             :math:`moving\_mean = moving\_mean * momentum + new\_mean * (1. - momentum)`
             :math:`moving\_var = moving\_var * momentum + new\_var * (1. - momentum)`
             Default is 0.9.
@@ -2694,14 +2692,14 @@ def batch_norm(
             numerical stability. Default is 1e-5.
         param_attr(ParamAttr|None): The parameter attribute for Parameter `scale`
              of batch_norm. If it is set to None or one attribute of ParamAttr, batch_norm
-         will create ParamAttr as param_attr, the name of scale can be set in ParamAttr.
-         If the Initializer of the param_attr is not set, the parameter is initialized
-         with Xavier. Default: None.
+             will create ParamAttr as param_attr, the name of scale can be set in ParamAttr.
+             If the Initializer of the param_attr is not set, the parameter is initialized
+             with Xavier. Default: None.
         bias_attr(ParamAttr|None): The parameter attribute for the bias of batch_norm.
              If it is set to None or one attribute of ParamAttr, batch_norm
-         will create ParamAttr as bias_attr, the name of bias can be set in ParamAttr.
-         If the Initializer of the bias_attr is not set, the bias is initialized zero.
-         Default: None.
+             will create ParamAttr as bias_attr, the name of bias can be set in ParamAttr.
+             If the Initializer of the bias_attr is not set, the bias is initialized zero.
+             Default: None.
         data_layout (str, optional): Specify the data format of the input, and the data format of the output
              will be consistent with that of the input. An optional string from: `"NCHW"`, `"NHWC"`.
              The default is `"NCHW"`. When it is `"NCHW"`, the data is stored in the order of:
@@ -2731,16 +2729,16 @@ def batch_norm(
 
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            paddle.enable_static()
-            x = paddle.static.data(name='x', shape=[3, 7, 3, 7], dtype='float32')
-            hidden1 = paddle.static.nn.fc(x=x, size=200)
-            print(hidden1.shape)
-            # [3, 200]
-            hidden2 = paddle.static.nn.batch_norm(input=hidden1)
-            print(hidden2.shape)
-            # [3, 200]
+            >>> paddle.enable_static()
+            >>> x = paddle.static.data(name='x', shape=[3, 7, 3, 7], dtype='float32')
+            >>> hidden1 = paddle.static.nn.fc(x=x, size=200)
+            >>> print(hidden1.shape)
+            (3, 200)
+            >>> hidden2 = paddle.static.nn.batch_norm(input=hidden1)
+            >>> print(hidden2.shape)
+            (3, 200)
     """
     assert (
         bias_attr is not False
@@ -2756,15 +2754,13 @@ def batch_norm(
     dtype = helper.input_dtype()
 
     # use fp32 for bn parameter
-    if dtype == core.VarDesc.VarType.FP16 or dtype == core.VarDesc.VarType.BF16:
-        dtype = core.VarDesc.VarType.FP32
+    if dtype == paddle.float16 or dtype == paddle.bfloat16:
+        dtype = paddle.float32
 
     input_shape = input.shape
     if len(input.shape) < 2 or len(input.shape) > 5:
         raise ValueError(
-            'expected 2D or 3D or 4D or 5D input (got {}D input, input shape is: {})'.format(
-                len(input.shape), input_shape
-            )
+            f'expected 2D or 3D or 4D or 5D input (got {len(input.shape)}D input, input shape is: {input_shape})'
         )
     if data_layout == 'NCHW':
         channel_num = input_shape[1]
@@ -2818,11 +2814,10 @@ def batch_norm(
     variance_out = variance
 
     if in_dygraph_mode():
-        inputs_has_MomemtumTensor = False
+        inputs_has_MomentumTensor = False
         attrs_has_momentum = False
-        tmp_tensor_type = core.eager.Tensor
-        if isinstance(momentum, tmp_tensor_type):
-            inputs_has_MomemtumTensor = True
+        if isinstance(momentum, paddle.Tensor):
+            inputs_has_MomentumTensor = True
         else:
             attrs_has_momentum = True
 
@@ -2837,8 +2832,6 @@ def batch_norm(
                 is_test,
                 'data_layout',
                 data_layout,
-                'use_mkldnn',
-                False,
                 'fuse_with_relu',
                 False,
                 'use_global_stats',
@@ -2852,14 +2845,12 @@ def batch_norm(
                 is_test,
                 'data_layout',
                 data_layout,
-                'use_mkldnn',
-                False,
                 'fuse_with_relu',
                 False,
                 'use_global_stats',
                 use_global_stats,
             )
-        if inputs_has_MomemtumTensor:
+        if inputs_has_MomentumTensor:
             batch_norm_out, _, _, _, _, _ = paddle._legacy_C_ops.batch_norm(
                 input,
                 scale,
@@ -2884,8 +2875,8 @@ def batch_norm(
                 *attrs_,
             )
 
-        return paddle.fluid.dygraph_utils._append_activation_in_dygraph(
-            batch_norm_out, act=act, use_mkldnn=False
+        return paddle.base.dygraph_utils._append_activation_in_dygraph(
+            batch_norm_out, act=act
         )
 
     saved_mean = helper.create_variable_for_type_inference(
@@ -2917,7 +2908,6 @@ def batch_norm(
         "epsilon": epsilon,
         "is_test": is_test,
         "data_layout": data_layout,
-        "use_mkldnn": False,
         "fuse_with_relu": False,
         "use_global_stats": use_global_stats,
     }
@@ -2961,7 +2951,7 @@ def prelu(x, mode, param_attr=None, data_format="NCHW", name=None):
         element: All elements do not share alpha. Each element has its own alpha.
 
     Parameters:
-        x (Tensor): The input Tensor or LoDTensor with data type float32.
+        x (Tensor): The input Tensor or DenseTensor with data type float32.
         mode (str): The mode for weight sharing.
         param_attr (ParamAttr|None, optional): The parameter attribute for the learnable \
             weight (alpha), it can be create by ParamAttr. None by default. \
@@ -2978,13 +2968,14 @@ def prelu(x, mode, param_attr=None, data_format="NCHW", name=None):
 
         .. code-block:: python
 
-            import paddle
-            paddle.enable_static()
+            >>> # doctest: +SKIP("This has diff in xdoctest env")
+            >>> import paddle
+            >>> paddle.enable_static()
 
-            x = paddle.static.data(name="x", shape=[None,5,10,10], dtype="float32")
-            mode = 'channel'
-            output = paddle.static.nn.prelu(
-                x,mode,param_attr=paddle.ParamAttr(name='alpha'))
+            >>> x = paddle.static.data(name="x", shape=[None, 5, 10, 10], dtype="float32")
+            >>> mode = 'channel'
+            >>> output = paddle.static.nn.prelu(
+            ...     x,mode,param_attr=paddle.ParamAttr(name='alpha'))
 
     """
     check_variable_and_dtype(x, 'x', ['float16', 'float32', 'float64'], 'prelu')
@@ -3007,7 +2998,7 @@ def prelu(x, mode, param_attr=None, data_format="NCHW", name=None):
         if data_format not in true_data_format:
             raise ValueError(
                 "data_format must be one of 'NC', 'NCL', 'NCHW', 'NCDHW', "
-                "'NLC', 'NHWC', 'NDHWC' but receive {}".format(data_format)
+                f"'NLC', 'NHWC', 'NDHWC' but receive {data_format}"
             )
 
         data_format = 'NCHW' if data_format[1] == 'C' else 'NHWC'
@@ -3106,14 +3097,14 @@ class PyFuncRegistry:
 
         ret = []
         for each_ret in func_ret:
-            if each_ret is None or isinstance(each_ret, core.LoDTensor):
+            if each_ret is None or isinstance(each_ret, core.DenseTensor):
                 ret.append(each_ret)
                 continue
 
             if not isinstance(each_ret, np.ndarray):
                 each_ret = np.array(each_ret)
 
-            tensor = core.LoDTensor()
+            tensor = core.DenseTensor()
             tensor.set(each_ret, core.CPUPlace())
             ret.append(tensor)
 
@@ -3121,7 +3112,6 @@ class PyFuncRegistry:
 
 
 @static_only
-@templatedoc()
 def py_func(func, x, out, backward_func=None, skip_vars_in_backward_input=None):
     """
     This is used to register customized Python OP to Paddle. The design
@@ -3170,103 +3160,111 @@ def py_func(func, x, out, backward_func=None, skip_vars_in_backward_input=None):
         Tensor|tuple(Tensor)|list[Tensor], The output ``out`` of the forward function ``func``.
 
     Examples:
-
         .. code-block:: python
             :name: code-example1
 
-            # example 1:
-            import paddle
-            import numpy as np
-            paddle.enable_static()
-            # Creates a forward function, Tensor can be input directly without
-            # being converted into numpy array.
-            def tanh(x):
-                return np.tanh(x)
-            # Skip x in backward function and return the gradient of x
-            # Tensor must be actively converted to numpy array, otherwise,
-            # operations such as +/- can't be used.
-            def tanh_grad(y, dy):
-                return np.array(dy) * (1 - np.square(np.array(y)))
-            # Creates a forward function for debugging running networks(print value)
-            def debug_func(x):
-                print(x)
-            def create_tmp_var(name, dtype, shape):
-                return paddle.static.default_main_program().current_block().create_var(
-                    name=name, dtype=dtype, shape=shape)
-            def simple_net(img, label):
-                hidden = img
-                for idx in range(4):
-                    hidden = paddle.static.nn.fc(hidden, size=200)
-                    new_hidden = create_tmp_var(name='hidden_{}'.format(idx),
-                        dtype=hidden.dtype, shape=hidden.shape)
-                    # User-defined forward and backward
-                    hidden = paddle.static.py_func(func=tanh, x=hidden,
-                        out=new_hidden, backward_func=tanh_grad,
-                        skip_vars_in_backward_input=hidden)
-                    # User-defined debug functions that print out the input Tensor
-                    paddle.static.py_func(func=debug_func, x=hidden, out=None)
-                prediction = paddle.static.nn.fc(hidden, size=10, activation='softmax')
-                ce_loss = paddle.nn.loss.CrossEntropyLoss()
-                return ce_loss(prediction, label)
-            x = paddle.static.data(name='x', shape=[1,4], dtype='float32')
-            y = paddle.static.data(name='y', shape=[1], dtype='int64')
-            res = simple_net(x, y)
-            exe = paddle.static.Executor(paddle.CPUPlace())
-            exe.run(paddle.static.default_startup_program())
-            input1 = np.random.random(size=[1,4]).astype('float32')
-            input2 = np.random.randint(1, 10, size=[1], dtype='int64')
-            out = exe.run(paddle.static.default_main_program(),
-                          feed={'x':input1, 'y':input2},
-                          fetch_list=[res.name])
-            print(out)
+            >>> import paddle
+            >>> import numpy as np
+
+            >>> np.random.seed(1107)
+            >>> paddle.seed(1107)
+
+            >>> paddle.enable_static()
+            >>> # Creates a forward function, Tensor can be input directly without
+            >>> # being converted into numpy array.
+            >>> def tanh(x):
+            ...     return np.tanh(x)
+
+            >>> # Skip x in backward function and return the gradient of x
+            >>> # Tensor must be actively converted to numpy array, otherwise,
+            >>> # operations such as +/- can't be used.
+            >>> def tanh_grad(y, dy):
+            ...     return np.array(dy) * (1 - np.square(np.array(y)))
+
+            >>> # Creates a forward function for debugging running networks(print value)
+            >>> def debug_func(x):
+            ...     # print(x)
+            ...     pass
+            >>> def create_tmp_var(name, dtype, shape):
+            ...     return paddle.static.default_main_program().current_block().create_var(
+            ...         name=name, dtype=dtype, shape=shape)
+            >>> def simple_net(img, label):
+            ...     hidden = img
+            ...     for idx in range(4):
+            ...         hidden = paddle.static.nn.fc(hidden, size=200)
+            ...         new_hidden = create_tmp_var(name='hidden_{}'.format(idx),
+            ...             dtype=hidden.dtype, shape=hidden.shape)
+            ...         # User-defined forward and backward
+            ...         hidden = paddle.static.py_func(func=tanh, x=hidden,
+            ...             out=new_hidden, backward_func=tanh_grad,
+            ...             skip_vars_in_backward_input=hidden)
+            ...         # User-defined debug functions that print out the input Tensor
+            ...         paddle.static.py_func(func=debug_func, x=hidden, out=None)
+            ...     prediction = paddle.static.nn.fc(hidden, size=10, activation='softmax')
+            ...     ce_loss = paddle.nn.loss.CrossEntropyLoss()
+            ...     return ce_loss(prediction, label)
+            >>> x = paddle.static.data(name='x', shape=[1,4], dtype='float32')
+            >>> y = paddle.static.data(name='y', shape=[1], dtype='int64')
+            >>> res = simple_net(x, y)
+            >>> exe = paddle.static.Executor(paddle.CPUPlace())
+            >>> exe.run(paddle.static.default_startup_program())
+            >>> input1 = np.random.random(size=[1,4]).astype('float32')
+            >>> input2 = np.random.randint(1, 10, size=[1], dtype='int64')
+            >>> out = exe.run(paddle.static.default_main_program(),
+            ...                 feed={'x':input1, 'y':input2},
+            ...                 fetch_list=[res.name])
+            >>> print(out[0].shape)
+            ()
 
         .. code-block:: python
             :name: code-example2
 
-            # example 2:
-            # This example shows how to turn Tensor into numpy array and
-            # use numpy API to register an Python OP
-            import paddle
-            import numpy as np
-            paddle.enable_static()
-            def element_wise_add(x, y):
-                # Tensor must be actively converted to numpy array, otherwise,
-                # numpy.shape can't be used.
-                x = np.array(x)
-                y = np.array(y)
-                if x.shape != y.shape:
-                    raise AssertionError("the shape of inputs must be the same!")
-                result = np.zeros(x.shape, dtype='int32')
-                for i in range(len(x)):
-                    for j in range(len(x[0])):
-                        result[i][j] = x[i][j] + y[i][j]
-                return result
-            def create_tmp_var(name, dtype, shape):
-                return paddle.static.default_main_program().current_block().create_var(
-                            name=name, dtype=dtype, shape=shape)
-            def py_func_demo():
-                start_program = paddle.static.default_startup_program()
-                main_program = paddle.static.default_main_program()
-                # Input of the forward function
-                x = paddle.static.data(name='x', shape=[2,3], dtype='int32')
-                y = paddle.static.data(name='y', shape=[2,3], dtype='int32')
-                # Output of the forward function, name/dtype/shape must be specified
-                output = create_tmp_var('output','int32', [3,1])
-                # Multiple Tensor should be passed in the form of tuple(Tensor) or list[Tensor]
-                paddle.static.py_func(func=element_wise_add, x=[x,y], out=output)
-                exe=paddle.static.Executor(paddle.CPUPlace())
-                exe.run(start_program)
-                # Feed numpy array to main_program
-                input1 = np.random.randint(1, 10, size=[2,3], dtype='int32')
-                input2 = np.random.randint(1, 10, size=[2,3], dtype='int32')
-                out = exe.run(main_program,
-                            feed={'x':input1, 'y':input2},
-                            fetch_list=[output.name])
-                print("{0} + {1} = {2}".format(input1, input2, out))
-            py_func_demo()
-            # Reference output:
-            # [[5, 9, 9]   + [[7, 8, 4]  =  [array([[12, 17, 13]
-            #  [7, 5, 2]]     [1, 3, 3]]            [8, 8, 5]], dtype=int32)]
+            >>> # This example shows how to turn Tensor into numpy array and
+            >>> # use numpy API to register an Python OP
+            >>> import paddle
+            >>> import numpy as np
+
+            >>> np.random.seed(1107)
+            >>> paddle.seed(1107)
+
+            >>> paddle.enable_static()
+            >>> def element_wise_add(x, y):
+            ...     # Tensor must be actively converted to numpy array, otherwise,
+            ...     # numpy.shape can't be used.
+            ...     x = np.array(x)
+            ...     y = np.array(y)
+            ...     if x.shape != y.shape:
+            ...         raise AssertionError("the shape of inputs must be the same!")
+            ...     result = np.zeros(x.shape, dtype='int32')
+            ...     for i in range(len(x)):
+            ...         for j in range(len(x[0])):
+            ...             result[i][j] = x[i][j] + y[i][j]
+            ...     return result
+            >>> def create_tmp_var(name, dtype, shape):
+            ...     return paddle.static.default_main_program().current_block().create_var(
+            ...                 name=name, dtype=dtype, shape=shape)
+            >>> def py_func_demo():
+            ...     start_program = paddle.static.default_startup_program()
+            ...     main_program = paddle.static.default_main_program()
+            ...     # Input of the forward function
+            ...     x = paddle.static.data(name='x', shape=[2, 3], dtype='int32')
+            ...     y = paddle.static.data(name='y', shape=[2, 3], dtype='int32')
+            ...     # Output of the forward function, name/dtype/shape must be specified
+            ...     output = create_tmp_var('output','int32', [3, 1])
+            ...     # Multiple Tensor should be passed in the form of tuple(Tensor) or list[Tensor]
+            ...     paddle.static.py_func(func=element_wise_add, x=[x, y], out=output)
+            ...     exe=paddle.static.Executor(paddle.CPUPlace())
+            ...     exe.run(start_program)
+            ...     # Feed numpy array to main_program
+            ...     input1 = np.random.randint(1, 10, size=[2, 3], dtype='int32')
+            ...     input2 = np.random.randint(1, 10, size=[2, 3], dtype='int32')
+            ...     out = exe.run(main_program,
+            ...                feed={'x':input1, 'y':input2},
+            ...                fetch_list=[output.name])
+            ...     print("{0} + {1} = {2}".format(input1, input2, out))
+            >>> py_func_demo()
+            >>> # [[1 5 4]   + [[3 7 7]  =  [array([[ 4, 12, 11]
+            >>> #  [9 4 8]]     [2 3 9]]            [11,  7, 17]], dtype=int32)]
     """
     helper = LayerHelper('py_func', **locals())
     check_type(x, 'X', (list, tuple, Variable, type(None)), 'py_func')
@@ -3313,9 +3311,7 @@ def py_func(func, x, out, backward_func=None, skip_vars_in_backward_input=None):
         for v in skip_vars_in_backward_input:
             if v.name not in fwd_in_out:
                 raise ValueError(
-                    'Tensor {} is not found in forward inputs and outputs'.format(
-                        v.name
-                    )
+                    f'Tensor {v.name} is not found in forward inputs and outputs'
                 )
             backward_skip_vars.add(v.name)
 
@@ -3332,37 +3328,73 @@ def py_func(func, x, out, backward_func=None, skip_vars_in_backward_input=None):
     return out
 
 
-@templatedoc()
 def row_conv(input, future_context_size, param_attr=None, act=None):
-    """
+    r"""
     :api_attr: Static Graph
 
-    ${comment}
+    The row convolution is called lookahead convolution. It was
+    introduced in the following paper for DeepSpeech2:
+    http://www.cs.cmu.edu/~dyogatam/papers/wang+etal.iclrworkshop2016.pdf
+
+    The main motivation is that a bidirectional RNN, useful in DeepSpeech
+    like speech models, learns representation for a sequence by performing a
+    forward and a backward pass through the entire sequence. However, unlike
+    unidirectional RNNs, bidirectional RNNs are challenging to deploy in an online
+    and low-latency setting. The lookahead convolution incorporates information
+    from future subsequences in a computationally efficient manner to improve
+    unidirectional recurrent neural networks. The row convolution is
+    different from the 1D sequence convolution, and is computed as follows:
+
+    Given an input sequence :math:`X` of length :math:`t` and input dimension :math:`D`,
+    and a filter (:math:`W`) of size :math:`context \times D`,
+    the output sequence is convolved as:
+
+    .. math::
+
+        Out_{i} = \sum_{j=i}^{i + context - 1} X_{j} \cdot W_{j-i}
+
+
+    In the above equation:
+
+    * :math:`Out_{i}`: The i-th row of output variable with shape [1, D].
+
+    * :math:`context`: Future context size.
+
+    * :math:`X_{j}`: The j-th row of input variable with shape [1, D].
+
+    * :math:`W_{j-i}`: The (j-i)-th row of parameters with shape [1, D].
+
+    More details about row_conv please refer to
+    the design document
+    https://github.com/PaddlePaddle/Paddle/issues/2228#issuecomment-303903645 .
 
     Args:
-        input (${x_type}): ${x_comment}.
+        input (Tensor): The input is a Tensor, the shape of Tensor input has shape
+            (B x T x N), B is batch size.
         future_context_size (int): Future context size. Please note, the shape
             of convolution kernel is [future_context_size + 1, D].
         param_attr (ParamAttr): Attributes of parameters, including
             name, initializer etc.
-        act (str): Non-linear activation to be applied to output variable.
+        act (str): Non-linear activation to be applied to output Tensor.
 
     Returns:
-        ${out_comment}.
+        Tensor: The output is a Tensor, which has same type and same shape as input.
 
     Examples:
 
-      .. code-block:: python
+        .. code-block:: python
 
-        # for LodTensor inputs
-        import paddle
-        paddle.enable_static()
-        x = paddle.static.data(name='x', shape=[9, 16],
-                               dtype='float32', lod_level=1)
-        out_x = paddle.static.nn.row_conv(input=x, future_context_size=2)
-        # for Tensor inputs
-        y = paddle.static.data(name='y', shape=[9, 4, 16], dtype='float32')
-        out_y = paddle.static.nn.row_conv(input=y, future_context_size=2)
+            >>> # doctest: +SKIP("This has diff in xdoctest env")
+            >>> # for DenseTensor inputs
+            >>> import paddle
+            >>> paddle.enable_static()
+            >>> x = paddle.static.data(name='x', shape=[9, 16],
+            ...                     dtype='float32', lod_level=1)
+            >>> out_x = paddle.static.nn.row_conv(input=x, future_context_size=2)
+
+            >>> # for Tensor inputs
+            >>> y = paddle.static.data(name='y', shape=[9, 4, 16], dtype='float32')
+            >>> out_y = paddle.static.nn.row_conv(input=y, future_context_size=2)
     """
     helper = LayerHelper('row_conv', **locals())
     check_variable_and_dtype(input, 'input', ['float32'], 'row_conv')
@@ -3431,7 +3463,7 @@ def spectral_norm(weight, dim=0, power_iters=1, eps=1e-12, name=None):
                   Input(Weight) is the weight of conv layer, default 0.
         power_iters(int): number of power iterations to calculate spectral norm, default 1.
         eps(float): epsilon for numerical stability in calculating norms, it will be added to
-                    the denominator to aviod divide zero. Default 1e-12.
+                    the denominator to avoid divide zero. Default 1e-12.
         name(str, optional): For detailed information, please refer
                              to :ref:`api_guide_Name`. Usually name is no need to set and
                              None by default.
@@ -3443,12 +3475,13 @@ def spectral_norm(weight, dim=0, power_iters=1, eps=1e-12, name=None):
     Examples:
        .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            paddle.enable_static()
-            weight = paddle.static.data(name='weight', shape=[2, 8, 32, 32], dtype='float32')
-            x = paddle.static.nn.spectral_norm(weight=weight, dim=1, power_iters=2)
-            print(x.shape) # [2, 8, 32, 32]
+            >>> paddle.enable_static()
+            >>> weight = paddle.static.data(name='weight', shape=[2, 8, 32, 32], dtype='float32')
+            >>> x = paddle.static.nn.spectral_norm(weight=weight, dim=1, power_iters=2)
+            >>> print(x.shape)
+            (2, 8, 32, 32)
     """
     helper = LayerHelper('spectral_norm', **locals())
     check_variable_and_dtype(
@@ -3459,9 +3492,9 @@ def spectral_norm(weight, dim=0, power_iters=1, eps=1e-12, name=None):
     check_type(eps, 'eps', float, 'spectral_norm')
     dtype = weight.dtype
 
-    # create intput and parameters
+    # create input and parameters
     input_shape = weight.shape
-    assert weight.numel() > 0, "Any dimension of input cannot be equal to 0."
+    assert 0 not in input_shape, "Any dimension of input cannot be equal to 0."
 
     if dim not in [0, 1]:
         raise ValueError(
@@ -3486,7 +3519,7 @@ def spectral_norm(weight, dim=0, power_iters=1, eps=1e-12, name=None):
     )
     v.stop_gradient = True
 
-    if in_dygraph_mode():
+    if in_dynamic_or_pir_mode():
         return paddle._C_ops.spectral_norm(weight, u, v, dim, power_iters, eps)
 
     inputs = {'Weight': weight}
@@ -3517,7 +3550,6 @@ py_func.registered_func = PyFuncRegistry.registered_func
 py_func.registered_func_num = PyFuncRegistry.registered_func_num
 
 
-@templatedoc()
 def layer_norm(
     input,
     scale=True,
@@ -3584,11 +3616,12 @@ def layer_norm(
 
         .. code-block:: python
 
-            import paddle
-            paddle.enable_static()
-            x = paddle.static.data(name='x', shape=[8, 32, 32], dtype='float32')
-            output = paddle.static.nn.layer_norm(input=x, begin_norm_axis=1)
-            print(output.shape)  # [8, 32, 32]
+            >>> import paddle
+            >>> paddle.enable_static()
+            >>> x = paddle.static.data(name='x', shape=[8, 32, 32], dtype='float32')
+            >>> output = paddle.static.nn.layer_norm(input=x, begin_norm_axis=1)
+            >>> print(output.shape)
+            (8, 32, 32)
     """
     assert (
         in_dygraph_mode() is not True
@@ -3599,7 +3632,7 @@ def layer_norm(
     )
     dtype = helper.input_dtype()
 
-    # create intput and parameters
+    # create input and parameters
     inputs = {'X': input}
     input_shape = input.shape
     param_shape = [reduce(lambda x, y: x * y, input_shape[begin_norm_axis:], 1)]
@@ -3698,12 +3731,12 @@ def embedding(
 
         Case 2:
 
-        input is a LoDTensor with 1-level LoD. padding_idx = 0
+        input is a DenseTensor with 1-level LoD. padding_idx = 0
             input.lod = [[2, 3]]
             input.data = [[1], [3], [2], [4], [0]]
             input.shape = [5, 1]
         Given size = [128, 16]
-        output is a LoDTensor:
+        output is a DenseTensor:
             out.lod = [[2, 3]]
             out.shape = [5, 1, 16]
             out.data = [[[0.129435295, 0.244512452, ..., 0.436322452]],
@@ -3715,7 +3748,7 @@ def embedding(
 
 
     Args:
-        input(Tensor): A Tensor or LoDTensor with type int64, which contains the id information.
+        input(Tensor): A Tensor or DenseTensor with type int64, which contains the id information.
             The value of the input id should satisfy :math:`0<= id < size[0]` .
         size(tuple|list): The shape of lookup table parameter. It should have two elements which
             indicates the size of the dictionary of embeddings and the size of each embedding vector respectively.
@@ -3739,42 +3772,35 @@ def embedding(
             It must be float32 or float64. Default: float32.
 
     Returns:
-        Tensor: Embedding Tensor or LoDTensor mapped by input. The data type is the same as :attr:`dtype` .
+        Tensor: Embedding Tensor or DenseTensor mapped by input. The data type is the same as :attr:`dtype` .
 
     Static Examples:
         .. code-block:: python
 
-            import paddle
-            import numpy as np
-            paddle.enable_static()
+            >>> # doctest: +SKIP("This has diff in xdoctest env")
+            >>> import paddle
+            >>> import numpy as np
+            >>> paddle.enable_static()
 
-            x = paddle.static.data(name="x", shape = [2, 4], dtype=np.int64)
-            output = paddle.static.nn.embedding(x, (10, 3),
-                        param_attr=paddle.nn.initializer.Constant(value=1.0))
-            m_output=paddle.mean(output)
-            place = paddle.CPUPlace()
-            exe = paddle.static.Executor(place)
-            exe.run(paddle.static.default_startup_program())
+            >>> x = paddle.static.data(name="x", shape = [2, 4], dtype=np.int64)
+            >>> output = paddle.static.nn.embedding(x, (10, 3),
+            ...             param_attr=paddle.nn.initializer.Constant(value=1.0))
+            >>> m_output=paddle.mean(output)
+            >>> place = paddle.CPUPlace()
+            >>> exe = paddle.static.Executor(place)
+            >>> exe.run(paddle.static.default_startup_program())
 
-            x = np.array([[7, 2, 4, 5],[4, 3, 2, 9]], dtype=np.int64)
-
-            # x is a Numpy.
-            # x.data = [[7, 2, 4, 5], [4, 3, 2, 9]]
-            # x.shape = [2, 4]
-
-            out, = exe.run(paddle.static.default_main_program(), feed={'x':x}, fetch_list=[output])
-
-            # out is a Numpy.
-            # out.data = [[1., 1., 1.],
-            #             [1., 1., 1.],
-            #             [1., 1., 1.],
-            #             [1., 1., 1.]],
-            #
-            #            [[1., 1., 1.],
-            #             [1., 1., 1.],
-            #             [1., 1., 1.],
-            #             [0., 0., 0.]]]
-            # out.shape = [2, 4, 3]
+            >>> x = np.array([[7, 2, 4, 5],[4, 3, 2, 9]], dtype=np.int64) # type: ignore[var-annotated]
+            >>> out, = exe.run(paddle.static.default_main_program(), feed={'x':x}, fetch_list=[output])
+            >>> print(out)
+            [[[1. 1. 1.]
+              [1. 1. 1.]
+              [1. 1. 1.]
+              [1. 1. 1.]]
+             [[1. 1. 1.]
+              [1. 1. 1.]
+              [1. 1. 1.]
+              [1. 1. 1.]]]
     """
 
     helper = LayerHelper('embedding', **locals())
@@ -3795,9 +3821,7 @@ def embedding(
     padding_idx = (
         -1
         if padding_idx is None
-        else padding_idx
-        if padding_idx >= 0
-        else (size[0] + padding_idx)
+        else padding_idx if padding_idx >= 0 else (size[0] + padding_idx)
     )
     helper.append_op(
         type='lookup_table_v2',
@@ -3863,12 +3887,12 @@ def sparse_embedding(
 
         Case 2:
 
-        input is a LoDTensor with 1-level LoD. padding_idx = 0
+        input is a DenseTensor with 1-level LoD. padding_idx = 0
             input.lod = [[2, 3]]
             input.data = [[1], [3], [2], [4], [0]]
             input.shape = [5, 1]
         Given size = [128, 16]
-        output is a LoDTensor:
+        output is a DenseTensor:
             out.lod = [[2, 3]]
             out.shape = [5, 1, 16]
             out.data = [[[0.129435295, 0.244512452, ..., 0.436322452]],
@@ -3879,7 +3903,7 @@ def sparse_embedding(
         It will pad all-zero data when ids is 0.
 
     Args:
-        input(Tensor): A Tensor or LoDTensor with type int64, which contains the id
+        input(Tensor): A Tensor or DenseTensor with type int64, which contains the id
             information. The value of the input id should satisfy :math:`0<= id < size[0]` .
         size(tuple|list): The shape of lookup table parameter (vocab_size, emb_size). It
             should have two elements which indicates the size of the dictionary of embeddings
@@ -3891,7 +3915,7 @@ def sparse_embedding(
             If :math:`padding\_idx < 0`, the :math:`padding\_idx` will automatically be converted
             to :math:`vocab\_size + padding\_idx` . It will output all-zero padding data whenever
             lookup encounters :math:`padding\_idx` in id. And the padding data will not be updated
-            while training. If set None, it makes no efe mfect to output. Default: None.
+            while training. If set None, it makes no effect to output. Default: None.
         is_test(bool, optional): Training or prediction mode. In prediction mode (is_test=False),
             the output is not initialized and created, and it is filled with 0 and returned. Default: False.
         entry(str, optional): Entry config with parameter server whose value is ProbabilityEntry,
@@ -3907,29 +3931,30 @@ def sparse_embedding(
             float64. Default: float32.
 
     Returns:
-        Tensor: Embedding Tensor or LoDTensor mapped by input. The data type is the same as :attr:`dtype` .
+        Tensor: Embedding Tensor or DenseTensor mapped by input. The data type is the same as :attr:`dtype` .
 
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> # doctest: +SKIP("This has diff in xdoctest env")
+            >>> import paddle
 
-            paddle.enable_static()
-            sparse_feature_dim = 1024
-            embedding_size = 64
+            >>> paddle.enable_static()
+            >>> sparse_feature_dim = 1024
+            >>> embedding_size = 64
 
-            # Only when the feature appear more than 10 times or more will be participated in the training.
-            entry = paddle.distributed.CountFilterEntry(10)
+            >>> # Only when the feature appear more than 10 times or more will be participated in the training.
+            >>> entry = paddle.distributed.CountFilterEntry(10)
 
-            input = paddle.static.data(name='ins', shape=[1], dtype='int64')
+            >>> input = paddle.static.data(name='ins', shape=[1], dtype='int64')
 
-            emb = paddle.static.nn.sparse_embedding(
-                input=input,
-                size=[sparse_feature_dim, embedding_size],
-                is_test=False,
-                entry=entry,
-                param_attr=paddle.ParamAttr(name="SparseFeatFactors",
-                initializer=paddle.nn.initializer.Uniform()))
+            >>> emb = paddle.static.nn.sparse_embedding(
+            ...     input=input,
+            ...     size=[sparse_feature_dim, embedding_size],
+            ...     is_test=False,
+            ...     entry=entry,
+            ...     param_attr=paddle.ParamAttr(name="SparseFeatFactors",
+            ...     initializer=paddle.nn.initializer.Uniform()))
 
     """
 
@@ -3962,9 +3987,7 @@ def sparse_embedding(
     padding_idx = (
         -1
         if padding_idx is None
-        else padding_idx
-        if padding_idx >= 0
-        else (size[0] + padding_idx)
+        else padding_idx if padding_idx >= 0 else (size[0] + padding_idx)
     )
 
     if table_class not in [
@@ -4060,49 +4083,49 @@ class ExponentialMovingAverage:
 
         .. code-block:: python
 
-            import numpy
-            import paddle
-            import paddle.static as static
-            from paddle.static import ExponentialMovingAverage
+            >>> import numpy
+            >>> import paddle
+            >>> import paddle.static as static
+            >>> from paddle.static import ExponentialMovingAverage
 
-            paddle.enable_static()
+            >>> paddle.enable_static()
 
-            data = static.data(name='x', shape=[-1, 5], dtype='float32')
-            hidden = static.nn.fc(x=data, size=10)
-            cost = paddle.mean(hidden)
+            >>> data = static.data(name='x', shape=[-1, 5], dtype='float32')
+            >>> hidden = static.nn.fc(x=data, size=10)
+            >>> cost = paddle.mean(hidden)
 
-            test_program = static.default_main_program().clone(for_test=True)
-            optimizer = paddle.optimizer.Adam(learning_rate=0.001)
-            optimizer.minimize(cost)
+            >>> test_program = static.default_main_program().clone(for_test=True)
+            >>> optimizer = paddle.optimizer.Adam(learning_rate=0.001)
+            >>> optimizer.minimize(cost)
 
-            ema = ExponentialMovingAverage(0.999)
-            ema.update()
+            >>> ema = ExponentialMovingAverage(0.999)
+            >>> ema.update()
 
-            place = paddle.CPUPlace()
-            exe = static.Executor(place)
-            exe.run(static.default_startup_program())
+            >>> place = paddle.CPUPlace()
+            >>> exe = static.Executor(place)
+            >>> exe.run(static.default_startup_program())
 
-            for pass_id in range(3):
-                for batch_id in range(6):
-                    data = numpy.random.random(size=(10, 5)).astype('float32')
-                    exe.run(program=static.default_main_program(),
-                    feed={'x': data},
-                    fetch_list=[cost.name])
+            >>> for pass_id in range(3):
+            ...     for batch_id in range(6):
+            ...         feed_data = numpy.random.random(size=(10, 5)).astype('float32')
+            ...         exe.run(program=static.default_main_program(),
+            ...         feed={'x': feed_data},
+            ...         fetch_list=[cost.name])
 
-                # usage 1
-                with ema.apply(exe):
-                    data = numpy.random.random(size=(10, 5)).astype('float32')
-                    exe.run(program=test_program,
-                        feed={'x': data},
-                        fetch_list=[hidden.name])
+            ...     # usage 1
+            ...     with ema.apply(exe):
+            ...         feed_data = numpy.random.random(size=(10, 5)).astype('float32')
+            ...         exe.run(program=test_program,
+            ...             feed={'x': feed_data},
+            ...             fetch_list=[hidden.name])
 
-                # usage 2
-                with ema.apply(exe, need_restore=False):
-                    data = numpy.random.random(size=(10, 5)).astype('float32')
-                    exe.run(program=test_program,
-                        feed={'x': data},
-                        fetch_list=[hidden.name])
-                ema.restore(exe)
+            ...     # usage 2
+            ...     with ema.apply(exe, need_restore=False):
+            ...         feed_data = numpy.random.random(size=(10, 5)).astype('float32')
+            ...         exe.run(program=test_program,
+            ...             feed={'x': feed_data},
+            ...             fetch_list=[hidden.name])
+            ...     ema.restore(exe)
 
     """
 

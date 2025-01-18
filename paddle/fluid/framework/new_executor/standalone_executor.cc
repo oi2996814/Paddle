@@ -12,28 +12,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 #include "paddle/fluid/framework/new_executor/standalone_executor.h"
-
+#include "paddle/common/flags.h"
+#include "paddle/fluid/framework/feed_hook.h"
 #include "paddle/fluid/framework/new_executor/feed_fetch_utils.h"
 #include "paddle/fluid/framework/new_executor/interpreter/interpreter_util.h"
-#include "paddle/fluid/platform/profiler/event_tracing.h"
-
-#include "paddle/fluid/ir/transforms/pd_op_to_kernel_pass.h"
+#include "paddle/fluid/framework/new_executor/pir_interpreter.h"
+#include "paddle/fluid/framework/new_executor/program_interpreter.h"
+#include "paddle/fluid/pir/dialect/operator/ir/pd_op.h"
+#include "paddle/fluid/pir/transforms/pd_op_to_kernel_pass.h"
+#include "paddle/phi/core/platform/profiler/event_tracing.h"
 
 #include "paddle/fluid/ir_adaptor/translator/translate.h"
+#include "paddle/fluid/pir/transforms/general/inplace_pass.h"
+#include "paddle/pir/include/core/program.h"
+#include "paddle/pir/include/pass/pass.h"
+#include "paddle/pir/include/pass/pass_manager.h"
 
-PHI_DECLARE_bool(enable_new_ir_in_executor);
+COMMON_DECLARE_bool(enable_pir_in_executor);
+COMMON_DECLARE_bool(enable_pir_api);
+COMMON_DECLARE_bool(pir_apply_inplace_pass);
 
-namespace paddle {
-namespace framework {
-StandaloneExecutor::StandaloneExecutor(const platform::Place& place,
+namespace paddle::framework {
+StandaloneExecutor::StandaloneExecutor(const phi::Place& place,
                                        const interpreter::Plan& plan,
                                        Scope* scope)
-    : place_(place), plan_(plan), scope_(scope) {
+    : place_(place),
+      plan_(plan),
+      interpretercores_(),
+      scope_(scope),
+      micro_batch_scopes_(),
+      fetch_var_names_(),
+      fetch_list_(),
+      vec_force_events_to_wait_() {
   int64_t micro_batch_num = plan_.MicroBatchNum();
+  vec_force_events_to_wait_.resize(micro_batch_num);
   for (int64_t i = 0; i < micro_batch_num; ++i) {
     micro_batch_scopes_.emplace_back(&scope->NewScope());
   }
-
   std::stringstream ss;
   ss << "Create " << micro_batch_num << " micro_batch_scopes for scope "
      << scope_ << " : ";
@@ -43,59 +58,81 @@ StandaloneExecutor::StandaloneExecutor(const platform::Place& place,
   VLOG(6) << ss.str();
 
   const auto& jobs = plan_.JobList();
-  for (const auto& job : jobs) {
+  for (size_t job_idx = 0; job_idx < jobs.size(); ++job_idx) {
+    const auto& job = jobs[job_idx];
     const std::string& job_type = job->Type();
-    std::shared_ptr<ProgramDesc> program =
-        std::make_shared<ProgramDesc>(*(plan_.Program(job_type)));
-    SetColAttrForFetchOps(*job, program);
+    std::shared_ptr<ProgramDesc> program = nullptr;
+    std::shared_ptr<::pir::Program> ir_program = nullptr;
+    if (FLAGS_enable_pir_api || FLAGS_enable_pir_in_executor) {  // NOLINT
+      ir_program = plan_.IrProgram(job_type);
+      RunFeedHooks(*ir_program, *scope);
+    } else {
+      // NOTE (liuchenghao): std::make_shared will duplicate ProgramDesc object,
+      // maybe std::make_unique is better?
+      program = std::make_shared<ProgramDesc>(*(plan_.Program(job_type)));
+    }
 
     int64_t micro_batch_id = job->MicroBatchId();
-    PADDLE_ENFORCE(
-        micro_batch_id >= 0 && micro_batch_id < micro_batch_num,
-        phi::errors::Unavailable("The micro batch id (%lld) out of bound, "
-                                 "which should be in the range of [0, %lld].",
-                                 micro_batch_id,
-                                 micro_batch_num));
+    PADDLE_ENFORCE(micro_batch_id >= 0 && micro_batch_id < micro_batch_num,
+                   common::errors::Unavailable(
+                       "The micro batch id (%lld) out of bound, "
+                       "which should be in the range of [0, %lld].",
+                       micro_batch_id,
+                       micro_batch_num));
+
+    if (!FLAGS_enable_pir_api && !FLAGS_enable_pir_in_executor) {
+      SetColAttrForFeedFetchOps(program, micro_batch_num, micro_batch_id);
+    }
 
     interpreter::ExecutionConfig execution_config;
     execution_config.create_local_scope = false;
     execution_config.skip_gc_vars = job->SkipGcVars();
+    execution_config.force_sync_ops =
+        interpreter::GetForceSyncOps(micro_batch_id, job_type);
 
     // TODO(phlrain) we only support cpu for now
-    if (FLAGS_enable_new_ir_in_executor) {
-      VLOG(6) << "begin to translate" << std::endl;
-      auto base_program = paddle::TranslateLegacyProgramToProgram(*program);
-
+    if (FLAGS_enable_pir_in_executor) {
+      std::shared_ptr<::pir::Program> base_program = ir_program;
       auto block = base_program->block();
       for (auto it = block->begin(); it != block->end(); ++it) {
-        if ((*it)->name() == "pd.fetch") {
-          size_t index = (*it)
-                             ->attributes()
-                             .at("col")
-                             .dyn_cast<ir::Int32Attribute>()
-                             .data();
+        if (it->isa<paddle::dialect::FetchOp>()) {
+          size_t index =
+              it->attributes().at("col").dyn_cast<pir::Int32Attribute>().data();
 
           if (fetch_var_names_.size() < index + 1) {
             fetch_var_names_.resize(index + 1);
           }
 
-          fetch_var_names_[index] = (*it)
-                                        ->attributes()
+          fetch_var_names_[index] = it->attributes()
                                         .at("name")
-                                        .dyn_cast<ir::StrAttribute>()
+                                        .dyn_cast<pir::StrAttribute>()
                                         .AsString() +
                                     "@fetch";
+          job->SetFetchVarName(fetch_var_names_[index]);
         }
       }
-
       auto kernel_program =
           paddle::dialect::PdOpLowerToKernelPass(base_program.get(), place);
+      std::shared_ptr<pir::Program> shared_program = std::move(kernel_program);
+      plan_.SetIrProgram("job_" + std::to_string(job_idx), shared_program);
+
+      if (FLAGS_pir_apply_inplace_pass) {
+        pir::PassManager pm(pir::IrContext::Instance(), 3);
+        pm.AddPass(pir::CreateInplacePass());
+        pm.Run(shared_program.get());
+      }
+
       interpretercores_.emplace_back(
           std::make_shared<InterpreterCore>(place_,
-                                            fetch_var_names_,
-                                            std::move(kernel_program),
-                                            scope_,
+                                            job->FetchVarNames(),
+                                            shared_program->block(),
+                                            micro_batch_scopes_[micro_batch_id],
                                             execution_config));
+      // Note(lizhiyu): Add manual event info
+      auto pir_inter = const_cast<PirInterpreter*>(
+          static_cast<const PirInterpreter*>(interpretercores_.back()->Impl()));
+      pir_inter->SetForceEventsToWaitInfo(
+          &(vec_force_events_to_wait_[micro_batch_id]));
     } else {
       interpretercores_.emplace_back(
           std::make_shared<InterpreterCore>(place_,
@@ -103,22 +140,39 @@ StandaloneExecutor::StandaloneExecutor(const platform::Place& place,
                                             micro_batch_scopes_[micro_batch_id],
                                             execution_config));
       interpretercores_.back()->SetCopyProgram(program);
+
+      // Note(lizhiyu): Add manual event info
+      auto prog_inter = const_cast<ProgramInterpreter*>(
+          static_cast<const ProgramInterpreter*>(
+              interpretercores_.back()->Impl()));
+      prog_inter->SetForceEventsToWaitInfo(
+          &(vec_force_events_to_wait_[micro_batch_id]));
+
+      // NOTE(lizhiyu): Now we only check backward subprogram. After static
+      // build strategy is completely, we should
+      //                check all the program in the PP strategy.
+      if (job_type == "backward" && jobs.size() > 1) {
+        PADDLE_ENFORCE_EQ(static_cast<const ProgramInterpreter*>(
+                              interpretercores_.back()->Impl())
+                              ->IsStaticBuild(),
+                          true,
+                          common::errors::InvalidArgument(
+                              "When using pipeline strategy in auto "
+                              "prarallelism with new executor, "
+                              "the backward subprogram must be built in real "
+                              "static build mode, but it can not "
+                              "be staticly built in this case. You can "
+                              "enable 'GLOG_v=1' to obtain log information."));
+      }
     }
   }
 }
 
 paddle::framework::FetchList StandaloneExecutor::Run(
-    const std::vector<std::string>& feed_names) {
-  platform::RecordEvent record_event(
-      "StandaloneExecutor::run", platform::TracerEventType::UserDefined, 1);
-
-  if (plan_.MicroBatchNum() > 1) {
-    PADDLE_ENFORCE_EQ(feed_names.size(),
-                      0,
-                      phi::errors::Unimplemented(
-                          "Unsupported feed data for multiple micro_batch, "
-                          "please use non-iterative DataLoader for now."));
-  }
+    const std::vector<std::string>& feed_names,
+    const bool enable_job_schedule_profiler) {
+  phi::RecordEvent record_event(
+      "StandaloneExecutor::run", phi::TracerEventType::UserDefined, 1);
 
   const auto& jobs = plan_.JobList();
 
@@ -137,33 +191,86 @@ paddle::framework::FetchList StandaloneExecutor::Run(
     is_interpretercore_build_result_shared_ = true;
   }
 
+  std::vector<std::vector<phi::DenseTensor>> splited_feeds;
+  if (FLAGS_enable_pir_in_executor) {
+    SplitFeedTensors(feed_names, plan_.MicroBatchNum(), scope_, &splited_feeds);
+  }
+
+  fetch_list_.resize(plan_.MicroBatchNum());
   for (size_t job_idx = 0; job_idx < jobs.size(); ++job_idx) {
     const auto& job = jobs[job_idx];
     const std::string& job_type = job->Type();
-    platform::RecordEvent record_event(
+    phi::RecordEvent record_event(
         job_type + "-" + std::to_string(job->MicroBatchId()),
-        platform::TracerEventType::UserDefined,
+        phi::TracerEventType::UserDefined,
         1);
 
     VLOG(6) << "Run job (" << job_idx << "), type = " << job_type
             << ", micro_batch_id =" << job->MicroBatchId();
-    // Note(sonder): Share build results don't work for new IR now.
+
+    // NOTE(sonder): Share build results don't work for new IR now.
     if (type_to_first_id.count(job_type) != 0 &&
-        !FLAGS_enable_new_ir_in_executor) {
+        !FLAGS_enable_pir_in_executor) {
       interpretercores_[job_idx]->ShareBuildResultsFrom(
           interpretercores_[type_to_first_id[job_type]]);
     }
-    interpretercores_[job_idx]->Run(feed_names, /*need_fetch = */ false);
+
+    if (FLAGS_enable_pir_in_executor) {
+      interpretercores_[job_idx]->Run(feed_names,
+                                      splited_feeds[job->MicroBatchId()],
+                                      /*need_fetch = */ false,
+                                      /*enable_job_schedule_profiler = */
+                                      enable_job_schedule_profiler);
+
+      FetchTensors(job->FetchVarNames(),
+                   fetch_var_names_,
+                   job->MicroBatchId(),
+                   micro_batch_scopes_[job->MicroBatchId()],
+                   &fetch_list_);
+    } else {
+      if (jobs.size() > 1 && job_type != "forward") {
+        const std::vector<std::string> tmp_feed_names = {};
+        interpretercores_[job_idx]->Run(tmp_feed_names,
+                                        /*need_fetch = */ false,
+                                        /*enable_job_schedule_profiler = */
+                                        enable_job_schedule_profiler);
+      } else {
+        interpretercores_[job_idx]->Run(feed_names,
+                                        /*need_fetch = */ false,
+                                        /*enable_job_schedule_profiler = */
+                                        enable_job_schedule_profiler);
+      }
+    }
   }
 
-  // return Fetch Tensors
-  if (FLAGS_enable_new_ir_in_executor) {
-    framework::FetchList fetch_res;
-    for (auto& var_name : fetch_var_names_) {
-      auto* var = scope_->FindVar(var_name);
-      fetch_res.push_back(var->Get<phi::DenseTensor>());
-    }
+  // record each job's run time
+#if defined(PADDLE_WITH_CUDA)
+  if (enable_job_schedule_profiler) {
+    for (size_t job_idx = 0; job_idx < jobs.size(); ++job_idx) {
+      const auto& job = jobs[job_idx];
+      const std::string& job_type = job->Type();
+      double start_time, end_time;
+      std::tie(start_time, end_time) =
+          interpretercores_[job_idx]->InterpreterRunTime();
 
+      // Note(sonder): Used to record the runtime of each job in order to
+      // generate a parallel pipeline timeline. Job runtime information can be
+      // extracted from the logs using the scripts "profiler_helper_static.py".
+      // Do not modify, as it may affect the results of regular expression
+      // matching.
+      VLOG(0) << "Profiler Info: Job (" << job->MicroBatchId()
+              << "), type = " << job_type
+              << ", micro_batch_id = " << job->MicroBatchId()
+              << ", job_start_time = " << std::to_string(start_time)
+              << ", job_end_time = " << std::to_string(end_time);
+    }
+  }
+#endif
+
+  // return Fetch Tensors
+  if (FLAGS_enable_pir_in_executor) {
+    framework::FetchList fetch_res;
+    MergeFetchTensors(fetch_list_, plan_.MicroBatchNum(), &fetch_res);
     return fetch_res;
   } else {
     auto* fetch_var = scope_->FindVar(interpreter::kFetchVarName);
@@ -175,5 +282,26 @@ paddle::framework::FetchList StandaloneExecutor::Run(
   }
 }
 
-}  // namespace framework
-}  // namespace paddle
+std::shared_ptr<framework::ProgramDesc> StandaloneExecutor::RunProfile(
+    const std::vector<std::string>& feed_names) {
+  phi::RecordEvent record_event(
+      "StandaloneExecutor::run_profile", phi::TracerEventType::UserDefined, 1);
+
+  // in profiling run, there can be one and only one job ("default")
+  interpretercores_[0]->Run(feed_names,
+                            /*need_fetch = */ false,
+                            /*enable_job_schedule_profiler = */ false,
+                            /*enable_op_profiling = */ true);
+
+  // Don't return program desc directly, instead, return a copy of it since we
+  // don't know how the program desc will be further processed in Python side.
+  // If we return a raw shared_ptr, the program desc will be easily altered
+  // externally, result in unexpected behavior during the next profiling run.
+  std::shared_ptr<framework::ProgramDesc> copy_desc =
+      std::make_shared<framework::ProgramDesc>(
+          *(interpretercores_[0]->GetMutableCopyProgram()));
+
+  return copy_desc;
+}
+
+}  // namespace paddle::framework

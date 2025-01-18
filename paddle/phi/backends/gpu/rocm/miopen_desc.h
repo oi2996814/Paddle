@@ -121,7 +121,7 @@ class TensorDescriptor {
   T* desc() const { return desc_.get(); }
 
   void set(const phi::DenseTensor& tensor, const int groups = 1) {
-    auto dims = phi::vectorize<int>(tensor.dims());
+    auto dims = common::vectorize<int>(tensor.dims());
     std::vector<int> strides(dims.size());
     strides[dims.size() - 1] = 1;
     for (int i = dims.size() - 2; i >= 0; i--) {
@@ -141,11 +141,11 @@ class TensorDescriptor {
 
   void set(const phi::DenseTensor& tensor, const miopenTensorFormat_t format) {
     const int groups = 1;
-    PADDLE_ENFORCE_EQ(
-        format,
-        MIOPEN_TENSOR_NCHW,
-        phi::errors::InvalidArgument("format should ONLY be NCHW in MIOPEN."));
-    auto dims = phi::vectorize<int>(tensor.dims());
+    PADDLE_ENFORCE_EQ(format,
+                      MIOPEN_TENSOR_NCHW,
+                      common::errors::InvalidArgument(
+                          "format should ONLY be NCHW in MIOPEN."));
+    auto dims = common::vectorize<int>(tensor.dims());
     std::vector<int> strides(dims.size());
     strides[dims.size() - 1] = 1;
     for (int i = dims.size() - 2; i >= 0; i--) {
@@ -191,11 +191,11 @@ class FilterDescriptor {
   void set(const phi::DenseTensor& tensor,
            const miopenTensorFormat_t format,
            const int groups = 1) {
-    PADDLE_ENFORCE_EQ(
-        format,
-        MIOPEN_TENSOR_NCHW,
-        phi::errors::InvalidArgument("format should ONLY be NCHW in MIOPEN."));
-    auto dims = phi::vectorize<int>(tensor.dims());
+    PADDLE_ENFORCE_EQ(format,
+                      MIOPEN_TENSOR_NCHW,
+                      common::errors::InvalidArgument(
+                          "format should ONLY be NCHW in MIOPEN."));
+    auto dims = common::vectorize<int>(tensor.dims());
     std::vector<int> strides(dims.size());
     strides[dims.size() - 1] = 1;
     for (int i = dims.size() - 2; i >= 0; i--) {

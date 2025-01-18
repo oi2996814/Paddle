@@ -32,7 +32,7 @@ class TestConstraint(unittest.TestCase):
 
     def test_costraint(self):
         with self.assertRaises(NotImplementedError):
-            self._constraint(self.value)
+            self._constraint.check(self.value)
 
 
 @param.param_cls(
@@ -43,7 +43,7 @@ class TestReal(unittest.TestCase):
         self._constraint = constraint.Real()
 
     def test_costraint(self):
-        self.assertEqual(self._constraint(self.value), self.expect)
+        self.assertEqual(self._constraint.check(self.value), self.expect)
 
 
 @param.param_cls(
@@ -55,7 +55,7 @@ class TestRange(unittest.TestCase):
         self._constraint = constraint.Range(self.lower, self.upper)
 
     def test_costraint(self):
-        self.assertEqual(self._constraint(self.value), self.expect)
+        self.assertEqual(self._constraint.check(self.value), self.expect)
 
 
 @param.param_cls(
@@ -67,7 +67,7 @@ class TestPositive(unittest.TestCase):
         self._constraint = constraint.Positive()
 
     def test_costraint(self):
-        self.assertEqual(self._constraint(self.value), self.expect)
+        self.assertEqual(self._constraint.check(self.value), self.expect)
 
 
 @param.param_cls(
@@ -82,7 +82,7 @@ class TestSimplex(unittest.TestCase):
         self._constraint = constraint.Simplex()
 
     def test_costraint(self):
-        self.assertEqual(self._constraint(self.value), self.expect)
+        self.assertEqual(self._constraint.check(self.value), self.expect)
 
 
 if __name__ == '__main__':

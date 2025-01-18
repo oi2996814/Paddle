@@ -67,7 +67,7 @@ void UniqueRawKernel(const Context& context,
     PADDLE_ENFORCE_LE(
         x.numel(),
         INT_MAX,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The number of elements in Input(X) should be less than or "
             "equal to INT_MAX, but received num is %d. Please set `dtype` to "
             "int64.",
@@ -83,15 +83,15 @@ void UniqueRawKernel(const Context& context,
   if (axis.empty()) {
     phi::VisitDataTypeTiny(
         dtype,
-        phi::funcs::UniqueFlattendTensorFunctor<Context, T>(context,
-                                                            x,
-                                                            out,
-                                                            indices,
-                                                            index,
-                                                            counts,
-                                                            return_index,
-                                                            return_inverse,
-                                                            return_counts));
+        phi::funcs::UniqueFlattenedTensorFunctor<Context, T>(context,
+                                                             x,
+                                                             out,
+                                                             indices,
+                                                             index,
+                                                             counts,
+                                                             return_index,
+                                                             return_inverse,
+                                                             return_counts));
   } else {
     int axis_value = axis[0];
     axis_value = (axis_value == -1) ? (x.dims().size() - 1) : axis_value;

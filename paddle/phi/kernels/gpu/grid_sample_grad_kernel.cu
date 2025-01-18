@@ -121,16 +121,13 @@ ComputePositionsWithMask(T coord,
     coord = ClipIndexesWithMask(coord, size, &grad_clip);
     *grad_in = (*grad_in) * grad_clip;
   } else if (padding_mode == PaddingMode::reflect) {
-    if (align_corners) {
-      coord = ReflectIndexesWithMask(coord, 0, 2 * (size - 1), &grad_refl);
-    } else {
-      coord = ReflectIndexesWithMask(coord, -1, 2 * size - 1, &grad_refl);
-    }
+    coord = align_corners
+                ? ReflectIndexesWithMask(coord, 0, 2 * (size - 1), &grad_refl)
+                : ReflectIndexesWithMask(coord, -1, 2 * size - 1, &grad_refl);
     coord = ClipIndexesWithMask(coord, size, &grad_clip);
     *grad_in = (*grad_in) * grad_refl * grad_clip;
   }
-
-  return coord;
+  return SafeDownGradeToIntRange(coord);
 }
 
 template <typename T>
@@ -538,7 +535,7 @@ __global__ void GridSampler3DCudaBackwardKernel(const int nthreads,
       auto iy_nearest = static_cast<int>(std::round(iy));
       auto iz_nearest = static_cast<int>(std::round(iz));
 
-      // assign nearest neighor pixel value to output pixel
+      // assign nearest neighbor pixel value to output pixel
       int gOut_offset = n * gOut_sN + d * gOut_sD + h * gOut_sH + w * gOut_sW;
       T* gInp_ptr_NC = grad_input + n * inp_sN;
       for (int c = 0; c < out_c;

@@ -23,7 +23,7 @@
 #include "paddle/fluid/framework/fleet/heter_ps/heter_comm.h"
 #include "paddle/fluid/framework/fleet/heter_ps/heter_resource.h"
 #include "paddle/fluid/framework/fleet/heter_ps/optimizer.cuh.h"
-#include "paddle/fluid/platform/cuda_device_guard.h"
+#include "paddle/phi/core/platform/cuda_device_guard.h"
 
 using namespace paddle::framework;  // NOLINT
 namespace platform = paddle::platform;
@@ -174,9 +174,9 @@ TEST(TEST_FLEET, test_cpu_cache) {
       cur += node_query_res.get_len();
       NeighborSampleQuery query;
       query.initialize(
-          i, 0, node_query_res.get_val(), 1, node_query_res.get_len());
+          i, 0, node_query_res.get_val(), 1, node_query_res.get_len(), 50, 1);
       query.display();
-      auto c = g.graph_neighbor_sample_v3(query, false, true);
+      auto c = g.graph_neighbor_sample_v3(query, false, true, false);
       c.display();
     }
   }

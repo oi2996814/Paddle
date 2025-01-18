@@ -16,7 +16,7 @@ import logging
 import tarfile
 
 import paddle
-from paddle.fluid.log_helper import get_logger
+from paddle.base.log_helper import get_logger
 
 logger = get_logger("paddle", logging.INFO)
 
@@ -114,7 +114,7 @@ class Dataset:
         Load trainset.
         '''
         file_name = "train.txt"
-        logger.info("load trainset from %s" % file_name)
+        logger.info(f"load trainset from {file_name}")
         mode = TaskMode.create_train()
         return self._parse_creator(file_name, mode)
 
@@ -123,7 +123,7 @@ class Dataset:
         Load testset.
         '''
         file_name = "test.txt"
-        logger.info("load testset from %s" % file_name)
+        logger.info(f"load testset from {file_name}")
         mode = TaskMode.create_test()
         return self._parse_creator(file_name, mode)
 
@@ -132,7 +132,7 @@ class Dataset:
         Load infer set.
         '''
         file_name = "infer.txt"
-        logger.info("load inferset from %s" % file_name)
+        logger.info(f"load inferset from {file_name}")
         mode = TaskMode.create_infer()
         return self._parse_creator(file_name, mode)
 
@@ -168,6 +168,6 @@ def load_data_meta():
     ), err_info
     res = map(int, [_.split(':')[1] for _ in lines])
     res = list(res)
-    logger.info('dnn input dim: %d' % res[0])
-    logger.info('lr input dim: %d' % res[1])
+    logger.info(f'dnn input dim: {res[0]}')
+    logger.info(f'lr input dim: {res[1]}')
     return res

@@ -12,19 +12,38 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING, Any, Literal
 
 import paddle
-from paddle import _legacy_C_ops, in_dynamic_mode
-from paddle.fluid.data_feeder import check_variable_and_dtype
-from paddle.fluid.framework import _create_tensor
-from paddle.fluid.log_helper import get_logger
+from paddle import _C_ops, _legacy_C_ops, in_dynamic_mode
+from paddle.base.data_feeder import check_variable_and_dtype
+from paddle.base.framework import _create_tensor
+from paddle.base.log_helper import get_logger
 from paddle.framework import ParamAttr, core
-from paddle.nn import Layer
 from paddle.nn import functional as F
 from paddle.nn.initializer import Constant
 from paddle.nn.quant.lsq import FakeQuantActLSQPlus, FakeQuantWeightLSQPlus
 from paddle.utils import unique_name
+
+from ..layer.layers import Layer
+
+if TYPE_CHECKING:
+    from typing_extensions import Never, TypeAlias
+
+    from paddle import Tensor
+    from paddle._typing import DTypeLike, Size2
+
+    _QuantType: TypeAlias = Literal[
+        'abs_max',
+        'moving_average_abs_max',
+        'channel_wise_abs_max',
+        'lsq_weight',
+        'channel_wise_lsq_weight',
+        'lsq_act',
+    ]
 
 __all__ = [
     'FakeQuantAbsMax',
@@ -59,12 +78,12 @@ class FakeQuantAbsMax(Layer):
 
     def __init__(
         self,
-        name=None,
-        quant_bits=8,
-        dtype='float32',
-        quant_on_weight=False,
-        reduce_type=None,
-    ):
+        name: str | None = None,
+        quant_bits: int = 8,
+        dtype: DTypeLike = 'float32',
+        quant_on_weight: bool = False,
+        reduce_type: Literal['max'] | None = None,
+    ) -> None:
         super().__init__()
         self._quant_bits = quant_bits
         self._name = name
@@ -84,7 +103,7 @@ class FakeQuantAbsMax(Layer):
         else:
             self._scale = None
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         if in_dynamic_mode():
             attrs = ('bit_length', self._quant_bits)
             quant_out = _create_tensor(
@@ -102,7 +121,7 @@ class FakeQuantAbsMax(Layer):
 
             if not out_scale:
                 out_scale = _create_tensor(
-                    type=core.VarDesc.VarType.LOD_TENSOR,
+                    type=core.VarDesc.VarType.DENSE_TENSOR,
                     name=self._scale_name,
                     shape=[1],
                     dtype=self._dtype,
@@ -110,12 +129,14 @@ class FakeQuantAbsMax(Layer):
                 )
                 out_scale.stop_gradient = True
             (
-                out,
-                _,
-            ) = _legacy_C_ops.fake_quantize_dequantize_abs_max(
-                input, quant_out, out_scale, *attrs
+                out1,
+                out2,
+            ) = _C_ops.fake_quantize_dequantize_abs_max(
+                input, self._quant_bits, 1
             )
-            return out
+            _C_ops.assign_out_(out1, quant_out)
+            _C_ops.assign_out_(out2, out_scale)
+            return quant_out
 
         check_variable_and_dtype(input, 'input', ['float32'], "FakeQuantAbsMax")
         attrs = {'bit_length': self._quant_bits}
@@ -123,7 +144,7 @@ class FakeQuantAbsMax(Layer):
         quant_out = self._helper.create_variable(
             name=f"{input.name}.quantized.dequantized",
             dtype=input.dtype,
-            type=core.VarDesc.VarType.LOD_TENSOR,
+            type=core.VarDesc.VarType.DENSE_TENSOR,
             persistable=False,
             stop_gradient=False,
         )
@@ -132,7 +153,7 @@ class FakeQuantAbsMax(Layer):
             out_scale = self._helper.create_variable(
                 name=self._scale_name,
                 dtype=self._dtype,
-                type=core.VarDesc.VarType.LOD_TENSOR,
+                type=core.VarDesc.VarType.DENSE_TENSOR,
                 persistable=False,
                 stop_gradient=True,
             )
@@ -160,12 +181,12 @@ class FakeQuantMovingAverageAbsMax(Layer):
 
     def __init__(
         self,
-        name=None,
-        moving_rate=0.9,
-        quant_bits=8,
-        dtype='float32',
-        reduce_type=None,
-    ):
+        name: str | None = None,
+        moving_rate: float = 0.9,
+        quant_bits: int = 8,
+        dtype: DTypeLike = 'float32',
+        reduce_type: Literal['max'] | None = None,
+    ) -> None:
         super().__init__()
         self._moving_rate = moving_rate
         self._quant_bits = quant_bits
@@ -203,7 +224,7 @@ class FakeQuantMovingAverageAbsMax(Layer):
         )
         self._accum.stop_gradient = True
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         if in_dynamic_mode():
             attrs = (
                 'moving_rate',
@@ -229,23 +250,28 @@ class FakeQuantMovingAverageAbsMax(Layer):
             accum = self._accum if self.training else None
 
             (
-                out,
-                _,
-                _,
-                _,
-            ) = _legacy_C_ops.fake_quantize_dequantize_moving_average_abs_max(
+                out1,
+                out2,
+                out3,
+                out4,
+            ) = _C_ops.fake_quantize_dequantize_moving_average_abs_max(
                 input,
                 self._scale,
                 accum,
                 state,
-                quant_out,
-                self._scale,
-                state,
-                accum,
-                *attrs,
+                self._moving_rate,
+                self._quant_bits,
+                not self.training,
+                1,
             )
-
-            return out
+            _C_ops.assign_out_(out1, quant_out)
+            if out2._is_initialized():
+                _C_ops.assign_out_(out2, self._scale)
+            if state:
+                _C_ops.assign_out_(out3, state)
+            if accum:
+                _C_ops.assign_out_(out4, accum)
+            return quant_out
 
         check_variable_and_dtype(
             input, 'input', ['float32'], "FakeQuantMovingAverageAbsMax"
@@ -259,7 +285,7 @@ class FakeQuantMovingAverageAbsMax(Layer):
         quant_out = self._helper.create_variable(
             name=f"{input.name}.quantized.dequantized",
             dtype=input.dtype,
-            type=core.VarDesc.VarType.LOD_TENSOR,
+            type=core.VarDesc.VarType.DENSE_TENSOR,
             persistable=False,
             stop_gradient=False,
         )
@@ -284,14 +310,14 @@ class FakeQuantMovingAverageAbsMax(Layer):
 class FakeQuantChannelWiseAbsMax(Layer):
     def __init__(
         self,
-        name=None,
-        channel_num=None,
-        quant_bits=8,
-        quant_axis=0,
-        dtype='float32',
-        quant_on_weight=False,
-        reduce_type=None,
-    ):
+        name: str | None = None,
+        channel_num: int | None = None,
+        quant_bits: int = 8,
+        quant_axis: int = 0,
+        dtype: DTypeLike = 'float32',
+        quant_on_weight: bool = False,
+        reduce_type: Literal['max'] | None = None,
+    ) -> None:
         assert (
             quant_on_weight
         ), "Channel_wise only can be used on weight quantization."
@@ -317,7 +343,7 @@ class FakeQuantChannelWiseAbsMax(Layer):
         else:
             self._scale = None
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         if in_dynamic_mode():
             attrs = (
                 'bit_length',
@@ -340,7 +366,7 @@ class FakeQuantChannelWiseAbsMax(Layer):
                 )
             if out_scale is None:
                 out_scale = _create_tensor(
-                    type=core.VarDesc.VarType.LOD_TENSOR,
+                    type=core.VarDesc.VarType.DENSE_TENSOR,
                     name=self._scale_name,
                     shape=[self._channel_num],
                     dtype=self._dtype,
@@ -350,21 +376,27 @@ class FakeQuantChannelWiseAbsMax(Layer):
 
             (
                 out,
-                _,
-            ) = _legacy_C_ops.fake_channel_wise_quantize_dequantize_abs_max(
-                input, quant_out, out_scale, *attrs
+                scale,
+            ) = _C_ops.fake_channel_wise_quantize_dequantize_abs_max(
+                input, self._quant_bits, 1, self._quant_axis
             )
-            return out
+            _C_ops.assign_out_(out, quant_out)
+            _C_ops.assign_out_(scale, out_scale)
+            return quant_out
 
         check_variable_and_dtype(
             input, 'input', ['float32'], "FakeQuantChannelWiseAbsMax"
         )
-        attrs = {'bit_length': self._quant_bits, 'quant_axis': self._quant_axis}
+        attrs = {
+            'bit_length': self._quant_bits,
+            'round_type': 1,
+            'quant_axis': self._quant_axis,
+        }
         inputs = {"X": [input]}
         quant_out = self._helper.create_variable(
             name=f"{input.name}.quantized.dequantized",
             dtype=input.dtype,
-            type=core.VarDesc.VarType.LOD_TENSOR,
+            type=core.VarDesc.VarType.DENSE_TENSOR,
             persistable=False,
             stop_gradient=False,
         )
@@ -373,7 +405,7 @@ class FakeQuantChannelWiseAbsMax(Layer):
             out_scale = self._helper.create_variable(
                 name=self._scale_name,
                 dtype=self._dtype,
-                type=core.VarDesc.VarType.LOD_TENSOR,
+                type=core.VarDesc.VarType.DENSE_TENSOR,
                 persistable=False,
                 stop_gradient=True,
             )
@@ -391,8 +423,12 @@ class FakeQuantChannelWiseAbsMax(Layer):
 
 class MovingAverageAbsMaxScale(Layer):
     def __init__(
-        self, name=None, moving_rate=0.9, dtype='float32', reduce_type=None
-    ):
+        self,
+        name: str | None = None,
+        moving_rate: float = 0.9,
+        dtype: DTypeLike = 'float32',
+        reduce_type: Literal['max'] | None = None,
+    ) -> None:
         r"""
         MovingAverageMaxScale layer is used to calculating the output quantization
         scale of Layer. Its computational formula is described as below:
@@ -435,7 +471,7 @@ class MovingAverageAbsMaxScale(Layer):
         )
         self._accum.stop_gradient = True
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         if in_dynamic_mode():
             attrs = (
                 'moving_rate',
@@ -480,7 +516,7 @@ class MovingAverageAbsMaxScale(Layer):
         quant_out = self._helper.create_variable(
             name=f"{input.name}.tmp",
             dtype=input.dtype,
-            type=core.VarDesc.VarType.LOD_TENSOR,
+            type=core.VarDesc.VarType.DENSE_TENSOR,
             persistable=False,
             stop_gradient=False,
         )
@@ -511,19 +547,22 @@ class QuantizedConv2D(Layer):
     The only difference is that its inputs are all fake quantized.
     """
 
+    weight: Tensor
+    bias: Tensor
+
     def __init__(
         self,
-        layer,
-        weight_bits=8,
-        activation_bits=8,
-        moving_rate=0.9,
-        weight_quantize_type='abs_max',
-        activation_quantize_type='abs_max',
-        weight_pre_layer=None,
-        act_pre_layer=None,
-        weight_quant_layer=None,
-        act_quant_layer=None,
-    ):
+        layer: Layer,
+        weight_bits: int = 8,
+        activation_bits: int = 8,
+        moving_rate: float = 0.9,
+        weight_quantize_type: _QuantType = 'abs_max',
+        activation_quantize_type: _QuantType = 'abs_max',
+        weight_pre_layer: Layer | None = None,
+        act_pre_layer: Layer | None = None,
+        weight_quant_layer: Layer | None = None,
+        act_quant_layer: Layer | None = None,
+    ) -> None:
         super().__init__()
         # For Conv2D
         self._groups = layer._groups
@@ -573,7 +612,7 @@ class QuantizedConv2D(Layer):
             weight_pre_layer() if weight_pre_layer is not None else None
         )
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         if self._act_preprocess is not None:
             input = self._act_preprocess(input)
         quant_input = self._fake_quant_input(input)
@@ -629,19 +668,22 @@ class QuantizedConv2DTranspose(Layer):
 
     """
 
+    weight: Tensor
+    bias: Tensor
+
     def __init__(
         self,
-        layer,
-        weight_bits=8,
-        activation_bits=8,
-        moving_rate=0.9,
-        weight_quantize_type='abs_max',
-        activation_quantize_type='abs_max',
-        weight_pre_layer=None,
-        act_pre_layer=None,
-        weight_quant_layer=None,
-        act_quant_layer=None,
-    ):
+        layer: Layer,
+        weight_bits: int = 8,
+        activation_bits: int = 8,
+        moving_rate: float = 0.9,
+        weight_quantize_type: _QuantType = 'abs_max',
+        activation_quantize_type: _QuantType = 'abs_max',
+        weight_pre_layer: Layer | None = None,
+        act_pre_layer: Layer | None = None,
+        weight_quant_layer: Layer | None = None,
+        act_quant_layer: Layer | None = None,
+    ) -> None:
         r"""
         Constructor.
 
@@ -693,7 +735,9 @@ class QuantizedConv2DTranspose(Layer):
             weight_pre_layer() if weight_pre_layer is not None else None
         )
 
-    def forward(self, input, output_size=None):
+    def forward(
+        self, input: Tensor, output_size: Size2 | None = None
+    ) -> Tensor:
         if self._act_preprocess is not None:
             input = self._act_preprocess(input)
         quant_input = self._fake_quant_input(input)
@@ -728,19 +772,23 @@ class QuantizedLinear(Layer):
     The only difference is that its inputs are all fake quantized.
     """
 
+    weight: Tensor
+    bias: Tensor
+    name: str
+
     def __init__(
         self,
-        layer,
-        weight_bits=8,
-        activation_bits=8,
-        moving_rate=0.9,
-        weight_quantize_type='abs_max',
-        activation_quantize_type='abs_max',
-        weight_pre_layer=None,
-        act_pre_layer=None,
-        weight_quant_layer=None,
-        act_quant_layer=None,
-    ):
+        layer: Layer,
+        weight_bits: int = 8,
+        activation_bits: int = 8,
+        moving_rate: float = 0.9,
+        weight_quantize_type: _QuantType = 'abs_max',
+        activation_quantize_type: _QuantType = 'abs_max',
+        weight_pre_layer: Layer | None = None,
+        act_pre_layer: Layer | None = None,
+        weight_quant_layer: Layer | None = None,
+        act_quant_layer: Layer | None = None,
+    ) -> None:
         super().__init__()
         # For Linear
         self.weight = layer.weight
@@ -783,7 +831,7 @@ class QuantizedLinear(Layer):
             weight_pre_layer() if weight_pre_layer is not None else None
         )
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         if self._act_preprocess is not None:
             input = self._act_preprocess(input)
         quant_input = self._fake_quant_input(input)
@@ -800,19 +848,26 @@ class QuantizedLinear(Layer):
 
 
 class QuantizedColumnParallelLinear(Layer):
+    weight: Tensor
+    bias: Tensor
+    name: str
+    is_mp: bool
+    model_parallel_group: paddle.distributed.collective.Group
+    gather_output: bool
+
     def __init__(
         self,
-        layer,
-        weight_bits=8,
-        activation_bits=8,
-        moving_rate=0.9,
-        weight_quantize_type='abs_max',
-        activation_quantize_type='abs_max',
-        weight_pre_layer=None,
-        act_pre_layer=None,
-        weight_quant_layer=None,
-        act_quant_layer=None,
-    ):
+        layer: Layer,
+        weight_bits: int = 8,
+        activation_bits: int = 8,
+        moving_rate: float = 0.9,
+        weight_quantize_type: _QuantType = 'abs_max',
+        activation_quantize_type: _QuantType = 'abs_max',
+        weight_pre_layer: Layer | None = None,
+        act_pre_layer: Layer | None = None,
+        weight_quant_layer: Literal[None] = None,
+        act_quant_layer: Literal[None] = None,
+    ) -> None:
         super().__init__()
         '''
 
@@ -843,9 +898,9 @@ class QuantizedColumnParallelLinear(Layer):
             quant_on_weight=True,
             channel_num=self.weight.shape[self._linear_quant_axis],
             quant_axis=self._linear_quant_axis,
-            reduce_type='max'
-            if paddle.distributed.get_world_size() > 1
-            else None,
+            reduce_type=(
+                'max' if paddle.distributed.get_world_size() > 1 else None
+            ),
         )
 
         self._fake_quant_input = _get_fake_quant_type(
@@ -865,7 +920,7 @@ class QuantizedColumnParallelLinear(Layer):
             weight_pre_layer() if weight_pre_layer is not None else None
         )
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         if self.is_mp:
             input_parallel = paddle.distributed.collective._c_identity(
                 input, group=self.model_parallel_group
@@ -896,19 +951,26 @@ class QuantizedColumnParallelLinear(Layer):
 
 
 class QuantizedRowParallelLinear(Layer):
+    weight: Tensor
+    bias: Tensor
+    name: str
+    is_mp: bool
+    model_parallel_group: paddle.distributed.collective.Group
+    gather_output: bool
+
     def __init__(
         self,
-        layer,
-        weight_bits=8,
-        activation_bits=8,
-        moving_rate=0.9,
-        weight_quantize_type='abs_max',
-        activation_quantize_type='abs_max',
-        weight_pre_layer=None,
-        act_pre_layer=None,
-        weight_quant_layer=None,
-        act_quant_layer=None,
-    ):
+        layer: Layer,
+        weight_bits: int = 8,
+        activation_bits: int = 8,
+        moving_rate: float = 0.9,
+        weight_quantize_type: _QuantType = 'abs_max',
+        activation_quantize_type: _QuantType = 'abs_max',
+        weight_pre_layer: Layer | None = None,
+        act_pre_layer: Layer | None = None,
+        weight_quant_layer: Literal[None] = None,
+        act_quant_layer: Literal[None] = None,
+    ) -> None:
         super().__init__()
         assert (
             weight_quant_layer is None
@@ -937,9 +999,9 @@ class QuantizedRowParallelLinear(Layer):
             quant_on_weight=True,
             channel_num=self.weight.shape[self._linear_quant_axis],
             quant_axis=self._linear_quant_axis,
-            reduce_type='max'
-            if paddle.distributed.get_world_size() > 1
-            else None,
+            reduce_type=(
+                'max' if paddle.distributed.get_world_size() > 1 else None
+            ),
         )
 
         self._fake_quant_input = _get_fake_quant_type(
@@ -949,9 +1011,9 @@ class QuantizedRowParallelLinear(Layer):
             quant_bits=activation_bits,
             dtype=self._dtype,
             quant_on_weight=False,
-            reduce_type='max'
-            if paddle.distributed.get_world_size() > 1
-            else None,
+            reduce_type=(
+                'max' if paddle.distributed.get_world_size() > 1 else None
+            ),
         )
 
         self._act_preprocess = (
@@ -961,7 +1023,7 @@ class QuantizedRowParallelLinear(Layer):
             weight_pre_layer() if weight_pre_layer is not None else None
         )
 
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         if self.input_is_parallel or (not self.is_mp):
             input_parallel = input
         else:
@@ -1003,17 +1065,17 @@ class QuantizedMatmul(Layer):
 
     def __init__(
         self,
-        layer=None,
-        weight_bits=8,
-        activation_bits=8,
-        moving_rate=0.9,
-        weight_quantize_type='abs_max',
-        activation_quantize_type='abs_max',
-        weight_pre_layer=None,
-        act_pre_layer=None,
-        weight_quant_layer=None,
-        act_quant_layer=None,
-    ):
+        layer: Layer | None = None,
+        weight_bits: int = 8,
+        activation_bits: int = 8,
+        moving_rate: float = 0.9,
+        weight_quantize_type: _QuantType = 'abs_max',
+        activation_quantize_type: _QuantType = 'abs_max',
+        weight_pre_layer: Layer | None = None,
+        act_pre_layer: Layer | None = None,
+        weight_quant_layer: Layer | None = None,
+        act_quant_layer: Layer | None = None,
+    ) -> None:
         super().__init__()
 
         # For FakeQuant
@@ -1041,7 +1103,14 @@ class QuantizedMatmul(Layer):
             act_pre_layer() if act_pre_layer is not None else None
         )
 
-    def forward(self, x, y, transpose_x=False, transpose_y=False, name=None):
+    def forward(
+        self,
+        x: Tensor,
+        y: Tensor,
+        transpose_x: bool = False,
+        transpose_y: bool = False,
+        name: str | None = None,
+    ) -> Tensor:
         if self._act_preprocess_x is not None:
             x = self._act_preprocess_x(x)
         quant_x = self._fake_quant_x(x)
@@ -1062,12 +1131,12 @@ class MAOutputScaleLayer(Layer):
 
     def __init__(
         self,
-        layer=None,
-        moving_rate=0.9,
-        name=None,
-        dtype='float32',
-        reduce_type=None,
-    ):
+        layer: Layer | None = None,
+        moving_rate: float = 0.9,
+        name: str | None = None,
+        dtype: DTypeLike = 'float32',
+        reduce_type: Literal['max'] | None = None,
+    ) -> None:
         r"""
         Construct
         """
@@ -1079,7 +1148,7 @@ class MAOutputScaleLayer(Layer):
             name, moving_rate, dtype, reduce_type
         )
 
-    def forward(self, *inputs, **kwargs):
+    def forward(self, *inputs: Any, **kwargs: Any) -> Tensor:
         out = self._layer(*inputs, **kwargs)
         # TODO (jc): support the ops of several outputs
         if isinstance(out, (list, tuple, dict)):
@@ -1095,15 +1164,15 @@ class FakeQuantMAOutputScaleLayer(Layer):
 
     def __init__(
         self,
-        layer,
-        weight_bits=8,
-        activation_bits=8,
-        moving_rate=0.9,
-        name=None,
-        reduce_type=None,
-        *args,
-        **kwargs,
-    ):
+        layer: Layer,
+        weight_bits: int = 8,
+        activation_bits: int = 8,
+        moving_rate: float = 0.9,
+        name: str | None = None,
+        reduce_type: Literal['max'] | None = None,
+        *args: Never,
+        **kwargs: Never,
+    ) -> None:
         super().__init__()
         self._layer = layer
         self._fake_quant_output = _get_fake_quant_type(
@@ -1116,7 +1185,7 @@ class FakeQuantMAOutputScaleLayer(Layer):
             reduce_type=reduce_type,
         )
 
-    def forward(self, *inputs, **kwargs):
+    def forward(self, *inputs: Any, **kwargs: Any) -> Tensor:
         out = self._layer(*inputs, **kwargs)
         # TODO (jc): support the ops of several outputs
         if (isinstance(out, (list, tuple))) and len(out) > 1:
@@ -1146,13 +1215,13 @@ def _get_fake_quant_type(quant_type, **kwargs):
             "when you use channel_wise_abs_max strategy."
         )
     elif quant_type == 'lsq_weight':
-        call_args["all_postive"] = kwargs.get("all_postive", False)
+        call_args["all_positive"] = kwargs.get("all_positive", False)
         call_args["per_channel"] = False
         call_args["channel_num"] = 1
         call_args["quant_linear"] = kwargs.get("quant_linear", False)
     elif quant_type == 'channel_wise_lsq_weight':
         quant_type = 'lsq_weight'
-        call_args["all_postive"] = kwargs.get("all_postive", False)
+        call_args["all_positive"] = kwargs.get("all_positive", False)
         call_args["per_channel"] = True
         call_args["channel_num"] = kwargs.get("channel_num", None)
         call_args["quant_linear"] = kwargs.get("quant_linear", False)
@@ -1161,7 +1230,7 @@ def _get_fake_quant_type(quant_type, **kwargs):
             "when you use channel_wise_abs_max strategy."
         )
     elif quant_type == 'lsq_act':
-        call_args["all_postive"] = kwargs.get("all_postive", False)
+        call_args["all_positive"] = kwargs.get("all_positive", False)
         call_args["symmetric"] = kwargs.get("symmetric", True)
     fake_quant_map = {
         'abs_max': FakeQuantAbsMax,

@@ -16,8 +16,8 @@
 
 #include "glog/logging.h"
 
+#include "paddle/common/layout.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
-#include "paddle/phi/common/layout.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/core/tensor_utils.h"
 #include "paddle/phi/kernels/funcs/math_function.h"
@@ -335,7 +335,7 @@ void InstanceNormGradKernel(const Context &dev_ctx,
     PADDLE_ENFORCE_EQ(
         scale_ptr->dims().size(),
         1UL,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The `shape` in InstanceNormOp is invalid: "
             "the size of scale's dimensions must be equal to 1. But "
             "received: the size of scale's dimensions"
@@ -343,7 +343,7 @@ void InstanceNormGradKernel(const Context &dev_ctx,
             scale_ptr->dims().size()));
     PADDLE_ENFORCE_EQ(scale_ptr->dims()[0],
                       C,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The `shape` in InstanceNormOp is invalid: "
                           "the first dimension of scale must be equal to "
                           "Channels([%d]). But received: "
@@ -384,14 +384,6 @@ void InstanceNormGradKernel(const Context &dev_ctx,
   std::vector<int> strides;
   dims = {1, NxC, H, W, D};
   strides = {NxC * H * W * D, H * W * D, W * D, D, 1};
-
-  if ((H * W * D) == 1) {
-    phi::Copy(dev_ctx, d_y, dev_ctx.GetPlace(), false, d_x);
-    phi::funcs::SetConstant<GPUContext, BatchNormParamType<T>> functor;
-    functor(dev_ctx, d_scale, static_cast<BatchNormParamType<T>>(0));
-    functor(dev_ctx, d_bias, static_cast<BatchNormParamType<T>>(0));
-    return;
-  }
 
 #ifdef PADDLE_WITH_HIP
   miopenTensorDescriptor_t data_desc_;

@@ -16,6 +16,7 @@ import re
 from functools import reduce
 
 import paddle
+import paddle.distributed as dist
 from paddle.distributed.fleet.meta_optimizers.common import (
     OP_ROLE_KEY,
     OpRole,
@@ -39,13 +40,13 @@ def check_broadcast(block):
     """
     broadcast_vars = {}
     for idx, op in enumerate(block.ops):
-        if op.type == "c_broadcast":
+        if op.type == "c_broadcast" or op.type == "broadcast":
             if not op.all_attrs()["use_calc_stream"]:
                 var_name = op.desc.input_arg_names()[0]
                 if "@BroadCast" in var_name:
                     if var_name in broadcast_vars:
                         raise ValueError(
-                            "var_name areadly exist: {}"
+                            "var_name already exist: {}"
                             "the old pos is {}, the new pos is {}".format(
                                 var_name,
                                 broadcast_vars[var_name]["broadcast_pos"],
@@ -73,7 +74,7 @@ def check_broadcast(block):
         if op.type == "c_sync_calc_stream":
             last_sync_calc_op_idx = idx
             continue
-        if op.type == "c_broadcast":
+        if op.type == "c_broadcast" or op.type == "broadcast":
             if not op.all_attrs()["use_calc_stream"]:
                 var_name = op.desc.input_arg_names()[0]
                 if "@BroadCast" in var_name:
@@ -93,7 +94,6 @@ def check_broadcast(block):
                     < last_sync_comm_op_idx
                 )
                 assert last_sync_comm_op_idx < idx
-    return
 
 
 def check_allreduce_sum(block, shard, sharding_ring_id, dp_ring_id=-1):
@@ -104,7 +104,7 @@ def check_allreduce_sum(block, shard, sharding_ring_id, dp_ring_id=-1):
             - 1: sync_calc
             - 2: reduce_sum_sharding (allreduce --> reduce)
             - 3: sync_comm
-            - 4: allreuce_sum_dp (dp_grads)
+            - 4: allreduce_sum_dp (dp_grads)
             - 5: sync_comm (dp_grads)
             - 6: op that use Var (dp_grads & sum)
 
@@ -118,7 +118,17 @@ def check_allreduce_sum(block, shard, sharding_ring_id, dp_ring_id=-1):
 
     for idx, op in enumerate(block.ops):
         # sharding use both allreduce and reduce to sync grad
-        if op.type == "c_allreduce_sum" or op.type == "c_reduce_sum":
+        if (
+            op.type == "c_allreduce_sum"
+            or (
+                op.type == "reduce"
+                and op.desc.attr("reduce_type") == dist.ReduceOp.SUM
+            )
+            or (
+                op.type == "all_reduce"
+                and op.desc.attr("reduce_type") == dist.ReduceOp.SUM
+            )
+        ):
             if not op.all_attrs()["use_calc_stream"]:
                 ring_id = op.desc.attr("ring_id")
                 var_name = op.desc.input_arg_names()[0]
@@ -154,13 +164,17 @@ def check_allreduce_sum(block, shard, sharding_ring_id, dp_ring_id=-1):
                 ):
                     dp_grads_status[var_name] = 1
         # check sharding allreduce and  reduce but skip megatron allreduce
-        elif op.type == "c_allreduce_sum" or op.type == "c_reduce_sum":
+        elif op.type == "c_allreduce_sum" or (
+            op.type == "reduce"
+            and op.desc.attr("reduce_type") == dist.ReduceOp.SUM
+        ):
             if not op.all_attrs()["use_calc_stream"]:
                 var_name = op.desc.input_arg_names()[0]
                 ring_id = op.desc.attr("ring_id")
                 if ring_id == sharding_ring_id:
                     assert (
-                        op.type == "c_reduce_sum"
+                        op.type == "reduce"
+                        and op.desc.attr("reduce_type") == dist.ReduceOp.SUM
                     ), "Grad in Sharding group should be reduce rather than allreduce"
                     if var_name in vars_status:
                         _status = vars_status[var_name]
@@ -168,14 +182,14 @@ def check_allreduce_sum(block, shard, sharding_ring_id, dp_ring_id=-1):
                         _status = dp_grads_status[var_name]
                     if _status == -1:
                         raise ValueError(
-                            "{} is not generated, but you are"
-                            "trying to all-reduce it".format(var_name)
+                            f"{var_name} is not generated, but you are"
+                            "trying to all-reduce it"
                         )
                     if _status == 0:
                         raise ValueError(
                             "There should be a sync_calc op "
-                            "after generate Var: {} and before the"
-                            "c_allreduce_sum op".format(var_name)
+                            f"after generate Var: {var_name} and before the"
+                            "all_reduce sum op"
                         )
                     assert _status == 1
                     if var_name in vars_status:
@@ -213,25 +227,23 @@ def check_allreduce_sum(block, shard, sharding_ring_id, dp_ring_id=-1):
                     if vars_status[input_name] != 3:
                         raise ValueError(
                             "There should be a sync_comm op "
-                            "after allreduce the Var: {}".format(input_name)
+                            f"after allreduce the Var: {input_name}"
                         )
                     raise ValueError(
-                        "The reduce output grad [{}] should NOT be be used in Non-root rank.".format(
-                            input_name
-                        )
+                        f"The reduce output grad [{input_name}] should NOT be be used in Non-root rank."
                     )
                 if input_name in dp_grads_status:
                     if dp_ring_id == -1:
                         if dp_grads_status[input_name] != 3:
                             raise ValueError(
                                 "There should be a sync_comm op "
-                                "after allreduce the Var: {}".format(input_name)
+                                f"after allreduce the Var: {input_name}"
                             )
                     else:
                         if dp_grads_status[input_name] != 5:
                             raise ValueError(
                                 "The grad in shard should be allreduce and sync"
-                                "twice before usage {}".format(input_name)
+                                f"twice before usage {input_name}"
                             )
 
             for output_name in op.desc.output_arg_names():
@@ -253,8 +265,6 @@ def check_allreduce_sum(block, shard, sharding_ring_id, dp_ring_id=-1):
     # check sharding with gradient_clip_by_global_norm
     if idx_gradient_clip_allreduce != -1:
         assert idx_gradient_clip_allreduce > idx_last_grad_allreduce
-
-    return
 
 
 def get_valid_op_role(block, insert_idx):
@@ -284,7 +294,6 @@ def insert_sync_calc_op(block, insert_idx, calc_dep_vars):
         outputs={'Out': calc_dep_vars},
         attrs={OP_ROLE_KEY: op_role},
     )
-    return
 
 
 def insert_sync_comm_op(block, insert_idx, ring_id, comm_dep_vars):
@@ -339,7 +348,6 @@ def insert_fill_constant_ops(block, insert_idx, fill_constant_vars):
                 OP_ROLE_KEY: op_role,
             },
         )
-    return
 
 
 def insert_cast_ops(block, insert_idx, cast_ops):
@@ -359,7 +367,6 @@ def insert_cast_ops(block, insert_idx, cast_ops):
                 OP_ROLE_KEY: op_role,
             },
         )
-    return
 
 
 def insert_allreduce_ops(
@@ -397,12 +404,12 @@ def insert_allreduce_ops(
         for var in allreduce_vars:
             block._insert_op_without_sync(
                 insert_idx,
-                type='c_allreduce_sum',
-                inputs={'X': var},
-                outputs={'Out': var},
+                type='all_reduce',
+                inputs={'x': var},
+                outputs={'out': var},
                 attrs={
                     'ring_id': ring_id,
-                    'use_calc_stream': use_calc_stream,
+                    'reduce_type': dist.ReduceOp.SUM,
                     OP_ROLE_KEY: op_role,
                 },
             )
@@ -544,9 +551,7 @@ def insert_fused_reduce_ops(
         root_id = get_grad_device(var, shard)
         assert 0 <= root_id < nranks, (
             "root_id should >=0 and < nranks, "
-            "but now nranks={}, the root_id of var={} is {}".format(
-                nranks, var, root_id
-            )
+            f"but now nranks={nranks}, the root_id of var={var} is {root_id}"
         )
         device_to_vars[root_id].append(var)
 
@@ -560,13 +565,13 @@ def insert_fused_reduce_ops(
         for fused_var in fused_vars:
             block._insert_op_without_sync(
                 insert_idx + insert_num,
-                type='c_reduce_sum',
-                inputs={'X': fused_var},
-                outputs={'Out': fused_var},
+                type='reduce',
+                inputs={'x': fused_var},
+                outputs={'out': fused_var},
                 attrs={
                     'ring_id': ring_id,
                     'root_id': root_id,
-                    'use_calc_stream': use_calc_stream,
+                    'reduce_type': dist.ReduceOp.SUM,
                     OP_ROLE_KEY: op_role,
                 },
             )
@@ -627,20 +632,18 @@ def insert_reduce_ops(
         root_id = get_grad_device(grad_var, shard)
         assert (
             root_id >= 0
-        ), "root id should be a positive int, but now root id is {}".format(
-            root_id
-        )
+        ), f"root id should be a positive int, but now root id is {root_id}"
         if rank is not None and rank == root_id:
             grad_in_this_device.append(var)
         block._insert_op_without_sync(
             insert_idx,
-            type='c_reduce_sum',
-            inputs={'X': var},
-            outputs={'Out': var},
+            type='reduce',
+            inputs={'x': var},
+            outputs={'out': var},
             attrs={
                 'ring_id': ring_id,
                 'root_id': root_id,
-                'use_calc_stream': use_calc_stream,
+                'reduce_type': dist.ReduceOp.SUM,
                 OP_ROLE_KEY: op_role,
             },
         )
@@ -666,9 +669,7 @@ def insert_fused_broadcast_param_ops(
         root_id = shard.device(var)
         assert 0 <= root_id < nranks, (
             "root_id should >=0 and < nranks, "
-            "but now nranks={}, the root_id of var={} is {}".format(
-                nranks, var, root_id
-            )
+            f"but now nranks={nranks}, the root_id of var={var} is {root_id}"
         )
         device_to_vars[root_id].append(var)
 
@@ -682,13 +683,12 @@ def insert_fused_broadcast_param_ops(
         for fused_var in fused_vars:
             block._insert_op_without_sync(
                 insert_idx + insert_num,
-                type='c_broadcast',
-                inputs={'X': fused_var},
-                outputs={'Out': fused_var},
+                type='broadcast',
+                inputs={'x': fused_var},
+                outputs={'out': fused_var},
                 attrs={
                     'ring_id': ring_id,
                     'root': root_id,
-                    'use_calc_stream': use_calc_stream,
                     OP_ROLE_KEY: op_role,
                 },
             )
@@ -737,20 +737,17 @@ def insert_broadcast_param_ops(
         root_id = shard.device(param)
         assert (
             root_id >= 0
-        ), "root id should be a positive int, but now root id is {}".format(
-            root_id
-        )
+        ), f"root id should be a positive int, but now root id is {root_id}"
         if rank is not None and rank == root_id:
             param_in_this_device.append(param)
         block._insert_op_without_sync(
             insert_idx,
-            type='c_broadcast',
-            inputs={'X': param},
-            outputs={'Out': param},
+            type='broadcast',
+            inputs={'x': param},
+            outputs={'out': param},
             attrs={
                 'ring_id': ring_id,
                 'root': root_id,
-                'use_calc_stream': use_calc_stream,
                 OP_ROLE_KEY: op_role,
             },
         )
@@ -773,7 +770,9 @@ def fuse_opt_broadcast_param_ops(
     device_to_vars = [[] for _ in range(nranks)]
 
     for idx, op in reversed(list(enumerate(block.ops))):
-        if not is_optimizer_op(op) or op.type != 'c_broadcast':
+        if not is_optimizer_op(op) or (
+            op.type != 'c_broadcast' and op.type != 'broadcast'
+        ):
             break
         var = op.input_arg_names[0]
         root_id = op.attr('root')
@@ -792,13 +791,12 @@ def fuse_opt_broadcast_param_ops(
         for fused_var in fused_vars:
             block._insert_op_without_sync(
                 insert_idx + insert_num,
-                type='c_broadcast',
-                inputs={'X': fused_var},
-                outputs={'Out': fused_var},
+                type='broadcast',
+                inputs={'x': fused_var},
+                outputs={'out': fused_var},
                 attrs={
                     'ring_id': ring_id,
                     'root': root_id,
-                    'use_calc_stream': True,
                     OP_ROLE_KEY: op_role,
                 },
             )
@@ -807,9 +805,7 @@ def fuse_opt_broadcast_param_ops(
 
 
 def get_grad_device(grad_name, shard):
-    assert "@GRAD" in grad_name, "[{}] should be a grad variable.".format(
-        grad_name
-    )
+    assert "@GRAD" in grad_name, f"[{grad_name}] should be a grad variable."
     base_name = None
     # NOTE: mind the traversal order
     possible_suffixes = [
@@ -855,7 +851,9 @@ def get_first_optimize_op_idx(block):
     return first_opt_op_idx
 
 
-def insert_broadcast_ops(block, insert_idx, ring_id, broadcast2root):
+def insert_broadcast_ops(
+    block, insert_idx, ring_id, broadcast2root, use_calc_stream=False
+):
     """
     _add_broadcast_ops
     """
@@ -863,9 +861,9 @@ def insert_broadcast_ops(block, insert_idx, ring_id, broadcast2root):
     for broadcast_name, root_device in broadcast2root:
         block._insert_op_without_sync(
             insert_idx,
-            type='c_broadcast',
-            inputs={'X': broadcast_name},
-            outputs={'Out': broadcast_name},
+            type='broadcast',
+            inputs={'x': broadcast_name},
+            outputs={'out': broadcast_name},
             attrs={
                 'ring_id': ring_id,
                 'root': root_device,
@@ -873,11 +871,10 @@ def insert_broadcast_ops(block, insert_idx, ring_id, broadcast2root):
             },
         )
 
-    return
-
 
 DtypeToSize = {
     core.VarDesc.VarType.FP16: 2,
+    core.VarDesc.VarType.BF16: 2,
     core.VarDesc.VarType.FP32: 4,
     core.VarDesc.VarType.FP64: 8,
     core.VarDesc.VarType.INT16: 2,
@@ -913,7 +910,7 @@ def insert_scale_loss_grad_ops(block, scale=1.0):
         if is_loss_grad_op(op):
             assert op.type == 'fill_constant', (
                 "loss_grad_op must be fill_constant op, "
-                "but this op is {}".format(op.type)
+                f"but this op is {op.type}"
             )
             assert op.has_attr('value')
             loss_scale = float(op.attr('value'))
@@ -930,13 +927,16 @@ def comm_analyse(main_program):
     broadcast_vars = {}
     block = main_program.global_block()
     for op in block.ops:
-        if op.type == "c_broadcast":
+        if op.type == "c_broadcast" or op.type == "broadcast":
             var_name = op.desc.input_arg_names()[0]
             # convert MB to KB
             broadcast_vars[var_name] = (
                 get_var_size(block.var(var_name)) * 1024.0
             )
-        elif op.type == "c_allreduce_sum":
+        elif op.type == "c_allreduce_sum" or (
+            op.type == "all_reduce"
+            and op.desc.attr("reduce_type") == dist.ReduceOp.SUM
+        ):
             var_name = op.desc.input_arg_names()[0]
             reduce_vars[var_name] = get_var_size(block.var(var_name)) * 1024.0
 
@@ -978,7 +978,7 @@ def add_sync_comm(program, sharding_ring_id):
     block = program.global_block()
     not_sync_vars = set()
     for op in block.ops:
-        if op.type in ["c_broadcast", "c_allreduce"]:
+        if op.type in ["c_broadcast", "c_allreduce", "broadcast"]:
             for input_name in op.desc.input_arg_names():
                 not_sync_vars.add(input_name)
         if op.type == "c_sync_comm_stream":
@@ -994,7 +994,6 @@ def add_sync_comm(program, sharding_ring_id):
                 'op_role': core.op_proto_and_checker_maker.OpRole.Forward,
             },
         )
-    return
 
 
 def save_persistables(exe, dirname, main_program, filename=None):
@@ -1030,11 +1029,11 @@ def save_persistables(exe, dirname, main_program, filename=None):
     def is_gradient_merge_vars(var):
         # NOTE(JZ-LIANG): to revise save/load logic in framework instead of write this naive rule
 
-        return var.name.endswith("@GradiantMerge")
+        return var.name.endswith("@GradientMerge")
 
     def is_trainable(var):
         return (
-            isinstance(var, paddle.fluid.framework.Parameter) and var.trainable
+            isinstance(var, paddle.base.framework.Parameter) and var.trainable
         )
 
     def sharding_predicate(var):
@@ -1055,11 +1054,9 @@ def save_persistables(exe, dirname, main_program, filename=None):
             filename=None,
         )
 
-    return
-
 
 def append_naive_sync(block, sync_var, ring_id):
-    # NOTE (JZ-LIANG) update this to use barrier sync for more elegent logic
+    # NOTE (JZ-LIANG) update this to use barrier sync for more elegant logic
     # sync within global
     block.append_op(
         type="fill_constant",
@@ -1067,16 +1064,16 @@ def append_naive_sync(block, sync_var, ring_id):
         attrs={
             "shape": sync_var.shape,
             "dtype": sync_var.dtype,
-            "value": int(1),
+            "value": 1,
         },
     )
     block.append_op(
-        type='c_allreduce_sum',
-        inputs={'X': sync_var},
-        outputs={'Out': sync_var},
+        type='all_reduce',
+        inputs={'x': sync_var},
+        outputs={'out': sync_var},
         attrs={
             'ring_id': ring_id,
-            'use_calc_stream': True,
+            'reduce_type': dist.ReduceOp.SUM,
             OP_ROLE_KEY: OpRole.Forward,
         },
     )

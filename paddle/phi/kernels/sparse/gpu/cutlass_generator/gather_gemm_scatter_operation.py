@@ -158,7 +158,7 @@ struct ${operation_name} {
             'opcode_class': OpcodeClassTag[
                 operation.tile_description.math_instruction.opcode_class
             ],
-            'arch': "cutlass::arch::Sm%d" % operation.arch,
+            'arch': f"cutlass::arch::Sm{operation.arch}",
             'threadblock_shape_m': str(
                 operation.tile_description.threadblock_shape[0]
             ),
@@ -305,7 +305,4 @@ class GatherGemmScatterOperation(GemmOperation):
         }
 
     def layout_name(self):
-        return "{}{}".format(
-            self.ShortLayoutTypeNames[self.A.layout],
-            self.ShortLayoutTypeNames[self.B.layout],
-        )
+        return f"{self.ShortLayoutTypeNames[self.A.layout]}{self.ShortLayoutTypeNames[self.B.layout]}"

@@ -15,9 +15,13 @@
 #include "paddle/phi/kernels/strided_slice_kernel.h"
 
 #include "glog/logging.h"
+#include "paddle/phi/kernels/funcs/slice_utils.h"
 
+#include "paddle/common/flags.h"
 #include "paddle/phi/backends/all_context.h"
 #include "paddle/phi/core/kernel_registry.h"
+
+COMMON_DECLARE_bool(use_stride_kernel);
 
 namespace phi {
 
@@ -31,65 +35,53 @@ void StridedSliceRawStridedKernel(const Context& dev_ctx,
                                   const std::vector<int>& infer_flags,
                                   const std::vector<int>& decrease_axis,
                                   DenseTensor* out) {
+  if (!FLAGS_use_stride_kernel) {
+    PADDLE_THROW(common::errors::Fatal(
+        "FLAGS_use_stride_kernel is closed. Strided kernel "
+        "be called, something wrong has happened!"));
+  }
   std::vector<int64_t> starts = starts_arr.GetData();
   std::vector<int64_t> ends = ends_arr.GetData();
   std::vector<int64_t> strides = strides_arr.GetData();
 
-  std::vector<int64_t> output_dims = phi::vectorize<int64_t>(input.dims());
-  std::vector<int64_t> output_stride = phi::vectorize<int64_t>(input.strides());
-  int64_t output_offset = input.offset();
+  std::vector<int64_t> output_dims = common::vectorize<int64_t>(input.dims());
+  std::vector<int64_t> output_stride =
+      common::vectorize<int64_t>(input.strides());
+  int64_t output_offset = static_cast<int64_t>(input.offset());
   for (size_t i = 0; i < axes.size(); ++i) {
     int64_t axis_size = input.dims()[axes[i]];
 
     if (axis_size < 0) {
       continue;
     }
-
-    if (starts[i] < 0) {
-      starts[i] = starts[i] + axis_size;
-      starts[i] = std::max<int64_t>(starts[i], 0);
-    }
-    if (ends[i] < 0) {
-      if (!(ends[i] == -1 && strides[i] < 0)) {  // skip None stop condition
-        ends[i] = ends[i] + axis_size;
-        if (ends[i] < 0) {
-          ends[i] = 0;
-        }
-      }
-    }
-    if (strides[i] < 0) {
-      starts[i] = starts[i] + 1;
-      ends[i] = ends[i] + 1;
+    bool dummy_zero_dim_out = false;
+    funcs::normalize_interval(starts[i],
+                              ends[i],
+                              strides[i],
+                              axis_size,
+                              &starts[i],
+                              &ends[i],
+                              &dummy_zero_dim_out);
+    if (ends[i] == -axis_size - 1) {
+      ends[i] = -1;
     }
 
-    int64_t left =
-        std::max(static_cast<int64_t>(0), std::min(starts[i], ends[i]));
-    int64_t right = std::min(axis_size, std::max(starts[i], ends[i]));
-    int64_t step = std::abs(strides[i]);
+    int64_t step_size = std::abs(strides[i]);
 
-    auto dim = (std::abs(right - left) + step - 1) / step;
+    auto out_dim = (std::abs(ends[i] - starts[i]) + step_size - 1) / step_size;
 
-    if (dim <= 0) {
-      dim = 0;
-      strides[i] = 1;
-      starts[i] = 0;
-    }
-
-    if (starts[i] >= axis_size) {
-      starts[i] = (strides[i] < 0) ? axis_size - 1 : axis_size;
-    }
-
-    output_offset += starts[i] * output_stride[axes[i]] * SizeOf(out->dtype());
-    output_dims[axes[i]] = dim;
+    output_offset += static_cast<int>(starts[i] * output_stride[axes[i]] *
+                                      SizeOf(out->dtype()));
+    output_dims[axes[i]] = out_dim;
     output_stride[axes[i]] *= strides[i];
   }
 
   // generate new shape
-  if (decrease_axis.size() > 0) {
+  if (!decrease_axis.empty()) {
     std::vector<int64_t> new_out_shape;
     std::vector<int64_t> new_out_stride;
-    for (size_t i = 0; i < decrease_axis.size(); ++i) {
-      output_dims[decrease_axis[i]] = 0;
+    for (auto de_axis : decrease_axis) {
+      output_dims[de_axis] = 0;
     }
 
     for (size_t i = 0; i < output_dims.size(); ++i) {
@@ -104,18 +96,21 @@ void StridedSliceRawStridedKernel(const Context& dev_ctx,
 
   auto meta = out->meta();
   meta.offset = output_offset;
-  auto tmp_dim = DDim(output_dims.data(), output_dims.size());
+  auto tmp_dim = DDim(output_dims.data(), static_cast<int>(output_dims.size()));
   // if (product(meta.dims) > 0 && meta.dims != tmp_dim) {
   //   PADDLE_THROW(
-  //       phi::errors::Fatal("Striede_slice kernel stride compute diff, infer "
+  //       common::errors::Fatal("Striede_slice kernel stride compute diff,
+  //       infer "
   //                          "shape is %s, but compute is %s.",
   //                          meta.dims,
   //                          tmp_dim));
   // }
   meta.dims = tmp_dim;
-  meta.strides = DDim(output_stride.data(), output_stride.size());
+  meta.strides =
+      DDim(output_stride.data(), static_cast<int>(output_stride.size()));
   out->set_meta(meta);
   out->ResetHolder(input.Holder());
+  out->ShareInplaceVersionCounterWith(input);
 }
 
 template <typename Context>
@@ -126,14 +121,22 @@ void StridedSliceStridedKernel(const Context& dev_ctx,
                                const IntArray& ends,
                                const IntArray& strides,
                                DenseTensor* out) {
+  if (!FLAGS_use_stride_kernel) {
+    PADDLE_THROW(common::errors::Fatal(
+        "FLAGS_use_stride_kernel is closed. Strided kernel "
+        "be called, something wrong has happened!"));
+  }
   std::vector<int> infer_flags(axes.size(), 1);
   std::vector<int> decrease_axis;
   StridedSliceRawStridedKernel<Context>(
       dev_ctx, x, axes, starts, ends, strides, infer_flags, decrease_axis, out);
 }
 }  // namespace phi
-PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE_EXCEPT_CUSTOM(
-    strided_slice_raw, STRIDED, phi::StridedSliceRawStridedKernel) {}
 
-PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE_EXCEPT_CUSTOM(
-    strided_slice, STRIDED, phi::StridedSliceStridedKernel) {}
+PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE(strided_slice_raw,
+                                         STRIDED,
+                                         phi::StridedSliceRawStridedKernel) {}
+
+PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE(strided_slice,
+                                         STRIDED,
+                                         phi::StridedSliceStridedKernel) {}

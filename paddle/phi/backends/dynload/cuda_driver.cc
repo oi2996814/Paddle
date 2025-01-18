@@ -14,8 +14,7 @@ limitations under the License. */
 
 #include "paddle/phi/backends/dynload/cuda_driver.h"
 
-namespace phi {
-namespace dynload {
+namespace phi::dynload {
 
 std::once_flag cuda_dso_flag;
 void* cuda_dso_handle = nullptr;
@@ -24,6 +23,7 @@ void* cuda_dso_handle = nullptr;
 
 #if CUDA_VERSION >= 10020
 CUDA_ROUTINE_EACH_VVM(DEFINE_WRAP);
+CUDA_ROUTINE_EACH_CUDA_GRAPH(DEFINE_WRAP);
 #endif
 CUDA_ROUTINE_EACH(DEFINE_WRAP);
 
@@ -32,5 +32,4 @@ bool HasCUDADriver() {
   return cuda_dso_handle != nullptr;
 }
 
-}  // namespace dynload
-}  // namespace phi
+}  // namespace phi::dynload

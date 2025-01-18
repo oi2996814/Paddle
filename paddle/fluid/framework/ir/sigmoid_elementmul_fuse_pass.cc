@@ -23,10 +23,7 @@
 #include "paddle/fluid/framework/op_version_registry.h"
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
-namespace patterns {
+namespace paddle::framework::ir::patterns {
 
 struct SigmoidElementmulFusePattern : public PatternBase {
   SigmoidElementmulFusePattern(PDPattern* pattern,
@@ -65,13 +62,14 @@ SigmoidElementmulFusePattern::SigmoidElementmulFusePattern(
   elemul_op->LinksFrom({sigmoid_x, sigmoid_out}).LinksTo({elemul_out});
 }
 
-}  // namespace patterns
+}  // namespace paddle::framework::ir::patterns
+namespace paddle::framework::ir {
 
 SigmoidElementmulFusePass::SigmoidElementmulFusePass() = default;
 
 void SigmoidElementmulFusePass::ApplyImpl(ir::Graph* graph) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, platform::errors::PreconditionNotMet("graph should not be null."));
+      graph, common::errors::PreconditionNotMet("graph should not be null."));
   Init(name_scope_, graph);
 
   GraphPatternDetector gpd;
@@ -114,9 +112,7 @@ void SigmoidElementmulFusePass::ApplyImpl(ir::Graph* graph) const {
   AddStatis(found_subgraph_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(sigmoid_elementmul_fuse_pass,
               paddle::framework::ir::SigmoidElementmulFusePass);

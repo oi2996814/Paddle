@@ -24,22 +24,16 @@
 #include "paddle/fluid/inference/analysis/pass_result_info.h"
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 class Graph;
 class Node;
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
-namespace paddle {
-namespace inference {
-namespace analysis {
+namespace paddle::inference::analysis {
 
 using framework::ir::Graph;
 using framework::ir::Node;
-using framework::ir::TopologyVarientSort;
+using framework::ir::TopologyVariantSort;
 using space_table_t = MemoryOptimizePass::space_table_t;
 
 typedef struct {
@@ -60,15 +54,14 @@ void MemoryOptimizePass::CollectLifeCycle(
     int sort_kind) const {
   int max_lifecycle = 0;
   double persis_byte = 0;
-  for (auto* op_node : framework::ir::TopologyVarientSort(
+  for (auto* op_node : framework::ir::TopologyVariantSort(
            *graph, static_cast<framework::ir::SortKind>(sort_kind))) {
     if (!op_node->IsOp()) continue;
     auto reads = op_node->inputs;
     auto writes = op_node->outputs;
 
-    std::vector<Node*>
-    requires(reads.begin(), reads.end());
-    requires.insert(requires.end(), writes.begin(), writes.end());
+    std::vector<Node*> req(reads.begin(), reads.end());
+    req.insert(req.end(), writes.begin(), writes.end());
 
     // Disable reuse of feed variables.
     if (op_node->Name() == "feed") {
@@ -79,7 +72,7 @@ void MemoryOptimizePass::CollectLifeCycle(
       }
     } else {
       // Normal operators.
-      for (const Node* node : requires) {
+      for (const Node* node : req) {
         if (!node->Var()) continue;
         if (node->Var()->Persistable()) {
           // "Getting 'tensor_desc' is not supported by the fetch type
@@ -92,15 +85,18 @@ void MemoryOptimizePass::CollectLifeCycle(
 
           auto in_shape = node->Var()->GetShape();
           for (auto i : in_shape) {
-            CHECK_GT(i, 0);
+            PADDLE_ENFORCE_GE(i,
+                              0,
+                              common::errors::InvalidArgument(
+                                  "The shape of node shouldn't be negative. "));
           }
           auto var_bytes = std::accumulate(in_shape.begin(),
                                            in_shape.end(),
                                            (int64_t)1,
-                                           std::multiplies<int64_t>());
-          persis_byte +=
+                                           std::multiplies<>());
+          persis_byte += static_cast<double>(
               paddle::framework::SizeOfType(node->Var()->GetDataType()) *
-              var_bytes;
+              var_bytes);
           continue;
         }
         std::string var = node->Name();
@@ -138,7 +134,11 @@ void MemoryOptimizePass::CollectVarMemorySize(
                                         "fetch",
                                         "share_data"};
     for (auto* tmp : node->inputs) {
-      CHECK(tmp->IsOp());
+      PADDLE_ENFORCE_EQ(tmp->IsOp(),
+                        true,
+                        common::errors::InvalidArgument(
+                            "Expected a node to be an operation, but the given "
+                            "node is not an operation."));
       std::string op_type = tmp->Op()->Type();
       if (std::find(invalid_op.begin(), invalid_op.end(), op_type) !=
           invalid_op.end()) {
@@ -146,7 +146,11 @@ void MemoryOptimizePass::CollectVarMemorySize(
       }
     }
     for (auto* tmp : node->outputs) {
-      CHECK(tmp->IsOp());
+      PADDLE_ENFORCE_EQ(tmp->IsOp(),
+                        true,
+                        common::errors::InvalidArgument(
+                            "Expected a node to be an operation, but the given "
+                            "node is not an operation."));
       std::string op_type = tmp->Op()->Type();
       if (std::find(invalid_op.begin(), invalid_op.end(), op_type) !=
           invalid_op.end()) {
@@ -156,14 +160,14 @@ void MemoryOptimizePass::CollectVarMemorySize(
     return true;
   };
 
-  // MemoryOptimizePass surppose input model is directed acyclic graph
+  // MemoryOptimizePass suppose input model is directed acyclic graph
   // although it's not always the case. so black list is the best compromise
   // between performance and underlying principle.
   std::unordered_set<std::string> black_list;
   for (auto* node : graph->Nodes()) {
     if (node->IsVar() && node->Var() &&
         node->Var()->GetType() ==
-            framework::proto::VarType::Type::VarType_Type_LOD_TENSOR) {
+            framework::proto::VarType::Type::VarType_Type_DENSE_TENSOR) {
       if (!valid_var(node)) {
         black_list.emplace(node->Var()->Name());
       }
@@ -174,7 +178,7 @@ void MemoryOptimizePass::CollectVarMemorySize(
   for (auto* node : graph->Nodes()) {
     if (node->IsVar() && node->Var() &&
         node->Var()->GetType() ==
-            framework::proto::VarType::Type::VarType_Type_LOD_TENSOR &&
+            framework::proto::VarType::Type::VarType_Type_DENSE_TENSOR &&
         !black_list.count(node->Var()->Name())) {
       // Parameters will not be reused.
       if (node->Var()->Persistable()) continue;
@@ -183,8 +187,8 @@ void MemoryOptimizePass::CollectVarMemorySize(
         if (v < 0) v = fake_batch_size;
       }
 
-      int size = std::accumulate(
-          shape.begin(), shape.end(), 1, std::multiplies<int>());
+      int size =
+          std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<>());
       (*space_table)[node->Var()->Name()] =
           size * paddle::framework::SizeOfType(node->Var()->GetDataType());
     }
@@ -226,9 +230,9 @@ void MakeSimpleReusePlan(
   // Generating Memory Reuse Strategy Based on Greedy Way
   for (size_t i = 0; i < mem_nodes.size(); i++) {
     if (mem_nodes[i].cluster >= 0) continue;
-    int cluster_index = cluster_size->size();
+    int cluster_index = static_cast<int>(cluster_size->size());
     mem_nodes[i].cluster = cluster_index;
-    (*cluster_size)[mem_nodes[i].name] = mem_nodes[i].size;
+    (*cluster_size)[mem_nodes[i].name] = static_cast<int>(mem_nodes[i].size);
     (*node2cluster)[mem_nodes[i].name] = mem_nodes[i].name;
     std::unordered_set<std::string> cluster_adj = mem_nodes[i].adj;
     for (size_t j = i + 1; j < mem_nodes.size(); j++) {
@@ -284,6 +288,4 @@ void MemoryOptimizePass::RunImpl(Argument* argument) {
   return;
 }
 
-}  // namespace analysis
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::analysis

@@ -18,14 +18,13 @@
 #include "paddle/fluid/framework/io/crypto/cipher_utils.h"
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 std::shared_ptr<Cipher> CipherFactory::CreateCipher(
     const std::string& config_file) {
   std::string cipher_name;
-  int iv_size;
-  int tag_size;
+  int iv_size = 0;
+  int tag_size = 0;
   std::unordered_map<std::string, std::string> config;
   if (!config_file.empty()) {
     config = CipherUtils::LoadConfig(config_file);
@@ -49,13 +48,12 @@ std::shared_ptr<Cipher> CipherFactory::CreateCipher(
     ret->Init(cipher_name, iv_size, tag_size);
     return ret;
   } else {
-    PADDLE_THROW(paddle::platform::errors::InvalidArgument(
-        "Invalid cipher name is specied. "
+    PADDLE_THROW(common::errors::InvalidArgument(
+        "Invalid cipher name is specified. "
         "Please check you have specified valid cipher"
         " name in CryptoProperties."));
   }
   return nullptr;
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

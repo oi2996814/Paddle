@@ -14,13 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #pragma once
-#include "gflags/gflags.h"
 #include "glog/logging.h"
+#include "paddle/common/flags.h"
 
 #include "paddle/phi/backends/dynload/cudnn.h"
 #include "paddle/phi/backends/gpu/gpu_info.h"
 
-DECLARE_bool(enable_cudnn_frontend);
+PD_DECLARE_bool(enable_cudnn_frontend);
 
 // Redirect the CUDNN APIs in the cudnn_frontend namespace to
 // the functions in phi::dynload
@@ -36,6 +36,7 @@ DECLARE_bool(enable_cudnn_frontend);
   __macro(cudnnCreateFilterDescriptor);    \
   __macro(cudnnDestroyFilterDescriptor);   \
   __macro(cudnnGetStream);                 \
+  __macro(cudnnGetErrorString);            \
   __macro(cudnnGetVersion);                \
   __macro(cudnnReorderFilterAndBias);      \
   __macro(cudnnSetFilterNdDescriptor);
@@ -43,6 +44,13 @@ DECLARE_bool(enable_cudnn_frontend);
 namespace cudnn_frontend {
 CUDNN_FRONTEND_APPLY_EACH(CUDNN_FRONTEND_OVERRIDE_SYMBOL);
 }  // namespace cudnn_frontend
+
+#if CUDNN_VERSION >= 90000
+#define CUDNN_FRONTEND_APPLY_EACH_V9(__macro) __macro(cudnnGetLastErrorString);
+namespace cudnn_frontend {
+CUDNN_FRONTEND_APPLY_EACH_V9(CUDNN_FRONTEND_OVERRIDE_SYMBOL);
+}  // namespace cudnn_frontend
+#endif
 
 // clang-format off
 #include <cudnn_frontend.h>                                        // NOLINT

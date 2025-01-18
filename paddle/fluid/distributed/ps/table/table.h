@@ -22,17 +22,17 @@
 #include <string>
 #include <utility>
 
-#include "paddle/fluid/distributed/common/afs_warpper.h"
+#include "paddle/common/macros.h"
+#include "paddle/fluid/distributed/common/afs_wrapper.h"
 #include "paddle/fluid/distributed/ps/table/accessor.h"
 #include "paddle/fluid/distributed/ps/table/depends/sparse_utils.h"
 #include "paddle/fluid/distributed/ps/table/graph/graph_node.h"
 #include "paddle/fluid/framework/channel.h"
 #include "paddle/fluid/framework/program_desc.h"
 #include "paddle/fluid/framework/scope.h"
-#include "paddle/fluid/platform/device_context.h"
-#include "paddle/fluid/platform/place.h"
-#include "paddle/fluid/string/string_helper.h"
-#include "paddle/phi/core/macros.h"
+#include "paddle/phi/common/place.h"
+#include "paddle/phi/core/platform/device_context.h"
+#include "paddle/utils/string/string_helper.h"
 
 namespace paddle {
 namespace distributed {
@@ -92,7 +92,7 @@ class Table {
   // only for tensor table
   virtual int32_t SetProgramEnv(
       framework::Scope *scope UNUSED,
-      platform::Place place UNUSED,
+      phi::Place place UNUSED,
       const std::vector<framework::ProgramDesc> *sub_program UNUSED) {
     return 0;
   }
@@ -114,11 +114,18 @@ class Table {
   // 指定保存路径
   virtual int32_t Save(const std::string &path,
                        const std::string &converter) = 0;
+
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_PSCORE)
+  // pglbox支持将非9008 slot的feature额外保存一份，实际支持用户可配置过滤slot
+  virtual int32_t Save_v2(const std::string &path,
+                          const std::string &converter) = 0;
+#endif
+
   // for cache
   virtual int32_t SaveCache(
       const std::string &path UNUSED,
       const std::string &param UNUSED,
-      paddle::framework::Channel<std::pair<uint64_t, std::string>>
+      ::paddle::framework::Channel<std::pair<uint64_t, std::string>>
           &shuffled_channel UNUSED) {
     return 0;
   }
@@ -130,7 +137,7 @@ class Table {
       std::function<std::future<int32_t>(
           int msg_type, int to_pserver_id, std::string &msg)>  // NOLINT
           send_msg_func UNUSED,
-      paddle::framework::Channel<std::pair<uint64_t, std::string>>
+      ::paddle::framework::Channel<std::pair<uint64_t, std::string>>
           &shuffled_channel UNUSED,
       const std::vector<Table *> &table_ptrs UNUSED) {
     return 0;
@@ -144,8 +151,8 @@ class Table {
     return InitializeShard();
   }
 
-  inline std::shared_ptr<ValueAccessor> ValueAccesor() {
-    return _value_accesor;
+  inline std::shared_ptr<ValueAccessor> GetValueAccessor() {
+    return _value_accessor;
   }
 
   virtual void *GetShard(size_t shard_idx) = 0;
@@ -156,12 +163,14 @@ class Table {
   virtual void Revert() {}
   virtual void CheckSavePrePatchDone() {}
 
+  virtual void SetDayId(int day_id) {}
+
  protected:
   virtual int32_t Initialize() = 0;
   virtual int32_t InitializeAccessor();
   virtual int32_t InitializeShard() = 0;
   virtual std::string TableDir(const std::string &model_dir) {
-    return paddle::string::format_string(
+    return ::paddle::string::format_string(
         "%s/%03d/", model_dir.c_str(), _config.table_id());
   }
 
@@ -169,8 +178,11 @@ class Table {
   size_t _shard_num;  // table 分片总数
   TableParameter _config;
   float *_global_lr = nullptr;
-  std::shared_ptr<ValueAccessor> _value_accesor;
+  std::shared_ptr<ValueAccessor> _value_accessor;
   AfsClient _afs_client;
+  std::string _fs_name;
+  std::string _fs_user;
+  std::string _pass_wd;
 };
 REGISTER_PSCORE_REGISTERER(Table);
 

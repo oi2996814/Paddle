@@ -81,10 +81,10 @@ class DistPassTestBase(unittest.TestCase):
         pass
 
     def get_model(self, place, **kwargs):
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def apply_passes(self, main_prog, startup_prog):
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def check_main(self, model=None, gpus=None, **kwargs):
         pass_rets = self._distributed_launch(
@@ -137,7 +137,7 @@ class DistPassTestBase(unittest.TestCase):
             paddle.static.Program(), paddle.static.Program()
         ):
             with paddle.static.scope_guard(scope):
-                with paddle.fluid.unique_name.guard():
+                with paddle.base.unique_name.guard():
                     main_prog, startup_prog, inputs, outputs, reader = model(
                         place, **kwargs
                     )
@@ -151,9 +151,9 @@ class DistPassTestBase(unittest.TestCase):
         with paddle.static.scope_guard(scope):
             exe.run(startup_prog)
             for batch_id, input_data in enumerate(reader()):
-                assert len(input_data) == len(inputs), "{} vs {}".format(
-                    len(input_data), len(inputs)
-                )
+                assert len(input_data) == len(
+                    inputs
+                ), f"{len(input_data)} vs {len(inputs)}"
                 feed = dict(zip(inputs, input_data))
                 fetch_values = exe.run(main_prog, feed=feed, fetch_list=outputs)
                 if paddle.distributed.get_rank() == 0:
@@ -211,30 +211,26 @@ class DistPassTestBase(unittest.TestCase):
                 with open(model_dump_file, 'wb') as f:
                     pickle.dump(model, f)
 
-            cmd = (
-                [
-                    sys.executable,
-                    "-u",
-                ]
-                + coverage_args
-                + [
-                    "-m",
-                    "launch",
-                    "--log_dir",
-                    output_dir,
-                    "--gpus",
-                    gpus,
-                    os.path.join(file_dir, "pass_run_main.py"),
-                    "--file_path",
-                    inspect.getfile(type(self)),
-                    "--class_name",
-                    type(self).__name__,
-                    "--input_file",
-                    input_dump_file,
-                    "--output_dir",
-                    output_dir,
-                ]
-            )
+            cmd = [
+                sys.executable,
+                "-u",
+                *coverage_args,
+                "-m",
+                "launch",
+                "--log_dir",
+                output_dir,
+                "--gpus",
+                gpus,
+                os.path.join(file_dir, "pass_run_main.py"),
+                "--file_path",
+                inspect.getfile(type(self)),
+                "--class_name",
+                type(self).__name__,
+                "--input_file",
+                input_dump_file,
+                "--output_dir",
+                output_dir,
+            ]
             if apply_pass:
                 cmd += ["--apply_pass"]
             if model is not None:
@@ -245,9 +241,7 @@ class DistPassTestBase(unittest.TestCase):
             self.assertEqual(
                 exitcode,
                 0,
-                "Pass test failed with apply_pass = {}, please view log in {}".format(
-                    apply_pass, output_dir
-                ),
+                f"Pass test failed with apply_pass = {apply_pass}, please view log in {output_dir}",
             )
 
             results = []
@@ -255,9 +249,7 @@ class DistPassTestBase(unittest.TestCase):
                 dump_file = f'{output_dir}/{i}.bin'
                 self.assertTrue(
                     os.path.exists(dump_file),
-                    "Pass test failed with apply_pass = {}, please view log in {}".format(
-                        apply_pass, output_dir
-                    ),
+                    f"Pass test failed with apply_pass = {apply_pass}, please view log in {output_dir}",
                 )
                 with open(dump_file, "rb") as f:
                     results.append(pickle.load(f))
@@ -273,7 +265,7 @@ class PassConflictChecker(DistPassTestBase):
         super().setUp()
 
     def pass_config(self):
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def apply_passes(self, main_prog, startup_prog):
         passes = self.pass_config()
@@ -287,18 +279,14 @@ class PassConflictChecker(DistPassTestBase):
         self.assertEqual(
             len(passes),
             len(new_passes),
-            "After solving conflicts, the left passes are: {}".format(
-                auto_pass_manager.names
-            ),
+            f"After solving conflicts, the left passes are: {auto_pass_manager.names}",
         )
 
         for i, (p1, p2) in enumerate(zip(passes, new_passes)):
             self.assertEqual(
                 id(p1),
                 id(p2),
-                "After solving conflicts, the {}-th pass is different: {} vs {}".format(
-                    i, p1.name, p2.name
-                ),
+                f"After solving conflicts, the {i}-th pass is different: {p1.name} vs {p2.name}",
             )
 
         auto_pass_manager.apply([main_prog], [startup_prog])

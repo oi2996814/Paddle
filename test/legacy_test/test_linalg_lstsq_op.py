@@ -17,8 +17,8 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 
 class LinalgLstsqTestCase(unittest.TestCase):
@@ -26,7 +26,7 @@ class LinalgLstsqTestCase(unittest.TestCase):
         self.devices = ["cpu"]
         self.init_config()
         if core.is_compiled_with_cuda() and self.driver == "gels":
-            self.devices.append("gpu:0")
+            self.devices.append("gpu")
         self.generate_input()
         self.generate_output()
         np.random.seed(2022)
@@ -95,8 +95,10 @@ class LinalgLstsqTestCase(unittest.TestCase):
         paddle.enable_static()
         for dev in self.devices:
             paddle.set_device(dev)
-            place = fluid.CPUPlace() if dev == "cpu" else fluid.CUDAPlace(0)
-            with fluid.program_guard(fluid.Program(), fluid.Program()):
+            place = base.CPUPlace() if dev == "cpu" else base.CUDAPlace(0)
+            with paddle.static.program_guard(
+                paddle.static.Program(), paddle.static.Program()
+            ):
                 x = paddle.static.data(
                     name="x",
                     shape=self._input_shape_1,
@@ -110,9 +112,8 @@ class LinalgLstsqTestCase(unittest.TestCase):
                 results = paddle.linalg.lstsq(
                     x, y, rcond=self.rcond, driver=self.driver
                 )
-                exe = fluid.Executor(place)
+                exe = base.Executor(place)
                 fetches = exe.run(
-                    fluid.default_main_program(),
                     feed={"x": self._input_data_1, "y": self._input_data_2},
                     fetch_list=[results],
                 )

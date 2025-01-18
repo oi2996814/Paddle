@@ -12,9 +12,11 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include <stddef.h>
-#include <stdint.h>
-#include <stdio.h>
+#include <glog/logging.h>
+#include <gtest/gtest.h>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
 
 #include <fstream>
 #include <iostream>
@@ -22,8 +24,10 @@ limitations under the License. */
 #include <string>
 #include <vector>
 
+#include "paddle/common/flags.h"
 #include "paddle/fluid/inference/capi_exp/pd_inference_api.h"
-#include "test/cpp/inference/api/tester_helper.h"
+
+PD_DEFINE_string(infer_model, "", "model path");
 
 namespace paddle {
 namespace inference {
@@ -35,7 +39,7 @@ typedef struct RunParameter {
   size_t shape_size;
   float* input_data;
   int32_t out_size;
-  float* out_data;
+  std::vector<float> out_data;
   int32_t thread_index;
 } RunParameter;
 
@@ -58,15 +62,14 @@ void* run(void* thread_param) {
     param->out_size = param->out_size * output_shape->data[index];
   }
   PD_OneDimArrayInt32Destroy(output_shape);
-  param->out_data =
-      reinterpret_cast<float*>(malloc(param->out_size * sizeof(float)));
-  PD_TensorCopyToCpuFloat(output_tensor, param->out_data);
+  param->out_data.resize(param->out_size);
+  PD_TensorCopyToCpuFloat(output_tensor, param->out_data.data());
   PD_TensorDestroy(output_tensor);
   PD_OneDimArrayCstrDestroy(output_names);
   PD_TensorDestroy(tensor);
   PD_OneDimArrayCstrDestroy(input_names);
   LOG(INFO) << "Thread " << param->thread_index << " end run!";
-  return NULL;
+  return nullptr;
 }
 void threads_run(int thread_num) {
   auto model_dir = FLAGS_infer_model;
@@ -76,26 +79,22 @@ void threads_run(int thread_num) {
                     (model_dir + "/__params__").c_str());
   PD_Predictor* predictor = PD_PredictorCreate(config);
 
-  pthread_t* threads =
-      reinterpret_cast<pthread_t*>(malloc(thread_num * sizeof(pthread_t)));
-  RunParameter* params = reinterpret_cast<RunParameter*>(
-      malloc(thread_num * sizeof(RunParameter)));
-  int32_t shapes[4] = {1, 3, 300, 300};
-  float* input =
-      reinterpret_cast<float*>(malloc(1 * 3 * 300 * 300 * sizeof(float)));
-  memset(input, 0, 1 * 3 * 300 * 300 * sizeof(float));
+  std::vector<pthread_t> threads(thread_num);
+  std::vector<RunParameter> params(thread_num);
+
+  std::array<int32_t, 4> shapes = {1, 3, 224, 224};
+  std::vector<float> input(1 * 3 * 224 * 224, 0);
   for (int i = 0; i < thread_num; ++i) {
     params[i].predictor = PD_PredictorClone(predictor);
-    params[i].shapes = shapes;
+    params[i].shapes = shapes.data();
     params[i].shape_size = 4;
-    params[i].input_data = input;
+    params[i].input_data = input.data();
     params[i].out_size = 0;
-    params[i].out_data = NULL;
     params[i].thread_index = i;
-    pthread_create(&(threads[i]), NULL, run, (params + i));
+    pthread_create(&(threads[i]), nullptr, run, &(params[i]));
   }
   for (int i = 0; i < thread_num; ++i) {
-    pthread_join(threads[i], NULL);
+    pthread_join(threads[i], nullptr);
   }
   ASSERT_GT(params[0].out_size, 0);
 
@@ -107,11 +106,7 @@ void threads_run(int thread_num) {
   }
   for (int i = 0; i < thread_num; ++i) {
     PD_PredictorDestroy(params[i].predictor);
-    free(params[i].out_data);
   }
-  free(input);
-  free(params);
-  free(threads);
   PD_PredictorDestroy(predictor);
 }
 

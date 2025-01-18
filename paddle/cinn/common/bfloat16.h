@@ -158,7 +158,7 @@ struct CINN_ALIGN(2) bfloat16 {
     return *this;
   }
 
-  // Conversion opertors
+  // Conversion operators
   __host__ __device__ inline operator float() const {
 #ifdef CINN_CUDA_BF16
     return __bfloat162float(*reinterpret_cast<const __nv_bfloat16*>(&x));
@@ -217,6 +217,18 @@ struct CINN_ALIGN(2) bfloat16 {
     return static_cast<double>(static_cast<float>(*this));
   }
 #endif  // __cplusplus
+};
+
+struct CINN_ALIGN(16) bfloat168 {
+  bfloat16 x, y, z, w, v, u, t, s;
+};
+
+struct CINN_ALIGN(8) bfloat164 {
+  bfloat16 x, y, z, w;
+};
+
+struct CINN_ALIGN(4) bfloat162 {
+  bfloat16 x, y;
 };
 
 __host__ __device__ inline bfloat16 operator+(const bfloat16& a,

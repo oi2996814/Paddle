@@ -15,16 +15,12 @@ limitations under the License. */
 #pragma once
 
 #include "paddle/phi/core/allocator.h"
+#include "paddle/phi/core/enforce.h"
 #include "paddle/phi/core/storage_properties.h"
 #include "paddle/phi/core/stream.h"
 #include "paddle/phi/core/tensor_base.h"
 #include "paddle/phi/core/tensor_meta.h"
-
-/* @jim19930609: Move to MKLDNN_Tensor in the future
- */
-#ifdef PADDLE_WITH_DNNL
-#include "dnnl.hpp"  // NOLINT
-#endif
+#include "paddle/utils/test_macros.h"
 
 namespace phi {
 
@@ -38,8 +34,8 @@ class DistTensor;
 /// arrays are used in math operators.
 /// During the entire life cycle of a DenseTensor, its device type and key
 /// metadata are set unchanged.
-class DenseTensor : public TensorBase,
-                    public TypeInfoTraits<TensorBase, DenseTensor> {
+class TEST_API DenseTensor : public TensorBase,
+                             public TypeInfoTraits<TensorBase, DenseTensor> {
  public:
   /// \brief Construct a dense tensor and allocate space.
   /// \param a The allocator used to allocate space.
@@ -69,12 +65,12 @@ class DenseTensor : public TensorBase,
   /// \brief DenseTensor shallow copy assignment.
   DenseTensor& operator=(const DenseTensor& other);
 
-  DenseTensor& operator=(DenseTensor&& other);
+  DenseTensor& operator=(DenseTensor&& other) noexcept;
 
   DenseTensor();
 
   /// \brief Destroy the tensor object and release exclusive resources.
-  virtual ~DenseTensor() = default;
+  virtual ~DenseTensor();
 
  public:
   /// \brief Returns the name of the class for type traits.
@@ -99,7 +95,7 @@ class DenseTensor : public TensorBase,
 
   /// \brief Returns the lod of the tensor.
   /// \return The lod of the tensor.
-  const LoD& lod() const noexcept { return meta_.lod; }
+  const LegacyLoD& lod() const noexcept { return meta_.legacy_lod; }
 
   /// \brief Returns the data type of the tensor.
   /// \return The data type of the tensor.
@@ -132,6 +128,10 @@ class DenseTensor : public TensorBase,
   /// return Whether the allocation is allocated.
   bool initialized() const override { return holder_ && holder_->ptr(); }
 
+  /// \brief Test whether the holder is created.
+  /// \return Whether the holder is created.
+  bool has_allocation() const override { return holder_ != nullptr; }
+
   /// \brief Allocate memory with requested size from allocator.
   /// \return The mutable data pointer value of type T.
   void* AllocateFrom(Allocator* allocator,
@@ -153,8 +153,8 @@ class DenseTensor : public TensorBase,
   DenseTensor& Resize(const DDim& dims);
 
   /// \brief Change the lod information in the metadata.
-  /// \param lod The new lod of the dense tensor.
-  void ResetLoD(const LoD& lod);
+  /// \param legacy_lod The new lod of the dense tensor.
+  void ResetLoD(const LegacyLoD& legacy_lod);
 
   /// \brief Returns the actual allocation size occupied by tensor, may be
   /// larger
@@ -207,7 +207,7 @@ class DenseTensor : public TensorBase,
    *
    * 1. Some hardware or third-party libraries add some additional storage
    * properties on top of the description of the basic DenseTensor, such as
-   * memory desc of MKLDNN, storage_format and storage_layout of NPU,
+   * memory desc of OneDNN, storage_format and storage_layout of NPU,
    * these members are necessary for optimal performance, but if the properties
    * of each device are added to the DenseTensor with different macro isolation,
    * the memory layout of the DenseTensor will become more fragmented.
@@ -287,18 +287,6 @@ class DenseTensor : public TensorBase,
  protected:
   std::shared_ptr<InplaceVersion> inplace_version_counter_ =
       std::make_shared<InplaceVersion>();
-
-/* @jim19930609: This is a hack
-In general, it is badly designed to fuse MKLDNN-specific objects into a
-generic Tensor.
-We temporarily leave them here to unblock Tensor Unification progress.
-In the final state, we should come up with a MKLDNN_Tensor and move the
-following codes there.
-*/
-#ifdef PADDLE_WITH_DNNL
-  /// \brief memory descriptor of tensor which have layout set as kMKLDNN
-  dnnl::memory::desc mem_desc_;
-#endif
 
 #ifndef PADDLE_WITH_CUSTOM_KERNEL
 #include "paddle/phi/core/dense_tensor.inl"

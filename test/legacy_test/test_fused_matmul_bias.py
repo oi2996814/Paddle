@@ -17,7 +17,7 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 from paddle.incubate.nn import FusedLinear
 from paddle.incubate.nn.functional import fused_linear, fused_matmul_bias
 
@@ -153,6 +153,7 @@ class TestFusedLinear(unittest.TestCase):
     "fused_gemm_epilogue is only supported when CUDA version >= 11.6",
 )
 class TestStaticGraph(unittest.TestCase):
+
     def test_static_graph(self):
         paddle.enable_static()
         x = paddle.static.data(name='x', dtype='float32', shape=[-1, 100])

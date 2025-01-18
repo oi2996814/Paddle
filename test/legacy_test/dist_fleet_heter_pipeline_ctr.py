@@ -22,13 +22,12 @@ import ctr_dataset_reader
 from test_dist_fleet_heter_base import FleetDistHeterRunnerBase, runtime_main
 
 import paddle
-from paddle import fluid
+from paddle import base
 
 paddle.enable_static()
 
 # Fix seed for test
-fluid.default_startup_program().random_seed = 1
-fluid.default_main_program().random_seed = 1
+paddle.seed(1)
 
 
 class TestHeterPipelinePsCTR2x2(FleetDistHeterRunnerBase):
@@ -44,28 +43,25 @@ class TestHeterPipelinePsCTR2x2(FleetDistHeterRunnerBase):
             batch_size(int): the size of mini-batch for training
             lr(float): learning rate of training
         Returns:
-            avg_cost: LoDTensor of cost.
+            avg_cost: DenseTensor of cost.
         """
         dnn_input_dim, lr_input_dim = int(1e5), int(1e5)
 
-        with fluid.device_guard("cpu"):
+        with base.device_guard("cpu"):
             dnn_data = paddle.static.data(
                 name="dnn_data",
                 shape=[-1, 1],
                 dtype="int64",
-                lod_level=1,
             )
             lr_data = paddle.static.data(
                 name="lr_data",
                 shape=[-1, 1],
                 dtype="int64",
-                lod_level=1,
             )
             label = paddle.static.data(
                 name="click",
                 shape=[-1, 1],
                 dtype="float32",
-                lod_level=0,
             )
 
             datas = [dnn_data, lr_data, label]
@@ -76,7 +72,7 @@ class TestHeterPipelinePsCTR2x2(FleetDistHeterRunnerBase):
                 is_distributed=False,
                 input=dnn_data,
                 size=[dnn_input_dim, dnn_layer_dims[0]],
-                param_attr=fluid.ParamAttr(
+                param_attr=base.ParamAttr(
                     name="deep_embedding",
                     initializer=paddle.nn.initializer.Constant(value=0.01),
                 ),
@@ -92,7 +88,7 @@ class TestHeterPipelinePsCTR2x2(FleetDistHeterRunnerBase):
                 is_distributed=False,
                 input=lr_data,
                 size=[lr_input_dim, 1],
-                param_attr=fluid.ParamAttr(
+                param_attr=base.ParamAttr(
                     name="wide_embedding",
                     initializer=paddle.nn.initializer.Constant(value=0.01),
                 ),
@@ -102,20 +98,20 @@ class TestHeterPipelinePsCTR2x2(FleetDistHeterRunnerBase):
                 input=lr_embedding, pool_type="sum"
             )
 
-        with fluid.device_guard("gpu"):
+        with base.device_guard("gpu"):
             for i, dim in enumerate(dnn_layer_dims[1:]):
                 fc = paddle.static.nn.fc(
                     x=dnn_out,
                     size=dim,
                     activation="relu",
-                    weight_attr=fluid.ParamAttr(
+                    weight_attr=base.ParamAttr(
                         initializer=paddle.nn.initializer.Constant(value=0.01)
                     ),
-                    name='dnn-fc-%d' % i,
+                    name=f'dnn-fc-{i}',
                 )
                 dnn_out = fc
 
-        with fluid.device_guard("cpu"):
+        with base.device_guard("cpu"):
             merge_layer = paddle.concat([dnn_out, lr_pool], axis=1)
             label = paddle.cast(label, dtype="int64")
             predict = paddle.static.nn.fc(
@@ -141,20 +137,20 @@ class TestHeterPipelinePsCTR2x2(FleetDistHeterRunnerBase):
         with open(model_filename, "rb") as f:
             program_desc_str = f.read()
 
-        program = fluid.Program.parse_from_string(program_desc_str)
+        program = base.Program.parse_from_string(program_desc_str)
         with open(os.path.join(dirname, "__model__.proto"), "w") as wn:
             wn.write(str(program))
 
     def do_dataset_training(self, fleet):
         train_file_list = ctr_dataset_reader.prepare_fake_data()
 
-        exe = fluid.Executor(fluid.CPUPlace())
-        real_program = fluid.default_main_program()._heter_pipeline_opt[
+        exe = base.Executor(base.CPUPlace())
+        real_program = base.default_main_program()._heter_pipeline_opt[
             "section_program"
         ]
         print(real_program)
 
-        exe.run(fluid.default_startup_program())
+        exe.run(base.default_startup_program())
         fleet.init_worker()
 
         thread_num = int(os.getenv("CPU_NUM", 2))
@@ -164,7 +160,7 @@ class TestHeterPipelinePsCTR2x2(FleetDistHeterRunnerBase):
         print(f"filelist: {filelist}")
 
         # config dataset
-        dataset = fluid.DatasetFactory().create_dataset()
+        dataset = base.DatasetFactory().create_dataset()
         dataset.set_batch_size(batch_size)
         dataset.set_use_var(self.feeds)
         pipe_command = 'python3 ctr_dataset_reader.py'
@@ -177,7 +173,7 @@ class TestHeterPipelinePsCTR2x2(FleetDistHeterRunnerBase):
             pass_start = time.time()
             dataset.set_filelist(filelist)
             exe.train_from_dataset(
-                program=fluid.default_main_program(),
+                program=base.default_main_program(),
                 dataset=dataset,
                 fetch_list=[self.avg_cost],
                 fetch_info=["cost"],
@@ -189,10 +185,10 @@ class TestHeterPipelinePsCTR2x2(FleetDistHeterRunnerBase):
         exe.close()
 
     def do_dataset_heter_training(self, fleet):
-        exe = fluid.Executor()
-        exe.run(fluid.default_startup_program())
+        exe = base.Executor()
+        exe.run(base.default_startup_program())
         fleet.init_worker()
-        real_program = fluid.default_main_program()._heter_pipeline_opt[
+        real_program = base.default_main_program()._heter_pipeline_opt[
             "section_program"
         ]
         print(real_program)
@@ -202,7 +198,7 @@ class TestHeterPipelinePsCTR2x2(FleetDistHeterRunnerBase):
 
         pass_start = time.time()
         exe.train_from_dataset(
-            program=fluid.default_main_program(),
+            program=base.default_main_program(),
             fetch_list=[self.avg_cost],
             fetch_info=["cost"],
             print_period=2,
@@ -216,7 +212,7 @@ class TestHeterPipelinePsCTR2x2(FleetDistHeterRunnerBase):
         #    pass_start = time.time()
         #    dataset.set_filelist(filelist)
         #    exe.train_from_dataset(
-        #        program=fluid.default_main_program(),
+        #        program=base.default_main_program(),
         #        dataset=dataset,
         #        fetch_list=[self.avg_cost],
         #        fetch_info=["cost"],

@@ -21,7 +21,7 @@ import nets
 from test_dist_base import TestDistRunnerBase, runtime_main
 
 import paddle
-from paddle import fluid
+from paddle import base
 
 DTYPE = "float32"
 VOCAB_URL = 'http://paddle-dist-ce-data.bj.bcebos.com/imdb.vocab'
@@ -59,7 +59,7 @@ def conv_net(
         input=input,
         size=[dict_dim, emb_dim],
         is_sparse=False,
-        param_attr=fluid.ParamAttr(
+        param_attr=base.ParamAttr(
             initializer=paddle.nn.initializer.Constant(value=0.01)
         ),
     )
@@ -70,7 +70,7 @@ def conv_net(
         filter_size=window_size,
         act="tanh",
         pool_type="max",
-        param_attr=fluid.ParamAttr(
+        param_attr=base.ParamAttr(
             initializer=paddle.nn.initializer.Constant(value=0.01)
         ),
     )
@@ -78,7 +78,7 @@ def conv_net(
     fc_0 = paddle.static.nn.fc(
         x=[conv_3],
         size=fc0_dim,
-        weight_attr=fluid.ParamAttr(
+        weight_attr=base.ParamAttr(
             initializer=paddle.nn.initializer.Constant(value=0.01)
         ),
     )
@@ -87,7 +87,7 @@ def conv_net(
         x=[fc_0],
         size=class_dim,
         activation="softmax",
-        weight_attr=fluid.ParamAttr(
+        weight_attr=base.ParamAttr(
             initializer=paddle.nn.initializer.Constant(value=0.01)
         ),
     )
@@ -96,9 +96,7 @@ def conv_net(
 
 
 def inference_network(dict_dim):
-    data = paddle.static.data(
-        name="words", shape=[-1, 1], dtype="int64", lod_level=1
-    )
+    data = paddle.static.data(name="words", shape=[-1, 1], dtype="int64")
     out = conv_net(data, dict_dim)
     return out
 
@@ -126,9 +124,7 @@ class TestDistTextClassification2x2(TestDistRunnerBase):
         word_dict, dict_dim = get_worddict(vocab)
 
         # Input data
-        data = paddle.static.data(
-            name="words", shape=[-1, 1], dtype="int64", lod_level=1
-        )
+        data = paddle.static.data(name="words", shape=[-1, 1], dtype="int64")
         label = paddle.static.data(name='label', shape=[-1, 1], dtype='int64')
 
         # Train program
@@ -138,7 +134,7 @@ class TestDistTextClassification2x2(TestDistRunnerBase):
         )
         avg_cost = paddle.mean(x=cost)
         acc = paddle.static.accuracy(input=predict, label=label)
-        inference_program = fluid.default_main_program().clone()
+        inference_program = base.default_main_program().clone()
 
         # Optimization
         opt = get_optimizer(learning_rate=0.001)

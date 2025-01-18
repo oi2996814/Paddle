@@ -14,10 +14,9 @@
 
 import os
 
-from paddle.device import get_available_custom_device
-
 # (TODO: GhostScreaming) It will be removed later.
-from paddle.fluid import core
+from paddle.base import core
+from paddle.device import get_available_custom_device
 
 
 class DeviceType:
@@ -102,12 +101,18 @@ class Device:
             )
             if visible_devices_str in os.environ:
                 visible_devices = os.getenv(visible_devices_str)
-        elif 'CUDA_VISIBLE_DEVICES' in os.environ:
-            dev._dtype = DeviceType.GPU
-            visible_devices = os.getenv("CUDA_VISIBLE_DEVICES")
+        elif 'XPULINK_VISIBLE_DEVICES' in os.environ:
+            dev._dtype = DeviceType.XPU
+            visible_devices = os.getenv("XPULINK_VISIBLE_DEVICES")
         elif 'XPU_VISIBLE_DEVICES' in os.environ:
             dev._dtype = DeviceType.XPU
             visible_devices = os.getenv("XPU_VISIBLE_DEVICES")
+        elif 'CUDA_VISIBLE_DEVICES' in os.environ:
+            if core.is_compiled_with_xpu():
+                dev._dtype = DeviceType.XPU
+            else:
+                dev._dtype = DeviceType.GPU
+            visible_devices = os.getenv("CUDA_VISIBLE_DEVICES")
 
         if visible_devices is not None and visible_devices != 'all':
             dev._labels = visible_devices.split(',')
@@ -133,8 +138,8 @@ class Device:
             custom_device_type = os.getenv('PADDLE_XCCL_BACKEND')
             dev._dtype = DeviceType.CUSTOM_DEVICE
             num = get_custom_devices_count(custom_device_type)
-            visible_devices_str = '{}_VISIBLE_DEVICES'.format(
-                custom_device_type.upper()
+            visible_devices_str = (
+                f'{custom_device_type.upper()}_VISIBLE_DEVICES'
             )
             if visible_devices_str in os.environ:
                 visible_devices = os.getenv(visible_devices_str)

@@ -19,10 +19,7 @@
 #include "paddle/phi/backends/cpu/cpu_info.h"
 #include "paddle/phi/kernels/funcs/jit/registry.h"
 
-namespace phi {
-namespace jit {
-namespace more {
-namespace intrinsic {
+namespace phi::jit::more::intrinsic {
 
 void LayerNorm(float* x,
                float* out,
@@ -44,21 +41,22 @@ void LayerNorm(float* x,
     __m256 mean_vec, var_vec;
     __m128 hi, lo;
     __m256 tmp = _mm256_setzero_ps();
-    size_t offset;
-    size_t j;
-    __m256 reverse_num_vec =
-        _mm256_div_ps(_mm256_set1_ps(1.0), _mm256_set1_ps(right));
+    size_t offset = 0;
+    size_t j = 0;
+    __m256 reverse_num_vec = _mm256_div_ps(
+        _mm256_set1_ps(1.0), _mm256_set1_ps(static_cast<float>(right)));
     __m256 epsilon_vec = _mm256_set1_ps(epsilon);
-    int rest_mask =
-        ((-1) & (~((~0U) >> (sizeof(int) * 8 - (block - rest))))) & 0x0ff;
-    __m256i mask_vec = _mm256_set_epi32(rest_mask & 0x80 ? 0xffffffff : 0,
-                                        rest_mask & 0x40 ? 0xffffffff : 0,
-                                        rest_mask & 0x20 ? 0xffffffff : 0,
-                                        rest_mask & 0x10 ? 0xffffffff : 0,
-                                        rest_mask & 0x8 ? 0xffffffff : 0,
-                                        rest_mask & 0x4 ? 0xffffffff : 0,
-                                        rest_mask & 0x2 ? 0xffffffff : 0,
-                                        rest_mask & 0x1 ? 0xffffffff : 0);
+    int rest_mask = static_cast<int>(
+        ((-1) & (~((~0U) >> (sizeof(int) * 8 - (block - rest))))) & 0x0ff);
+    __m256i mask_vec =
+        _mm256_set_epi32(rest_mask & 0x80 ? 0xffffffff : 0,  // NOLINT
+                         rest_mask & 0x40 ? 0xffffffff : 0,  // NOLINT
+                         rest_mask & 0x20 ? 0xffffffff : 0,  // NOLINT
+                         rest_mask & 0x10 ? 0xffffffff : 0,  // NOLINT
+                         rest_mask & 0x8 ? 0xffffffff : 0,   // NOLINT
+                         rest_mask & 0x4 ? 0xffffffff : 0,   // NOLINT
+                         rest_mask & 0x2 ? 0xffffffff : 0,   // NOLINT
+                         rest_mask & 0x1 ? 0xffffffff : 0);  // NOLINT
 
 #ifdef PADDLE_WITH_MKLML
 #pragma omp for
@@ -182,10 +180,7 @@ bool LayerNormKernel::CanBeUsed(const int& d) const {
          d >= YMM_FLOAT_BLOCK;
 }
 
-}  // namespace intrinsic
-}  // namespace more
-}  // namespace jit
-}  // namespace phi
+}  // namespace phi::jit::more::intrinsic
 
 namespace intrinsic = phi::jit::more::intrinsic;
 

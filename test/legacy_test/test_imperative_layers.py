@@ -85,7 +85,9 @@ class TestLayerPrint(unittest.TestCase):
         self.assertEqual(str(module), 'Tanhshrink()')
 
         module = nn.ThresholdedReLU()
-        self.assertEqual(str(module), 'ThresholdedReLU(threshold=1.0)')
+        self.assertEqual(
+            str(module), 'ThresholdedReLU(threshold=1.0, value=0.0)'
+        )
 
         module = nn.LogSigmoid()
         self.assertEqual(str(module), 'LogSigmoid()')
@@ -108,7 +110,7 @@ class TestLayerPrint(unittest.TestCase):
         module = nn.Upsample(size=[12, 12])
         self.assertEqual(
             str(module),
-            'Upsample(size=[12, 12], mode=nearest, align_corners=False, align_mode=0, data_format=NCHW)',
+            'Upsample(size=[12, 12], mode=nearest, align_corners=False, align_mode=0, data_format=None)',
         )
 
         module = nn.UpsamplingNearest2D(size=[12, 12])
@@ -116,7 +118,17 @@ class TestLayerPrint(unittest.TestCase):
             str(module), 'UpsamplingNearest2D(size=[12, 12], data_format=NCHW)'
         )
 
+        module = nn.UpsamplingNearest2D(size=12)
+        self.assertEqual(
+            str(module), 'UpsamplingNearest2D(size=[12, 12], data_format=NCHW)'
+        )
+
         module = nn.UpsamplingBilinear2D(size=[12, 12])
+        self.assertEqual(
+            str(module), 'UpsamplingBilinear2D(size=[12, 12], data_format=NCHW)'
+        )
+
+        module = nn.UpsamplingBilinear2D(size=12)
         self.assertEqual(
             str(module), 'UpsamplingBilinear2D(size=[12, 12], data_format=NCHW)'
         )
@@ -167,8 +179,11 @@ class TestLayerPrint(unittest.TestCase):
         module = nn.CosineSimilarity(axis=0)
         self.assertEqual(str(module), 'CosineSimilarity(axis=0, eps=1e-08)')
 
-        module = nn.Embedding(10, 3, sparse=True)
-        self.assertEqual(str(module), 'Embedding(10, 3, sparse=True)')
+        module = nn.Embedding(10, 3, sparse=True, scale_grad_by_freq=False)
+        self.assertEqual(
+            str(module),
+            'Embedding(10, 3, sparse=True, scale_grad_by_freq=False)',
+        )
 
         module = nn.Conv1D(3, 2, 3)
         self.assertEqual(

@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 paddle.enable_static()
 np.random.seed(0)
@@ -28,6 +29,8 @@ class TestLerp(OpTest):
     def setUp(self):
         self.op_type = "lerp"
         self.python_api = paddle.lerp
+        self.prim_op_type = "comp"
+        self.public_python_api = paddle.lerp
         self.init_dtype()
         self.init_shape()
         self.init_xyshape()
@@ -52,10 +55,10 @@ class TestLerp(OpTest):
         self.wshape = [1]
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_prim_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X', 'Y'], 'Out')
+        self.check_grad(['X', 'Y'], 'Out', check_pir=True, check_prim_pir=True)
 
 
 class TestLerpWithDim2(TestLerp):
@@ -135,7 +138,13 @@ class TestLerpAPI(unittest.TestCase):
         self.y = np.full(4, 10.0).astype(self.dtype)
         self.w = np.asarray([0.75]).astype(self.dtype)
         self.res_ref = self.x + self.w * (self.y - self.x)
-        self.place = [paddle.CPUPlace()]
+        self.place = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.place.append(paddle.CPUPlace())
         if core.is_compiled_with_cuda():
             self.place.append(paddle.CUDAPlace(0))
 
@@ -223,12 +232,14 @@ class TestLerpAPI(unittest.TestCase):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestLerpBF16(TestLerp):
     def setUp(self):
         self.op_type = "lerp"
         self.python_api = paddle.lerp
+        self.prim_op_type = "comp"
+        self.public_python_api = paddle.lerp
         self.dtype = np.uint16
         self.init_shape()
         self.init_xyshape()
@@ -268,7 +279,7 @@ class TestLerpBF16(TestLerp):
 
     def test_check_output(self):
         place = core.CUDAPlace(0)
-        self.check_output_with_place(place)
+        self.check_output_with_place(place, check_pir=True, check_prim_pir=True)
 
     def test_check_grad(self):
         place = core.CUDAPlace(0)
@@ -277,6 +288,8 @@ class TestLerpBF16(TestLerp):
             ['X', 'Y'],
             'Out',
             user_defined_grads=[self.x_grad, self.y_grad],
+            check_pir=True,
+            check_prim_pir=True,
         )
 
 

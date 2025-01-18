@@ -28,10 +28,7 @@
 #include "paddle/fluid/framework/ir/pass_tester_helper.h"
 #include "paddle/fluid/framework/op_proto_maker.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
-namespace test {
+namespace paddle::framework::ir::test {
 
 OpDesc* CreateOp(ProgramDesc* prog,
                  const std::string& op_type_name,
@@ -143,7 +140,7 @@ ProgramDesc BuildProgramDesc(const std::vector<std::string>& transient_vars,
 
   auto add_var_to_prog = [&prog](const std::string& var_name) -> VarDesc* {
     auto var = prog.MutableBlock(0)->Var(var_name);
-    var->SetType(proto::VarType::LOD_TENSOR);
+    var->SetType(proto::VarType::DENSE_TENSOR);
     return var;
   };
 
@@ -167,10 +164,10 @@ bool RunPassAndAssert(Graph* graph,
                       int added_nodes_count) {
   if (!TestIsReachable(*graph, from, to)) return false;
 
-  int original_nodes_num = graph->Nodes().size();
+  int original_nodes_num = static_cast<int>(graph->Nodes().size());
   auto pass = PassRegistry::Instance().Get(pass_name);
   pass->Apply(graph);
-  int current_nodes_num = graph->Nodes().size();
+  int current_nodes_num = static_cast<int>(graph->Nodes().size());
 
   if (!TestIsReachable(*graph, from, to)) return false;
 
@@ -180,14 +177,15 @@ bool RunPassAndAssert(Graph* graph,
 }
 
 template <typename T>
-void InitLoDTensorHolder(const Scope& scope,
-                         const paddle::platform::Place& place,
-                         const std::string& var_name,
-                         const std::vector<int64_t>& dims,
-                         const T* data) {
+void InitDenseTensorHolder(const Scope& scope,
+                           const phi::Place& place,
+                           const std::string& var_name,
+                           const std::vector<int64_t>& dims,
+                           const T* data) {
   auto var = scope.FindLocalVar(var_name);
   auto tensor = var->GetMutable<phi::DenseTensor>();
-  auto* tensor_mem_ptr = tensor->mutable_data<T>(phi::make_ddim(dims), place);
+  auto* tensor_mem_ptr =
+      tensor->mutable_data<T>(common::make_ddim(dims), place);
   if (data != nullptr) {
     std::memcpy(tensor_mem_ptr, data, tensor->memory_size());
   } else {
@@ -196,21 +194,21 @@ void InitLoDTensorHolder(const Scope& scope,
 }
 
 // Instantiate for below data types.
-template void InitLoDTensorHolder<float>(const Scope&,
-                                         const paddle::platform::Place&,
+template void InitDenseTensorHolder<float>(const Scope&,
+                                           const phi::Place&,
+                                           const std::string&,
+                                           const std::vector<int64_t>&,
+                                           const float*);
+template void InitDenseTensorHolder<int>(const Scope&,
+                                         const phi::Place&,
                                          const std::string&,
                                          const std::vector<int64_t>&,
-                                         const float*);
-template void InitLoDTensorHolder<int>(const Scope&,
-                                       const paddle::platform::Place&,
-                                       const std::string&,
-                                       const std::vector<int64_t>&,
-                                       const int*);
-template void InitLoDTensorHolder<double>(const Scope&,
-                                          const paddle::platform::Place&,
-                                          const std::string&,
-                                          const std::vector<int64_t>&,
-                                          const double*);
+                                         const int*);
+template void InitDenseTensorHolder<double>(const Scope&,
+                                            const phi::Place&,
+                                            const std::string&,
+                                            const std::vector<int64_t>&,
+                                            const double*);
 
 OpDesc* GetOp(const ProgramDesc& prog,
               const std::string& op_type,
@@ -235,7 +233,4 @@ OpDesc* GetOp(const BlockDesc& block_desc,
   return nullptr;
 }
 
-}  // namespace test
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir::test

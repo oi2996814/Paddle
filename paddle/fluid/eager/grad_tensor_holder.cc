@@ -18,6 +18,8 @@
 #include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/fluid/framework/var_type.h"
 #include "paddle/fluid/imperative/gradient_accumulator.h"
+#include "paddle/phi/core/distributed/auto_parallel/dist_attr.h"
+#include "paddle/phi/core/distributed/auto_parallel/dist_tensor.h"
 #include "paddle/phi/core/sparse_coo_tensor.h"
 #include "paddle/phi/kernels/funcs/math_function.h"
 
@@ -35,10 +37,10 @@ void GradTensorHolder::CopyValueFromTensor(size_t slot_id,
                                            bool fill_one) {
   // TODO(jiabin): We need to deal with empty input_buffer with slot size not
   // empty;
-  PADDLE_ENFORCE(slot_id < buffer_.size(),
-                 paddle::platform::errors::Fatal(
-                     "Invalid slot_id for GradTensorHolder::add() "
-                     "which exceeds size of buffer"));
+  PADDLE_ENFORCE(
+      slot_id < buffer_.size(),
+      common::errors::Fatal("Invalid slot_id for GradTensorHolder::add() "
+                            "which exceeds size of buffer"));
   VLOG(6) << "Add Tensor for buffer_ slot: " << slot_id
           << ", size: " << buffer_[slot_id].size();
   if (buffer_[slot_id].empty()) {
@@ -48,7 +50,7 @@ void GradTensorHolder::CopyValueFromTensor(size_t slot_id,
   }
   PADDLE_ENFORCE(
       rank < buffer_[slot_id].size(),
-      paddle::platform::errors::Fatal(
+      common::errors::Fatal(
           "Invalid rank for GradTensorHolder::add() which exceeds size "
           "of buffer slot %d, got slot size is: %d rank is: %d",
           slot_id,
@@ -56,7 +58,7 @@ void GradTensorHolder::CopyValueFromTensor(size_t slot_id,
           rank));
   if (!fill_one) {
     paddle::Tensor& buffer_tensor = buffer_[slot_id][rank];
-    if ((!buffer_tensor.defined() || !buffer_tensor.initialized())) {
+    if ((!buffer_tensor.defined() || !buffer_tensor.has_allocation())) {
       // Perform deep copy here
       buffer_tensor.copy_(t, t.place(), false);
       auto* meta = egr::EagerUtils::autograd_meta(&buffer_tensor);
@@ -69,7 +71,7 @@ void GradTensorHolder::CopyValueFromTensor(size_t slot_id,
         meta->WeakGrad() = origin_meta->WeakGrad();
       }
     } else {
-      PADDLE_THROW(paddle::platform::errors::Fatal(
+      PADDLE_THROW(common::errors::Fatal(
           "Cannot copy grad_tensors' value to grad tensor holders,"
           "input buffer has already been initialized."));
     }
@@ -77,14 +79,26 @@ void GradTensorHolder::CopyValueFromTensor(size_t slot_id,
     // Create new tensor->impl and fill it with 1.0
     if (t.defined()) {
       // Fill 1.0, use full to support complex, one_like don't support it.
-      if (t.is_dense_tensor()) {
+      if (t.is_dense_tensor()) {  // NOLINT
         buffer_[slot_id][rank] =
             paddle::experimental::full(t.shape(), 1, t.dtype(), t.place());
       } else if (t.is_sparse_csr_tensor() || t.is_sparse_coo_tensor()) {
         buffer_[slot_id][rank] =
             paddle::experimental::sparse::full_like(t, 1, t.dtype());
+      } else if (t.is_dist_tensor()) {
+        auto init_grad =
+            paddle::experimental::full(t.shape(), 1, t.dtype(), t.place());
+        auto global_dense_t =
+            std::static_pointer_cast<phi::DenseTensor>(init_grad.impl());
+        auto dist_t =
+            static_cast<phi::distributed::DistTensor*>(t.impl().get());
+        auto dist_attr = dist_t->dist_attr();
+        dist_attr.clean_partial_status();
+        init_grad.set_impl(std::make_shared<phi::distributed::DistTensor>(
+            global_dense_t, dist_attr));
+        buffer_[slot_id][rank] = init_grad;
       } else {
-        PADDLE_THROW(paddle::platform::errors::Fatal(
+        PADDLE_THROW(common::errors::Fatal(
             "Only Support DENSE_TENSOR, SPARSE_COO_TENSOR, SPARSE_CSR_TENSOR "
             "now."));
       }
@@ -98,15 +112,26 @@ void GradTensorHolder::add(size_t slot_id,
                            size_t rank,
                            const paddle::Tensor& t,
                            bool create_graph) {
-  if (!t.initialized()) {
-    VLOG(3) << "No need to do accumulate for uninitialized t.";
-    return;
+  if (!t.has_allocation()) {
+    if (t.defined() && t.is_dist_tensor() &&
+        phi::distributed::NeedComputationClipForPP(t.impl())) {
+      // Pipeline parallel still needs to construct GradNode graph
+      // to make DistTensor's global shape and DistAttr information flow.
+      // Skip grad accumulation will cause GradTensor disconnect to next
+      // GradNode.
+      VLOG(3) << "Do accumulate for uninitialized Tensor " << t.name()
+              << " as it's DistTensor and it needs computation clip for "
+                 "pipeline parallel.";
+    } else {
+      VLOG(3) << "No need to do accumulate for uninitialized t.";
+      return;
+    }
   }  // TODO(jiabin): Remove this when we fix all kernel.
 
-  PADDLE_ENFORCE(slot_id < buffer_.size(),
-                 paddle::platform::errors::Fatal(
-                     "Invalid slot_id for GradTensorHolder::add() "
-                     "which exceeds size of buffer"));
+  PADDLE_ENFORCE(
+      slot_id < buffer_.size(),
+      common::errors::Fatal("Invalid slot_id for GradTensorHolder::add() "
+                            "which exceeds size of buffer"));
   if (buffer_[slot_id].empty()) {
     VLOG(6) << "Pass add Tensor for buffer_ slot: " << slot_id
             << " since its buffer_ is empty ";
@@ -114,7 +139,7 @@ void GradTensorHolder::add(size_t slot_id,
   }
   PADDLE_ENFORCE(
       rank < buffer_[slot_id].size(),
-      paddle::platform::errors::Fatal(
+      common::errors::Fatal(
           "Invalid rank for GradTensorHolder::add() which exceeds size "
           "of buffer slot %d, got slot size is: %d rank is: %d",
           slot_id,
@@ -127,7 +152,7 @@ void GradTensorHolder::add(size_t slot_id,
   // related code later.
   // This if statement is trying to test neither phi::Tensor nor
   // framework::Variable is initialized.
-  if ((!buffer_tensor.defined() || !buffer_tensor.initialized())) {
+  if ((!buffer_tensor.defined() || !buffer_tensor.has_allocation())) {
     // Simply copy tensor->impl
     VLOG(6) << "Move Tensor for buffer_ slot: " << slot_id
             << ", size: " << buffer_[slot_id].size();
@@ -136,13 +161,14 @@ void GradTensorHolder::add(size_t slot_id,
     VLOG(6) << "Add Tensor for buffer_ slot: " << slot_id
             << ", size: " << buffer_[slot_id].size();
     // Accumulation
-    PADDLE_ENFORCE_EQ(t.initialized(),
-                      true,
-                      paddle::platform::errors::Fatal(
-                          "We can only accumulate initialized tensor, but we "
-                          "got tensor: %s is empty please check you network "
-                          "and make sure it creates grads.",
-                          t.name()));
+    PADDLE_ENFORCE_EQ(
+        t.has_allocation(),
+        true,
+        common::errors::Fatal(
+            "We can only accumulate tensor having allocation, but we "
+            "got tensor: %s without allocation, please check you network "
+            "and make sure it creates grads.",
+            t.name()));
 
     if (t.is_dense_tensor()) {
       if (buffer_tensor.is_dense_tensor()) {
@@ -178,6 +204,8 @@ void GradTensorHolder::add(size_t slot_id,
                                                         &buffer_values);
         }
       }
+    } else if (t.is_dist_tensor()) {
+      buffer_tensor = add_ad_func(t, buffer_tensor);
     } else {
       // TODO(jiabin): Support Other TensorBase later
       // TODO(zhanlve): Replace SelectedRowsAddTensor with add_dygraph_function

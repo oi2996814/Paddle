@@ -16,17 +16,15 @@
 
 #include <memory>
 
+#include "paddle/cinn/ir/ir_printer.h"
 #include "paddle/cinn/optim/ir_simplify.h"
 #include "paddle/cinn/optim/optimize.h"
+#include "paddle/common/enforce.h"
 
 namespace cinn {
 namespace ir {
 
 void Module::Builder::AddFunction(ir::LoweredFunc func) {
-  optim::Simplify(&(func->body));
-  optim::SimplifyForLoops(&(func->body));
-  optim::SimplifyBlocks(&(func->body));
-  func->body = optim::Optimize(func->body, module_->target);
   module_->functions.push_back(func);
 }
 
@@ -34,25 +32,71 @@ void Module::Builder::AddFunctionWithoutOptim(const ir::LoweredFunc &func) {
   module_->functions.push_back(func);
 }
 
+std::optional<int> GetDataAlignmentImpl(common::UnknownArch arch) {
+  return std::nullopt;
+}
+
+std::optional<int> GetDataAlignmentImpl(common::X86Arch arch) { return 32; }
+
+std::optional<int> GetDataAlignmentImpl(common::ARMArch arch) {
+  return std::nullopt;
+}
+
+std::optional<int> GetDataAlignmentImpl(common::NVGPUArch) {
+  return std::nullopt;
+}
+
+std::optional<int> GetDataAlignmentImpl(common::HygonDCUArchHIP arch) {
+  return std::nullopt;
+}
+
+std::optional<int> GetDataAlignmentImpl(common::HygonDCUArchSYCL arch) {
+  return std::nullopt;
+}
+
+std::optional<int> GetDataAlignment(common::Arch arch) {
+  return std::visit([](const auto &impl) { return GetDataAlignmentImpl(impl); },
+                    arch.variant());
+}
+
 void Module::Builder::AddBuffer(ir::Buffer buffer) {
-  CHECK(buffer->target.defined())
-      << "buffer [" << buffer->name << "]'s target is undefined";
+  PADDLE_ENFORCE_EQ(
+      buffer->target.defined(),
+      true,
+      ::common::errors::InvalidArgument(
+          "The target of buffer [%s] is undefined. Please define the target.",
+          buffer->name));
   if (std::find_if(
           module_->buffers.begin(), module_->buffers.end(), [&](const Expr &x) {
             return x.as_buffer()->name == buffer->name;
           }) == std::end(module_->buffers)) {
     module_->buffers.push_back(buffer);
-    if (module_->target.arch == Target::Arch::X86) {
-      module_->buffers.back().as_buffer()->data_alignment = 32;
+    if (auto alignment = GetDataAlignment(module_->target.arch)) {
+      module_->buffers.back().as_buffer()->data_alignment = alignment.value();
     }
   }
+}
+
+void Module::Builder::AddPredicate(ir::Expr predicate) {
+  module_->predicates.push_back(predicate);
+}
+
+void Module::Builder::AddPriority(int priority) {
+  module_->priorities.push_back(priority);
+}
+
+void Module::Builder::SetInferShapeFunc(ir::LoweredFunc infer_shape_func) {
+  module_->infer_shape_func = infer_shape_func;
 }
 
 void Module::Builder::Clear() {
   module_->buffers.clear();
   module_->functions.clear();
   module_->submodules.clear();
+  module_->predicates.clear();
 }
+
+common::Arch Module::Builder::GetTargetArch() { return module_->target.arch; }
 
 Module Module::Builder::Build() {
   if (module_->functions.empty()) {
@@ -60,8 +104,7 @@ Module Module::Builder::Build() {
   }
 
   auto res = ir::Module(module_.get());
-
-  return optim::Optimize(res, module_->target);
+  return res;
 }
 
 ir::_Module_ *Module::self() { return p_->as<ir::_Module_>(); }
@@ -79,25 +122,15 @@ std::vector<ir::Buffer> Module::buffers() const {
   return buffers;
 }
 
-std::vector<ir::LoweredFunc> Module::functions() const {
-  std::vector<ir::LoweredFunc> functions;
-  for (auto &x : self()->functions) {
-    functions.emplace_back(x.as_lowered_func_ref());
-  }
-  return functions;
+const std::vector<ir::LoweredFunc> &Module::functions() const {
+  return self()->functions;
 }
 
-std::vector<Module> Module::submodules() const {
-  std::vector<ir::Module> modules;
-  for (auto &x : self()->submodules) {
-    modules.push_back(x.as_module_ref());
-  }
-  return modules;
+const std::vector<Module> &Module::submodules() const {
+  return self()->submodules;
 }
 
 void Module::Compile(const backends::Outputs &outputs) const {}
-
-Module::operator Expr() const { return Expr(ptr()); }
 
 }  // namespace ir
 }  // namespace cinn

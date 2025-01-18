@@ -21,9 +21,8 @@ import numpy as np
 from test_imperative_base import new_program_scope
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
-from paddle.fluid.dygraph.base import to_variable
+from paddle import base
+from paddle.base import core
 from paddle.nn import Linear
 
 
@@ -39,7 +38,7 @@ class DMF(paddle.nn.Layer):
         for i in range(len(self._hid_sizes)):
             self._user_layers.append(
                 self.add_sublayer(
-                    'user_layer_%d' % i,
+                    f'user_layer_{i}',
                     Linear(
                         256 if i == 0 else self._hid_sizes[i - 1],
                         self._hid_sizes[i],
@@ -48,13 +47,13 @@ class DMF(paddle.nn.Layer):
             )
             self._user_layers.append(
                 self.add_sublayer(
-                    'user_layer_act_%d' % i,
+                    f'user_layer_act_{i}',
                     paddle.nn.ReLU(),
                 )
             )
             self._item_layers.append(
                 self.add_sublayer(
-                    'item_layer_%d' % i,
+                    f'item_layer_{i}',
                     Linear(
                         256 if i == 0 else self._hid_sizes[i - 1],
                         self._hid_sizes[i],
@@ -63,7 +62,7 @@ class DMF(paddle.nn.Layer):
             )
             self._item_layers.append(
                 self.add_sublayer(
-                    'item_layer_act_%d' % i,
+                    f'item_layer_act_{i}',
                     paddle.nn.ReLU(),
                 )
             )
@@ -88,7 +87,7 @@ class MLP(paddle.nn.Layer):
         for i in range(len(self._hid_sizes)):
             self._match_layers.append(
                 self.add_sublayer(
-                    'match_layer_%d' % i,
+                    f'match_layer_{i}',
                     Linear(
                         256 * 2 if i == 0 else self._hid_sizes[i - 1],
                         self._hid_sizes[i],
@@ -97,7 +96,7 @@ class MLP(paddle.nn.Layer):
             )
             self._match_layers.append(
                 self.add_sublayer(
-                    'match_layer_act_%d' % i,
+                    f'match_layer_act_{i}',
                     paddle.nn.ReLU(),
                 )
             )
@@ -117,7 +116,7 @@ class DeepCF(paddle.nn.Layer):
         self._num_users = num_users
         self._num_items = num_items
         self._rating_matrix = self.create_parameter(
-            attr=fluid.ParamAttr(trainable=False),
+            attr=base.ParamAttr(trainable=False),
             shape=matrix.shape,
             dtype=matrix.dtype,
             is_bias=False,
@@ -157,7 +156,7 @@ class TestDygraphDeepCF(unittest.TestCase):
 
         self.batch_size = int(os.environ.get('BATCH_SIZE', 128))
         self.num_batches = int(os.environ.get('NUM_BATCHES', 5))
-        self.num_epoches = int(os.environ.get('NUM_EPOCHES', 1))
+        self.num_epochs = int(os.environ.get('NUM_EPOCHS', 1))
 
     def get_data(self):
         user_ids = []
@@ -189,12 +188,12 @@ class TestDygraphDeepCF(unittest.TestCase):
         )
 
     def load_data(self):
-        sys.stderr.write('loading from %s\n' % self.data_path)
+        sys.stderr.write(f'loading from {self.data_path}\n')
         likes = {}
         num_users = -1
         num_items = -1
         with open(self.data_path, 'r') as f:
-            for l in f.readlines():
+            for l in f:
                 uid, iid, rating = (int(v) for v in l.split('\t'))
                 num_users = max(num_users, uid + 1)
                 num_items = max(num_items, iid + 1)
@@ -257,10 +256,10 @@ class TestDygraphDeepCF(unittest.TestCase):
             ) = self.get_data()
         paddle.seed(seed)
         paddle.framework.random._manual_program_seed(seed)
-        startup = fluid.Program()
-        main = fluid.Program()
+        startup = base.Program()
+        main = base.Program()
 
-        scope = fluid.core.Scope()
+        scope = base.core.Scope()
         with new_program_scope(main=main, startup=startup, scope=scope):
             users = paddle.static.data('users', [-1, 1], dtype='int32')
             items = paddle.static.data('items', [-1, 1], dtype='int32')
@@ -272,14 +271,14 @@ class TestDygraphDeepCF(unittest.TestCase):
             adam = paddle.optimizer.Adam(0.01)
             adam.minimize(loss)
 
-            exe = fluid.Executor(
-                fluid.CPUPlace()
+            exe = base.Executor(
+                base.CPUPlace()
                 if not core.is_compiled_with_cuda()
-                else fluid.CUDAPlace(0)
+                else base.CUDAPlace(0)
             )
             exe.run(startup)
-            for e in range(self.num_epoches):
-                sys.stderr.write('epoch %d\n' % e)
+            for e in range(self.num_epochs):
+                sys.stderr.write(f'epoch {e}\n')
                 for slice in range(
                     0, self.batch_size * self.num_batches, self.batch_size
                 ):
@@ -300,29 +299,33 @@ class TestDygraphDeepCF(unittest.TestCase):
                         },
                         fetch_list=[loss],
                     )[0]
-                    sys.stderr.write('static loss %s\n' % static_loss)
+                    sys.stderr.write(f'static loss {static_loss}\n')
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             paddle.seed(seed)
             paddle.framework.random._manual_program_seed(seed)
 
             deepcf = DeepCF(num_users, num_items, matrix)
             adam = paddle.optimizer.Adam(0.01, parameters=deepcf.parameters())
-            for e in range(self.num_epoches):
-                sys.stderr.write('epoch %d\n' % e)
+            for e in range(self.num_epochs):
+                sys.stderr.write(f'epoch {e}\n')
                 for slice in range(
                     0, self.batch_size * self.num_batches, self.batch_size
                 ):
                     if slice + self.batch_size >= users_np.shape[0]:
                         break
                     prediction = deepcf(
-                        to_variable(users_np[slice : slice + self.batch_size]),
-                        to_variable(items_np[slice : slice + self.batch_size]),
+                        paddle.to_tensor(
+                            users_np[slice : slice + self.batch_size]
+                        ),
+                        paddle.to_tensor(
+                            items_np[slice : slice + self.batch_size]
+                        ),
                     )
                     loss = paddle.sum(
                         paddle.nn.functional.log_loss(
                             prediction,
-                            to_variable(
+                            paddle.to_tensor(
                                 labels_np[slice : slice + self.batch_size]
                             ),
                         )
@@ -333,28 +336,32 @@ class TestDygraphDeepCF(unittest.TestCase):
                     dy_loss = loss.numpy()
                     sys.stderr.write(f'dynamic loss: {slice} {dy_loss}\n')
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             paddle.seed(seed)
             paddle.framework.random._manual_program_seed(seed)
 
             deepcf2 = DeepCF(num_users, num_items, matrix)
             adam2 = paddle.optimizer.Adam(0.01, parameters=deepcf2.parameters())
-            fluid.set_flags({'FLAGS_sort_sum_gradient': True})
-            for e in range(self.num_epoches):
-                sys.stderr.write('epoch %d\n' % e)
+            base.set_flags({'FLAGS_sort_sum_gradient': True})
+            for e in range(self.num_epochs):
+                sys.stderr.write(f'epoch {e}\n')
                 for slice in range(
                     0, self.batch_size * self.num_batches, self.batch_size
                 ):
                     if slice + self.batch_size >= users_np.shape[0]:
                         break
                     prediction2 = deepcf2(
-                        to_variable(users_np[slice : slice + self.batch_size]),
-                        to_variable(items_np[slice : slice + self.batch_size]),
+                        paddle.to_tensor(
+                            users_np[slice : slice + self.batch_size]
+                        ),
+                        paddle.to_tensor(
+                            items_np[slice : slice + self.batch_size]
+                        ),
                     )
                     loss2 = paddle.sum(
                         paddle.nn.functional.log_loss(
                             prediction2,
-                            to_variable(
+                            paddle.to_tensor(
                                 labels_np[slice : slice + self.batch_size]
                             ),
                         )
@@ -365,30 +372,32 @@ class TestDygraphDeepCF(unittest.TestCase):
                     dy_loss2 = loss2.numpy()
                     sys.stderr.write(f'dynamic loss: {slice} {dy_loss2}\n')
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             paddle.seed(seed)
             paddle.framework.random._manual_program_seed(seed)
-            fluid.default_startup_program().random_seed = seed
-            fluid.default_main_program().random_seed = seed
 
             deepcf = DeepCF(num_users, num_items, matrix)
             adam = paddle.optimizer.Adam(0.01, parameters=deepcf.parameters())
 
-            for e in range(self.num_epoches):
-                sys.stderr.write('epoch %d\n' % e)
+            for e in range(self.num_epochs):
+                sys.stderr.write(f'epoch {e}\n')
                 for slice in range(
                     0, self.batch_size * self.num_batches, self.batch_size
                 ):
                     if slice + self.batch_size >= users_np.shape[0]:
                         break
                     prediction = deepcf(
-                        to_variable(users_np[slice : slice + self.batch_size]),
-                        to_variable(items_np[slice : slice + self.batch_size]),
+                        paddle.to_tensor(
+                            users_np[slice : slice + self.batch_size]
+                        ),
+                        paddle.to_tensor(
+                            items_np[slice : slice + self.batch_size]
+                        ),
                     )
                     loss = paddle.sum(
                         paddle.nn.functional.log_loss(
                             prediction,
-                            to_variable(
+                            paddle.to_tensor(
                                 labels_np[slice : slice + self.batch_size]
                             ),
                         )

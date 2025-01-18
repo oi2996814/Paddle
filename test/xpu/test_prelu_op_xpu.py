@@ -23,8 +23,7 @@ from get_test_cover_info import (
 from op_test_xpu import XPUOpTest
 
 import paddle
-from paddle import fluid
-from paddle.fluid import Program
+from paddle import base
 
 paddle.enable_static()
 
@@ -148,7 +147,7 @@ class XPUTestPReluOp(XPUOpTestWrapper):
 
 
 def prelu_t(x, mode, param_attr=None, name=None, data_format='NCHW'):
-    helper = fluid.layer_helper.LayerHelper('prelu', **locals())
+    helper = base.layer_helper.LayerHelper('prelu', **locals())
     alpha_shape = [1, x.shape[1], 1, 1]
     dtype = helper.input_dtype(input_param_name='x')
     alpha = helper.create_parameter(
@@ -175,29 +174,31 @@ class TestModeError(unittest.TestCase):
         self.x_np = np.ones([1, 2, 3, 4]).astype('float32')
 
     def test_mode_error(self):
-        main_program = Program()
-        with fluid.program_guard(main_program, Program()):
-            x = paddle.static.data(name='x', shape=[2, 3, 4, 5])
-            try:
-                y = prelu_t(x, 'any')
-            except Exception as e:
-                assert e.args[0].find('InvalidArgument') != -1
+        with paddle.pir_utils.OldIrGuard():
+            main_program = paddle.base.Program()
+            with base.program_guard(main_program, paddle.base.Program()):
+                x = paddle.static.data(name='x', shape=[2, 3, 4, 5])
+                try:
+                    y = prelu_t(x, 'any')
+                except Exception as e:
+                    assert e.args[0].find('InvalidArgument') != -1
 
     def test_data_format_error1(self):
-        main_program = Program()
-        with fluid.program_guard(main_program, Program()):
-            x = paddle.static.data(name='x', shape=[2, 3, 4, 5])
-            try:
-                y = prelu_t(x, 'channel', data_format='N')
-            except Exception as e:
-                assert e.args[0].find('InvalidArgument') != -1
+        with paddle.pir_utils.OldIrGuard():
+            main_program = paddle.base.Program()
+            with base.program_guard(main_program, paddle.base.Program()):
+                x = paddle.static.data(name='x', shape=[2, 3, 4, 5])
+                try:
+                    y = prelu_t(x, 'channel', data_format='N')
+                except Exception as e:
+                    assert e.args[0].find('InvalidArgument') != -1
 
     def test_data_format_error2(self):
-        main_program = Program()
-        with fluid.program_guard(main_program, Program()):
+        main_program = paddle.base.Program()
+        with base.program_guard(main_program, paddle.base.Program()):
             x = paddle.static.data(name='x', shape=[2, 3, 4, 5])
             try:
-                y = paddle.static.nn.prelu(x, 'channel', data_format='N')
+                y = paddle.nn.PReLU(3, data_format='N')(x)
             except ValueError as e:
                 pass
 

@@ -16,12 +16,12 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
 from get_test_cover_info import (
     XPUOpTestWrapper,
     create_test_class,
     get_xpu_op_support_types,
 )
+from op_test import OpTest
 from op_test_xpu import XPUOpTest
 
 import paddle
@@ -58,8 +58,8 @@ class XPUTestHuberLossOp(XPUOpTestWrapper):
             x = np.random.uniform(0, 1.0, shape).astype(self.dtype)
             y = np.random.uniform(0, 1.0, shape).astype(self.dtype)
             self.inputs = {
-                'X': OpTest.np_dtype_to_fluid_dtype(x),
-                'Y': OpTest.np_dtype_to_fluid_dtype(y),
+                'X': OpTest.np_dtype_to_base_dtype(x),
+                'Y': OpTest.np_dtype_to_base_dtype(y),
             }
 
         def set_attrs(self):
@@ -89,12 +89,12 @@ class XPUTestHuberLossOp(XPUOpTestWrapper):
         def test_check_grad_normal(self):
             self.check_grad_with_place(self.place, ['X', 'Y'], 'Out')
 
-        def test_check_grad_ingore_x(self):
+        def test_check_grad_ignore_x(self):
             self.check_grad_with_place(
                 self.place, ['Y'], 'Out', no_grad_set=set("residual")
             )
 
-        def test_check_grad_ingore_y(self):
+        def test_check_grad_ignore_y(self):
             self.check_grad_with_place(
                 self.place, ['X'], 'Out', no_grad_set=set('residual')
             )

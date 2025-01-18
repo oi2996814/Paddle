@@ -29,21 +29,21 @@ using gpuStream_t = cudaStream_t;
 using gpuStream_t = hipStream_t;
 #endif
 
-#include "paddle/phi/api/include/dll_decl.h"
+#include "paddle/common/layout.h"
+#include "paddle/common/macros.h"
 #include "paddle/phi/common/data_type.h"
 #include "paddle/phi/common/int_array.h"
-#include "paddle/phi/common/layout.h"
 #include "paddle/phi/common/place.h"
 #include "paddle/phi/common/scalar.h"
 
 namespace phi {
 class DenseTensor;
+class TensorBase;
 }  // namespace phi
 
-namespace phi {
-class TensorBase;
+namespace common {
 class DDim;
-}  // namespace phi
+}  // namespace common
 
 namespace paddle {
 // TODO(chenweihang): Remove the experimental namespace for Scalar and IntArray
@@ -96,7 +96,7 @@ class PADDLE_API Tensor final {
   /**
    * @brief Construct a new Tensor object by move
    */
-  Tensor(Tensor&&) = default;
+  Tensor(Tensor&&) noexcept = default;
 
   /**
    * @brief Construct a new Tensor object by a TensorBase pointer
@@ -141,6 +141,18 @@ class PADDLE_API Tensor final {
    * */
   explicit Tensor(const std::string& name) : name_(name) {}
 
+  /**
+   * @brief Construct a new Tensor object by a TensorBase pointer, autograd meta
+   * and name
+   *
+   * @param tensor_impl
+   * @param autograd_meta
+   * @param name
+   */
+  Tensor(std::shared_ptr<phi::TensorBase> tensor_impl,
+         std::shared_ptr<AbstractAutogradMeta> autograd_meta,
+         const std::string& name);
+
   /* Part 2: Dimension, DataType and DataLayout methods */
 
   /**
@@ -163,9 +175,9 @@ class PADDLE_API Tensor final {
   /**
    * @brief Return the dimensions of Tensor.
    *
-   * @return phi::DDim
+   * @return common::DDim
    */
-  const phi::DDim& dims() const;
+  const common::DDim& dims() const;
 
   /**
    * @brief Return the shape (dimensions) of Tensor.
@@ -180,9 +192,9 @@ class PADDLE_API Tensor final {
   /**
    * @brief Return the strides (dimensions) of Tensor.
    *
-   * @return phi::DDim
+   * @return common::DDim
    */
-  const phi::DDim& strides() const;
+  const common::DDim& strides() const;
 
   /**
    * @brief Reset the shape of the tensor.
@@ -487,6 +499,13 @@ class PADDLE_API Tensor final {
   bool defined() const;
 
   /**
+   * @brief Determine whether Tensor has allocation
+   *
+   * @return bool
+   */
+  bool has_allocation() const;
+
+  /**
    * @brief Determine whether Tensor is initialized.
    *
    * @return bool
@@ -522,7 +541,7 @@ class PADDLE_API Tensor final {
    * @param x
    * @return Tensor&
    */
-  Tensor& operator=(Tensor&& x) &;
+  Tensor& operator=(Tensor&& x) & noexcept;
 
   /**
    * @brief Tensor operants
@@ -618,6 +637,24 @@ class PADDLE_API Tensor final {
    */
   Tensor to_dense() const;
 
+  /* Part 12: Contiguous methods */
+
+  /**
+   * @brief Determine whether tensor is contiguous
+   *
+   * @return bool
+   */
+  bool is_contiguous() const;
+
+  /**
+   * @brief Returns a contiguous in memory tensor containing the same data as
+   * current Tensor. If self tensor is already contiguous, this function returns
+   * the current Tensor.
+   *
+   * @return Tensor
+   */
+  Tensor contiguous();
+
  private:
   /**
    * [ Why use abstract TensorImpl interface here? ]
@@ -703,7 +740,7 @@ class PADDLE_API Tensor final {
   Tensor maximum(const Tensor& y) const;
   Tensor minimum(const Tensor& y) const;
   Tensor scale(const Scalar& scale = 1.0,
-               float bias = 0.0,
+               const Scalar& bias = 0.0,
                bool bias_after_scale = true) const;
   Tensor sum(const IntArray& axis = {},
              DataType dtype = DataType::UNDEFINED,

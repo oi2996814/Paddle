@@ -19,7 +19,11 @@ from functools import wraps
 
 import decos
 import numpy as np
-from dygraph_to_static_util import ast_only_test, dy2static_unittest
+from dygraph_to_static_utils import (
+    Dy2StTestBase,
+    test_ast_only,
+    test_pt_only,
+)
 
 import paddle
 
@@ -92,7 +96,7 @@ def deco6(x=0):
 @deco2
 def fun1(x, y=0):
     a = paddle.to_tensor(y)
-    print('in fun1, x=%d' % (x))
+    print(f'in fun1, x={x}')
     return a
 
 
@@ -100,21 +104,21 @@ def fun1(x, y=0):
 @deco2
 def fun2(x, y=0):
     a = paddle.to_tensor(y)
-    print('in fun2, x=%d' % (x))
+    print(f'in fun2, x={x}')
     return a
 
 
 @deco3(3)
 def fun3(x, y=0):
     a = paddle.to_tensor(y)
-    print('in fun3, x=%d' % (x))
+    print(f'in fun3, x={x}')
     return a
 
 
 @deco4(x=4)
 def fun4(x, y=0):
     a = paddle.to_tensor(y)
-    print('in fun4, x=%d' % (x))
+    print(f'in fun4, x={x}')
     return a
 
 
@@ -122,7 +126,7 @@ def fun4(x, y=0):
 @deco4()
 def fun5(x, y=0):
     a = paddle.to_tensor(y)
-    print('in fun5, x=%d' % (x))
+    print(f'in fun5, x={x}')
     return a
 
 
@@ -130,21 +134,21 @@ def fun5(x, y=0):
 @decos.deco2(2)
 def fun6(x, y=0):
     a = paddle.to_tensor(y)
-    print('in fun6, x=%d' % (x))
+    print(f'in fun6, x={x}')
     return a
 
 
 @deco5()
 def fun7(x, y=0):
     a = paddle.to_tensor(y)
-    print('in fun7, x=%d' % (x))
+    print(f'in fun7, x={x}')
     return a
 
 
 @deco6(2)
 def fun8(x, y=0):
     a = paddle.to_tensor(y)
-    print('in fun8, x=%d' % (x))
+    print(f'in fun8, x={x}')
     return a
 
 
@@ -176,13 +180,11 @@ def fun10():
     return True
 
 
-@paddle.jit.to_static
 def deco_with_paddle_api():
     return fun10()
 
 
-@dy2static_unittest
-class TestDecoratorTransform(unittest.TestCase):
+class TestDecoratorTransform(Dy2StTestBase):
     def test_deco_transform(self):
         outs = paddle.jit.to_static(forward)()
         np.testing.assert_allclose(outs[0], np.array(3), rtol=1e-05)
@@ -194,7 +196,8 @@ class TestDecoratorTransform(unittest.TestCase):
         np.testing.assert_allclose(outs[6], np.array(9), rtol=1e-05)
         np.testing.assert_allclose(outs[7], np.array(10), rtol=1e-05)
 
-    @ast_only_test
+    @test_ast_only
+    @test_pt_only
     def test_contextmanager_warning(self):
         paddle.disable_static()
         with warnings.catch_warnings(record=True) as w:
@@ -212,7 +215,7 @@ class TestDecoratorTransform(unittest.TestCase):
             self.assertTrue(flag)
 
     def test_deco_with_paddle_api(self):
-        self.assertTrue(deco_with_paddle_api())
+        self.assertTrue(paddle.jit.to_static(deco_with_paddle_api)())
 
 
 if __name__ == '__main__':

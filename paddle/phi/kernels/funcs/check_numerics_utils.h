@@ -87,7 +87,7 @@ HOSTDEVICE static void PrintAndThrowError(const char* debug_info,
                                           int64_t num_inf,
                                           int64_t num_zero) {
 #if !defined(__HIPCC__) && !defined(__CUDA_ARCH__)
-  PADDLE_THROW(phi::errors::PreconditionNotMet(
+  PADDLE_THROW(common::errors::PreconditionNotMet(
       "There are NAN or INF (num_nan=%lld, num_inf=%lld, num_zero=%lld) in "
       "%s.",
       static_cast<long long>(num_nan),   // NOLINT
@@ -150,13 +150,13 @@ void WriteToFileForDifferentLevel(const char* debug_info,
   MKDIR(output_dir.c_str());
   std::string filename = output_dir + "worker_" + log_name;
   std::ofstream outfile(filename, std::ios::app);
-  PADDLE_ENFORCE_EQ(
-      outfile.is_open(),
-      true,
-      phi::errors::Unavailable("Fail to open output file %s, please check the "
-                               "specified output_dir (%s).",
-                               filename,
-                               output_dir));
+  PADDLE_ENFORCE_EQ(outfile.is_open(),
+                    true,
+                    common::errors::Unavailable(
+                        "Fail to open output file %s, please check the "
+                        "specified output_dir (%s).",
+                        filename,
+                        output_dir));
 
   if (num_nan > 0 || num_inf > 0) {
     outfile << "[PRECISION] [ERROR] in " << debug_info
@@ -224,7 +224,7 @@ static void CheckNumericsCpuImpl(const T* value_ptr,
                                  float* values_ptr) {
   using MT = typename phi::dtype::template MPTypeTrait<T>::Type;
 
-#ifdef _OPENMP
+#ifdef PADDLE_WITH_MKLML
   // Use maximum 4 threads to collect the nan and inf information.
   int num_threads = std::max(omp_get_num_threads(), 1);
   num_threads = std::min(num_threads, 4);
@@ -239,11 +239,11 @@ static void CheckNumericsCpuImpl(const T* value_ptr,
   std::vector<MT> thread_max_value(num_threads, static_cast<MT>(value_ptr[0]));
   std::vector<MT> thread_mean_value(num_threads, static_cast<MT>(0));
 
-#ifdef _OPENMP
+#ifdef PADDLE_WITH_MKLML
 #pragma omp parallel num_threads(num_threads)
 #endif
   {
-#ifdef _OPENMP
+#ifdef PADDLE_WITH_MKLML
     int64_t tid = omp_get_thread_num();
     int64_t chunk_size = (numel + num_threads - 1) / num_threads;
     int64_t begin = tid * chunk_size;
@@ -338,7 +338,7 @@ void CheckNumericsCpuImpl(const T* value_ptr,
 
   RealType real_sum = 0.0f, imag_sum = 0.0f;
 
-#ifdef _OPENMP
+#ifdef PADDLE_WITH_MKLML
 #pragma omp parallel for reduction(+ : real_sum) reduction(+ : imag_sum)
 #endif
   for (int64_t i = 0; i < numel; ++i) {
@@ -351,8 +351,8 @@ void CheckNumericsCpuImpl(const T* value_ptr,
       std::isinf(imag_sum)) {
     // hot fix for compile failed in gcc4.8
     // here also need print detail info of nan or inf later
-    PADDLE_THROW(phi::errors::PreconditionNotMet("There are NAN or INF in %s.",
-                                                 cpu_hint_str));
+    PADDLE_THROW(common::errors::PreconditionNotMet(
+        "There are NAN or INF in %s.", cpu_hint_str));
   }
 }
 

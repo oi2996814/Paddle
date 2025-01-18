@@ -15,11 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 import paddle
 from paddle import _C_ops
-from paddle.fluid import Program, core, program_guard
 
 paddle.enable_static()
 
@@ -227,53 +226,34 @@ class TestWarpRNNTOp(OpTest):
         }
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
         self.outputs["warprnntgrad"] = self.gradient
-        if core.is_compiled_with_rocm():
-            self.check_grad(
-                ["input"],
-                "loss",
-                numeric_grad_delta=0.009,
-            )
-        else:
-            self.check_grad(
-                ["input"],
-                "loss",
-                numeric_grad_delta=0.009,
-            )
+        self.check_grad(
+            ["input"], "loss", numeric_grad_delta=0.009, check_pir=True
+        )
 
 
 class TestWarpRNNTFP64Op(TestWarpRNNTOp):
     def test_check_output(self):
         self.acts.astype(np.float64)
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
         self.acts.astype(np.float64)
         self.outputs["warprnntgrad"] = self.gradient
-        if core.is_compiled_with_rocm():
-            self.check_grad(
-                ["input"],
-                "loss",
-                numeric_grad_delta=0.009,
-            )
-        else:
-            self.check_grad(
-                ["input"],
-                "loss",
-                numeric_grad_delta=0.009,
-            )
+        self.check_grad(
+            ["input"], "loss", numeric_grad_delta=0.009, check_pir=True
+        )
 
 
 class TestWarpRNNTOpError(unittest.TestCase):
-    def test_errors(self):
-        print("test_errors")
-        with program_guard(Program(), Program()):
-            logits = paddle.static.data(
-                name='input', shape=[5, 16, 6], dtype='float32'
-            )
+
+    def test_errors1(self):
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
             logits_length = paddle.static.data(
                 name='logit_lengths', shape=[None], dtype='int32'
             )
@@ -297,44 +277,62 @@ class TestWarpRNNTOpError(unittest.TestCase):
 
             self.assertRaises(TypeError, test_logits_Variable)
 
-            def test_label_Variable():
-                label_data = paddle.static.data(
-                    name='label_data', shape=[16, 3], dtype='int64'
+    def test_errors2(self):
+        with paddle.pir_utils.OldIrGuard():
+            with paddle.static.program_guard(
+                paddle.static.Program(), paddle.static.Program()
+            ):
+                logits = paddle.static.data(
+                    name='input', shape=[5, 16, 6], dtype='float32'
                 )
-                paddle.nn.functional.rnnt_loss(
-                    input=logits,
-                    label=label_data,
-                    input_lengths=logits_length,
-                    label_lengths=label_length,
+                logits_length = paddle.static.data(
+                    name='logit_lengths', shape=[None], dtype='int32'
                 )
-
-            self.assertRaises(TypeError, test_label_Variable)
-
-            def test_logits_len_Variable():
-                logits_length_data = paddle.static.data(
-                    name='logits_length_data', shape=[None], dtype='int64'
+                label = paddle.static.data(
+                    name='labels', shape=[16, 3], dtype='int32'
                 )
-                paddle.nn.functional.rnnt_loss(
-                    input=logits,
-                    label=label,
-                    input_lengths=logits_length_data,
-                    label_lengths=label_length,
+                label_length = paddle.static.data(
+                    name='label_lengths', shape=[None], dtype='int32'
                 )
 
-            self.assertRaises(TypeError, test_logits_len_Variable)
+                def test_label_Variable():
+                    label_data = paddle.static.data(
+                        name='label_data', shape=[16, 3], dtype='int64'
+                    )
+                    paddle.nn.functional.rnnt_loss(
+                        input=logits,
+                        label=label_data,
+                        input_lengths=logits_length,
+                        label_lengths=label_length,
+                    )
 
-            def test_label_len_Variable():
-                label_length_data = paddle.static.data(
-                    name='label_length_data', shape=[None], dtype='int64'
-                )
-                paddle.nn.functional.rnnt_loss(
-                    input=logits,
-                    label=label,
-                    input_lengths=logits_length,
-                    label_lengths=label_length_data,
-                )
+                self.assertRaises(TypeError, test_label_Variable)
 
-            self.assertRaises(TypeError, test_label_len_Variable)
+                def test_logits_len_Variable():
+                    logits_length_data = paddle.static.data(
+                        name='logits_length_data', shape=[None], dtype='int64'
+                    )
+                    paddle.nn.functional.rnnt_loss(
+                        input=logits,
+                        label=label,
+                        input_lengths=logits_length_data,
+                        label_lengths=label_length,
+                    )
+
+                self.assertRaises(TypeError, test_logits_len_Variable)
+
+                def test_label_len_Variable():
+                    label_length_data = paddle.static.data(
+                        name='label_length_data', shape=[None], dtype='int64'
+                    )
+                    paddle.nn.functional.rnnt_loss(
+                        input=logits,
+                        label=label,
+                        input_lengths=logits_length,
+                        label_lengths=label_length_data,
+                    )
+
+                self.assertRaises(TypeError, test_label_len_Variable)
 
     def test_dygraph_errors(self):
         def test_dygraph_with_lod():

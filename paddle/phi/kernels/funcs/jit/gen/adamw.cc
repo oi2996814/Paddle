@@ -14,23 +14,26 @@
 
 #include "paddle/phi/kernels/funcs/jit/gen/adamw.h"
 
-#include <stddef.h>  // offsetof
+#include <cstddef>  // offsetof
 
 #include "paddle/phi/backends/cpu/cpu_info.h"
 #include "paddle/phi/kernels/funcs/jit/registry.h"
 
-namespace phi {
-namespace jit {
-namespace gen {
+namespace phi::jit::gen {
 
 void AdamWJitCode::loadArgs() {
   static constexpr int32_t one_as_float = 0x3f800000;
-  static constexpr int32_t mask_all_ones = 0xFFFFFFFF;
-  static constexpr int64_t mask_8_divisible = 0xFFFFFFFFFFFFFFF8;
+  static constexpr int32_t mask_all_ones = static_cast<int32_t>(0xFFFFFFFF);
+  static constexpr int64_t mask_8_divisible =
+      static_cast<int64_t>(0xFFFFFFFFFFFFFFF8);
   static constexpr int64_t abi_pushes_offset = num_g_abi_regs * 8;
 
-  mov(reg_mom2_out_ptr, ptr[rsp + (abi_pushes_offset + 8)]);
-  mov(reg_param_out_ptr, ptr[rsp + (abi_pushes_offset + 16)]);
+  mov(reg_mom1_out_ptr, ptr[rsp + (abi_pushes_offset + 8)]);
+  mov(reg_mom2_out_ptr, ptr[rsp + (abi_pushes_offset + 16)]);
+  mov(reg_mom2_max_out_ptr, ptr[rsp + (abi_pushes_offset + 24)]);
+  mov(reg_param_out_ptr, ptr[rsp + (abi_pushes_offset + 32)]);
+  mov(reg_amsgrad, byte[rsp + (abi_pushes_offset + 40)]);
+
   mov(eax, one_as_float);
   movd(xmm_one, eax);
 
@@ -58,6 +61,9 @@ void AdamWJitCode::loadArgs() {
 }
 
 void AdamWJitCode::setTailOpmask() {
+  push(r13);
+  push(r14);
+
   mov(r13, rcx);
 
   mov(rcx, reg_numel);
@@ -69,6 +75,9 @@ void AdamWJitCode::setTailOpmask() {
   kmovw(k1, r14d);
 
   mov(rcx, r13);
+
+  pop(r14);
+  pop(r13);
 }
 
 void AdamWJitCode::mainCode() {
@@ -99,16 +108,32 @@ void AdamWJitCode::mainCode() {
   vmovups(ptr[reg_mom1_out_ptr + reg_offset] | k1, ymm12);
   vmovups(ptr[reg_mom2_out_ptr + reg_offset] | k1, ymm10);
 
-  // sqrt(mom2) + eps
-  vsqrtps(ymm10 | k1, ymm10);
-  vaddps(ymm10 | k1, ymm10, ymm_eps);
+  // // make a local label: `.without_amsgrad`
+  inLocalLabel();
+  // if not amsgrad then update params
+  cmp(reg_amsgrad, 0);
+  je(".without_amsgrad", T_NEAR);
+  // load mom2_max
+  vmovups(ymm13 | k1, ptr[reg_mom2_max_ptr + reg_offset]);
+  // compare mom2 and mom2_max and save to mom2
+  vmaxps(ymm10 | k1, ymm10, ymm13);
+  // store mom2_max
+  vmovups(ptr[reg_mom2_max_out_ptr + reg_offset] | k1, ymm10);
 
-  // p + (-lr) * (mom1 / sqrt(mom2) + eps)
-  vdivps(ymm10 | k1, ymm12, ymm10);
-  vfmadd213ps(ymm10 | k1, ymm_lr, ymm11);
+  L(".without_amsgrad");
+  {
+    // sqrt(mom2) + eps
+    vsqrtps(ymm10 | k1, ymm10);
+    vaddps(ymm10 | k1, ymm10, ymm_eps);
 
-  // store p
-  vmovups(ptr[reg_param_out_ptr + reg_offset] | k1, ymm10);
+    // p + (-lr) * (mom1 / sqrt(mom2) + eps)
+    vdivps(ymm10 | k1, ymm12, ymm10);
+    vfmadd213ps(ymm10 | k1, ymm_lr, ymm11);
+
+    // store p
+    vmovups(ptr[reg_param_out_ptr + reg_offset] | k1, ymm10);
+  }
+  outLocalLabel();
 }
 
 void AdamWJitCode::genCode() {
@@ -119,14 +144,14 @@ void AdamWJitCode::genCode() {
   loadArgs();
 
   cmp(reg_numel, main_loop_elems_size);
-  jl("process_tail");
+  jl("process_tail", T_NEAR);
 
   L("main_loop");
   {
     mainCode();
     add(reg_offset, offset_increment);
     cmp(reg_numel_without_tail, reg_offset);
-    jg("main_loop");
+    jg("main_loop", T_NEAR);
   }
 
   cmp(reg_numel, reg_offset);
@@ -143,20 +168,21 @@ void AdamWJitCode::genCode() {
   postCode();
 }
 
-class AdamWCreator : public JitCodeCreator<int> {
+class AdamWCreator : public JitCodeCreator<adamw_attr_t> {
  public:
-  bool CanBeUsed(const int& attr) const override {
+  bool CanBeUsed(const adamw_attr_t& attr) const override {
     return phi::backends::cpu::MayIUse(phi::backends::cpu::avx512f);
   }
-  size_t CodeSize(const int& attr) const override { return 96 + 32 * 8; }
-  std::unique_ptr<GenBase> CreateJitCode(const int& attr) const override {
+  size_t CodeSize(const adamw_attr_t& attr) const override {
+    return 96 + 32 * 8;
+  }
+  std::unique_ptr<GenBase> CreateJitCode(
+      const adamw_attr_t& attr) const override {
     return make_unique<AdamWJitCode>(attr, CodeSize(attr));
   }
 };
 
-}  // namespace gen
-}  // namespace jit
-}  // namespace phi
+}  // namespace phi::jit::gen
 
 namespace gen = phi::jit::gen;
 

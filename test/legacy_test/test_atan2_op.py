@@ -1,4 +1,4 @@
-# Copyright (c) 2021 PaddlePaddle Authors. All Rights Reserved.
+# Copyright (c) 2024 PaddlePaddle Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 paddle.enable_static()
 np.random.seed(0)
@@ -33,7 +34,9 @@ def atan2_grad(x1, x2, dout):
 class TestAtan2(OpTest):
     def setUp(self):
         self.op_type = "atan2"
+        self.prim_op_type = "prim"
         self.python_api = paddle.atan2
+        self.public_python_api = paddle.atan2
         self.check_cinn = True
         self.init_dtype()
 
@@ -45,10 +48,16 @@ class TestAtan2(OpTest):
         self.outputs = {'Out': out}
 
     def test_check_grad(self):
-        self.check_grad(['X1', 'X2'], 'Out', check_cinn=self.check_cinn)
+        self.check_grad(
+            ['X1', 'X2'],
+            'Out',
+            check_cinn=self.check_cinn,
+            check_pir=True,
+            check_prim_pir=True,
+        )
 
     def test_check_output(self):
-        self.check_output(check_cinn=self.check_cinn)
+        self.check_output(check_cinn=self.check_cinn, check_pir=True)
 
     def init_dtype(self):
         self.dtype = np.float64
@@ -69,6 +78,8 @@ class TestAtan2_float(TestAtan2):
                     1 / self.inputs['X1'].size,
                 ),
                 check_cinn=self.check_cinn,
+                check_pir=True,
+                check_prim_pir=True,
             )
 
 
@@ -96,7 +107,13 @@ class TestAtan2API(unittest.TestCase):
         self.init_dtype()
         self.x1 = np.random.uniform(0.1, 1, self.shape).astype(self.dtype)
         self.x2 = np.random.uniform(-1, -0.1, self.shape).astype(self.dtype)
-        self.place = [paddle.CPUPlace()]
+        self.place = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.place.append(paddle.CPUPlace())
         if core.is_compiled_with_cuda():
             self.place.append(paddle.CUDAPlace(0))
 
@@ -139,7 +156,9 @@ class TestAtan2API(unittest.TestCase):
 class TestAtan2BF16OP(OpTest):
     def setUp(self):
         self.op_type = 'atan2'
+        self.prim_op_type = 'prim'
         self.python_api = paddle.atan2
+        self.public_python_api = paddle.atan2
         self.dtype = np.uint16
         self.check_cinn = True
         x1 = np.random.uniform(-1, -0.1, [15, 17]).astype('float32')
@@ -154,25 +173,91 @@ class TestAtan2BF16OP(OpTest):
 
     def test_check_output(self):
         place = core.CUDAPlace(0)
-        self.check_output_with_place(place, check_cinn=self.check_cinn)
+        self.check_output_with_place(
+            place, check_cinn=self.check_cinn, check_pir=True
+        )
 
     def test_check_grad(self):
         place = core.CUDAPlace(0)
         self.check_grad_with_place(
-            place, ['X1', 'X2'], 'Out', check_cinn=self.check_cinn
+            place,
+            ['X1', 'X2'],
+            'Out',
+            check_cinn=self.check_cinn,
+            check_pir=True,
+            check_prim_pir=True,
         )
 
 
-class TestAtan2Error(unittest.TestCase):
-    def test_mismatch(self):
-        paddle.enable_static()
+class TestAtan2Broadcasting(unittest.TestCase):
+    def _get_places(self):
+        places = [paddle.base.CPUPlace()]
+        if paddle.is_compiled_with_cuda():
+            places.append(paddle.base.CUDAPlace(0))
+        return places
 
-        def test_mismatch_numel():
-            X = paddle.static.data('X', (1,), dtype=np.float64)
-            Y = paddle.static.data('Y', (0,), dtype=np.float64)
-            out = paddle.atan2(X, Y)
+    def _generate_inputs_outputs(self, shapes):
+        inputs = [
+            np.random.random(shape).astype('float64') for shape in shapes[:2]
+        ]
+        out_ref = np.arctan2(inputs[0], inputs[1])
+        return inputs, out_ref
 
-        self.assertRaises(ValueError, test_mismatch_numel)
+    def _test_with_shapes(self, shapes, place=None):
+        inputs, out_ref = self._generate_inputs_outputs(shapes)
+
+        if place is None:  # Dygraph mode
+            with paddle.base.dygraph.guard():
+                tensors = [paddle.to_tensor(inp) for inp in inputs]
+                result = paddle.atan2(tensors[0], tensors[1])
+        else:  # Static mode
+            with paddle.static.program_guard(paddle.static.Program()):
+                data_tensors = [
+                    paddle.static.data(
+                        shape=shape, dtype='float64', name=f'x{i}'
+                    )
+                    for i, shape in enumerate(shapes)
+                ]
+                result = paddle.atan2(data_tensors[0], data_tensors[1])
+                exe = paddle.base.Executor(place=place)
+                feed_dict = {f'x{i}': inp for i, inp in enumerate(inputs)}
+                result = exe.run(
+                    paddle.static.default_main_program(),
+                    feed=feed_dict,
+                    fetch_list=[result],
+                )[0]
+
+        np.testing.assert_allclose(out_ref, result, rtol=1e-05)
+
+    def test_api_with_dygraph_empty_tensor_input(self):
+        self._test_with_shapes([(100,), (100, 100)])
+        self._test_with_shapes([(), (5, 17, 6)])
+        self._test_with_shapes([(111, 222, 333), (222, 333)])
+
+    def _test_api_with_static_empty_tensor_input(self, place):
+        self._test_with_shapes([(100,), (100, 100)], place)
+        self._test_with_shapes([(), (5, 17, 6)], place)
+        self._test_with_shapes([(111, 222, 333), (222, 333)], place)
+
+    def test_api_with_static_empty_tensor_input(self):
+        for place in self._get_places():
+            self._test_api_with_static_empty_tensor_input(place)
+
+
+class TestAtan2EmptyTensorInput(TestAtan2Broadcasting):
+    def test_api_with_dygraph_empty_tensor_input(self):
+        self._test_with_shapes([(), (0,)])
+        self._test_with_shapes([(0,), (0, 0)])
+        self._test_with_shapes([(0, 0, 0), (0,)])
+        self._test_with_shapes([(5, 17, 1, 6), (5, 17, 0, 6)])
+        self._test_with_shapes([(5, 17, 6), (0, 5, 17, 6)])
+
+    def _test_api_with_static_empty_tensor_input(self, place):
+        self._test_with_shapes([(), (0,)], place)
+        self._test_with_shapes([(0,), (0, 0)], place)
+        self._test_with_shapes([(0, 0, 0), (0,)], place)
+        self._test_with_shapes([(5, 17, 1, 6), (5, 17, 0, 6)], place)
+        self._test_with_shapes([(5, 17, 6), (0, 5, 17, 6)])
 
 
 if __name__ == '__main__':

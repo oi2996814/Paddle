@@ -16,16 +16,24 @@
 #include <set>
 
 #include "glog/logging.h"
+#include "paddle/common/flags.h"
 #include "paddle/phi/backends/all_context.h"
 #include "paddle/phi/core/kernel_registry.h"
+
+COMMON_DECLARE_bool(use_stride_kernel);
 
 namespace phi {
 
 template <typename Context>
-void SqueezeInferStridedKernel(const Context& dev_ctx,
-                               const DenseTensor& input,
-                               const IntArray& axes_arr,
-                               DenseTensor* out) {
+void SqueezeStridedKernel(const Context& dev_ctx,
+                          const DenseTensor& input,
+                          const IntArray& axes_arr,
+                          DenseTensor* out) {
+  if (!FLAGS_use_stride_kernel) {
+    PADDLE_THROW(common::errors::Fatal(
+        "FLAGS_use_stride_kernel is closed. Strided kernel "
+        "be called, something wrong has happened!"));
+  }
   std::vector<int64_t> axes = axes_arr.GetData();
   std::vector<int64_t> output_dims;
   std::vector<int64_t> output_stride;
@@ -36,7 +44,7 @@ void SqueezeInferStridedKernel(const Context& dev_ctx,
   auto input_stride = input.strides();
 
   if (input.Holder() == out->Holder() && input.meta() == out->meta()) {
-    output_dims = phi::vectorize<int64_t>(out->dims());
+    output_dims = common::vectorize<int64_t>(out->dims());
     if (axes.empty()) {
       for (int i = input_stride.size() - 1; i > 0; --i) {
         if (input_stride[i] != input_stride[i - 1]) {
@@ -49,7 +57,8 @@ void SqueezeInferStridedKernel(const Context& dev_ctx,
     } else {
       for (auto& item : axes) {
         item = item < 0 ? item + input_stride.size() : item;
-        if (item != 0 && input_stride[item] == input_stride[item - 1]) {
+        if (item != 0 && input_stride[static_cast<int>(item)] ==
+                             input_stride[static_cast<int>(item) - 1]) {
           axes_set.insert(item);
         }
       }
@@ -65,7 +74,8 @@ void SqueezeInferStridedKernel(const Context& dev_ctx,
 
     auto meta = out->meta();
     meta.offset = input.offset();
-    meta.strides = DDim(output_stride.data(), output_stride.size());
+    meta.strides =
+        DDim(output_stride.data(), static_cast<int>(output_stride.size()));
     out->set_meta(meta);
     return;
   }
@@ -80,7 +90,7 @@ void SqueezeInferStridedKernel(const Context& dev_ctx,
   } else {
     for (auto item : axes) {
       auto axis = item < 0 ? item + input_dims.size() : item;
-      if (input_dims[axis] == 1) {
+      if (input_dims[static_cast<int>(axis)] == 1) {
         axes_set.insert(axis);
       }
     }
@@ -94,34 +104,44 @@ void SqueezeInferStridedKernel(const Context& dev_ctx,
   }
 
   auto meta = out->meta();
-  auto tmp_dim = DDim(output_dims.data(), output_dims.size());
+  auto tmp_dim = DDim(output_dims.data(), static_cast<int>(output_dims.size()));
   // if (product(meta.dims) > 0 && meta.dims != tmp_dim) {
   //   PADDLE_THROW(
-  //       phi::errors::Fatal("Unsqueeze kernel stride compute diff, infer
+  //       common::errors::Fatal("Unsqueeze kernel stride compute diff, infer
   //       shape"
   //                          "is %s, but compute is %s.",
   //                          meta.dims,
   //                          tmp_dim));
   // }
   meta.dims = tmp_dim;
-  meta.strides = DDim(output_stride.data(), output_stride.size());
+  meta.strides =
+      DDim(output_stride.data(), static_cast<int>(output_stride.size()));
   meta.offset = input.offset();
   out->set_meta(meta);
   out->ResetHolder(input.Holder());
+  out->ShareInplaceVersionCounterWith(input);
 }
 
 template <typename Context>
-void SqueezeStridedKernel(const Context& dev_ctx,
-                          const DenseTensor& x,
-                          const IntArray& axes,
-                          DenseTensor* out,
-                          DenseTensor* xshape UNUSED) {
-  SqueezeInferStridedKernel<Context>(dev_ctx, x, axes, out);
+void SqueezeWithXShapeStridedKernel(const Context& dev_ctx,
+                                    const DenseTensor& x,
+                                    const IntArray& axes,
+                                    DenseTensor* out,
+                                    DenseTensor* xshape UNUSED) {
+  if (!FLAGS_use_stride_kernel) {
+    PADDLE_THROW(common::errors::Fatal(
+        "FLAGS_use_stride_kernel is closed. Strided kernel "
+        "be called, something wrong has happened!"));
+  }
+  SqueezeStridedKernel<Context>(dev_ctx, x, axes, out);
 }
 
 }  // namespace phi
-PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE_EXCEPT_CUSTOM(
-    squeeze_infer, STRIDED, phi::SqueezeInferStridedKernel) {}
 
-PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE_EXCEPT_CUSTOM(
-    squeeze, STRIDED, phi::SqueezeStridedKernel) {}
+PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE(squeeze,
+                                         STRIDED,
+                                         phi::SqueezeStridedKernel) {}
+
+PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE(squeeze_with_xshape,
+                                         STRIDED,
+                                         phi::SqueezeWithXShapeStridedKernel) {}

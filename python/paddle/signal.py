@@ -11,15 +11,27 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Literal
 
 import paddle
 from paddle import _C_ops
-from paddle.framework import in_dynamic_mode
+from paddle.framework import (
+    in_dynamic_mode,
+    in_dynamic_or_pir_mode,
+    in_pir_mode,
+)
 
+from .base.data_feeder import check_variable_and_dtype
+from .base.layer_helper import LayerHelper
 from .fft import fft_c2c, fft_c2r, fft_r2c
-from .fluid.data_feeder import check_variable_and_dtype
-from .fluid.layer_helper import LayerHelper
 from .tensor.attribute import is_complex
+
+if TYPE_CHECKING:
+    from paddle import Tensor
+
+    _SignalAxes = Literal[0, -1]
 
 __all__ = [
     'stft',
@@ -27,7 +39,13 @@ __all__ = [
 ]
 
 
-def frame(x, frame_length, hop_length, axis=-1, name=None):
+def frame(
+    x: Tensor,
+    frame_length: int,
+    hop_length: int,
+    axis: _SignalAxes = -1,
+    name: str | None = None,
+) -> Tensor:
     """
     Slice the N-dimensional (where N >= 1) input into (overlapping) frames.
 
@@ -40,6 +58,8 @@ def frame(x, frame_length, hop_length, axis=-1, name=None):
         axis (int, optional): Specify the axis to operate on the input Tensors. Its
             value should be 0(the first dimension) or -1(the last dimension). If not
             specified, the last axis is used by default.
+        name (str|None, optional): The default value is None. Normally there is no need for user
+            to set this property. For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
         The output frames tensor with shape `[..., frame_length, num_frames]` if `axis==-1`,
@@ -49,60 +69,57 @@ def frame(x, frame_length, hop_length, axis=-1, name=None):
 
     Examples:
 
-    .. code-block:: python
+        .. code-block:: python
 
-        import paddle
-        from paddle.signal import frame
+            >>> import paddle
+            >>> from paddle import signal
 
-        # 1D
-        x = paddle.arange(8)
-        y0 = frame(x, frame_length=4, hop_length=2, axis=-1)  # [4, 3]
-        # [[0, 2, 4],
-        #  [1, 3, 5],
-        #  [2, 4, 6],
-        #  [3, 5, 7]]
+            >>> # 1D
+            >>> x = paddle.arange(8)
+            >>> y0 = signal.frame(x, frame_length=4, hop_length=2, axis=-1)
+            >>> print(y0)
+            Tensor(shape=[4, 3], dtype=int64, place=Place(cpu), stop_gradient=True,
+            [[0, 2, 4],
+             [1, 3, 5],
+             [2, 4, 6],
+             [3, 5, 7]])
 
-        y1 = frame(x, frame_length=4, hop_length=2, axis=0)   # [3, 4]
-        # [[0, 1, 2, 3],
-        #  [2, 3, 4, 5],
-        #  [4, 5, 6, 7]]
+            >>> y1 = signal.frame(x, frame_length=4, hop_length=2, axis=0)
+            >>> print(y1)
+            Tensor(shape=[3, 4], dtype=int64, place=Place(cpu), stop_gradient=True,
+            [[0, 1, 2, 3],
+             [2, 3, 4, 5],
+             [4, 5, 6, 7]])
 
-        # 2D
-        x0 = paddle.arange(16).reshape([2, 8])
-        y0 = frame(x0, frame_length=4, hop_length=2, axis=-1)  # [2, 4, 3]
-        # [[[0, 2, 4],
-        #   [1, 3, 5],
-        #   [2, 4, 6],
-        #   [3, 5, 7]],
-        #
-        #  [[8 , 10, 12],
-        #   [9 , 11, 13],
-        #   [10, 12, 14],
-        #   [11, 13, 15]]]
+            >>> # 2D
+            >>> x0 = paddle.arange(16).reshape([2, 8])
+            >>> y0 = signal.frame(x0, frame_length=4, hop_length=2, axis=-1)
+            >>> print(y0)
+            Tensor(shape=[2, 4, 3], dtype=int64, place=Place(cpu), stop_gradient=True,
+            [[[0 , 2 , 4 ],
+              [1 , 3 , 5 ],
+              [2 , 4 , 6 ],
+              [3 , 5 , 7 ]],
+             [[8 , 10, 12],
+              [9 , 11, 13],
+              [10, 12, 14],
+              [11, 13, 15]]])
 
-        x1 = paddle.arange(16).reshape([8, 2])
-        y1 = frame(x1, frame_length=4, hop_length=2, axis=0)   # [3, 4, 2]
-        # [[[0 , 1 ],
-        #   [2 , 3 ],
-        #   [4 , 5 ],
-        #   [6 , 7 ]],
-        #
-        #   [4 , 5 ],
-        #   [6 , 7 ],
-        #   [8 , 9 ],
-        #   [10, 11]],
-        #
-        #   [8 , 9 ],
-        #   [10, 11],
-        #   [12, 13],
-        #   [14, 15]]]
+            >>> x1 = paddle.arange(16).reshape([8, 2])
+            >>> y1 = signal.frame(x1, frame_length=4, hop_length=2, axis=0)
+            >>> print(y1.shape)
+            [3, 4, 2]
 
-        # > 2D
-        x0 = paddle.arange(32).reshape([2, 2, 8])
-        y0 = frame(x0, frame_length=4, hop_length=2, axis=-1)  # [2, 2, 4, 3]
+            >>> # > 2D
+            >>> x0 = paddle.arange(32).reshape([2, 2, 8])
+            >>> y0 = signal.frame(x0, frame_length=4, hop_length=2, axis=-1)
+            >>> print(y0.shape)
+            [2, 2, 4, 3]
 
-        x1 = paddle.arange(32).reshape([8, 2, 2])
-        y1 = frame(x1, frame_length=4, hop_length=2, axis=0)   # [3, 4, 2, 2]
+            >>> x1 = paddle.arange(32).reshape([8, 2, 2])
+            >>> y1 = signal.frame(x1, frame_length=4, hop_length=2, axis=0)
+            >>> print(y1.shape)
+            [3, 4, 2, 2]
     """
     if axis not in [0, -1]:
         raise ValueError(f'Unexpected axis: {axis}. It should be 0 or -1.')
@@ -123,6 +140,8 @@ def frame(x, frame_length, hop_length, axis=-1, name=None):
                 f'Attribute frame_length should be less equal than sequence length, '
                 f'but got ({frame_length}) > ({x.shape[axis]}).'
             )
+        return _C_ops.frame(x, frame_length, hop_length, axis)
+    elif in_pir_mode():
         return _C_ops.frame(x, frame_length, hop_length, axis)
     else:
         op_type = 'frame'
@@ -145,7 +164,9 @@ def frame(x, frame_length, hop_length, axis=-1, name=None):
     return out
 
 
-def overlap_add(x, hop_length, axis=-1, name=None):
+def overlap_add(
+    x: Tensor, hop_length: int, axis: _SignalAxes = -1, name: str | None = None
+) -> Tensor:
     """
     Reconstructs a tensor consisted of overlap added sequences from input frames.
 
@@ -158,6 +179,8 @@ def overlap_add(x, hop_length, axis=-1, name=None):
         axis (int, optional): Specify the axis to operate on the input Tensors. Its
             value should be 0(the first dimension) or -1(the last dimension). If not
             specified, the last axis is used by default.
+        name (str|None, optional): The default value is None. Normally there is no need for user
+            to set this property. For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
         The output frames tensor with shape `[..., seq_length]` if `axis==-1`,
@@ -167,36 +190,53 @@ def overlap_add(x, hop_length, axis=-1, name=None):
 
     Examples:
 
-    .. code-block:: python
+        .. code-block:: python
 
-        import paddle
-        from paddle.signal import overlap_add
+            >>> import paddle
+            >>> from paddle.signal import overlap_add
 
-        # 2D
-        x0 = paddle.arange(16).reshape([8, 2])
-        # [[0 , 1 ],
-        #  [2 , 3 ],
-        #  [4 , 5 ],
-        #  [6 , 7 ],
-        #  [8 , 9 ],
-        #  [10, 11],
-        #  [12, 13],
-        #  [14, 15]]
-        y0 = overlap_add(x0, hop_length=2, axis=-1)  # [10]
-        # [0 , 2 , 5 , 9 , 13, 17, 21, 25, 13, 15]
+            >>> # 2D
+            >>> x0 = paddle.arange(16).reshape([8, 2])
+            >>> print(x0)
+            Tensor(shape=[8, 2], dtype=int64, place=Place(cpu), stop_gradient=True,
+            [[0 , 1 ],
+             [2 , 3 ],
+             [4 , 5 ],
+             [6 , 7 ],
+             [8 , 9 ],
+             [10, 11],
+             [12, 13],
+             [14, 15]])
 
-        x1 = paddle.arange(16).reshape([2, 8])
-        # [[0 , 1 , 2 , 3 , 4 , 5 , 6 , 7 ],
-        #  [8 , 9 , 10, 11, 12, 13, 14, 15]]
-        y1 = overlap_add(x1, hop_length=2, axis=0)   # [10]
-        # [0 , 1 , 10, 12, 14, 16, 18, 20, 14, 15]
 
-        # > 2D
-        x0 = paddle.arange(32).reshape([2, 1, 8, 2])
-        y0 = overlap_add(x0, hop_length=2, axis=-1)  # [2, 1, 10]
+            >>> y0 = overlap_add(x0, hop_length=2, axis=-1)
+            >>> print(y0)
+            Tensor(shape=[10], dtype=int64, place=Place(cpu), stop_gradient=True,
+            [0 , 2 , 5 , 9 , 13, 17, 21, 25, 13, 15])
 
-        x1 = paddle.arange(32).reshape([2, 8, 1, 2])
-        y1 = overlap_add(x1, hop_length=2, axis=0)   # [10, 1, 2]
+            >>> x1 = paddle.arange(16).reshape([2, 8])
+            >>> print(x1)
+            Tensor(shape=[2, 8], dtype=int64, place=Place(cpu), stop_gradient=True,
+            [[0 , 1 , 2 , 3 , 4 , 5 , 6 , 7 ],
+             [8 , 9 , 10, 11, 12, 13, 14, 15]])
+
+
+            >>> y1 = overlap_add(x1, hop_length=2, axis=0)
+            >>> print(y1)
+            Tensor(shape=[10], dtype=int64, place=Place(cpu), stop_gradient=True,
+            [0 , 1 , 10, 12, 14, 16, 18, 20, 14, 15])
+
+
+            >>> # > 2D
+            >>> x0 = paddle.arange(32).reshape([2, 1, 8, 2])
+            >>> y0 = overlap_add(x0, hop_length=2, axis=-1)
+            >>> print(y0.shape)
+            [2, 1, 10]
+
+            >>> x1 = paddle.arange(32).reshape([2, 8, 1, 2])
+            >>> y1 = overlap_add(x1, hop_length=2, axis=0)
+            >>> print(y1.shape)
+            [10, 1, 2]
     """
     if axis not in [0, -1]:
         raise ValueError(f'Unexpected axis: {axis}. It should be 0 or -1.')
@@ -208,7 +248,7 @@ def overlap_add(x, hop_length, axis=-1, name=None):
 
     op_type = 'overlap_add'
 
-    if in_dynamic_mode():
+    if in_dynamic_or_pir_mode():
         out = _C_ops.overlap_add(x, hop_length, axis)
     else:
         check_variable_and_dtype(
@@ -230,17 +270,17 @@ def overlap_add(x, hop_length, axis=-1, name=None):
 
 
 def stft(
-    x,
-    n_fft,
-    hop_length=None,
-    win_length=None,
-    window=None,
-    center=True,
-    pad_mode='reflect',
-    normalized=False,
-    onesided=True,
-    name=None,
-):
+    x: Tensor,
+    n_fft: int,
+    hop_length: int | None = None,
+    win_length: int | None = None,
+    window: Tensor | None = None,
+    center: bool = True,
+    pad_mode: Literal["reflect", "constant"] = "reflect",
+    normalized: bool = False,
+    onesided: bool = True,
+    name: str | None = None,
+) -> Tensor:
     r"""
 
     Short-time Fourier transform (STFT).
@@ -262,11 +302,11 @@ def stft(
         x (Tensor): The input data which is a 1-dimensional or 2-dimensional Tensor with
             shape `[..., seq_length]`. It can be a real-valued or a complex Tensor.
         n_fft (int): The number of input samples to perform Fourier transform.
-        hop_length (int, optional): Number of steps to advance between adjacent windows
+        hop_length (int|None, optional): Number of steps to advance between adjacent windows
             and `0 < hop_length`. Default: `None` (treated as equal to `n_fft//4`)
-        win_length (int, optional): The size of window. Default: `None` (treated as equal
+        win_length (int|None, optional): The size of window. Default: `None` (treated as equal
             to `n_fft`)
-        window (Tensor, optional): A 1-dimensional tensor of size `win_length`. It will
+        window (Tensor|None, optional): A 1-dimensional tensor of size `win_length`. It will
             be center padded to length `n_fft` if `win_length < n_fft`. Default: `None` (
             treated as a rectangle window with value equal to 1 of size `win_length`).
         center (bool, optional): Whether to pad `x` to make that the
@@ -278,7 +318,7 @@ def stft(
         onesided (bool, optional): Control whether to return half of the Fourier transform
             output that satisfies the conjugate symmetry condition when input is a real-valued
             tensor. It can not be `True` if input is a complex tensor. Default: `True`
-        name (str, optional): The default value is None. Normally there is no need for user
+        name (str|None, optional): The default value is None. Normally there is no need for user
             to set this property. For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -289,18 +329,30 @@ def stft(
     Examples:
         .. code-block:: python
 
-            import paddle
-            from paddle.signal import stft
+            >>> import paddle
+            >>> from paddle.signal import stft
 
-            # real-valued input
-            x = paddle.randn([8, 48000], dtype=paddle.float64)
-            y1 = stft(x, n_fft=512)  # [8, 257, 376]
-            y2 = stft(x, n_fft=512, onesided=False)  # [8, 512, 376]
+            >>> # real-valued input
+            >>> x = paddle.randn([8, 48000], dtype=paddle.float64)
+            >>> y1 = stft(x, n_fft=512)
+            >>> print(y1.shape)
+            [8, 257, 376]
 
-            # complex input
-            x = paddle.randn([8, 48000], dtype=paddle.float64) + \
-                    paddle.randn([8, 48000], dtype=paddle.float64)*1j  # [8, 48000] complex128
-            y1 = stft(x, n_fft=512, center=False, onesided=False)  # [8, 512, 372]
+            >>> y2 = stft(x, n_fft=512, onesided=False)
+            >>> print(y2.shape)
+            [8, 512, 376]
+
+            >>> # complex input
+            >>> x = paddle.randn([8, 48000], dtype=paddle.float64) + \
+            ...         paddle.randn([8, 48000], dtype=paddle.float64)*1j
+            >>> print(x.shape)
+            [8, 48000]
+            >>> print(x.dtype)
+            paddle.complex128
+
+            >>> y1 = stft(x, n_fft=512, center=False, onesided=False)
+            >>> print(y1.shape)
+            [8, 512, 372]
 
     """
 
@@ -348,9 +400,7 @@ def stft(
         assert pad_mode in [
             'constant',
             'reflect',
-        ], 'pad_mode should be "reflect" or "constant", but got "{}".'.format(
-            pad_mode
-        )
+        ], f'pad_mode should be "reflect" or "constant", but got "{pad_mode}".'
 
         pad_length = n_fft // 2
         # FIXME: Input `x` can be a complex tensor but pad does not support complex input.
@@ -397,18 +447,18 @@ def stft(
 
 
 def istft(
-    x,
-    n_fft,
-    hop_length=None,
-    win_length=None,
-    window=None,
-    center=True,
-    normalized=False,
-    onesided=True,
-    length=None,
-    return_complex=False,
-    name=None,
-):
+    x: Tensor,
+    n_fft: int,
+    hop_length: int | None = None,
+    win_length: int | None = None,
+    window: Tensor | None = None,
+    center: bool = True,
+    normalized: bool = False,
+    onesided: bool = True,
+    length: int | None = None,
+    return_complex: bool = False,
+    name: str | None = None,
+) -> Tensor:
     r"""
     Inverse short-time Fourier transform (ISTFT).
 
@@ -433,12 +483,12 @@ def istft(
         x (Tensor): The input data which is a 2-dimensional or 3-dimensional **complex**
             Tensor with shape `[..., n_fft, num_frames]`.
         n_fft (int): The size of Fourier transform.
-        hop_length (int, optional): Number of steps to advance between adjacent windows
+        hop_length (int|None, optional): Number of steps to advance between adjacent windows
             from time-domain signal and `0 < hop_length < win_length`. Default: `None` (
             treated as equal to `n_fft//4`)
-        win_length (int, optional): The size of window. Default: `None` (treated as equal
+        win_length (int|None, optional): The size of window. Default: `None` (treated as equal
             to `n_fft`)
-        window (Tensor, optional): A 1-dimensional tensor of size `win_length`. It will
+        window (Tensor|None, optional): A 1-dimensional tensor of size `win_length`. It will
             be center padded to length `n_fft` if `win_length < n_fft`. It should be a
             real-valued tensor if `return_complex` is False. Default: `None`(treated as
             a rectangle window with value equal to 1 of size `win_length`).
@@ -450,12 +500,12 @@ def istft(
             of the conjugate symmetry STFT tensor transformed from a real-valued signal
             and `istft` will return a real-valued tensor when it is set to `True`.
             Default: `True`.
-        length (int, optional): Specify the length of time-domain signal. Default: `None`(
+        length (int|None, optional): Specify the length of time-domain signal. Default: `None`(
             treated as the whole length of signal).
         return_complex (bool, optional): It means that whether the time-domain signal is
             real-valued. If `return_complex` is set to `True`, `onesided` should be set to
             `False` cause the output is complex.
-        name (str, optional): The default value is None. Normally there is no need for user
+        name (str|None, optional): The default value is None. Normally there is no need for user
             to set this property. For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -465,20 +515,25 @@ def istft(
     Examples:
         .. code-block:: python
 
-            import numpy as np
-            import paddle
-            from paddle.signal import stft, istft
+            >>> import numpy as np
+            >>> import paddle
+            >>> from paddle.signal import stft, istft
 
-            paddle.seed(0)
+            >>> paddle.seed(0)
 
-            # STFT
-            x = paddle.randn([8, 48000], dtype=paddle.float64)
-            y = stft(x, n_fft=512)  # [8, 257, 376]
+            >>> # STFT
+            >>> x = paddle.randn([8, 48000], dtype=paddle.float64)
+            >>> y = stft(x, n_fft=512)
+            >>> print(y.shape)
+            [8, 257, 376]
 
-            # ISTFT
-            x_ = istft(y, n_fft=512)  # [8, 48000]
+            >>> # ISTFT
+            >>> x_ = istft(y, n_fft=512)
+            >>> print(x_.shape)
+            [8, 48000]
 
-            np.allclose(x, x_)  # True
+            >>> np.allclose(x, x_)
+            True
     """
     check_variable_and_dtype(x, 'x', ['complex64', 'complex128'], 'istft')
 
@@ -486,9 +541,7 @@ def istft(
     assert x_rank in [
         2,
         3,
-    ], 'x should be a 2D or 3D complex tensor, but got rank of x is {}'.format(
-        x_rank
-    )
+    ], f'x should be a 2D or 3D complex tensor, but got rank of x is {x_rank}'
 
     if x_rank == 2:  # (batch, n_fft, n_frames)
         x = x.unsqueeze(0)
@@ -502,15 +555,11 @@ def istft(
     # Assure no gaps between frames.
     assert (
         0 < hop_length <= win_length
-    ), 'hop_length should be in (0, win_length({})], but got {}.'.format(
-        win_length, hop_length
-    )
+    ), f'hop_length should be in (0, win_length({win_length})], but got {hop_length}.'
 
     assert (
         0 < win_length <= n_fft
-    ), 'win_length should be in (0, n_fft({})], but got {}.'.format(
-        n_fft, win_length
-    )
+    ), f'win_length should be in (0, n_fft({n_fft})], but got {win_length}.'
 
     n_frames = x.shape[-1]
     fft_size = x.shape[-2]
@@ -519,22 +568,16 @@ def istft(
         if onesided:
             assert (
                 fft_size == n_fft // 2 + 1
-            ), 'fft_size should be equal to n_fft // 2 + 1({}) when onesided is True, but got {}.'.format(
-                n_fft // 2 + 1, fft_size
-            )
+            ), f'fft_size should be equal to n_fft // 2 + 1({n_fft // 2 + 1}) when onesided is True, but got {fft_size}.'
         else:
             assert (
                 fft_size == n_fft
-            ), 'fft_size should be equal to n_fft({}) when onesided is False, but got {}.'.format(
-                n_fft, fft_size
-            )
+            ), f'fft_size should be equal to n_fft({n_fft}) when onesided is False, but got {fft_size}.'
 
     if window is not None:
         assert (
             len(window.shape) == 1 and len(window) == win_length
-        ), 'expected a 1D window tensor of size equal to win_length({}), but got window with shape {}.'.format(
-            win_length, window.shape
-        )
+        ), f'expected a 1D window tensor of size equal to win_length({win_length}), but got window with shape {window.shape}.'
     else:
         window_dtype = (
             paddle.float32

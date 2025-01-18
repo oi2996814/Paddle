@@ -43,7 +43,7 @@ namespace gpu {
  *    this time, the cycle condition `i < (n)` is still satisfied, so it
  *    will cause illegal access to cuda memory.
  *
- *    Here is a real example in ERINE, it will trigger above error.
+ *    Here is a real example in ERNIE, it will trigger above error.
  *    The related data are:
  *      - blockIdx.x = 2172938
  *      - blockDim.x = 512
@@ -89,8 +89,14 @@ cudaDataType_t ToCudaDataType() {
   } else if (std::is_same<T, phi::dtype::bfloat16>::value) {
     return CUDA_R_16BF;
 #endif
+#if CUDA_VERSION >= 11060
+  } else if (std::is_same<T, int8_t>::value) {
+    return CUDA_R_8I;
+  } else if (std::is_same<T, int32_t>::value) {
+    return CUDA_R_32I;
+#endif
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "DataType %s is unsupported for CUDA.",
         DataTypeToString(phi::CppTypeToDataType<T>::Type())));
   }

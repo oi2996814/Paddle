@@ -32,7 +32,7 @@ void DiagKernel(const Context& dev_ctx,
   T* out_data = dev_ctx.template Alloc<T>(out);
   auto out_dims = out->dims();
 
-  int64_t i;
+  int64_t i = 0;
   if (x_dims.size() <= 1) {
     phi::funcs::SetConstant<Context, T> set_padding_value;
     set_padding_value(dev_ctx, out, static_cast<T>(padding_value));
@@ -70,4 +70,6 @@ PD_REGISTER_KERNEL(diag,
                    int,
                    float,
                    double,
-                   int64_t) {}
+                   int64_t,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}

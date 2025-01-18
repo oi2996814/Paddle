@@ -12,9 +12,7 @@ limitations under the License. */
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 #include "paddle/phi/common/data_type.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 /*
  * After trt_map_ops_to_matrix_multiply_pass(mul, matmul, matmul_v2 ->
@@ -148,7 +146,7 @@ class MatrixMultiplyOpConverter : public OpConverter {
     PADDLE_ENFORCE_EQ(
         y_num_col_dims,
         y_rank - 1,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The matrix_multiply op'y_num_col_dims should be equal "
             "to y'rank - 1, but got y_num_col_dims = %d, and y_rank = %d",
             y_num_col_dims,
@@ -237,7 +235,7 @@ class MatrixMultiplyOpConverter : public OpConverter {
                                  matrix_operation_x,
                                  *input2,
                                  matrix_operation_y);
-
+    SupportFP32MixPrecision(output_name, op_desc.Type(), layer);
     if (enable_int8) {
       if (op_desc.HasAttr("out_threshold") || op_desc.HasAttr("Out")) {
         engine_->SetTensorDynamicRange(layer->getOutput(0), out_scale);
@@ -259,14 +257,13 @@ class MatrixMultiplyOpConverter : public OpConverter {
                                    *layer->getOutput(0),
                                    *reshape_alpha->getOutput(0),
                                    nvinfer1::ElementWiseOperation::kPROD);
+      SupportFP32MixPrecision(output_name, op_desc.Type(), layer);
     }
-    RreplenishLayerAndOutput(
+    ReplenishLayerAndOutput(
         layer, "matrix_multiply_op", {output_name}, test_mode);
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(matrix_multiply, MatrixMultiplyOpConverter);

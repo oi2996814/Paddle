@@ -15,24 +15,22 @@
 # If the output after infershape() is a lod_tensor, commenly its lod_level
 # should be equal during compile time and run time.
 # For ops in this whitelist, the equality check of lod_level between
-# compiletime&runtime will be skipped. Ops in this whitelist need to declear
+# compiletime&runtime will be skipped. Ops in this whitelist need to declare
 # reasons for skipping compile_vs_runtime test or be fixed later.
 
 COMPILE_RUN_OP_WHITE_LIST = [
     'sequence_pool',
     'sequence_slice',
     'generate_proposals',
-    'mine_hard_examples',
     'retinanet_detection_output',
     'ctc_align',
+    'fusion_seqpool_concat',
     'fusion_seqpool_cvm_concat',
     'gru',
     'rpn_target_assign',
     'retinanet_target_assign',
-    'filter_by_instag',
     'im2sequence',
     'generate_proposal_labels',
     'detection_map',
-    'locality_aware_nms',
     'var_conv_2d',
 ]

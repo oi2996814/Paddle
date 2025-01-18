@@ -103,7 +103,7 @@ class FP16Utils:
             if param_name not in shard.global_params:
                 raise ValueError(
                     "Output 'X' of cast_op must be a grad of"
-                    "model param, but {} is not a grad".format(output_name)
+                    f"model param, but {output_name} is not a grad"
                 )
             if output_name in reduced_grads_to_param:
                 continue
@@ -131,7 +131,7 @@ class FP16Utils:
                     if param_name not in shard.global_params:
                         raise ValueError(
                             "Input 'X' of check_finite_and_unscale must"
-                            "be grads, but {} is not a grad".format(input_name)
+                            f"be grads, but {input_name} is not a grad"
                         )
                     if shard.has_param(param_name):
                         reversed_x.append(input_name)
@@ -150,11 +150,8 @@ class FP16Utils:
                 )
                 assert (
                     to_check_param == should_check_param
-                ), "amp \
-                    check_finite_and_unscale checking miss [{}] and got unexpected [{}]".format(
-                    should_check_param - to_check_param,
-                    to_check_param - should_check_param,
-                )
+                ), f"amp \
+                    check_finite_and_unscale checking miss [{should_check_param - to_check_param}] and got unexpected [{to_check_param - should_check_param}]"
 
         if update_loss_scaling_op_idx == -1:
             return

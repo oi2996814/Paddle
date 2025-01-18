@@ -14,15 +14,14 @@ limitations under the License. */
 
 #include "paddle/fluid/framework/data_feed_factory.h"
 
-#include <stdlib.h>
+#include <cstdlib>
 
 #include <memory>
 #include <string>
 
 #include "glog/logging.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class DataFeed;
 
 typedef std::shared_ptr<DataFeed> (*Createdata_feedFunction)();
@@ -73,5 +72,4 @@ REGISTER_DATAFEED_CLASS(SlotRecordInMemoryDataFeed);
 #if (defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)) && !defined(_WIN32)
 REGISTER_DATAFEED_CLASS(MultiSlotFileInstantDataFeed);
 #endif
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

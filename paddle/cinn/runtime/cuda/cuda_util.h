@@ -68,12 +68,6 @@ void cinn_call_cholesky_nvgpu(void* v_args,
                               bool upper,
                               void* stream = nullptr);
 
-void cinn_assert_true_nvgpu(void* v_args,
-                            int num_args,
-                            int msg,
-                            bool only_warning,
-                            void* stream = nullptr);
-
 void cinn_call_triangular_solve_nvgpu(void* v_args,
                                       int num_args,
                                       int batch_size,
@@ -95,6 +89,11 @@ void cinn_call_cuda_memcpy(void* v_args,
                            size_t count,
                            void* stream = nullptr);
 
+int64_t cinn_get_value_in_cuda_kernel_args(void* v_args, int idx);
+void* cinn_get_item_in_cuda_kernel_args(void* v_args, int idx);
+
+void infer_shape_set_value(int row, int col, int64_t value, int64_t** v);
+
 /**
  * Call a CUDA compiled kernel.
  *
@@ -110,6 +109,7 @@ void cinn_call_cuda_kernel(void* kernel_fn,
                            int block_x,
                            int block_y,
                            int block_z,
+                           int shared_memory_bytes,
                            void* stream);
 
 void cinn_call_cublas(void* v_args,
@@ -148,12 +148,13 @@ void cinn_call_batched_cublas(void* v_args,
                               void* stream);
 
 #ifdef CINN_WITH_CUDNN
-void cinn_gpu_cudnn_conv2d(const absl::flat_hash_map<std::string, int>& attr,
-                           cinn_buffer_t* x,
-                           cinn_buffer_t* w,
-                           cinn_buffer_t* y,
-                           cudaStream_t stream = nullptr,
-                           common::Layout target = common::Layout::kNCHW);
+void cinn_gpu_cudnn_conv2d(
+    const absl::flat_hash_map<std::string, int>& attr,
+    cinn_buffer_t* x,
+    cinn_buffer_t* w,
+    cinn_buffer_t* y,
+    cudaStream_t stream = nullptr,
+    cinn::common::Layout target = cinn::common::Layout::kNCHW);
 
 void cinn_gpu_cudnn_conv2d_backward_data(
     const absl::flat_hash_map<std::string, int>& attr,

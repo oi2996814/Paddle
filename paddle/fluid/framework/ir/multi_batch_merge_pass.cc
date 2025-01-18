@@ -19,9 +19,7 @@
 #include "paddle/fluid/framework/ir/graph_helper.h"
 #include "paddle/fluid/framework/op_proto_maker.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 static const char kNumRepeats[] = "num_repeats";  // NOLINT
 typedef std::unordered_map<std::string, std::vector<ir::Node*>> SSAVarList;
@@ -85,8 +83,8 @@ void BatchMergePass::ApplyImpl(ir::Graph* graph) const {
     if (!node->IsOp()) continue;
     PADDLE_ENFORCE_NOT_NULL(
         node->Op(),
-        platform::errors::InvalidArgument("Node(%s) must hold op description.",
-                                          node->Name()));
+        common::errors::InvalidArgument("Node(%s) must hold op description.",
+                                        node->Name()));
     int op_role = PADDLE_GET_CONST(
         int,
         node->Op()->GetAttr(
@@ -111,9 +109,9 @@ void BatchMergePass::ApplyImpl(ir::Graph* graph) const {
       lr_ops.push_back(node);
     } else {  // NOLINT
       PADDLE_THROW(
-          platform::errors::InvalidArgument("Invalid op role(%d), in node(%s).",
-                                            static_cast<int>(op_role),
-                                            node->Name()));
+          common::errors::InvalidArgument("Invalid op role(%d), in node(%s).",
+                                          static_cast<int>(op_role),
+                                          node->Name()));
     }
   }
 
@@ -130,7 +128,7 @@ void BatchMergePass::ApplyImpl(ir::Graph* graph) const {
       auto node = forward_backward_ops[node_idx];
       OpDesc repeated_op(*(node->Op()), node->Op()->Block());
       // 3. rename grad outputs to current repeat.
-      for (auto outname : repeated_op.OutputArgumentNames()) {
+      for (auto const& outname : repeated_op.OutputArgumentNames()) {
         if (grad_names.find(outname) != grad_names.end()) {
           std::string new_gname = string::Sprintf("%s.repeat.%d", outname, i);
           repeated_op.RenameOutput(outname, new_gname);
@@ -244,11 +242,12 @@ void BatchMergePass::ApplyImpl(ir::Graph* graph) const {
 
   // 5. create GRAD merge op node: sum(repeat.0...repeat.n) ->
   // scale(1/num_repeats)
-  for (auto kv : grad_repeated_map) {
+  for (auto const& kv : grad_repeated_map) {
     OpDesc sum_op;
     sum_op.SetType("sum");
     std::vector<std::string> repeated_grad_names;
     std::vector<std::string> param_grad_op_role_var;
+    repeated_grad_names.reserve(kv.second.size());
     for (auto r : kv.second) {
       repeated_grad_names.push_back(r->Var()->Name());
     }
@@ -278,7 +277,8 @@ void BatchMergePass::ApplyImpl(ir::Graph* graph) const {
     scale_op.SetInput("X", {sum_out_var_node->Var()->Name()});
     // NOTE: inplace scale.
     scale_op.SetOutput("Out", {sum_out_var_node->Var()->Name()});
-    scale_op.SetAttr("scale", static_cast<float>(1.0f / num_repeats));
+    scale_op.SetAttr(
+        "scale", static_cast<float>(1.0f / static_cast<float>(num_repeats)));
     scale_op.SetAttr(OpProtoAndCheckerMaker::OpRoleAttrName(),
                      static_cast<int>(OpRole::kBackward));
 
@@ -333,9 +333,7 @@ void BatchMergePass::ApplyImpl(ir::Graph* graph) const {
   }
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(multi_batch_merge_pass, paddle::framework::ir::BatchMergePass)
     .RequirePassAttr(paddle::framework::ir::kNumRepeats);

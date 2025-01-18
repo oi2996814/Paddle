@@ -16,11 +16,12 @@
 
 #include "paddle/cinn/ir/ir.h"
 #include "paddle/cinn/ir/module.h"
+#include "paddle/common/enforce.h"
 
 namespace cinn {
 namespace optim {
 
-void LowerFunctionCallBindVars(Expr *m);
+void LowerFunctionCallBindVars(ir::Module m);
 
 }  // namespace optim
 }  // namespace cinn

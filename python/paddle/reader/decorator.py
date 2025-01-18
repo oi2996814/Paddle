@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import itertools
 import logging
 import multiprocessing
@@ -21,8 +23,26 @@ import warnings
 from itertools import zip_longest
 from queue import Queue
 from threading import Thread
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Generator,
+    TypedDict,
+    TypeVar,
+    overload,
+)
 
-from paddle.fluid.reader import QUEUE_GET_TIMEOUT
+from typing_extensions import NotRequired, TypeAlias, Unpack
+
+from paddle.base.reader import QUEUE_GET_TIMEOUT
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    class _ComposeOptions(TypedDict):
+        check_alignment: NotRequired[bool]
+
 
 __all__ = []
 
@@ -41,8 +61,18 @@ if sys.version_info >= (3, 8) and sys.platform == 'darwin':
 else:
     fork_context = multiprocessing
 
+_T = TypeVar('_T')
+_T1 = TypeVar('_T1')
+_T2 = TypeVar('_T2')
+_T3 = TypeVar('_T3')
+_T4 = TypeVar('_T4')
+_U = TypeVar('_U')
 
-def cache(reader):
+
+_Reader: TypeAlias = Callable[[], Generator[_T, None, None]]
+
+
+def cache(reader: _Reader[_T]) -> _Reader[_T]:
     """
     Cache the reader data into memory.
 
@@ -60,25 +90,72 @@ def cache(reader):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            def reader():
-                for i in range(3):
-                    yield i
+            >>> def reader():
+            ...     for i in range(3):
+            ...         yield i
+            ...
+            >>> # All data is cached into memory
+            >>> cached_reader = paddle.base.io.cache(reader)
 
-            # All data is cached into memory
-            cached_reader = paddle.io.cache(reader)
-
-            # Output: 0 1 2
-            for i in cached_reader():
-                print(i)
+            >>> for i in cached_reader():
+            ...     print(i)
+            0
+            1
+            2
     """
     all_data = tuple(reader())
 
-    def __impl__():
+    def __impl__() -> Generator[_T, None, None]:
         yield from all_data
 
     return __impl__
+
+
+# A temporary solution like builtin map function.
+# `Map` maybe the final solution in the future.
+# See https://github.com/python/typing/issues/1383
+@overload
+def map_readers(
+    func: Callable[[_T1], _U], reader1: _Reader[_T1], /
+) -> _Reader[_U]: ...
+
+
+@overload
+def map_readers(
+    func: Callable[[_T1, _T2], _U],
+    reader1: _Reader[_T1],
+    reader2: _Reader[_T2],
+    /,
+) -> _Reader[_U]: ...
+
+
+@overload
+def map_readers(
+    func: Callable[[_T1, _T2, _T3], _U],
+    reader1: _Reader[_T1],
+    reader2: _Reader[_T2],
+    reader3: _Reader[_T3],
+    /,
+) -> _Reader[_U]: ...
+
+
+@overload
+def map_readers(
+    func: Callable[[_T1, _T2, _T3, _T4], _U],
+    reader1: _Reader[_T1],
+    reader2: _Reader[_T2],
+    reader3: _Reader[_T3],
+    reader4: _Reader[_T4],
+    /,
+) -> _Reader[_U]: ...
+
+
+@overload
+def map_readers(
+    func: Callable[..., _U], *readers: _Reader[Any]
+) -> _Reader[_U]: ...
 
 
 def map_readers(func, *readers):
@@ -103,14 +180,14 @@ def map_readers(func, *readers):
 
         .. code-block:: python
 
-         import paddle.reader
-         d = {"h": 0, "i": 1}
-         def func(x):
-             return d[x]
-         def reader():
-             yield "h"
-             yield "i"
-         map_reader_result = paddle.reader.map_readers(func, reader)
+            >>> import paddle.reader
+            >>> d = {"h": 0, "i": 1}
+            >>> def func(x):
+            ...     return d[x]
+            >>> def reader():
+            ...     yield "h"
+            ...     yield "i"
+            >>> map_reader_result = paddle.reader.map_readers(func, reader)
     """
 
     def reader():
@@ -122,11 +199,8 @@ def map_readers(func, *readers):
     return reader
 
 
-def shuffle(reader, buf_size):
+def shuffle(reader: _Reader[_T], buf_size: int) -> _Reader[_T]:
     """
-    paddle.fluid.io.shuffle ( :ref:`api_fluid_io_shuffle` ) is recommended to use,
-    and paddle.reader.shuffle is an alias.
-
     This API creates a decorated reader that outputs the shuffled data.
 
     The output data from the origin reader will be saved into a buffer,
@@ -142,18 +216,17 @@ def shuffle(reader, buf_size):
     Examples:
         .. code-block:: python
 
-            import paddle.fluid as fluid
-
-            def reader():
-                for i in range(5):
-                    yield i
-            shuffled_reader = fluid.io.shuffle(reader, 3)
-            for e in shuffled_reader():
-                print(e)
-            # outputs are 0~4 unordered arrangement
+            >>> # doctest: +SKIP('outputs are 0~4 unordered arrangement')
+            >>> def reader():
+            ...     for i in range(5):
+            ...         yield i
+            >>> shuffled_reader = paddle.reader.decorator.shuffle(reader, 3)
+            >>> for e in shuffled_reader():
+            ...     print(e)
+            >>> # outputs are 0~4 unordered arrangement
     """
 
-    def data_reader():
+    def data_reader() -> Generator[_T, None, None]:
         buf = []
         for e in reader():
             buf.append(e)
@@ -171,15 +244,15 @@ def shuffle(reader, buf_size):
     return data_reader
 
 
-def chain(*readers):
+def chain(*readers: _Reader[_T]) -> _Reader[_T]:
     """
     Use the input data readers to create a chained data reader. The new created reader
     chains the outputs of input readers together as its output, and it do not change
     the format of the outputs.
 
     **Note**:
-        ``paddle.reader.chain`` is the alias of ``paddle.fluid.io.chain``, and
-        ``paddle.fluid.io.chain`` is recommended to use.
+        ``paddle.reader.chain`` is the alias of ``paddle.base.io.chain``, and
+        ``paddle.base.io.chain`` is recommended to use.
 
     For example, if three input readers' outputs are as follows:
     [0, 0, 0],
@@ -195,34 +268,33 @@ def chain(*readers):
         callable: the new chained data reader.
 
     Examples:
-        ..  code-block:: python
+        .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            def reader_creator_3(start):
-                def reader():
-                    for i in range(start, start + 3):
-                        yield [i, i, i]
-                return reader
-
-            c = paddle.reader.chain(reader_creator_3(0), reader_creator_3(10), reader_creator_3(20))
-            for e in c():
-                print(e)
-            # Output:
-            # [0, 0, 0]
-            # [1, 1, 1]
-            # [2, 2, 2]
-            # [10, 10, 10]
-            # [11, 11, 11]
-            # [12, 12, 12]
-            # [20, 20, 20]
-            # [21, 21, 21]
-            # [22, 22, 22]
+            >>> def reader_creator_3(start):
+            ...     def reader():
+            ...         for i in range(start, start + 3):
+            ...             yield [i, i, i]
+            ...     return reader
+            ...
+            >>> c = paddle.reader.chain(reader_creator_3(0), reader_creator_3(10), reader_creator_3(20))
+            >>> for e in c():
+            ...     print(e)
+            [0, 0, 0]
+            [1, 1, 1]
+            [2, 2, 2]
+            [10, 10, 10]
+            [11, 11, 11]
+            [12, 12, 12]
+            [20, 20, 20]
+            [21, 21, 21]
+            [22, 22, 22]
 
     """
 
-    def reader():
-        rs = []
+    def reader() -> Generator[_T, None, None]:
+        rs: list[Generator[_T, None, None]] = []
         for r in readers:
             rs.append(r())
 
@@ -235,7 +307,9 @@ class ComposeNotAligned(ValueError):
     pass
 
 
-def compose(*readers, **kwargs):
+def compose(
+    *readers: _Reader[Any], **kwargs: Unpack[_ComposeOptions]
+) -> _Reader[Any]:
     """
     Creates a data reader whose output is the combination of input readers.
 
@@ -257,13 +331,12 @@ def compose(*readers, **kwargs):
     Examples:
         .. code-block:: python
 
-          import paddle.fluid as fluid
-          def reader_creator_10(dur):
-              def reader():
-                 for i in range(10):
-                     yield i
-              return reader
-          reader = fluid.io.compose(reader_creator_10(0), reader_creator_10(0))
+            >>> def reader_creator_10(dur):
+            ...     def reader():
+            ...         for i in range(10):
+            ...             yield i
+            ...     return reader
+            >>> reader = paddle.reader.decorator.compose(reader_creator_10(0), reader_creator_10(0))
     """
     check_alignment = kwargs.pop('check_alignment', True)
 
@@ -293,7 +366,7 @@ def compose(*readers, **kwargs):
     return reader
 
 
-def buffered(reader, size):
+def buffered(reader: _Reader[_T], size: int) -> _Reader[_T]:
     """
     Creates a buffered data reader.
 
@@ -311,18 +384,21 @@ def buffered(reader, size):
     Examples:
         .. code-block:: python
 
-            import paddle
+            >>> import paddle
 
-            def reader():
-                for i in range(3):
-                    yield i
+            >>> def reader():
+            ...     for i in range(3):
+            ...         yield i
+            ...
+            >>> # Create a buffered reader, and the buffer size is 2.
+            >>> buffered_reader = paddle.reader.decorator.buffered(reader, 2)
 
-            # Create a buffered reader, and the buffer size is 2.
-            buffered_reader = paddle.io.buffered(reader, 2)
-
-            # Output: 0 1 2
-            for i in buffered_reader():
-                print(i)
+            >>> # Output: 0 1 2
+            >>> for i in buffered_reader():
+            ...     print(i)
+            0
+            1
+            2
     """
 
     class EndSignal:
@@ -340,10 +416,7 @@ def buffered(reader, size):
         q = Queue(maxsize=size)
         t = Thread(
             target=read_worker,
-            args=(
-                r,
-                q,
-            ),
+            args=(r, q),
         )
         t.daemon = True
         t.start()
@@ -355,10 +428,8 @@ def buffered(reader, size):
     return data_reader
 
 
-def firstn(reader, n):
+def firstn(reader: _Reader[_T], n: int) -> _Reader[_T]:
     """
-    paddle.fluid.io.firstn ( :ref:`api_fluid_io_firstn` ) is recommended to use,
-    and paddle.reader.firstn is an alias.
 
     This API creates a decorated reader, and limits the max number of
     samples that reader could return.
@@ -373,15 +444,17 @@ def firstn(reader, n):
     Examples:
         .. code-block:: python
 
-            import paddle.fluid as fluid
-
-            def reader():
-                for i in range(100):
-                    yield i
-            firstn_reader = fluid.io.firstn(reader, 5)
-            for e in firstn_reader():
-                print(e)
-            # the outputs are: 0 1 2 3 4
+            >>> def reader():
+            ...     for i in range(100):
+            ...         yield i
+            >>> firstn_reader = paddle.reader.decorator.firstn(reader, 5)
+            >>> for e in firstn_reader():
+            ...     print(e)
+            0
+            1
+            2
+            3
+            4
     """
 
     # TODO(yuyang18): Check if just drop the reader, could clean the opened
@@ -400,7 +473,13 @@ class XmapEndSignal:
     pass
 
 
-def xmap_readers(mapper, reader, process_num, buffer_size, order=False):
+def xmap_readers(
+    mapper: Callable[[_T], _U],
+    reader: _Reader[_T],
+    process_num: int,
+    buffer_size: int,
+    order: bool = False,
+) -> _Reader[_U]:
     """
     Use multi-threads to map samples from reader by a mapper defined by user.
 
@@ -496,7 +575,11 @@ def xmap_readers(mapper, reader, process_num, buffer_size, order=False):
     return xreader
 
 
-def multiprocess_reader(readers, use_pipe=True, queue_size=1000):
+def multiprocess_reader(
+    readers: Sequence[_Reader[_T]],
+    use_pipe: bool = True,
+    queue_size: int = 1000,
+) -> _Reader[list[_T]]:
     """
     This API use python ``multiprocessing`` to read data from ``readers`` parallelly,
     and then ``multiprocess.Queue`` or ``multiprocess.Pipe`` is used to merge
@@ -509,13 +592,13 @@ def multiprocess_reader(readers, use_pipe=True, queue_size=1000):
     in some platforms.
 
     Parameters:
-       readers (list( ``generator`` ) | tuple( ``generator`` )): a python ``generator`` list
-           used to read input data
-       use_pipe (bool, optional): control the inner API used to implement the multi-processing,
-           default True - use ``multiprocess.Pipe`` which is recommended
-       queue_size (int, optional): only useful when ``use_pipe`` is False - ``multiprocess.Queue``
-           is used, default 1000. Increase this value can speed up the data reading, and more memory
-           will be consumed.
+        readers (list( ``generator`` ) | tuple( ``generator`` )): a python ``generator`` list
+            used to read input data
+        use_pipe (bool, optional): control the inner API used to implement the multi-processing,
+            default True - use ``multiprocess.Pipe`` which is recommended
+        queue_size (int, optional): only useful when ``use_pipe`` is False - ``multiprocess.Queue``
+            is used, default 1000. Increase this value can speed up the data reading, and more memory
+            will be consumed.
 
     Returns:
         ``generator``: a new reader which can be run parallelly
@@ -523,60 +606,56 @@ def multiprocess_reader(readers, use_pipe=True, queue_size=1000):
 
     Example:
 
-    .. code-block:: python
-        import paddle
-        import paddle.fluid as fluid
-        from paddle.fluid.io import multiprocess_reader
-        import numpy as np
+        .. code-block:: python
 
-        sample_files = ['sample_file_1', 'sample_file_2']
+            >>> import paddle
+            >>> import numpy as np
 
-        def fake_input_files():
-            with open(sample_files[0], 'w') as f:
-               np.savez(f, a=np.array([1, 2]), b=np.array([3, 4]), c=np.array([5, 6]), d=np.array([7, 8]))
-            with open(sample_files[1], 'w') as f:
-               np.savez(f, a=np.array([9, 10]), b=np.array([11, 12]), c=np.array([13, 14]))
+            >>> sample_files = ['sample_file_1', 'sample_file_2']
 
-
-        def generate_reader(file_name):
-            # load data file
-            def _impl():
-                data = np.load(file_name)
-                for item in sorted(data.files):
-                    yield data[item],
-            return _impl
-
-        if __name__ == '__main__':
-            # generate sample input files
-            fake_input_files()
-
-            with fluid.program_guard(fluid.Program(), fluid.Program()):
-                place = fluid.CPUPlace()
-                # the 1st 2 is batch size
-
-                image = paddle.static.data(name='image', dtype='int64', shape=[2, 1, 2])
-                paddle.static.Print(image)
-                # print detailed tensor info of image variable
-
-                reader = fluid.io.PyReader(feed_list=[image], capacity=2)
-
-                decorated_reader = multiprocess_reader(
-                    [generate_reader(sample_files[0]), generate_reader(sample_files[1])], False)
-
-                reader.decorate_sample_generator(decorated_reader, batch_size=2, places=[place])
-
-                exe = fluid.Executor(place)
-                exe.run(fluid.default_startup_program())
-
-                for data in reader():
-                    res = exe.run(feed=data, fetch_list=[image])
-                    print(res[0])
-                    # print below content in this case
-                    # [[[1 2]], [[3 4]]]
-                    # [[[5 6]], [[7 8]]]
-                    # [[[9 10]], [[11 12]]]
-                    # [13,14] will be dropped
-
+            >>> def fake_input_files():
+            ...     with open(sample_files[0], 'wb') as f:
+            ...         np.savez(f, a=np.array([1, 2]), b=np.array([3, 4]), c=np.array([5, 6]), d=np.array([7, 8]))
+            ...     with open(sample_files[1], 'wb') as f:
+            ...         np.savez(f, a=np.array([9, 10]), b=np.array([11, 12]), c=np.array([13, 14]))
+            ...
+            ...
+            >>> def generate_reader(file_name):
+            ...     # load data file
+            ...     def _impl():
+            ...         data = np.load(file_name)
+            ...         for item in sorted(data.files):
+            ...             yield data[item],
+            ...     return _impl
+            ...
+            >>> if __name__ == '__main__':
+            ...     # generate sample input files
+            ...     fake_input_files()
+            ...
+            ...     with base.program_guard(base.Program(), base.Program()):
+            ...         place = base.CPUPlace()
+            ...         # the 1st 2 is batch size
+            ...
+            ...         image = paddle.static.data(name='image', dtype='int64', shape=[2, 1, 2])
+            ...         paddle.static.Print(image)
+            ...         # print detailed tensor info of image variable
+            ...
+            ...         reader = base.io.PyReader(feed_list=[image], capacity=2)
+            ...
+            ...         decorated_reader = paddle.reader.multiprocess_reader(
+            ...             [generate_reader(sample_files[0]), generate_reader(sample_files[1])], False)
+            ...
+            ...         reader.decorate_sample_generator(decorated_reader, batch_size=2, places=[place])
+            ...
+            ...         exe = base.Executor(place)
+            ...         exe.run(base.default_startup_program())
+            ...
+            ...         for data in reader():
+            ...             res = exe.run(feed=data, fetch_list=[image])
+            ...             print(res[0])
+            [[[1 2]], [[3 4]]]
+            [[[5 6]], [[7 8]]]
+            [[[9 10]], [[11 12]]]
     """
 
     if sys.platform == 'win32':

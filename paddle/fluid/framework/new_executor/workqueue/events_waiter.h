@@ -22,14 +22,14 @@
 #include <unordered_set>
 
 #include "paddle/fluid/framework/new_executor/workqueue/event_count.h"
-#include "paddle/fluid/memory/allocation/spin_lock.h"
+#include "paddle/phi/core/memory/allocation/spin_lock.h"
 
 namespace paddle {
 namespace framework {
 
 // A multiplexing waiter, be able to wait multiple kinds of events
 // simultaneously.
-// Muti-Producer single-consumer single-slot message-queue.
+// Multi-Producer single-consumer single-slot message-queue.
 class EventsWaiter {
  public:
   using EventId = std::size_t;

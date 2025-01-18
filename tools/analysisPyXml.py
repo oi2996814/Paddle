@@ -22,16 +22,8 @@ import commands
 
 def analysisPyXml(rootPath, ut):
     xml_path = f'{rootPath}/build/pytest/{ut}/python-coverage.xml'
-    related_ut_map_file = '{}/build/ut_map/{}/related_{}.txt'.format(
-        rootPath,
-        ut,
-        ut,
-    )
-    notrelated_ut_map_file = '{}/build/ut_map/{}/notrelated_{}.txt'.format(
-        rootPath,
-        ut,
-        ut,
-    )
+    related_ut_map_file = f'{rootPath}/build/ut_map/{ut}/related_{ut}.txt'
+    notrelated_ut_map_file = f'{rootPath}/build/ut_map/{ut}/notrelated_{ut}.txt'
     tree = ElementTree.parse(xml_path)
     root = tree.getroot()
     error_files = []
@@ -39,7 +31,7 @@ def analysisPyXml(rootPath, ut):
     for clazz in root.findall('packages/package/classes/class'):
         clazz_filename = clazz.attrib.get('filename')
         if not clazz_filename.startswith('/paddle'):
-            clazz_filename = '/paddle/%s' % clazz_filename
+            clazz_filename = f'/paddle/{clazz_filename}'
         for line in clazz.findall('lines/line'):
             line_hits = int(line.attrib.get('hits'))
             if line_hits != 0:

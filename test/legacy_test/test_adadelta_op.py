@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 import paddle
-from paddle import fluid
+from paddle import base
 
 
 def adadelta_wrapper(
@@ -173,9 +174,9 @@ class TestAdadeltaV2(unittest.TestCase):
 
     def test_adadelta(self):
         paddle.enable_static()
-        place = fluid.CPUPlace()
-        main = fluid.Program()
-        with fluid.program_guard(main):
+        place = base.CPUPlace()
+        main = base.Program()
+        with base.program_guard(main):
             x = paddle.static.data(name='x', shape=[-1, 13], dtype='float32')
             y = paddle.static.data(name='y', shape=[-1, 1], dtype='float32')
             y_predict = paddle.static.nn.fc(x, size=1)
@@ -191,9 +192,9 @@ class TestAdadeltaV2(unittest.TestCase):
             train_reader = paddle.batch(
                 paddle.dataset.uci_housing.train(), batch_size=1
             )
-            feeder = fluid.DataFeeder(place=place, feed_list=[x, y])
-            exe = fluid.Executor(place)
-            exe.run(fluid.default_startup_program())
+            feeder = base.DataFeeder(place=place, feed_list=[x, y])
+            exe = base.Executor(place)
+            exe.run(base.default_startup_program())
             for data in train_reader():
                 exe.run(main, feed=feeder.feed(data), fetch_list=fetch_list)
 
@@ -208,6 +209,24 @@ class TestAdadeltaV2(unittest.TestCase):
             learning_rate=0.1,
             epsilon=None,
         )
+
+
+class TestAdadeltaV2WeightDecay(unittest.TestCase):
+    def test_weight_decay_int(self):
+        paddle.disable_static(paddle.CPUPlace())
+        value = np.arange(26).reshape(2, 13).astype("float32")
+        a = paddle.to_tensor(value)
+        linear = paddle.nn.Linear(13, 5)
+        # This can be any optimizer supported by dygraph.
+        adam = paddle.optimizer.Adadelta(
+            learning_rate=0.01,
+            parameters=linear.parameters(),
+            weight_decay=1,
+        )
+        out = linear(a)
+        out.backward()
+        adam.step()
+        adam.clear_gradients()
 
 
 class TestAdadeltaV2Group(TestAdadeltaV2):
@@ -236,7 +255,7 @@ class TestAdadeltaV2Group(TestAdadeltaV2):
         adam.clear_gradients()
 
 
-class TestAdadeltaOpMultiPrecison(unittest.TestCase):
+class TestAdadeltaOpMultiPrecision(unittest.TestCase):
     def _test_adadelta_op_dygraph_place_amp(self, place, use_amp=False):
         import paddle
 
@@ -278,7 +297,13 @@ class TestAdadeltaOpMultiPrecison(unittest.TestCase):
     def _get_places(self):
         import paddle
 
-        places = ['cpu']
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.is_compiled_with_cuda()
+        ):
+            places.append('cpu')
         if paddle.is_compiled_with_cuda():
             places.append('gpu')
         return places
@@ -331,16 +356,7 @@ class TestAdadeltaMultiPrecision2_0(unittest.TestCase):
         train_program = paddle.static.Program()
         startup_program = paddle.static.Program()
         optimizer = paddle.optimizer.Adadelta(0.1)
-        optimizer._multi_precision = mp
 
-        if use_amp:
-            optimizer = paddle.static.amp.decorate(
-                optimizer,
-                init_loss_scaling=128.0,
-                use_dynamic_loss_scaling=True,
-                use_pure_fp16=True,
-                use_fp16_guard=False,
-            )
         with paddle.static.program_guard(train_program, startup_program):
             if use_amp:
                 data = paddle.static.data(
@@ -350,22 +366,34 @@ class TestAdadeltaMultiPrecision2_0(unittest.TestCase):
                 data = paddle.static.data(
                     shape=[2, 2], name='X', dtype='float32'
                 )
-            hidden = paddle.static.nn.fc(x=data, size=10)
-            loss = paddle.mean(hidden)
+            hidden_layer = paddle.nn.Linear(2, 10)
+            if use_amp:
+                hidden_layer, optimizer = paddle.amp.decorate(
+                    models=hidden_layer,
+                    optimizers=optimizer,
+                    level='O2',
+                    master_weight=True,
+                    master_grad=False,
+                )
+                with paddle.amp.auto_cast(
+                    level='O2', dtype='float16', use_promote=True
+                ):
+                    hidden = hidden_layer(data)
+                    loss = paddle.mean(hidden)
+            else:
+                hidden = hidden_layer(data)
+                loss = paddle.mean(hidden)
             optimizer.minimize(loss)
         exe.run(startup_program)
 
         if use_amp:
-            optimizer.amp_init(
-                place=paddle.CUDAPlace(0), scope=paddle.static.global_scope()
-            )
             x = np.random.random(size=(2, 2)).astype('float16')
         else:
             x = np.random.random(size=(2, 2)).astype('float32')
         out = []
         for idx in range(5):
             (loss_data,) = exe.run(
-                train_program, feed={"X": x}, fetch_list=[loss.name]
+                train_program, feed={"X": x}, fetch_list=[loss]
             )
             out.append(loss_data)
         return out
@@ -392,15 +420,16 @@ class TestAdadeltaMultiPrecision2_0(unittest.TestCase):
                 atol=0.1,
             )
         "Test static mode"
-        output1_st = self.static_adadelta_mp(use_amp=True, mp=True)
-        output2_st = self.static_adadelta_mp(use_amp=False, mp=False)
-        for idx in range(len(output1_st)):
-            np.testing.assert_allclose(
-                output1_st[idx].astype('float32'),
-                output2_st[idx].astype('float32'),
-                rtol=1e-05,
-                atol=0.1,
-            )
+        with paddle.pir_utils.IrGuard():
+            output1_st = self.static_adadelta_mp(use_amp=True, mp=True)
+            output2_st = self.static_adadelta_mp(use_amp=False, mp=False)
+            for idx in range(len(output1_st)):
+                np.testing.assert_allclose(
+                    output1_st[idx].astype('float32'),
+                    output2_st[idx].astype('float32'),
+                    rtol=1e-05,
+                    atol=0.1,
+                )
 
 
 if __name__ == "__main__":

@@ -45,10 +45,11 @@ import re
 from functools import partial
 
 import paddle
+import paddle.distributed as dist
 from paddle import framework, nn
+from paddle.device.cuda.cuda_graphed_layer import CUDAGraphedLayer
+from paddle.distributed.fleet.utils.log_util import layer_to_str, logger
 from paddle.incubate.distributed.fleet import recompute_hybrid
-
-from ...utils.log_util import layer_to_str, logger
 
 __all__ = []
 
@@ -120,9 +121,7 @@ class SegmentLayers:
                     assert part >= 0, f"part[{part}] should be greater than 0"
                     assert (
                         part <= self.num_items
-                    ), "part[{}] should be less than num_items[{}]".format(
-                        part, self.num_items
-                    )
+                    ), f"part[{part}] should be less than num_items[{self.num_items}]"
 
             check_sanity()
 
@@ -133,9 +132,7 @@ class SegmentLayers:
                 return seg_method
             else:
                 raise ValueError(
-                    "We set seg_method as {}, this length is {}, but the number of stages is {}".format(
-                        seg_method, len(seg_method), self.num_parts
-                    )
+                    f"We set seg_method as {seg_method}, this length is {len(seg_method)}, but the number of stages is {self.num_parts}"
                 )
 
         elif self.method == "uniform":
@@ -157,9 +154,7 @@ class SegmentLayers:
 
             assert (
                 sum(weights) % actual_num_parts == 0
-            ), "number of layers ({}) should be divided by part number({})".format(
-                sum(weights), actual_num_parts
-            )
+            ), f"number of layers ({sum(weights)}) should be divided by part number({actual_num_parts})"
             part_size = sum(weights) // actual_num_parts
             result = [0 for _ in range(actual_num_parts + 1)]
 
@@ -223,6 +218,10 @@ class PipelineLayerChunk(nn.Layer):
             self.add_sublayer(str(len(self.run_function)), sublayer)
         self.run_function.append(sublayer)
 
+    def extend(self, layer_list):
+        for layer in layer_list:
+            self.append(layer)
+
     def get_run_function(self):
         return self.run_function
 
@@ -234,6 +233,26 @@ class PipelineLayerChunk(nn.Layer):
             "The forward function of PipelineLayerChunk cannot be called directly. "
             "Please call forward function of PipelineLayer."
         )
+
+    def __iter__(self):
+        return iter(self.run_function)
+
+
+class PipelineSublayers(nn.Layer):
+    def __init__(self, run_function):
+        super().__init__()
+        self.run_function = run_function
+        for idx, sublayer in enumerate(self.run_function):
+            if isinstance(sublayer, nn.Layer):
+                self.add_sublayer(str(idx), sublayer)
+
+    def forward(self, x):
+        for layer in self.run_function:
+            x = layer(x)
+        return x
+
+    def __iter__(self):
+        return iter(self.run_function)
 
 
 class PipelineLayer(nn.Layer):
@@ -247,70 +266,72 @@ class PipelineLayer(nn.Layer):
         recompute_interval(int, optional): the number of layers to be used recompute, the value of 0 represents no recompute. default 0.
         recompute_ctx(dict,optional): the context of recompute, when 'recompute_interval' > 0, the context must be given.
         num_virtual_pipeline_stages(int, optional): the num of virtual pipeline stages for interleave pp.
+        use_cudagraph(bool, optional): enable CUDAGraphedLayer in pp layers.
     Examples:
         .. code-block:: python
-        import paddle.nn as nn
-        import paddle.nn.functional as F
-        from paddle.distributed import fleet
-        from paddle.distributed.fleet.meta_parallel import LayerDesc, PipelineLayer
 
-        pipeline_parallel_size = 2
-        strategy = fleet.DistributedStrategy()
-        strategy.hybrid_configs = {
-            "dp_degree": 1,
-            "mp_degree": 1,
-            "pp_degree": pipeline_parallel_size
-        }
-        strategy.pipeline_configs = {
-            "accumulate_steps": 4,
-            "micro_batch_size": 2
-        }
+            >>> # doctest: +REQUIRES(env:DISTRIBUTED)
+            >>> import paddle.nn as nn
+            >>> import paddle.nn.functional as F
+            >>> from paddle.distributed import fleet
+            >>> from paddle.distributed.fleet.meta_parallel import LayerDesc, PipelineLayer
 
-        fleet.init(is_collective=True, strategy=strategy)
+            >>> pipeline_parallel_size = 2
+            >>> strategy = fleet.DistributedStrategy()
+            >>> strategy.hybrid_configs = {
+            ...     "dp_degree": 1,
+            ...     "mp_degree": 1,
+            ...     "pp_degree": pipeline_parallel_size
+            >>> }
+            >>> strategy.pipeline_configs = {
+            ...     "accumulate_steps": 4,
+            ...     "micro_batch_size": 2
+            >>> }
 
-        hcg = fleet.get_hybrid_communicate_group()
+            >>> fleet.init(is_collective=True, strategy=strategy)
 
-        class ReshapeHelp(nn.Layer):
-            def __init__(self, shape):
-                super().__init__()
-                self.shape = shape
+            >>> hcg = fleet.get_hybrid_communicate_group()
 
-            def forward(self, x):
-                return x.reshape(shape=self.shape)
+            >>> class ReshapeHelp(nn.Layer):
+            ...     def __init__(self, shape):
+            ...         super().__init__()
+            ...         self.shape = shape
+            ...     def forward(self, x):
+            ...         return x.reshape(shape=self.shape)
 
-        class AlexNetPipeDesc(PipelineLayer):
-            def __init__(self, num_classes=10, **kwargs):
-                self.num_classes = num_classes
-                decs = [
-                    LayerDesc(
-                        nn.Conv2D, 1, 64, kernel_size=11, stride=4, padding=5),
-                    LayerDesc(nn.ReLU),
-                    LayerDesc(
-                        nn.MaxPool2D, kernel_size=2, stride=2),
-                    LayerDesc(
-                        nn.Conv2D, 64, 192, kernel_size=5, padding=2),
-                    F.relu,
-                    LayerDesc(
-                        nn.MaxPool2D, kernel_size=2, stride=2),
-                    LayerDesc(
-                        nn.Conv2D, 192, 384, kernel_size=3, padding=1),
-                    F.relu,
-                    LayerDesc(
-                        nn.Conv2D, 384, 256, kernel_size=3, padding=1),
-                    F.relu,
-                    LayerDesc(
-                        nn.Conv2D, 256, 256, kernel_size=3, padding=1),
-                    F.relu,
-                    LayerDesc(
-                        nn.MaxPool2D, kernel_size=2, stride=2),
-                    LayerDesc(
-                        ReshapeHelp, shape=[-1, 256]),
-                    LayerDesc(nn.Linear, 256, self.num_classes),  # classifier
-                ]
-                super().__init__(
-                    layers=decs, loss_fn=nn.CrossEntropyLoss(), **kwargs)
+            >>> class AlexNetPipeDesc(PipelineLayer):
+            ...     def __init__(self, num_classes=10, **kwargs):
+            ...         self.num_classes = num_classes
+            ...         decs = [
+            ...             LayerDesc(
+            ...                 nn.Conv2D, 1, 64, kernel_size=11, stride=4, padding=5),
+            ...             LayerDesc(nn.ReLU),
+            ...             LayerDesc(
+            ...                 nn.MaxPool2D, kernel_size=2, stride=2),
+            ...             LayerDesc(
+            ...                 nn.Conv2D, 64, 192, kernel_size=5, padding=2),
+            ...             F.relu,
+            ...             LayerDesc(
+            ...                 nn.MaxPool2D, kernel_size=2, stride=2),
+            ...             LayerDesc(
+            ...                 nn.Conv2D, 192, 384, kernel_size=3, padding=1),
+            ...             F.relu,
+            ...             LayerDesc(
+            ...                 nn.Conv2D, 384, 256, kernel_size=3, padding=1),
+            ...             F.relu,
+            ...             LayerDesc(
+            ...                 nn.Conv2D, 256, 256, kernel_size=3, padding=1),
+            ...             F.relu,
+            ...             LayerDesc(
+            ...                 nn.MaxPool2D, kernel_size=2, stride=2),
+            ...             LayerDesc(
+            ...                 ReshapeHelp, shape=[-1, 256]),
+            ...             LayerDesc(nn.Linear, 256, self.num_classes),  # classifier
+            ...         ]
+            ...         super().__init__(
+            ...             layers=decs, loss_fn=nn.CrossEntropyLoss(), **kwargs)
 
-        model = AlexNetPipeDesc(num_stages=pipeline_parallel_size, topology=hcg._topo)
+            >>> model = AlexNetPipeDesc(num_stages=pipeline_parallel_size, topology=hcg._topo)
 
     """
 
@@ -324,6 +345,7 @@ class PipelineLayer(nn.Layer):
         recompute_interval=0,
         recompute_ctx=None,
         num_virtual_pipeline_stages=None,
+        use_cudagraph=False,
     ):
         super().__init__()
         if num_stages is None and topology is None:
@@ -342,7 +364,7 @@ class PipelineLayer(nn.Layer):
                 ), "seg_method should be a str for interleave scheduler"
                 assert seg_method.startswith(
                     'layer:'
-                ), "seg_method shoud be start with layer: for interleave scheduler"
+                ), "seg_method should be start with layer: for interleave scheduler"
 
         self._num_virtual_pipeline_stages = (
             1
@@ -356,10 +378,11 @@ class PipelineLayer(nn.Layer):
 
         self.device_id = dist.ParallelEnv().device_id
         self.layers = layers
-        self._loss_fn = loss_fn
+        self._loss_fn = loss_fn if isinstance(loss_fn, list) else [loss_fn]
         self._topo = topology
         self._recompute_interval = recompute_interval
         self.recompute_ctx = recompute_ctx
+        self.use_cudagraph = use_cudagraph
 
         # Defaults to 1234 to initialize layer parameters
         self._base_seed = 1234
@@ -372,9 +395,7 @@ class PipelineLayer(nn.Layer):
             offload = recompute_ctx.get('offload', False)
             partition = recompute_ctx.get('partition', False)
             logger.info(
-                "Start Recompute for PipeLineParallel. recompute_offload: {}, recompute_partition: {}".format(
-                    offload, partition
-                )
+                f"Start Recompute for PipeLineParallel. recompute_offload: {offload}, recompute_partition: {partition}"
             )
 
         world_size = dist.get_world_size()
@@ -386,15 +407,13 @@ class PipelineLayer(nn.Layer):
             if num_stages:
                 assert (
                     self._num_stages == num_stages
-                ), "num_stages should be equal to be %d" % (self._num_stages)
+                ), f"num_stages should be equal to be {self._num_stages}"
         else:
             # construct default topology
             if world_size % num_stages != 0:
                 raise ValueError(
-                    "should provide correct num_stages({}) "
-                    "which can be divided by world_size({})".format(
-                        num_stages, world_size
-                    )
+                    f"should provide correct num_stages({num_stages}) "
+                    f"which can be divided by world_size({world_size})"
                 )
             dp_num = world_size // num_stages
             self._topo = fleet.CommunicateTopology(
@@ -535,20 +554,22 @@ class PipelineLayer(nn.Layer):
             if framework.in_dynamic_mode():
                 with paddle.framework.no_grad():
                     paddle.distributed.all_reduce(
-                        param.grad
-                        if not hasattr(param, "main_grad")
-                        else param.main_grad,
+                        (
+                            param.grad
+                            if not hasattr(param, "main_grad")
+                            else param.main_grad
+                        ),
                         group=comm['group'],
                     )
             else:
                 with paddle.framework.no_grad():
                     framework._dygraph_tracer().trace_op(
-                        type="c_allreduce_sum",
-                        inputs={'X': param._grad_ivar()},
-                        outputs={'Out': param._grad_ivar()},
+                        type="all_reduce",
+                        inputs={'x': param._grad_ivar()},
+                        outputs={'out': param._grad_ivar()},
                         attrs={
                             'ring_id': comm['group'].id,
-                            'use_calc_stream': True,
+                            'reduce_type': dist.ReduceOp.SUM,
                         },
                     )
 
@@ -609,13 +630,11 @@ class PipelineLayer(nn.Layer):
             start = self.segment_parts[stage]
             end = self.segment_parts[stage + 1]
             logger.info(
-                "stage={}, global_rank={} ,layer_number={}".format(
-                    stage, self.global_rank, end - start
-                )
+                f"stage={stage}, global_rank={self.global_rank} ,layer_number={end - start}"
             )
 
             for index, layer in enumerate(self._layers_desc[start:end]):
-                logger.info(f"{index + start}: {str(layer)}")
+                logger.info(f"{index + start}: {layer}")
 
         if self._num_virtual_pipeline_stages > 1:
             for stage in range(self._num_stages):
@@ -630,11 +649,14 @@ class PipelineLayer(nn.Layer):
                     stage_to_virtual_stage_info += f" {i},"
                 logger.info(stage_to_virtual_stage_info)
 
-        if self._loss_fn:
-            try:
-                logger.info(f"loss: {self._loss_fn.__name__}")
-            except AttributeError:
-                logger.info(f"loss: {self._loss_fn.__class__.__name__}")
+        if self._loss_fn[0]:
+            loss_fn_names = []
+            for idx in range(len(self._loss_fn)):
+                try:
+                    loss_fn_names.append(self._loss_fn[idx].__name__)
+                except AttributeError:
+                    loss_fn_names.append(self._loss_fn[idx].__class__.__name__)
+            logger.info(f"loss: {', '.join(loss_fn_names)}")
 
     def _build_layer_with_interleave(self):
         from paddle.distributed.fleet.meta_parallel.parallel_layers.random import (
@@ -680,6 +702,23 @@ class PipelineLayer(nn.Layer):
             # For 1f1b scheduler, just use run_function list
             run_function = self.run_function
 
+        self.groupable_layers = []
+
+        def flush_into_run_function():
+            if len(self.groupable_layers) > 0:
+                logger.info(
+                    f"flush {len(self.groupable_layers)} of layers into run_function"
+                )
+                if self.use_cudagraph:
+                    pipeline_sublayer = PipelineSublayers(
+                        self.groupable_layers.copy()
+                    )
+                    pipeline_sublayer = CUDAGraphedLayer(pipeline_sublayer)
+                    run_function.append(pipeline_sublayer)
+                else:
+                    run_function.extend(self.groupable_layers)
+                self.groupable_layers = []
+
         for index, layer in enumerate(self._layers_desc[start:end]):
             layer_index = start + index
 
@@ -689,17 +728,18 @@ class PipelineLayer(nn.Layer):
             paddle.seed(self._base_seed + layer_index)
 
             if isinstance(layer, nn.Layer):
-                run_function.append(layer)
+                self.groupable_layers.append(layer)
                 if self._num_virtual_pipeline_stages == 1:
                     # Only add sublayer for 1f1b scheduler,
                     # for interleave, PipelineLayerChunk will do this
                     self.add_sublayer(str(layer_index), layer)
             elif isinstance(layer, SharedLayerDesc):
+                flush_into_run_function()
                 if layer.layer_name not in self.shared_layers:
                     self.shared_layers[layer.layer_name] = layer.build_layer()
-                    self.shared_weight_attrs[
-                        layer.layer_name
-                    ] = layer.shared_weight_attr
+                    self.shared_weight_attrs[layer.layer_name] = (
+                        layer.shared_weight_attr
+                    )
                     for param in self.shared_layers[
                         layer.layer_name
                     ].parameters():
@@ -726,13 +766,16 @@ class PipelineLayer(nn.Layer):
 
             elif isinstance(layer, LayerDesc):
                 model = layer.build_layer()
-                run_function.append(model)
+                self.groupable_layers.append(model)
                 if self._num_virtual_pipeline_stages == 1:
                     # Only add sublayer for 1f1b scheduler,
                     # for interleave, PipelineLayerChunk will do this
                     self.add_sublayer(str(layer_index), model)
             else:
+                flush_into_run_function()
                 run_function.append(layer)
+
+        flush_into_run_function()
         return run_function
 
     def forward_function(self, start, end):
@@ -754,10 +797,8 @@ class PipelineLayer(nn.Layer):
                 self._num_virtual_pipeline_stages > 1
             ), "chunk_id is only valid when using virtual pipeline stage"
             assert chunk_id < len(self._model_chunks), (
-                "The virtual pipeline only has {} chunks, "
-                "but received chunk_id {}.".format(
-                    len(self._model_chunks), chunk_id
-                )
+                f"The virtual pipeline only has {len(self._model_chunks)} chunks, "
+                f"but received chunk_id {chunk_id}."
             )
             # Get the target model chunk.
             model_chunk = self._model_chunks[chunk_id]

@@ -42,7 +42,7 @@ class TestCollectiveAllToAllSingle(unittest.TestCase):
         )
 
         group = dist.new_group([0, 1])
-        dist.alltoall_single(input, output, group=group)
+        dist.alltoall_single(output, input, group=group)
 
         np.testing.assert_allclose(output.numpy(), expected_output.numpy())
         dist.destroy_process_group(group)
@@ -62,8 +62,8 @@ class TestCollectiveAllToAllSingle(unittest.TestCase):
 
         group = dist.new_group([0, 1])
         task = dist.alltoall_single(
-            input,
             output,
+            input,
             in_split_sizes,
             out_split_sizes,
             sync_op=False,

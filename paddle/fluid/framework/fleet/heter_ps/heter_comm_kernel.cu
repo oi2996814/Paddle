@@ -16,7 +16,7 @@ limitations under the License. */
 
 #ifdef PADDLE_WITH_HETERPS
 #include "paddle/fluid/framework/fleet/heter_ps/heter_comm_kernel.h"
-#include "paddle/fluid/platform/float16.h"
+#include "paddle/phi/common/float16.h"
 
 namespace paddle {
 namespace framework {
@@ -335,9 +335,13 @@ __global__ void scatter_dvals_by_unit_kernel(TUnit* d_dest_vals,
   }
 }
 
-// cuda implemention of  heter_comm_kernel.h
+// cuda implementation of  heter_comm_kernel.h
 template <typename T, typename StreamType>
-void HeterCommKernel::fill_idx(T* idx, int64_t len, const StreamType& stream) {
+void HeterCommKernel::fill_idx(T* idx,
+                               int64_t len,
+                               const StreamType& stream,
+                               const int gpu_id) {
+  platform::CUDADeviceGuard guard(gpu_id);
   int grid_size = (len - 1) / block_size_ + 1;
   size_t c_len = static_cast<size_t>(len);
   fill_idx_kernel<<<grid_size, block_size_, 0, stream>>>(idx, c_len);
@@ -349,7 +353,8 @@ void HeterCommKernel::calc_shard_offset(T* idx,
                                         T* right,
                                         int64_t len,
                                         int total_devs,
-                                        const StreamType& stream) {
+                                        const StreamType& stream,
+                                        const int gpu_id) {
   int grid_size = (len - 1) / block_size_ + 1;
   size_t c_len = static_cast<size_t>(len);
   calc_shard_offset_kernel<<<grid_size, block_size_, 0, stream>>>(
@@ -361,7 +366,9 @@ void HeterCommKernel::calc_shard_index(KeyType* d_keys,
                                        int64_t len,
                                        T* shard_index,
                                        int total_gpu,
-                                       const StreamType& stream) {
+                                       const StreamType& stream,
+                                       const int gpu_id) {
+  platform::CUDADeviceGuard guard(gpu_id);
   int grid_size = (len - 1) / block_size_ + 1;
   size_t c_len = static_cast<size_t>(len);
   calc_shard_index_kernel<<<grid_size, block_size_, 0, stream>>>(
@@ -385,7 +392,9 @@ void HeterCommKernel::fill_shard_key(KeyType* d_shard_keys,
                                      KeyType* d_keys,
                                      T* idx,
                                      int64_t len,
-                                     const StreamType& stream) {
+                                     const StreamType& stream,
+                                     const int gpu_id) {
+  platform::CUDADeviceGuard guard(gpu_id);
   int grid_size = (len - 1) / block_size_ + 1;
   size_t c_len = static_cast<size_t>(len);
   fill_shard_key_kernel<<<grid_size, block_size_, 0, stream>>>(
@@ -426,10 +435,12 @@ void HeterCommKernel::sort_pairs(void* d_temp_storage,
                                  const ValueT* d_values_in,
                                  ValueT* d_values_out,
                                  int num_items,
+                                 const int gpu_id,
                                  int begin_bit,
                                  int end_bit,
                                  StreamType stream,
                                  bool debug_synchronous) {
+  platform::CUDADeviceGuard guard(gpu_id);
   PADDLE_ENFORCE_GPU_SUCCESS(
       cub::DeviceRadixSort::SortPairs(d_temp_storage,
                                       temp_storage_bytes,
@@ -493,7 +504,13 @@ void HeterCommKernel::dy_mf_fill_shard_grads(KeyType* d_shard_keys,
   fill_shard_key_kernel<<<grid_size, block_size_, 0, stream>>>(
       d_shard_keys, d_keys, idx, c_len);
 
-  CHECK_EQ(grad_value_size % sizeof(float), 0);
+  PADDLE_ENFORCE_EQ(grad_value_size % sizeof(float),
+                    0,
+                    common::errors::InvalidArgument(
+                        "The size of 'grad_value_size' must be a multiple of "
+                        "sizeof(float), but received size %d.",
+                        grad_value_size));
+
   size_t N = len * grad_value_size_float;
   grid_size = (N - 1) / block_size_ + 1;
   gather_dvals_by_unit_kernel<<<grid_size, block_size_, 0, stream>>>(
@@ -550,7 +567,13 @@ void HeterCommKernel::dy_mf_fill_dvals(float* d_shard_vals,
                                        size_t val_size,
                                        const StreamType& stream) {
   const size_t val_size_float = val_size / sizeof(float);
-  CHECK_EQ(val_size % sizeof(float), 0);
+  PADDLE_ENFORCE_EQ(val_size % sizeof(float),
+                    0,
+                    common::errors::InvalidArgument(
+                        "The size of 'val_size' must be a multiple "
+                        "of sizeof(float), but received size %d.",
+                        val_size));
+
   size_t N = len * val_size_float;
   const int grid_size = (N - 1) / block_size_ + 1;
   // fill by float, d_shard_vals to d_vals
@@ -712,7 +735,8 @@ void HeterCommKernel::gather_keys(KeyType* d_shard_keys,
                                   const KeyType* d_keys,
                                   T* idx,
                                   int64_t len,
-                                  const StreamType& stream) {
+                                  const StreamType& stream,
+                                  const int gpu_id) {
   size_t N = len;
   int grid_size = (N - 1) / block_size_ + 1;
   // d_keys -> d_shard_keys
@@ -745,21 +769,28 @@ void HeterCommKernel::gather_vals(float* d_shard_vals,
   gather_dvals_by_unit_kernel<<<grid_size, block_size_, 0, stream>>>(
       d_shard_vals, d_vals, idx, N, value_size_float);
 }
-template <typename T, typename StreamType>
-void HeterCommKernel::scatter_vals(const float* d_shard_vals,
-                                   float* d_vals,
-                                   T* idx,
+template <typename ValType, typename StreamType>
+void HeterCommKernel::scatter_vals(const ValType* d_shard_vals,
+                                   ValType* d_vals,
+                                   uint32_t* idx,
                                    int64_t len,
                                    size_t value_bytes,
                                    const StreamType& stream) {
-  const size_t val_size_float = size_t(value_bytes / sizeof(float));
-  CHECK_EQ(value_bytes % sizeof(float), 0);
-  size_t N = len * val_size_float;
+  const size_t val_size_unit = size_t(value_bytes / sizeof(ValType));
+  PADDLE_ENFORCE_EQ(value_bytes % sizeof(ValType),
+                    0,
+                    common::errors::InvalidArgument(
+                        "The size of 'value_bytes' must be a multiple of "
+                        "sizeof(ValType), but received size %d.",
+                        value_bytes));
+
+  size_t N = len * val_size_unit;
   const int grid_size = (N - 1) / block_size_ + 1;
   // fill by float, d_shard_vals to d_vals
   scatter_dvals_by_unit_kernel<<<grid_size, block_size_, 0, stream>>>(
-      d_vals, d_shard_vals, idx, N, val_size_float);
+      d_vals, d_shard_vals, idx, N, val_size_unit);
 }
+
 template <typename KeyType>
 __global__ void check_valid_values_kernel(const int type,
                                           const size_t N,
@@ -886,7 +917,13 @@ void HeterCommKernel::check_valid_values(const int& type,
                                          const size_t& value_bytes,
                                          const StreamType& stream,
                                          bool debug) {
-  CHECK_EQ(value_bytes % sizeof(float), 0);
+  PADDLE_ENFORCE_EQ(value_bytes % sizeof(float),
+                    0,
+                    common::errors::InvalidArgument(
+                        "The size of 'value_bytes' must be a multiple of "
+                        "sizeof(float), but received size %d.",
+                        value_bytes));
+
   const int grid_size = (N - 1) / block_size_ + 1;
   const int num = static_cast<int>(value_bytes / sizeof(float));
   check_valid_values_kernel<<<grid_size, block_size_, 0, stream>>>(
@@ -1032,9 +1069,9 @@ void HeterCommKernel::uncompress_values(const size_t& len,
 }
 
 template void HeterCommKernel::fill_idx<int, cudaStream_t>(
-    int* idx, int64_t len, const cudaStream_t& stream);
+    int* idx, int64_t len, const cudaStream_t& stream, const int gpu_id);
 template void HeterCommKernel::fill_idx<uint32_t, cudaStream_t>(
-    uint32_t* idx, int64_t len, const cudaStream_t& stream);
+    uint32_t* idx, int64_t len, const cudaStream_t& stream, const int gpu_id);
 
 template void HeterCommKernel::calc_shard_offset<int, cudaStream_t>(
     int* idx,
@@ -1042,28 +1079,32 @@ template void HeterCommKernel::calc_shard_offset<int, cudaStream_t>(
     int* right,
     int64_t len,
     int total_devs,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    const int gpu_id);
 template void HeterCommKernel::calc_shard_offset<uint32_t, cudaStream_t>(
     uint32_t* idx,
     uint32_t* left,
     uint32_t* right,
     int64_t len,
     int total_devs,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    const int gpu_id);
 
 template void HeterCommKernel::calc_shard_index<uint64_t, int, cudaStream_t>(
     uint64_t* d_keys,
     int64_t len,
     int* shard_index,
     int total_devs,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    const int gpu_id);
 
 template void HeterCommKernel::calc_shard_index<int64_t, int, cudaStream_t>(
     int64_t* d_keys,
     int64_t len,
     int* shard_index,
     int total_devs,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    const int gpu_id);
 
 template void
 HeterCommKernel::calc_shard_index<uint64_t, uint32_t, cudaStream_t>(
@@ -1071,7 +1112,8 @@ HeterCommKernel::calc_shard_index<uint64_t, uint32_t, cudaStream_t>(
     int64_t len,
     uint32_t* shard_index,
     int total_devs,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    const int gpu_id);
 
 template void
 HeterCommKernel::calc_shard_index<int64_t, uint32_t, cudaStream_t>(
@@ -1079,7 +1121,8 @@ HeterCommKernel::calc_shard_index<int64_t, uint32_t, cudaStream_t>(
     int64_t len,
     uint32_t* shard_index,
     int total_devs,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    const int gpu_id);
 
 template void
 HeterCommKernel::calc_node_shard_index<uint64_t, int, cudaStream_t>(
@@ -1122,28 +1165,32 @@ template void HeterCommKernel::fill_shard_key<int64_t, int, cudaStream_t>(
     int64_t* d_keys,
     int* idx,
     int64_t len,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    const int gpu_id);
 
 template void HeterCommKernel::fill_shard_key<uint64_t, int, cudaStream_t>(
     uint64_t* d_shard_keys,
     uint64_t* d_keys,
     int* idx,
     int64_t len,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    const int gpu_id);
 
 template void HeterCommKernel::fill_shard_key<int64_t, uint32_t, cudaStream_t>(
     int64_t* d_shard_keys,
     int64_t* d_keys,
     uint32_t* idx,
     int64_t len,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    const int gpu_id);
 
 template void HeterCommKernel::fill_shard_key<uint64_t, uint32_t, cudaStream_t>(
     uint64_t* d_shard_keys,
     uint64_t* d_keys,
     uint32_t* idx,
     int64_t len,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    const int gpu_id);
 
 template void
 HeterCommKernel::fill_shard_grads<uint32_t, float, int, cudaStream_t>(
@@ -1163,6 +1210,13 @@ HeterCommKernel::fill_dvals<paddle::framework::FeatureValue, int, cudaStream_t>(
     int64_t len,
     const cudaStream_t& stream);
 
+template void HeterCommKernel::fill_dvals<uint32_t, int, cudaStream_t>(
+    uint32_t* d_shard_vals,
+    uint32_t* d_vals,
+    int* idx,
+    int64_t len,
+    const cudaStream_t& stream);
+
 template void HeterCommKernel::
     sort_pairs<uint32_t, paddle::framework::FeaturePushValue, cudaStream_t>(
         void* d_temp_storage,
@@ -1172,6 +1226,7 @@ template void HeterCommKernel::
         const paddle::framework::FeaturePushValue* d_values_in,
         paddle::framework::FeaturePushValue* d_values_out,
         int num_items,
+        const int gpu_id,
         int begin_bit,
         int end_bit,
         cudaStream_t stream,
@@ -1185,6 +1240,7 @@ template void HeterCommKernel::sort_pairs<int, int, cudaStream_t>(
     const int* d_values_in,
     int* d_values_out,
     int num_items,
+    const int gpu_id,
     int begin_bit,
     int end_bit,
     cudaStream_t stream,
@@ -1198,6 +1254,7 @@ template void HeterCommKernel::sort_pairs<uint32_t, uint32_t, cudaStream_t>(
     const uint32_t* d_values_in,
     uint32_t* d_values_out,
     int num_items,
+    const int gpu_id,
     int begin_bit,
     int end_bit,
     cudaStream_t stream,
@@ -1355,25 +1412,29 @@ template void HeterCommKernel::gather_keys<uint64_t, int, cudaStream_t>(
     const uint64_t* d_keys,
     int* idx,
     int64_t len,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    const int gpu_id);
 template void HeterCommKernel::gather_keys<int32_t, int, cudaStream_t>(
     int32_t* d_shard_keys,
     const int32_t* d_keys,
     int* idx,
     int64_t len,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    const int gpu_id);
 template void HeterCommKernel::gather_keys<uint64_t, uint32_t, cudaStream_t>(
     uint64_t* d_shard_keys,
     const uint64_t* d_keys,
     uint32_t* idx,
     int64_t len,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    const int gpu_id);
 template void HeterCommKernel::gather_keys<int32_t, uint32_t, cudaStream_t>(
     int32_t* d_shard_keys,
     const int32_t* d_keys,
     uint32_t* idx,
     int64_t len,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    const int gpu_id);
 template void HeterCommKernel::scatter_keys<uint64_t, int, cudaStream_t>(
     const uint64_t* d_shard_keys,
     uint64_t* d_keys,
@@ -1413,16 +1474,37 @@ template void HeterCommKernel::gather_vals<uint32_t, cudaStream_t>(
     int64_t len,
     size_t value_bytes,
     const cudaStream_t& stream);
-template void HeterCommKernel::scatter_vals<int, cudaStream_t>(
+template void HeterCommKernel::scatter_vals<float, cudaStream_t>(
     const float* d_shard_vals,
     float* d_vals,
-    int* idx,
+    uint32_t* idx,
+    int64_t len,
+    size_t value_bytes,
+    const cudaStream_t& stream);
+template void HeterCommKernel::scatter_vals<uint64_t, cudaStream_t>(
+    const uint64_t* d_shard_vals,
+    uint64_t* d_vals,
+    uint32_t* idx,
+    int64_t len,
+    size_t value_bytes,
+    const cudaStream_t& stream);
+template void HeterCommKernel::scatter_vals<int, cudaStream_t>(
+    const int* d_shard_vals,
+    int* d_vals,
+    uint32_t* idx,
     int64_t len,
     size_t value_bytes,
     const cudaStream_t& stream);
 template void HeterCommKernel::scatter_vals<uint32_t, cudaStream_t>(
-    const float* d_shard_vals,
-    float* d_vals,
+    const uint32_t* d_shard_vals,
+    uint32_t* d_vals,
+    uint32_t* idx,
+    int64_t len,
+    size_t value_bytes,
+    const cudaStream_t& stream);
+template void HeterCommKernel::scatter_vals<uint8_t, cudaStream_t>(
+    const uint8_t* d_shard_vals,
+    uint8_t* d_vals,
     uint32_t* idx,
     int64_t len,
     size_t value_bytes,

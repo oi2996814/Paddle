@@ -25,16 +25,16 @@
 #include "paddle/cinn/common/object.h"
 #include "paddle/cinn/common/shared.h"
 #include "paddle/cinn/common/type.h"
-
+#include "paddle/common/enforce.h"
 namespace cinn {
 
 namespace ir {
-using common::BFloat16;
-using common::Float;
-using common::Float16;
-using common::Int;
-using common::Type;
-using common::type_of;
+using cinn::common::BFloat16;
+using cinn::common::Float;
+using cinn::common::Float16;
+using cinn::common::Int;
+using cinn::common::Type;
+using cinn::common::type_of;
 
 class Module;
 class IRVisitor;
@@ -51,6 +51,7 @@ class _BufferRange_;
 class BufferRange;
 class ScheduleBlock;
 class ScheduleBlockRealize;
+class Dim;
 
 // clang-format off
 #define NODETY_PRIMITIVE_TYPE_FOR_EACH(macro__) \
@@ -99,8 +100,6 @@ class ScheduleBlockRealize;
   macro__(Free)                             \
   macro__(_Buffer_)                         \
   macro__(_Tensor_)                         \
-  macro__(_LoweredFunc_)                    \
-  macro__(_Module_)                         \
   macro__(Let)                              \
   macro__(Reduce)                           \
   macro__(Ramp)                             \
@@ -109,40 +108,90 @@ class ScheduleBlockRealize;
   macro__(Product)                          \
   macro__(Sum)                              \
   macro__(PrimitiveNode)                    \
-  macro__(IntrinsicOp)                      \
   macro__(_BufferRange_)                    \
   macro__(ScheduleBlock)                    \
   macro__(ScheduleBlockRealize)             \
+  macro__(_Dim_)                            \
 
+#define NODETY_CONTROL_OP_FOR_INTRINSIC(macro__) \
+  macro__(IntrinsicOp)                      \
 
+// TODO(Hongqing-work): change NODETY_FORALL to NODETY_FORALL_EXPR
 #define NODETY_FORALL(__m)              \
   NODETY_PRIMITIVE_TYPE_FOR_EACH(__m)   \
   NODETY_OP_FOR_EACH(__m)               \
+  NODETY_CONTROL_OP_FOR_INTRINSIC(__m)  \
   NODETY_CONTROL_OP_FOR_EACH(__m)
+
+#define NODETY_FORALL_EXCEPT_INTRINSIC(__m)              \
+  NODETY_PRIMITIVE_TYPE_FOR_EACH(__m)                    \
+  NODETY_OP_FOR_EACH(__m)                                \
+  NODETY_CONTROL_OP_FOR_EACH(__m)
+
+#define NODETY_FORALL_STMT(macro__) \
+  macro__(Let)                      \
+  macro__(Store)                    \
+  macro__(Alloc)                    \
+  macro__(Free)                     \
+  macro__(IfThenElse)               \
+  macro__(For)                      \
+  macro__(Schedule)                 \
+  macro__(Evaluate)
+
+#define NODETY_FORALL_INDEXEXPR(macro__) \
+  macro__(IntImm)                      \
+  macro__(_Var_)                      \
+  macro__(Add)                      \
+  macro__(Sub)                      \
+  macro__(Mul)                    \
+  macro__(Div)                    \
+  macro__(Mod)                     \
+  macro__(Load)               \
+  macro__(Cast)                      \
+  macro__(Min)                 \
+  macro__(Max)
 // clang-format on
 
 //! Define IrNodeTy
 // @{
 #define __m(x__) x__,
-enum class IrNodeTy { kUnk = -1, NODETY_FORALL(__m) };
+enum class IrNodeTy {
+  kUnk = -1,
+  Module,
+  LoweredFunc,
+  IterMark,
+  IterSum,
+  IterSplit,
+  NODETY_FORALL(__m)
+};
+#undef __m
+// @}
+
+//! Define StmtNodeTy
+// @{
+#define __m(x__) x__,
+enum class StmtNodeTy { kUnk = -1, NODETY_FORALL_STMT(__m) };
 #undef __m
 // @}
 
 //! String representations for IrNodeTy.
 // @{
 #define __m(x__) #x__,
-const std::vector<std::string> kIrNodeTyReprs({NODETY_FORALL(__m) "None"});
+const std::vector<std::string> kIrNodeTyReprs(
+    {NODETY_FORALL(__m) "IterSplit", "IterSum", "IterMark", "None"});
 #undef __m
 // @}
 
 std::ostream& operator<<(std::ostream& os, IrNodeTy type);
+std::ostream& operator<<(std::ostream& os, StmtNodeTy type);
 
 struct Expr;
+struct IndexExpr;
 
 /**
  * The base of all the nodes in the IR.
  */
-class IrNode : public common::Object {
+class IrNode : public cinn::common::Object {
  public:
   //! The operands of this operator.
   std::vector<Expr> operands;
@@ -153,8 +202,14 @@ class IrNode : public common::Object {
 
   virtual IrNodeTy node_type() const { return IrNodeTy::kUnk; }
   virtual Type type() const { return type_; }
-  void set_type(Type type) { type_ = type; }
+  void set_type(Type type);
+  //! Elevate int32 to int64 if needed
+  virtual void convert_int32_to_int64();
 
+  //! Elevate int64 to int32 if needed
+  virtual void convert_int64_to_int32();
+
+  virtual void replace(Expr old_op, Expr new_op);
   //! Get i-th operand
   const Expr& operand(int i);
 
@@ -167,15 +222,19 @@ class IrNode : public common::Object {
   //! Verify the current IR node's correctness.
   virtual void Verify() const { CINN_NOT_IMPLEMENTED }
 
+  bool get_index() const;
+  void set_index(bool flag);
+
  protected:
   static constexpr char* __type_info__ = "IRNode";
+  bool is_index_ = false;
   Type type_;
 };
 
 /**
  * A handle to store any IRNode.
  */
-class IrNodeRef : public common::Shared<IrNode> {
+class IrNodeRef : public cinn::common::Shared<IrNode> {
  public:
   IrNodeRef() = default;
   IrNodeRef(const IrNodeRef& other) : Shared(other.p_) {}
@@ -186,7 +245,11 @@ class IrNodeRef : public common::Shared<IrNode> {
   template <typename T>
   const T* As() const {
     static_assert(std::is_base_of<IrNode, T>());
-    CHECK(get()) << "IrNodeRef holds null";
+    PADDLE_ENFORCE_NOT_NULL(
+        get(),
+        ::common::errors::InvalidArgument(
+            "IrNodeRef holds null. "
+            "The get() method should return a non-null value."));
     if (node_type() == T::_node_type_) return static_cast<const T*>(get());
     return nullptr;
   }
@@ -218,11 +281,17 @@ struct ExprNode : public IrNode {
   std::vector<Expr>& operands() { return IrNode::operands; }
 
   Expr& operand(int i) {
-    CHECK_LT(i, operands().size());
+    PADDLE_ENFORCE_LT(
+        i,
+        operands().size(),
+        ::common::errors::InvalidArgument("The index %d is out of range", i));
     return operands()[i];
   }
   const Expr& operand(int i) const {
-    CHECK_LT(i, operands().size());
+    PADDLE_ENFORCE_LT(
+        i,
+        operands().size(),
+        ::common::errors::InvalidArgument("The index %d is out of range", i));
     return operands()[i];
   }
 
@@ -234,13 +303,29 @@ struct ExprNode : public IrNode {
 struct IntImm : public ExprNode<IntImm> {
   int64_t value;
 
-  IntImm(Type t, int64_t v) : ExprNode<IntImm>(t), value(v) { Verify(); }
+  IntImm(Type t, int64_t v) : ExprNode<IntImm>(t), value(v) {
+    if (t.bits() == 32 || t.bits() == 64) set_index(true);
+    Verify();
+  }
 
   void Verify() const override {
-    CHECK(type().is_int());
-    CHECK(type().is_scalar());
-    CHECK(type().bits() == 8 || type().bits() == 16 || type().bits() == 32 ||
-          type().bits() == 64);
+    PADDLE_ENFORCE_EQ(
+        type().is_int(),
+        true,
+        ::common::errors::InvalidArgument("The type must be an integer type."));
+    PADDLE_ENFORCE_EQ(
+        type().is_scalar(),
+        true,
+        ::common::errors::InvalidArgument("The type must be scalar type."));
+    if (type().bits() != 8)
+      if (type().bits() != 16)
+        if (type().bits() != 32)
+          PADDLE_ENFORCE_EQ(type().bits(),
+                            64,
+                            "The type must be one of the following bit sizes: "
+                            "8, 16, 32, or 64. "
+                            "But got bit size: %d",
+                            type().bits());
   }
 
   static const IrNodeTy _node_type_ = IrNodeTy::IntImm;
@@ -252,10 +337,24 @@ struct UIntImm : public ExprNode<UIntImm> {
   UIntImm(Type t, uint64_t v) : ExprNode<UIntImm>(t), value(v) { Verify(); }
 
   void Verify() const override {
-    CHECK(type().is_uint());
-    CHECK(type().is_scalar());
-    CHECK(type().bits() == 1 /*bool*/ || type().bits() == 8 ||
-          type().bits() == 16 || type().bits() == 32 || type().bits() == 64);
+    PADDLE_ENFORCE_EQ(type().is_uint(),
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "The type must be an unsigned integer type."));
+    PADDLE_ENFORCE_EQ(
+        type().is_scalar(),
+        true,
+        ::common::errors::InvalidArgument("The type must be scalar type."));
+    if (type().bits() != 1)
+      if (type().bits() != 8)
+        if (type().bits() != 16)
+          if (type().bits() != 32)
+            PADDLE_ENFORCE_EQ(type().bits(),
+                              64,
+                              "The type must be one of the following bit "
+                              "sizes: 1, 8, 16, 32, or 64. "
+                              "But got bit size: %d",
+                              type().bits());
   }
 
   static const IrNodeTy _node_type_ = IrNodeTy::UIntImm;
@@ -267,8 +366,14 @@ struct FloatImm : public ExprNode<FloatImm> {
   FloatImm(Type t, double v) : ExprNode<FloatImm>(t), value(v) { Verify(); }
 
   void Verify() const override {
-    CHECK(type().is_float());
-    CHECK(type().is_scalar());
+    PADDLE_ENFORCE_EQ(
+        type().is_float(),
+        true,
+        ::common::errors::InvalidArgument("The type must be float type."));
+    PADDLE_ENFORCE_EQ(
+        type().is_scalar(),
+        true,
+        ::common::errors::InvalidArgument("The type must be scalar type."));
   }
 
   static const IrNodeTy _node_type_ = IrNodeTy::FloatImm;
@@ -285,6 +390,7 @@ struct StringImm : public ExprNode<StringImm> {
 };
 
 class Var;
+class IndexExpr;
 /**
  * An expression that represents some value or the result of some operations.
  */
@@ -293,6 +399,7 @@ struct Expr : public IrNodeRef {
   Expr() = default;
   Expr(const Expr& other) : IrNodeRef(other.ptr()) {}
   Expr(IrNode* p) : IrNodeRef(p) {}  // NOLINT
+  Expr(const IndexExpr& e);          // NOLINT
   explicit Expr(const Var& var);
 
   //! Helper function to construct numeric constants of various types.
@@ -320,6 +427,8 @@ struct Expr : public IrNodeRef {
   // @}
 
   Expr& operator=(const Expr& other);
+  Expr& operator=(const IndexExpr& other);
+  Expr& operator=(const Var& other);
 
   // primitive types
   // @{
@@ -350,14 +459,6 @@ struct Expr : public IrNodeRef {
   const _Buffer_* as_buffer() const;
   Buffer as_buffer_ref() const;
 
-  _LoweredFunc_* as_lowered_func();
-  const _LoweredFunc_* as_lowered_func() const;
-  LoweredFunc as_lowered_func_ref() const;
-
-  _Module_* as_module();
-  const _Module_* as_module() const;
-  ir::Module as_module_ref() const;
-
   _Tensor_* as_tensor();
   const _Tensor_* as_tensor() const;
   ir::Tensor as_tensor_ref() const;
@@ -371,25 +472,110 @@ struct Expr : public IrNodeRef {
 
   bool is_var() const;
 
+  bool is_index() const;
+
+  IndexExpr as_index();
+  const IndexExpr as_index() const;
+
+  Expr& set_index(bool flag);
+  const Expr& set_index(bool flag) const;
+
   operator Var();
 
   Type type() const { return p_->type(); }
+};
+
+struct IndexExpr : public IrNodeRef {
+ public:
+  IndexExpr() = default;
+  IndexExpr(const IndexExpr& other) : IrNodeRef(other.ptr()) {}
+  IndexExpr(IrNode* p) : IrNodeRef(p) { p->set_index(true); }  // NOLINT
+  IndexExpr(const Expr& e);                                    // NOLINT
+
+  explicit IndexExpr(int32_t x) : IrNodeRef(new IntImm(Int(32), x)) {}
+  explicit IndexExpr(int64_t x) : IrNodeRef(new IntImm(Int(64), x)) {}
+
+  explicit IndexExpr(Type t, int64_t x)
+      : IrNodeRef(new IntImm(x > INT32_MAX ? Int(64) : t, x)) {}
+
+  bool is_var() const;
+  _Var_* as_var();
+  const _Var_* as_var() const;
+  Var as_var_ref() const;
+
+  int32_t as_int32() const;
+  int64_t as_int64() const;
+
+  bool is_constant() const;
+  int64_t get_constant() const;
+
+  const IndexExpr operand(int32_t i) const;
+
+  Type type() const { return p_->type(); }
+
+  int64_t GetLargestMultiplyPart() const;
+
+  /*
+   * Enum class OptLevel defines optimization levels for the IndexExpr
+   * normalization.
+   *
+   * Level0: only constant folding
+   *   e.g. (x + 3) + 2  ==> x + 5
+   * Level1: constant folding and sequential simplification.
+   *   e.g. x / 2 * 2 + x % 2 ==> x
+   * Level2: Each factor in the expression is attempted to be simplified with
+   * the other factors
+   *   e.g. x / 2 * 2 + y / 2 + 5 + x % 2 ==> y / 2 + x + 5
+   *
+   * Note: Because IndexExpr is generated in order, Short operand is at the
+   * end of the expression, so Level1 is usually used.
+   */
+  enum class OptLevel {
+    Level0 = 0,  // TODO(liujinnan): Only constant folding is performed
+    Level1 = 1,  // Constant folding and sequential simplification are performed
+    Level2 = 2   // Top level, simplify
+  };
+
+  IndexExpr Normalize(OptLevel level = OptLevel::Level1) const;
+
+  bool IsDynamic() const;
+
+  // count the `IndeExpr` length, each node has weight 1, e.g.
+  // S0,          length = 1
+  // S0 + S1,     length = 3
+  // S0 + S1 * 2, length = 5
+  int32_t length() const;
+
+  IndexExpr& operator=(const IndexExpr& other);
+  IndexExpr& operator=(const Expr& other);
+  IndexExpr& operator=(const Var& other);
 };
 
 template <typename T>
 struct UnaryOpNode : public ExprNode<T> {
   UnaryOpNode() { operands().resize(1); }
   UnaryOpNode(Type type, Expr v) : ExprNode<T>(type) {
-    CHECK(v.defined());
+    PADDLE_ENFORCE_EQ(
+        v.defined(),
+        true,
+        ::common::errors::InvalidArgument("The variable must be defined."));
     operands().resize(1);
     this->v() = v;
   }
 
   Type type() const override {
-    CHECK(v().defined());
+    PADDLE_ENFORCE_EQ(
+        v().defined(),
+        true,
+        ::common::errors::InvalidArgument("The variable must be defined."));
     return v().type();
   }
 
+  void replace(Expr old_op, Expr new_op) {
+    if (v() == old_op) {
+      v() = new_op;
+    }
+  }
   Expr& v() { return operands().front(); }
   const Expr& v() const { return operands().front(); }
 
@@ -403,22 +589,36 @@ template <typename T>
 struct BinaryOpNode : public ExprNode<T> {
   BinaryOpNode() { operands().resize(2); }
   BinaryOpNode(Type type, Expr a, Expr b) : ExprNode<T>(type) {
-    CHECK(type.valid());
-    CHECK(a.defined());
-    CHECK(b.defined());
+    PADDLE_ENFORCE_EQ(
+        type.valid(),
+        true,
+        ::common::errors::InvalidArgument("The type must be valid."));
+    PADDLE_ENFORCE_EQ(
+        a.defined(),
+        true,
+        ::common::errors::InvalidArgument("The object 'a' must be defined."));
+    PADDLE_ENFORCE_EQ(
+        b.defined(),
+        true,
+        ::common::errors::InvalidArgument("The object 'b' must be defined."));
     operands().resize(2);
     this->a() = a;
     this->b() = b;
-    // CHECK_EQ(a.type(), b.type()) << "the type of two argument not match";
   }
 
   Expr& a() { return ExprNode<T>::operand(0); }
   Expr& b() { return ExprNode<T>::operand(1); }
   const Expr& a() const { return ExprNode<T>::operand(0); }
   const Expr& b() const { return ExprNode<T>::operand(1); }
-
   Type type() const override { return a().type(); }
 
+  void replace(Expr old_op, Expr new_op) {
+    for (int i = 0; i < operands().size(); i++) {
+      if (operands()[i] == old_op) {
+        operands()[i] = new_op;
+      }
+    }
+  }
   std::vector<Expr*> expr_fields() override { return {&a(), &b()}; }
   std::vector<const Expr*> expr_fields() const override { return {&a(), &b()}; }
 
@@ -481,7 +681,8 @@ static std::ostream& operator<<(std::ostream& os, MemoryType t) {
     MEMORY_TYPE_FOR_ALL(__)
 
     default:
-      LOG(FATAL) << "Not supported memory type";
+      PADDLE_THROW(
+          ::common::errors::InvalidArgument("Not supported memory type"));
 #undef __
   }
   return os;
@@ -489,20 +690,11 @@ static std::ostream& operator<<(std::ostream& os, MemoryType t) {
 
 template <typename T>
 Expr ExprNode<T>::Copy() const {
-  LOG(FATAL) << "Not Implemented";
+  PADDLE_THROW(::common::errors::Unimplemented("Not Implemented"));
   return Expr();
 }
 
+void TryElevateInt32ToInt64(const std::vector<Expr>& expr_vec);
+
 }  // namespace ir
 }  // namespace cinn
-
-namespace std {
-
-template <>
-struct hash<cinn::ir::Expr> {
-  size_t operator()(const cinn::ir::Expr& x) {
-    return reinterpret_cast<size_t>(x.get());
-  }
-};
-
-}  // namespace std

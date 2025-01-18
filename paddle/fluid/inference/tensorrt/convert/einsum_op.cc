@@ -11,9 +11,7 @@ limitations under the License. */
 
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 /*
  * Einsum Op
@@ -39,15 +37,13 @@ class EinsumOpConverter : public OpConverter {
         engine_, Einsum, input_tensors.data(), input_num, equation.c_str());
 
     auto output_name = op_desc.Output("Out")[0];
-    RreplenishLayerAndOutput(layer, "einsum", {output_name}, test_mode);
+    ReplenishLayerAndOutput(layer, "einsum", {output_name}, test_mode);
 #else
     VLOG(3) << "Einsum is not supported when TensorRT < 8.2.0";
 #endif
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(einsum, EinsumOpConverter);

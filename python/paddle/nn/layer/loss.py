@@ -12,14 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import paddle
+from __future__ import annotations
 
-# TODO: define loss functions of neural network
-from paddle import fluid, in_dynamic_mode
-from paddle.fluid.framework import in_dygraph_mode
+from typing import TYPE_CHECKING, Callable
+
+import paddle
+from paddle import base, in_dynamic_mode
+from paddle.base.framework import in_dynamic_or_pir_mode
 
 from .. import functional as F
 from .layers import Layer
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from paddle import Tensor
+    from paddle._typing import ParamAttrLike
+
+    from ..functional.loss import _ReduceMode
+
 
 __all__ = []
 
@@ -64,19 +75,19 @@ class BCEWithLogitsLoss(Layer):
     Note that the target labels ``label`` should be numbers between 0 and 1.
 
     Args:
-        weight (Tensor, optional): A manual rescaling weight given to the loss of each
+        weight (Tensor|None, optional): A manual rescaling weight given to the loss of each
             batch element. If given, it has to be a 1D Tensor whose size is `[N, ]`,
             The data type is float32, float64. Default is ``'None'``.
         reduction (str, optional): Indicate how to average the loss by batch_size,
-            the candicates are ``'none'`` | ``'mean'`` | ``'sum'``.
+            the candidates are ``'none'`` | ``'mean'`` | ``'sum'``.
             If :attr:`reduction` is ``'none'``, the unreduced loss is returned;
             If :attr:`reduction` is ``'mean'``, the reduced mean loss is returned;
             If :attr:`reduction` is ``'sum'``, the summed loss is returned.
             Default is ``'mean'``.
-        pos_weight (Tensor, optional): A weight of positive examples. Must be a vector
+        pos_weight (Tensor|None, optional): A weight of positive examples. Must be a vector
             with length equal to the number of classes. The data type is float32, float64.
             Default is ``'None'``.
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Shapes:
@@ -103,13 +114,22 @@ class BCEWithLogitsLoss(Layer):
 
     """
 
+    weight: Tensor | None
+    reduction: _ReduceMode
+    pos_weight: Tensor | None
+    name: str | None
+
     def __init__(
-        self, weight=None, reduction='mean', pos_weight=None, name=None
-    ):
+        self,
+        weight: Tensor | None = None,
+        reduction: _ReduceMode = 'mean',
+        pos_weight: Tensor | None = None,
+        name: str | None = None,
+    ) -> None:
         if reduction not in ['sum', 'mean', 'none']:
             raise ValueError(
                 "The value of 'reduction' in BCEWithLogitsLoss should be 'sum', 'mean' or 'none', but "
-                "received %s, which is not allowed." % reduction
+                f"received {reduction}, which is not allowed."
             )
 
         super().__init__()
@@ -118,7 +138,7 @@ class BCEWithLogitsLoss(Layer):
         self.pos_weight = pos_weight
         self.name = name
 
-    def forward(self, logit, label):
+    def forward(self, logit: Tensor, label: Tensor) -> Tensor:
         out = paddle.nn.functional.binary_cross_entropy_with_logits(
             logit,
             label,
@@ -231,7 +251,7 @@ class CrossEntropyLoss(Layer):
 
             where, N is the number of samples and C is the number of categories.
 
-            2.3.2. If the 'weight' parameter is not 'None', the weighted average value of the previous result will be returned
+            2.3.2. If the ``weight`` parameter is ``None`` , the weighted average value of the previous result will be returned
 
             1. Hard labels (soft_label = False)
 
@@ -248,26 +268,31 @@ class CrossEntropyLoss(Layer):
         weight (Tensor, optional): a manual rescaling weight given to each class.
             If given, has to be a Tensor of size C and the data type is float32, float64.
             Default is ``'None'`` .
-        ignore_index (int64, optional): Specifies a target value that is ignored
+        ignore_index (int, optional): Specifies a target value that is ignored
             and does not contribute to the loss. A negative value means that no label
             value needs to be ignored. Only valid when soft_label = False.
             Default is ``-100`` .
         reduction (str, optional): Indicate how to average the loss by batch_size,
-            the candicates are ``'none'`` | ``'mean'`` | ``'sum'``.
+            the candidates are ``'none'`` | ``'mean'`` | ``'sum'``.
             If :attr:`reduction` is ``'mean'``, the reduced mean loss is returned;
-            If :attr:`size_average` is ``'sum'``, the reduced sum loss is returned.
+            If :attr:`reduction` is ``'sum'``, the reduced sum loss is returned.
             If :attr:`reduction` is ``'none'``, the unreduced loss is returned.
             Default is ``'mean'``.
         soft_label (bool, optional): Indicate whether label is soft.
             If soft_label=False, the label is hard.  If soft_label=True, the label is soft.
             Default is ``False``.
+        label_smoothing (float, optional): A float in [0.0, 1.0].
+            Specifies the amount of smoothing when computing the loss, where 0.0 means no smoothing.
+            The targets become  a mixture of the original ground truth and a uniform distribution as
+            described in paper 'Rethinking the Inception Architecture for Computer Vision'.
+            Default is ``0.0``.
         axis (int, optional): The index of dimension to perform softmax calculations.
             It should be in range :math:`[-1, rank - 1]`, where :math:`rank` is the number
             of dimensions of input :attr:`input`.
             Default is ``-1`` .
         use_softmax (bool, optional): Indicate whether compute softmax before cross_entropy.
             Default is ``True``.
-        name (str, optional): The name of the operator. Default is ``None`` .
+        name (str|None, optional): The name of the operator. Default is ``None`` .
             For more information, please refer to :ref:`api_guide_Name` .
 
 
@@ -287,8 +312,12 @@ class CrossEntropyLoss(Layer):
             :math:`[N_1, N_2, ..., N_k]` or :math:`[N_1, N_2, ..., N_k, 1]`, k >= 1.
             the data type is int32, int64, float32, float64, where each value is [0, C-1].
 
-            2. If soft_label=True, the shape and data type should be same with ``input`` ,
-            and the sum of the labels for each sample should be 1.
+            2. If soft_label=True and no label_smoothing, the shape and data type
+            should be same with ``input`` , and the sum of the labels for each sample should be 1.
+
+            3. If has label_smoothing, (i.e. label_smoothing > 0.0), no matter what ``soft_label`` is,
+            the shape and data type of ``label`` could be either the situation 1 or situation 2.
+            In other words, if label_smoothing > 0.0, the format of label could be one-hot label or integer label.
 
         - **output** (Tensor), Return the softmax cross_entropy loss of ``input`` and ``label``.
           The data type is the same as input.
@@ -302,6 +331,7 @@ class CrossEntropyLoss(Layer):
     Examples:
 
         .. code-block:: python
+            :name: code-example1
 
             >>> # hard labels
             >>> import paddle
@@ -321,42 +351,82 @@ class CrossEntropyLoss(Layer):
             5.33697682)
 
         .. code-block:: python
+            :name: code-example2
 
             >>> # soft labels
             >>> import paddle
+            >>> from typing import Optional
             >>> paddle.seed(2023)
             >>> axis = -1
-            >>> ignore_index = -100
             >>> N = 4
             >>> C = 3
             >>> shape = [N, C]
             >>> reduction='mean'
-            >>> weight = None
+            >>> weight: Optional[paddle.Tensor] = None
             >>> logits = paddle.uniform(shape, dtype='float64', min=0.1, max=1.0)
+            >>> # case1: soft labels without label_smoothing
             >>> labels = paddle.uniform(shape, dtype='float64', min=0.1, max=1.0)
             >>> labels /= paddle.sum(labels, axis=axis, keepdim=True)
-            >>> paddle_loss_mean = paddle.nn.functional.cross_entropy(logits,
-            ...                                                       labels,
-            ...                                                       soft_label=True,
-            ...                                                       axis=axis,
-            ...                                                       weight=weight,
-            ...                                                       reduction=reduction)
-            >>> print(paddle_loss_mean)
+            >>> cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
+            ...     weight=weight, reduction=reduction, soft_label=True, label_smoothing=0.0)
+            >>> dy_ret = cross_entropy_loss(logits, labels)
+            >>> print(dy_ret)
             Tensor(shape=[], dtype=float64, place=Place(cpu), stop_gradient=True,
             1.14554912)
 
+
+            >>> # case2: soft labels with label_smoothing
+            >>> import paddle
+            >>> from typing import Optional
+            >>> paddle.seed(2023)
+            >>> axis = -1
+            >>> N = 4
+            >>> C = 3
+            >>> shape = [N, C]
+            >>> label_smoothing = 0.4
+            >>> reduction='mean'
+            >>> weight: Optional[paddle.Tensor]  = None
+            >>> logits = paddle.uniform(shape, dtype='float64', min=0.1, max=1.0)
+            >>> integer_labels = paddle.randint(low=0, high=C, shape=[N], dtype='int64')
+            >>> one_hot_labels = paddle.nn.functional.one_hot(integer_labels, C).astype('float32')
+
+            >>> cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
+            ...     weight=weight, reduction=reduction, label_smoothing=label_smoothing)
+
+            >>> # integer labels
+            >>> integer_label_dy_ret = cross_entropy_loss(logits, integer_labels)
+            >>> print(integer_label_dy_ret)
+            Tensor(shape=[], dtype=float64, place=Place(cpu), stop_gradient=True,
+            1.10520368)
+
+            >>> # one_hot labels
+            >>> one_hot_label_dy_ret = cross_entropy_loss(logits, one_hot_labels)
+            >>> print(one_hot_label_dy_ret)
+            Tensor(shape=[], dtype=float64, place=Place(cpu), stop_gradient=True,
+            1.10520368)
+
     """
+
+    weight: Tensor | None
+    ignore_index: int
+    reduction: _ReduceMode
+    soft_label: bool
+    axis: int
+    use_softmax: bool
+    label_smoothing: float
+    name: str | None
 
     def __init__(
         self,
-        weight=None,
-        ignore_index=-100,
-        reduction='mean',
-        soft_label=False,
-        axis=-1,
-        use_softmax=True,
-        name=None,
-    ):
+        weight: Tensor | None = None,
+        ignore_index: int = -100,
+        reduction: _ReduceMode = 'mean',
+        soft_label: bool = False,
+        axis: int = -1,
+        use_softmax: bool = True,
+        label_smoothing: float = 0.0,
+        name: str | None = None,
+    ) -> None:
         super().__init__()
         self.weight = weight
         self.reduction = reduction
@@ -364,9 +434,10 @@ class CrossEntropyLoss(Layer):
         self.soft_label = soft_label
         self.axis = axis
         self.use_softmax = use_softmax
+        self.label_smoothing = label_smoothing
         self.name = name
 
-    def forward(self, input, label):
+    def forward(self, input: Tensor, label: Tensor) -> Tensor:
         ret = paddle.nn.functional.cross_entropy(
             input,
             label,
@@ -376,6 +447,7 @@ class CrossEntropyLoss(Layer):
             soft_label=self.soft_label,
             axis=self.axis,
             use_softmax=self.use_softmax,
+            label_smoothing=self.label_smoothing,
             name=self.name,
         )
 
@@ -412,11 +484,11 @@ class HSigmoidLoss(Layer):
             should not be None. If the custom tree is used (:attr:`is_custom` is set to True),
             :attr:`num_classes` should be the number of non-leaf nodes, which indicates the num of
             classes using by the binary classifier.
-        weight_attr (ParamAttr, optional): The parameter attribute for the learnable weights
+        weight_attr (ParamAttr|None, optional): The parameter attribute for the learnable weights
             of hsigmoid. If it is set to None or one attribute of ParamAttr, hsigmoid will create a
             ParamAttr as param_attr. If the Initializer of the param_attr is not set, the parameter is
             initialized with Xavier. Default is None.
-        bias_attr (ParamAttr|bool, optional): The parameter attribute for the bias of hsigmoid. If it
+        bias_attr (ParamAttr|bool|None, optional): The parameter attribute for the bias of hsigmoid. If it
             is set to False, no bias will be added. If it is set to None or one attribute of ParamAttr,
             hsigmoid will create a ParamAttr as bias_attr. If the Initializer of the bias_attr is not
             set, the bias is initialized zero. Default is None.
@@ -425,7 +497,7 @@ class HSigmoidLoss(Layer):
             should not be passed to its forward method. Default is False.
         is_sparse (bool, optional): Whether use sparse updating instead of dense updating, if it's True,
             the gradient of weight and input will be sparse. Default is False.
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Shape:
@@ -457,16 +529,19 @@ class HSigmoidLoss(Layer):
              [2.97453213]])
     """
 
+    weight: Tensor
+    bias: Tensor
+
     def __init__(
         self,
-        feature_size,
-        num_classes,
-        weight_attr=None,
-        bias_attr=None,
-        is_custom=False,
-        is_sparse=False,
-        name=None,
-    ):
+        feature_size: int,
+        num_classes: int,
+        weight_attr: ParamAttrLike | None = None,
+        bias_attr: ParamAttrLike | None = None,
+        is_custom: bool = False,
+        is_sparse: bool = False,
+        name: str | None = None,
+    ) -> None:
         super().__init__()
         if (num_classes < 2) and (not is_custom):
             raise ValueError(
@@ -505,7 +580,13 @@ class HSigmoidLoss(Layer):
             [C, 1], attr=self._bias_attr, is_bias=True, dtype=self._dtype
         )
 
-    def forward(self, input, label, path_table=None, path_code=None):
+    def forward(
+        self,
+        input: Tensor,
+        label: Tensor,
+        path_table: Tensor = None,
+        path_code: Tensor = None,
+    ) -> Tensor:
         out = F.hsigmoid_loss(
             input,
             label,
@@ -546,7 +627,7 @@ class MSELoss(Layer):
         reduction (str, optional): The reduction method for the output,
             could be 'none' | 'mean' | 'sum'.
             If :attr:`reduction` is ``'mean'``, the reduced mean loss is returned.
-            If :attr:`size_average` is ``'sum'``, the reduced sum loss is returned.
+            If :attr:`reduction` is ``'sum'``, the reduced sum loss is returned.
             If :attr:`reduction` is ``'none'``, the unreduced loss is returned.
             Default is ``'mean'``.
 
@@ -570,25 +651,27 @@ class MSELoss(Layer):
 
     """
 
-    def __init__(self, reduction='mean'):
+    reduction: _ReduceMode
+
+    def __init__(self, reduction: _ReduceMode = 'mean'):
         super().__init__()
         if reduction not in ['sum', 'mean', 'none']:
             raise ValueError(
                 "'reduction' in 'MSELoss' should be 'sum', 'mean' or 'none', "
-                "but received {}.".format(reduction)
+                f"but received {reduction}."
             )
         self.reduction = reduction
 
-    def forward(self, input, label):
+    def forward(self, input: Tensor, label: Tensor) -> Tensor:
         if not in_dynamic_mode():
-            fluid.data_feeder.check_variable_and_dtype(
+            base.data_feeder.check_variable_and_dtype(
                 input, 'input', ['float32', 'float64'], 'MSELoss'
             )
-            fluid.data_feeder.check_variable_and_dtype(
+            base.data_feeder.check_variable_and_dtype(
                 label, 'label', ['float32', 'float64'], 'MSELoss'
             )
 
-        if in_dygraph_mode():
+        if in_dynamic_or_pir_mode():
             square_out = paddle._C_ops.square(paddle.subtract(input, label))
         else:
             square_out = paddle.square(paddle.subtract(input, label))
@@ -627,12 +710,12 @@ class L1Loss(Layer):
 
     Parameters:
         reduction (str, optional): Indicate the reduction to apply to the loss,
-            the candicates are ``'none'`` | ``'mean'`` | ``'sum'``.
+            the candidates are ``'none'`` | ``'mean'`` | ``'sum'``.
             If `reduction` is ``'none'``, the unreduced loss is returned;
             If `reduction` is ``'mean'``, the reduced mean loss is returned.
             If `reduction` is ``'sum'``, the reduced sum loss is returned.
             Default is ``'mean'``.
-        name (str, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
+        name (str|None, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
 
     Shape:
         - input (Tensor): The input tensor. The shapes is ``[N, *]``, where N is batch size and `*` means any number of additional dimensions. It's data type should be float32, float64, int32, int64.
@@ -670,17 +753,22 @@ class L1Loss(Layer):
 
     """
 
-    def __init__(self, reduction='mean', name=None):
+    reduction: _ReduceMode
+    name: str | None
+
+    def __init__(
+        self, reduction: _ReduceMode = 'mean', name: str | None = None
+    ) -> None:
         if reduction not in ['sum', 'mean', 'none']:
             raise ValueError(
                 "The value of 'reduction' in L1Loss should be 'sum', 'mean' or 'none', but "
-                "received %s, which is not allowed." % reduction
+                f"received {reduction}, which is not allowed."
             )
         super().__init__()
         self.reduction = reduction
         self.name = name
 
-    def forward(self, input, label):
+    def forward(self, input: Tensor, label: Tensor) -> Tensor:
         return paddle.nn.functional.l1_loss(
             input, label, self.reduction, name=self.name
         )
@@ -723,12 +811,12 @@ class BCELoss(Layer):
             batch element. If given, has to be a Tensor of size nbatch and the data type
             is float32, float64. Default is ``'None'``.
         reduction (str, optional): Indicate how to average the loss by batch_size,
-            the candicates are ``'none'`` | ``'mean'`` | ``'sum'``.
+            the candidates are ``'none'`` | ``'mean'`` | ``'sum'``.
             If :attr:`reduction` is ``'none'``, the unreduced loss is returned;
             If :attr:`reduction` is ``'mean'``, the reduced mean loss is returned;
             If :attr:`reduction` is ``'sum'``, the summed loss is returned.
             Default is ``'mean'``.
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Shape:
@@ -754,11 +842,20 @@ class BCELoss(Layer):
 
     """
 
-    def __init__(self, weight=None, reduction='mean', name=None):
+    weight: Tensor | None
+    reduction: _ReduceMode
+    name: str | None
+
+    def __init__(
+        self,
+        weight: Tensor | None = None,
+        reduction: _ReduceMode = 'mean',
+        name: str | None = None,
+    ):
         if reduction not in ['sum', 'mean', 'none']:
             raise ValueError(
                 "The value of 'reduction' in bce_loss should be 'sum', 'mean' or 'none', but "
-                "received %s, which is not allowed." % reduction
+                f"received {reduction}, which is not allowed."
             )
 
         super().__init__()
@@ -766,7 +863,7 @@ class BCELoss(Layer):
         self.reduction = reduction
         self.name = name
 
-    def forward(self, input, label):
+    def forward(self, input: Tensor, label: Tensor) -> Tensor:
         out = paddle.nn.functional.binary_cross_entropy(
             input, label, self.weight, self.reduction, self.name
         )
@@ -822,12 +919,12 @@ class NLLLoss(Layer):
         ignore_index (int, optional): Specifies a target value that is ignored
             and does not contribute to the input gradient.
         reduction (str, optional): Indicate how to average the loss,
-            the candicates are ``'none'`` | ``'mean'`` | ``'sum'``. Default is ``'mean'``.
+            the candidates are ``'none'`` | ``'mean'`` | ``'sum'``. Default is ``'mean'``.
             If `reduction` is ``'mean'``, the reduced mean loss is returned;
             if `reduction` is ``'sum'``, the reduced sum loss is returned;
-            if `reduction` is ``'none'``, no reduction will be apllied.
+            if `reduction` is ``'none'``, no reduction will be applied.
             Default is ``'mean'``.
-        name (str, optional): For details, please refer to :ref:`api_guide_Name`. Generally, no setting is required. Default is ``'None'``.
+        name (str|None, optional): For details, please refer to :ref:`api_guide_Name`. Generally, no setting is required. Default is ``'None'``.
 
     Shape:
         - input (Tensor): Input tensor, the shape is :math:`[N, C]`, `C` is the number of classes.
@@ -862,12 +959,16 @@ class NLLLoss(Layer):
     """
 
     def __init__(
-        self, weight=None, ignore_index=-100, reduction='mean', name=None
-    ):
+        self,
+        weight: Tensor | None = None,
+        ignore_index: int = -100,
+        reduction: _ReduceMode = 'mean',
+        name: str | None = None,
+    ) -> None:
         if reduction not in ['sum', 'mean', 'none']:
             raise ValueError(
                 "The value of 'reduction' in nll_loss should be 'sum', 'mean' or "
-                "'none', but received %s, which is not allowed." % reduction
+                f"'none', but received {reduction}, which is not allowed."
             )
         super().__init__()
         self._weight = weight
@@ -875,7 +976,7 @@ class NLLLoss(Layer):
         self._reduction = reduction
         self._name = name
 
-    def forward(self, input, label):
+    def forward(self, input: Tensor, label: Tensor) -> Tensor:
         return F.nll_loss(
             input,
             label,
@@ -917,12 +1018,12 @@ class PoissonNLLLoss(Layer):
             A small value to avoid evaluation of :math:`\log(0)` when ``log_input`` = ``False``. ``epsilon > 0``.
             Default: 1e-8.
          reduction (str, optional):
-            Indicate how to reduce the loss, the candicates are ``'none'`` | ``'mean'`` | ``'sum'``.
+            Indicate how to reduce the loss, the candidates are ``'none'`` | ``'mean'`` | ``'sum'``.
             If `reduction` is ``'mean'``, the reduced mean loss is returned;
             if `reduction` is ``'sum'``, the reduced sum loss is returned;
-            if `reduction` is ``'none'``, no reduction will be apllied.
+            if `reduction` is ``'none'``, no reduction will be applied.
             Default is ``'mean'``.
-         name (str, optional):
+         name (str|None, optional):
             Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
 
     Shape:
@@ -947,21 +1048,20 @@ class PoissonNLLLoss(Layer):
 
     def __init__(
         self,
-        log_input=True,
-        full=False,
-        epsilon=1e-8,
-        reduction="mean",
-        name=None,
-    ):
+        log_input: bool = True,
+        full: bool = False,
+        epsilon: float = 1e-08,
+        reduction: _ReduceMode = 'mean',
+        name: str | None = None,
+    ) -> None:
         if epsilon <= 0:
             raise ValueError(
-                "The value of `epsilon` in PoissonNLLLoss should be positve, but received %f, which is not allowed"
-                % epsilon
+                f"The value of `epsilon` in PoissonNLLLoss should be positive, but received {epsilon:f}, which is not allowed"
             )
         if reduction not in ['sum', 'mean', 'none']:
             raise ValueError(
                 "The value of 'reduction' in PoissonNLLLoss should be 'sum', 'mean' or 'none', but "
-                "received %s, which is not allowed." % reduction
+                f"received {reduction}, which is not allowed."
             )
         super().__init__()
         self._log_input = log_input
@@ -970,7 +1070,7 @@ class PoissonNLLLoss(Layer):
         self._reduction = reduction
         self._name = name
 
-    def forward(self, input, label):
+    def forward(self, input: Tensor, label: Tensor) -> Tensor:
         return F.poisson_nll_loss(
             input,
             label,
@@ -992,7 +1092,13 @@ class KLDivLoss(Layer):
 
     KL divergence loss is calculated as follows:
 
+    If `log_target` is False:
+
     $$l(x, y) = y * (\log(y) - x)$$
+
+    If `log_target` is True:
+
+    $$l(x, y) = \exp(y) * (y - x)$$
 
     Here :math:`x` is input and :math:`y` is label.
 
@@ -1006,12 +1112,13 @@ class KLDivLoss(Layer):
 
     Parameters:
         reduction (str, optional): Indicate how to average the loss,
-            the candicates are ``'none'`` | ``'batchmean'`` | ``'mean'`` | ``'sum'``.
+            the candidates are ``'none'`` | ``'batchmean'`` | ``'mean'`` | ``'sum'``.
             If `reduction` is ``'mean'``, the reduced mean loss is returned;
             If `reduction` is ``'batchmean'``, the sum loss divided by batch size is returned;
             if `reduction` is ``'sum'``, the reduced sum loss is returned;
-            if `reduction` is ``'none'``, no reduction will be apllied.
+            if `reduction` is ``'none'``, no reduction will be applied.
             Default is ``'mean'``.
+        log_target (bool, optional): Indicate whether `label` is passed in log space. Default is False.
 
     Shape:
 
@@ -1055,14 +1162,30 @@ class KLDivLoss(Layer):
             >>> print(pred_loss.shape)
             [5, 20]
 
+            >>> # if label is in the log space, set log_target = True
+            >>> target = paddle.uniform(shape, min=0, max=10).astype('float32')
+            >>> log_target = paddle.log(target)
+            >>> kldiv_criterion_1 = nn.KLDivLoss(reduction='none')
+            >>> kldiv_criterion_2 = nn.KLDivLoss(reduction='none', log_target=True)
+            >>> pred_loss_1 = kldiv_criterion_1(x, target)
+            >>> pred_loss_2 = kldiv_criterion_2(x, log_target)
+            >>> print(paddle.allclose(pred_loss_1, pred_loss_2))
+            Tensor(shape=[], dtype=bool, place=Place(cpu), stop_gradient=True,
+            True)
     """
 
-    def __init__(self, reduction='mean'):
+    reduction: _ReduceMode
+    log_target: bool
+
+    def __init__(
+        self, reduction: _ReduceMode = 'mean', log_target: bool = False
+    ) -> None:
         super().__init__()
         self.reduction = reduction
+        self.log_target = log_target
 
-    def forward(self, input, label):
-        out = F.kl_div(input, label, self.reduction)
+    def forward(self, input: Tensor, label: Tensor) -> Tensor:
+        out = F.kl_div(input, label, self.reduction, self.log_target)
         return out
 
 
@@ -1090,8 +1213,8 @@ class MarginRankingLoss(Layer):
 
     Parameters:
         margin (float, optional): The margin value to add, default value is 0;
-        reduction (str, optional): Indicate the reduction to apply to the loss, the candicates are ``'none'``, ``'mean'``, ``'sum'``.If :attr:`reduction` is ``'none'``, the unreduced loss is returned; If :attr:`reduction` is ``'mean'``, the reduced mean loss is returned. If :attr:`reduction` is ``'sum'``, the reduced sum loss is returned. Default is ``'mean'``.
-        name (str, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
+        reduction (str, optional): Indicate the reduction to apply to the loss, the candidates are ``'none'``, ``'mean'``, ``'sum'``.If :attr:`reduction` is ``'none'``, the unreduced loss is returned; If :attr:`reduction` is ``'mean'``, the reduced mean loss is returned. If :attr:`reduction` is ``'sum'``, the reduced sum loss is returned. Default is ``'mean'``.
+        name (str|None, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
 
     Shape:
 
@@ -1122,18 +1245,27 @@ class MarginRankingLoss(Layer):
             0.75000000)
     """
 
-    def __init__(self, margin=0.0, reduction='mean', name=None):
+    margin: float
+    reduction: _ReduceMode
+    name: str | None
+
+    def __init__(
+        self,
+        margin: float = 0.0,
+        reduction: _ReduceMode = 'mean',
+        name: str | None = None,
+    ) -> None:
         if reduction not in ['sum', 'mean', 'none']:
             raise ValueError(
                 "The value of 'reduction' in MarginRankingLoss should be 'sum', 'mean' or 'none', but "
-                "received %s, which is not allowed." % reduction
+                f"received {reduction}, which is not allowed."
             )
         super().__init__()
         self.margin = margin
         self.reduction = reduction
         self.name = name
 
-    def forward(self, input, other, label):
+    def forward(self, input: Tensor, other: Tensor, label: Tensor) -> Tensor:
         out = paddle.nn.functional.margin_ranking_loss(
             input, other, label, self.margin, self.reduction, self.name
         )
@@ -1146,11 +1278,11 @@ class CTCLoss(Layer):
     An operator integrating the open source Warp-CTC library (https://github.com/baidu-research/warp-ctc)
     to compute Connectionist Temporal Classification (CTC) loss.
     It can be aliased as softmax with CTC, since a native softmax activation
-    is interated to the Warp-CTC library to normalize values for each row of the input tensor.
+    is integrated to the Warp-CTC library to normalize values for each row of the input tensor.
 
     Parameters:
         blank (int, optional): The blank label index of Connectionist Temporal Classification (CTC) loss, which is in the half-opened interval [0, num_classes + 1). The data type must be int32. Default is 0.
-        reduction (string, optional): Indicate how to average the loss, the candicates are ``'none'`` | ``'mean'`` | ``'sum'``. If :attr:`reduction` is ``'mean'``, the output loss will be divided by the label_lengths, and then return the mean of quotient; If :attr:`reduction` is ``'sum'``, return the sum of loss; If :attr:`reduction` is ``'none'``, no reduction will be applied. Default is ``'mean'``.
+        reduction (string, optional): Indicate how to average the loss, the candidates are ``'none'`` | ``'mean'`` | ``'sum'``. If :attr:`reduction` is ``'mean'``, the output loss will be divided by the label_lengths, and then return the mean of quotient; If :attr:`reduction` is ``'sum'``, return the sum of loss; If :attr:`reduction` is ``'none'``, no reduction will be applied. Default is ``'mean'``.
 
     Shape:
         - log_probs (Tensor): The unscaled probability sequence with padding, which is a 3-D Tensor. The tensor shape is [max_logit_length, batch_size, num_classes + 1], where max_logit_length is the longest length of input logit sequence. The data type should be float32 or float64.
@@ -1203,19 +1335,22 @@ class CTCLoss(Layer):
             1.13760614)
     """
 
-    def __init__(self, blank=0, reduction='mean'):
+    blank: int
+    reduction: _ReduceMode
+
+    def __init__(self, blank: int = 0, reduction: _ReduceMode = 'mean') -> None:
         super().__init__()
         self.blank = blank
         self.reduction = reduction
 
     def forward(
         self,
-        log_probs,
-        labels,
-        input_lengths,
-        label_lengths,
-        norm_by_times=False,
-    ):
+        log_probs: Tensor,
+        labels: Tensor,
+        input_lengths: Tensor,
+        label_lengths: Tensor,
+        norm_by_times: bool = False,
+    ) -> Tensor:
         return paddle.nn.functional.ctc_loss(
             log_probs,
             labels,
@@ -1244,7 +1379,7 @@ class RNNTLoss(Layer):
         label_lengths: Tensor of (batch) containing label length of each example
 
     Returns:
-     Tensor, The RNN-T loss between ``logprobs`` and  ``labels``. If attr:`reduction` is ``'none'``, the shape of loss is [batch_size], otherwise, the shape of loss is []. Data type is the same as ``logprobs``.
+        Tensor, The RNN-T loss between ``logprobs`` and  ``labels``. If attr:`reduction` is ``'none'``, the shape of loss is [batch_size], otherwise, the shape of loss is []. Data type is the same as ``logprobs``.
 
     Examples:
         .. code-block:: python
@@ -1278,16 +1413,31 @@ class RNNTLoss(Layer):
             -2.85042444)
     """
 
+    blank: int
+    fastemit_lambda: float
+    reduction: _ReduceMode
+    name: str | None
+
     def __init__(
-        self, blank=0, fastemit_lambda=0.001, reduction='mean', name=None
-    ):
+        self,
+        blank: int = 0,
+        fastemit_lambda: float = 0.001,
+        reduction: _ReduceMode = 'mean',
+        name=None,
+    ) -> None:
         super().__init__()
         self.blank = blank
         self.reduction = reduction
         self.fastemit_lambda = fastemit_lambda
         self.name = name
 
-    def forward(self, input, label, input_lengths, label_lengths):
+    def forward(
+        self,
+        input: Tensor,
+        label: Tensor,
+        input_lengths: Tensor,
+        label_lengths: Tensor,
+    ) -> Tensor:
         return paddle.nn.functional.rnnt_loss(
             input,
             label,
@@ -1322,7 +1472,7 @@ class SmoothL1Loss(Layer):
 
     Parameters:
         reduction (str, optional): Indicate how to average the loss by batch_size,
-            the candicates are ``'none'`` | ``'mean'`` | ``'sum'``.
+            the candidates are ``'none'`` | ``'mean'`` | ``'sum'``.
             If :attr:`reduction` is ``'mean'``, the reduced mean loss is returned;
             If :attr:`reduction` is ``'sum'``, the reduced sum loss is returned.
             If :attr:`reduction` is ``'none'``, the unreduced loss is returned.
@@ -1331,7 +1481,7 @@ class SmoothL1Loss(Layer):
             The value determines how large the errors need to be to use L1. Errors
             smaller than delta are minimized with L2. Parameter is ignored for
             negative/zero values. Default value is :math:`1.0`.
-        name (str, optional): For details, please refer to :ref:`api_guide_Name`. Generally, no setting is required. Default: None.
+        name (str|None, optional): For details, please refer to :ref:`api_guide_Name`. Generally, no setting is required. Default: None.
 
     Call Parameters:
 
@@ -1359,13 +1509,22 @@ class SmoothL1Loss(Layer):
             0.08307374)
     """
 
-    def __init__(self, reduction='mean', delta=1.0, name=None):
+    reduction: _ReduceMode
+    delta: float
+    name: str | None
+
+    def __init__(
+        self,
+        reduction: _ReduceMode = 'mean',
+        delta: float = 1.0,
+        name: str | None = None,
+    ) -> None:
         super().__init__()
         self.reduction = reduction
         self.delta = delta
         self.name = name
 
-    def forward(self, input, label):
+    def forward(self, input: Tensor, label: Tensor) -> Tensor:
         return F.smooth_l1_loss(
             input,
             label,
@@ -1377,78 +1536,85 @@ class SmoothL1Loss(Layer):
 
 class MultiLabelSoftMarginLoss(Layer):
     r"""Creates a criterion that optimizes a multi-class multi-classification
-        hinge loss (margin-based loss) between input :math:`x` (a 2D mini-batch `Tensor`)
-        and output :math:`y` (which is a 2D `Tensor` of target class indices).
-        For each sample in the mini-batch:
+    hinge loss (margin-based loss) between input :math:`x` (a 2D mini-batch `Tensor`)
+    and output :math:`y` (which is a 2D `Tensor` of target class indices).
+    For each sample in the mini-batch:
 
-        .. math::
-            \text{loss}(x, y) = \sum_{ij}\frac{\max(0, 1 - (x[y[j]] - x[i]))}{\text{x.size}(0)}
+    .. math::
+        \text{loss}(x, y) = - \frac{1}{C} * \sum_i y[i] * \log((1 + \exp(-x[i]))^{-1})
+            + (1-y[i]) * \log\left(\frac{\exp(-x[i])}{(1 + \exp(-x[i]))}\right)
 
-        where :math:`x \in \left\{0, \; \cdots , \; \text{x.size}(0) - 1\right\}`, \
-        :math:`y \in \left\{0, \; \cdots , \; \text{y.size}(0) - 1\right\}`, \
-        :math:`0 \leq y[j] \leq \text{x.size}(0)-1`, \
-        and :math:`i \neq y[j]` for all :math:`i` and :math:`j`.
-        :math:`y` and :math:`x` must have the same size.
+    where :math:`i \in \left\{0, \; \cdots , \; \text{x.nElement}() - 1\right\}`,
+    :math:`y[i] \in \left\{0, \; 1\right\}`.
 
-        Parameters:
-            weight (Tensor,optional): a manual rescaling weight given to each class.
-                    If given, has to be a Tensor of size C and the data type is float32, float64.
-                    Default is ``'None'`` .
-            reduction (str, optional): Indicate how to average the loss by batch_size,
-                    the candicates are ``'none'`` | ``'mean'`` | ``'sum'``.
-                    If :attr:`reduction` is ``'none'``, the unreduced loss is returned;
-                    If :attr:`reduction` is ``'mean'``, the reduced mean loss is returned;
-                    If :attr:`reduction` is ``'sum'``, the summed loss is returned.
-                    Default: ``'mean'``
-            name (str, optional): Name for the operation (optional, default is None).
-                For more information, please refer to :ref:`api_guide_Name`.
+    Parameters:
+        weight (Tensor,optional): a manual rescaling weight given to each class.
+                If given, has to be a Tensor of size C and the data type is float32, float64.
+                Default is ``'None'`` .
+        reduction (str, optional): Indicate how to average the loss by batch_size,
+                the candidates are ``'none'`` | ``'mean'`` | ``'sum'``.
+                If :attr:`reduction` is ``'none'``, the unreduced loss is returned;
+                If :attr:`reduction` is ``'mean'``, the reduced mean loss is returned;
+                If :attr:`reduction` is ``'sum'``, the summed loss is returned.
+                Default: ``'mean'``
+        name (str|None, optional): Name for the operation (optional, default is None).
+            For more information, please refer to :ref:`api_guide_Name`.
 
-        Call parameters:
-            input (Tensor): Input tensor, the data type is float32 or float64. Shape is (N, C), where C is number of classes, and if shape is more than 2D, this is (N, C, D1, D2,..., Dk), k >= 1.
-            label (Tensor): Label tensor containing 1 or -1, the data type is float32 or float64. The shape of label is the same as the shape of input.
+    Call parameters:
+        input (Tensor): Input tensor, the data type is float32 or float64. Shape is (N, C), where C is number of classes, and if shape is more than 2D, this is (N, C, D1, D2,..., Dk), k >= 1.
+        label (Tensor): Label tensor containing 1 or -1, the data type is float32 or float64. The shape of label is the same as the shape of input.
 
-        Shape:
-            input: N-D Tensor, the shape is [N, \*], N is batch size and `\*` means number of classes, available dtype is float32, float64. The sum operationoperates over all the elements.
-            label: N-D Tensor, same shape as the input.
-            output: scalar. If :attr:`reduction` is ``'none'``, then same shape as the input.
+    Shape:
+        input: N-D Tensor, the shape is [N, \*], N is batch size and `\*` means number of classes, available dtype is float32, float64. The sum operationoperates over all the elements.
+        label: N-D Tensor, same shape as the input.
+        output: scalar. If :attr:`reduction` is ``'none'``, then same shape as the input.
 
-        Returns:
-            A callable object of MultiLabelSoftMarginLoss.
+    Returns:
+        A callable object of MultiLabelSoftMarginLoss.
 
-        Examples:
-            .. code-block:: python
+    Examples:
+        .. code-block:: python
 
-                >>> import paddle
-                >>> import paddle.nn as nn
+            >>> import paddle
+            >>> import paddle.nn as nn
 
-                >>> input = paddle.to_tensor([[1, -2, 3], [0, -1, 2], [1, 0, 1]], dtype=paddle.float32)
-                >>> label = paddle.to_tensor([[-1, 1, -1], [1, 1, 1], [1, -1, 1]], dtype=paddle.float32)
+            >>> input = paddle.to_tensor([[1, -2, 3], [0, -1, 2], [1, 0, 1]], dtype=paddle.float32)
+            >>> label = paddle.to_tensor([[-1, 1, -1], [1, 1, 1], [1, -1, 1]], dtype=paddle.float32)
 
-                >>> multi_label_soft_margin_loss = nn.MultiLabelSoftMarginLoss(reduction='none')
-                >>> loss = multi_label_soft_margin_loss(input, label)
-                >>> print(loss)
-                Tensor(shape=[3], dtype=float32, place=Place(cpu), stop_gradient=True,
-                [3.49625897, 0.71111226, 0.43989015])
+            >>> multi_label_soft_margin_loss = nn.MultiLabelSoftMarginLoss(reduction='none')
+            >>> loss = multi_label_soft_margin_loss(input, label)
+            >>> print(loss)
+            Tensor(shape=[3], dtype=float32, place=Place(cpu), stop_gradient=True,
+            [3.49625897, 0.71111226, 0.43989015])
 
-                >>> multi_label_soft_margin_loss = nn.MultiLabelSoftMarginLoss(reduction='mean')
-                >>> loss = multi_label_soft_margin_loss(input, label)
-                >>> print(loss)
-                Tensor(shape=[], dtype=float32, place=Place(cpu), stop_gradient=True,
-                1.54908717)
-        """
+            >>> multi_label_soft_margin_loss = nn.MultiLabelSoftMarginLoss(reduction='mean')
+            >>> loss = multi_label_soft_margin_loss(input, label)
+            >>> print(loss)
+            Tensor(shape=[], dtype=float32, place=Place(cpu), stop_gradient=True,
+            1.54908717)
+    """
 
-    def __init__(self, weight=None, reduction="mean", name=None):
+    weight: Tensor | None
+    reduction: _ReduceMode
+    name: str | None
+
+    def __init__(
+        self,
+        weight: Tensor | None = None,
+        reduction: _ReduceMode = 'mean',
+        name: str | None = None,
+    ) -> None:
         super().__init__()
         if reduction not in ['sum', 'mean', 'none']:
             raise ValueError(
                 "'reduction' in 'MultiLabelSoftMarginloss' should be 'sum', 'mean' or 'none', "
-                "but received {}.".format(reduction)
+                f"but received {reduction}."
             )
         self.weight = weight
         self.reduction = reduction
         self.name = name
 
-    def forward(self, input, label):
+    def forward(self, input: Tensor, label: Tensor) -> Tensor:
         return F.multi_label_soft_margin_loss(
             input,
             label,
@@ -1489,12 +1655,12 @@ class HingeEmbeddingLoss(Layer):
             hinge_embedding_loss. When label is -1, Input smaller than margin are minimized with hinge_embedding_loss.
             Default = 1.0
         reduction (str, optional): Indicate how to average the loss by batch_size,
-            the candicates are ``'none'`` | ``'mean'`` | ``'sum'``.
+            the candidates are ``'none'`` | ``'mean'`` | ``'sum'``.
             If :attr:`reduction` is ``'none'``, the unreduced loss is returned;
             If :attr:`reduction` is ``'mean'``, the reduced mean loss is returned;
             If :attr:`reduction` is ``'sum'``, the summed loss is returned.
             Default: ``'mean'``
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Call Parameters:
@@ -1540,13 +1706,22 @@ class HingeEmbeddingLoss(Layer):
             0.22222222)
     """
 
-    def __init__(self, margin=1.0, reduction="mean", name=None):
+    margin: float
+    reduction: _ReduceMode
+    name: str | None
+
+    def __init__(
+        self,
+        margin: float = 1.0,
+        reduction: _ReduceMode = 'mean',
+        name: str | None = None,
+    ) -> None:
         super().__init__()
         self.margin = margin
         self.reduction = reduction
         self.name = name
 
-    def forward(self, input, label):
+    def forward(self, input: Tensor, label: Tensor) -> Tensor:
         return F.hinge_embedding_loss(
             input,
             label,
@@ -1586,7 +1761,7 @@ class CosineEmbeddingLoss(Layer):
             ``'none'`` | ``'mean'`` | ``'sum'``. ``'none'``: no reduction will be applied,
             ``'mean'``: the sum of the output will be divided by the number of
             elements in the output, ``'sum'``: the output will be summed.
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Shape:
@@ -1629,23 +1804,31 @@ class CosineEmbeddingLoss(Layer):
 
     """
 
-    def __init__(self, margin=0, reduction='mean', name=None):
+    margin: float
+    reduction: _ReduceMode
+    name: str | None
+
+    def __init__(
+        self,
+        margin: float = 0,
+        reduction: _ReduceMode = 'mean',
+        name: str | None = None,
+    ) -> None:
         if margin > 1 or margin < -1:
             raise ValueError(
-                "The value of 'margin' should be in the interval of [-1, 1], but received %f, which is not allowed."
-                % margin
+                f"The value of 'margin' should be in the interval of [-1, 1], but received {margin:f}, which is not allowed."
             )
         if reduction not in ['sum', 'mean', 'none']:
             raise ValueError(
                 "The value of 'reduction' should be 'sum', 'mean' or "
-                "'none', but received %s, which is not allowed." % reduction
+                f"'none', but received {reduction}, which is not allowed."
             )
         super().__init__()
         self.margin = margin
         self.reduction = reduction
         self.name = name
 
-    def forward(self, input1, input2, label):
+    def forward(self, input1: Tensor, input2: Tensor, label: Tensor) -> Tensor:
         return F.cosine_embedding_loss(
             input1,
             input2,
@@ -1691,27 +1874,27 @@ class TripletMarginWithDistanceLoss(Layer):
                 and negative samples) if swap distance smaller than negative distance. Default: ``False``.
 
         reduction (str, Optional):Indicate how to average the loss by batch_size.
-                the candicates are ``'none'`` | ``'mean'`` | ``'sum'``.
+                the candidates are ``'none'`` | ``'mean'`` | ``'sum'``.
                 If :attr:`reduction` is ``'none'``, the unreduced loss is returned;
                 If :attr:`reduction` is ``'mean'``, the reduced mean loss is returned;
                 If :attr:`reduction` is ``'sum'``, the summed loss is returned.
                 Default: ``'mean'``
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Shapes:
-        input (Tensor):Input tensor, the data type is float32 or float64.
-    the shape is [N, \*], N is batch size and `\*` means any number of additional dimensions, available dtype is float32, float64.
+      - input (Tensor):Input tensor, the data type is float32 or float64.
+        the shape is [N, \*], N is batch size and `\*` means any number of additional dimensions, available dtype is float32, float64.
 
-        positive (Tensor):Positive tensor, the data type is float32 or float64.
-    The shape of label is the same as the shape of input.
+      - positive (Tensor):Positive tensor, the data type is float32 or float64.
+        The shape of label is the same as the shape of input.
 
-        negative (Tensor):Negative tensor, the data type is float32 or float64.
-    The shape of label is the same as the shape of input.
+      - negative (Tensor):Negative tensor, the data type is float32 or float64.
+        The shape of label is the same as the shape of input.
 
-        output(Tensor): The tensor variable storing the triplet_margin_with_distance_loss of input and positive and negative.
+      - output(Tensor): The tensor variable storing the triplet_margin_with_distance_loss of input and positive and negative.
 
-    Return：
+    Return:
         A callable object of TripletMarginWithDistanceLoss
 
     Examples:
@@ -1737,20 +1920,26 @@ class TripletMarginWithDistanceLoss(Layer):
 
     """
 
+    margin: float
+    swap: bool
+    reduction: _ReduceMode
+    distance_function: Callable[[Tensor, Tensor], Tensor] | None
+    name: str | None
+
     def __init__(
         self,
-        distance_function=None,
-        margin=1.0,
-        swap=False,
-        reduction: str = 'mean',
-        name=None,
-    ):
+        distance_function: Callable[[Tensor, Tensor], Tensor] | None = None,
+        margin: float = 1.0,
+        swap: bool = False,
+        reduction: _ReduceMode = 'mean',
+        name: str | None = None,
+    ) -> None:
         super().__init__()
         if reduction not in ['sum', 'mean', 'none']:
             raise ValueError(
                 "The value of 'reduction' in TripletMarginWithDistanceLoss "
                 "should be 'sum', 'mean' or 'none', but "
-                "received %s, which is not allowed." % reduction
+                f"received {reduction}, which is not allowed."
             )
         self.margin = margin
         self.swap = swap
@@ -1758,7 +1947,9 @@ class TripletMarginWithDistanceLoss(Layer):
         self.distance_function = distance_function
         self.name = name
 
-    def forward(self, input, positive, negative):
+    def forward(
+        self, input: Tensor, positive: Tensor, negative: Tensor
+    ) -> Tensor:
         return F.triplet_margin_with_distance_loss(
             input,
             positive,
@@ -1793,7 +1984,7 @@ class TripletMarginLoss(Layer):
     Parameters:
         margin (float, Optional):Default: :math:`1`.
 
-        p (int, Optional):The norm degree for pairwise distance. Default: :math:`2`.
+        p (float, Optional):The norm degree for pairwise distance. Default: :math:`2`.
 
         epsilon (float, Optional):Add small value to avoid division by zero,
             default value is 1e-6.
@@ -1803,13 +1994,13 @@ class TripletMarginLoss(Layer):
             Default: ``False``.
 
         reduction (str, Optional):Indicate how to average the loss by batch_size.
-                the candicates are ``'none'`` | ``'mean'`` | ``'sum'``.
+                the candidates are ``'none'`` | ``'mean'`` | ``'sum'``.
                 If :attr:`reduction` is ``'none'``, the unreduced loss is returned;
                 If :attr:`reduction` is ``'mean'``, the reduced mean loss is returned;
                 If :attr:`reduction` is ``'sum'``, the summed loss is returned.
                 Default: ``'mean'``
 
-        name (str,Optional): Name for the operation (optional, default is None).
+        name (str|None, Optional): Name for the operation (optional, default is None).
                 For more information, please refer to :ref:`api_guide_Name`.
 
     Call Parameters:
@@ -1847,20 +2038,27 @@ class TripletMarginLoss(Layer):
 
     """
 
+    margin: float
+    p: float
+    epsilon: float
+    swap: bool
+    reduction: _ReduceMode
+    name: str | None
+
     def __init__(
         self,
-        margin=1.0,
-        p=2.0,
-        epsilon=1e-6,
-        swap=False,
-        reduction='mean',
-        name=None,
-    ):
+        margin: float = 1.0,
+        p: float = 2.0,
+        epsilon: float = 1e-06,
+        swap: bool = False,
+        reduction: _ReduceMode = 'mean',
+        name: str | None = None,
+    ) -> None:
         super().__init__()
         if reduction not in ['sum', 'mean', 'none']:
             raise ValueError(
                 "The value of 'reduction' in TripletMarginLoss should be 'sum', 'mean' or 'none', but "
-                "received %s, which is not allowed." % reduction
+                f"received {reduction}, which is not allowed."
             )
         self.margin = margin
         self.p = p
@@ -1869,7 +2067,9 @@ class TripletMarginLoss(Layer):
         self.reduction = reduction
         self.name = name
 
-    def forward(self, input, positive, negative):
+    def forward(
+        self, input: Tensor, positive: Tensor, negative: Tensor
+    ) -> Tensor:
         return F.triplet_margin_loss(
             input,
             positive,
@@ -1921,7 +2121,7 @@ class MultiMarginLoss(Layer):
                 If :attr:`reduction` is ``'sum'``, the summed loss is returned.
                 Default: ``'mean'``
 
-        name (str, optional): Name for the operation (optional, default is None).
+        name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
     Call parameters:
@@ -1955,19 +2155,25 @@ class MultiMarginLoss(Layer):
             1.11111104)
     """
 
+    p: int
+    margin: float
+    weight: Tensor | None
+    reduction: _ReduceMode
+    name: str | None
+
     def __init__(
         self,
         p: int = 1,
         margin: float = 1.0,
-        weight=None,
-        reduction="mean",
-        name=None,
-    ):
+        weight: Tensor | None = None,
+        reduction: _ReduceMode = 'mean',
+        name: str | None = None,
+    ) -> None:
         super().__init__()
         if reduction not in ['sum', 'mean', 'none']:
             raise ValueError(
                 "'reduction' in 'MultiMarginLoss' should be 'sum', 'mean' or 'none', "
-                "but received {}.".format(reduction)
+                f"but received {reduction}."
             )
         self.p = p
         self.margin = margin
@@ -1975,7 +2181,7 @@ class MultiMarginLoss(Layer):
         self.reduction = reduction
         self.name = name
 
-    def forward(self, input, label):
+    def forward(self, input: Tensor, label: Tensor) -> Tensor:
         return F.multi_margin_loss(
             input,
             label,
@@ -2005,7 +2211,7 @@ class SoftMarginLoss(Layer):
             If :attr:`reduction` is ``'sum'``, the summed loss is returned.
             Default is ``'mean'``.
 
-        name (str, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
+        name (str|None, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
 
     Shapes:
         - Input (Tensor): The input tensor with shape: ``[N, *]``,
@@ -2049,18 +2255,23 @@ class SoftMarginLoss(Layer):
              [0.82684205, 1.02064907, 0.50296995, 1.13461733, 0.93222519]])
     """
 
-    def __init__(self, reduction='mean', name=None):
+    reduction: _ReduceMode
+    name: str | None
+
+    def __init__(
+        self, reduction: _ReduceMode = 'mean', name: str | None = None
+    ) -> None:
         if reduction not in ['sum', 'mean', 'none']:
             raise ValueError(
                 "The value of 'reduction' in SoftMarginLoss should be 'sum', 'mean' or 'none', but "
-                "received %s, which is not allowed." % reduction
+                f"received {reduction}, which is not allowed."
             )
 
         super().__init__()
         self.reduction = reduction
         self.name = name
 
-    def forward(self, input, label):
+    def forward(self, input: Tensor, label: Tensor) -> Tensor:
         out = paddle.nn.functional.soft_margin_loss(
             input, label, self.reduction, self.name
         )
@@ -2099,7 +2310,7 @@ class GaussianNLLLoss(Layer):
             will be applied, ``'mean'``: the output is the average of all batch
             member losses, ``'sum'``: the output is the sum of all batch member
             losses. Default: ``'mean'``.
-        name (str, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
+        name (str|None, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
 
     Shape:
         - Input(Tensor): :math:`(N, *)` or :math:`(*)` where :math:`*` means any number of additional
@@ -2142,11 +2353,22 @@ class GaussianNLLLoss(Layer):
         gradients are unaffected by it.
     """
 
-    def __init__(self, full=False, epsilon=1e-6, reduction='mean', name=None):
+    full: bool
+    epsilon: float
+    reduction: _ReduceMode
+    name: str | None
+
+    def __init__(
+        self,
+        full: bool = False,
+        epsilon: float = 1e-06,
+        reduction: _ReduceMode = 'mean',
+        name: str | None = None,
+    ) -> None:
         if reduction not in ['sum', 'mean', 'none']:
             raise ValueError(
                 "The value of 'reduction' in GaussianNLLLoss should be 'sum', 'mean' or 'none', but "
-                "received %s, which is not allowed." % reduction
+                f"received {reduction}, which is not allowed."
             )
 
         super().__init__()
@@ -2155,7 +2377,7 @@ class GaussianNLLLoss(Layer):
         self.reduction = reduction
         self.name = name
 
-    def forward(self, input, label, variance):
+    def forward(self, input: Tensor, label: Tensor, variance: Tensor) -> Tensor:
         out = F.gaussian_nll_loss(
             input,
             label,
@@ -2166,3 +2388,274 @@ class GaussianNLLLoss(Layer):
             self.name,
         )
         return out
+
+
+class AdaptiveLogSoftmaxWithLoss(Layer):
+    r"""Adaptive softmax is an approximate strategy for training models with large output spaces. It is most effective when
+    the label distribution is highly imbalanced, for example in natural language modelling, where the word frequency
+    distribution approximately follows the `Zipf's law <https://en.wikipedia.org/wiki/Zipf%27s_law>`_.
+
+    Adaptive softmax partitions the labels into several clusters, according to their frequency. These clusters may contain
+    different number of targets each. Additionally, clusters containing less frequent labels assign lower dimensional
+    embeddings to those labels, which speeds up the computation. For each minibatch, only clusters for which at least
+    one target is present are evaluated.
+
+    The idea is that the clusters which are accessed frequently (like the first one, containing most frequent labels),
+    should also be cheap to compute -- that is, contain a small number of assigned labels. We highly recommend taking
+    a look at the original paper for more details.
+
+    For :attr:`cutoffs` should be an ordered Sequence of integers sorted in the increasing order. It controls number of
+    clusters and the partitioning of targets into clusters. For example setting ``cutoffs = [10, 100, 1000]`` means that
+    first ``10`` targets will be assigned to the 'head' of the adaptive softmax, targets ``11, 12, ..., 100`` will be assigned
+    to the first cluster, and targets ``101, 102, ..., 1000`` will be assigned to the second cluster, while targets
+    ``1001, 1002, ..., n_classes - 1`` will be assigned to the last, third cluster.
+
+    For :attr:`div_value` is used to compute the size of each additional cluster, which is given as follow:
+
+    .. math::
+        \lfloor \frac{\text{in\_features}}{\text{div\_value}^{idx}} \rfloor
+
+    where :math:`idx` is the cluster index (with clusters for less frequent words having larger indices, and indices starting from :math:`1`).
+
+    For :attr:`head_bias` if set to True, adds a bias term to the 'head' of the adaptive softmax. See paper for details. Set to False in the official implementation.
+
+
+    Args:
+        in_features (int): Number of features in the input tensor.
+        n_classes (int): Number of classes in the dataset.
+        cutoffs (Sequence): Cutoffs used to assign targets to their buckets.
+        weight_attr (ParamAttr, optional): The attribute for the learnable
+            weight of this layer. The default value is None. If the Initializer of the
+            param_attr is not set, the parameter is initialized with Xavier.
+            For detailed information, please refer to :ref:`api_paddle_ParamAttr`.
+        bias_attr (ParamAttr|bool|None, optional): The attribute for the learnable bias
+            of this layer. If it is set to False, no bias will be added to the output.
+            If it is set to None or one kind of ParamAttr, a bias parameter will
+            be created according to ParamAttr. For detailed information, please refer
+            to :ref:`api_paddle_ParamAttr`. The default value is None and the bias will be
+            initialized to zero.
+        div_value (float, optional): value used as an exponent to compute sizes of the clusters. Default: 4.0.
+        head_bias (bool, optional): If ``True``, adds a bias term to the 'head' of the adaptive softmax. Default: ``False``.
+        name (str|None, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
+
+    Shape:
+        - input (Tensor): The input tensor. The shapes is ``[N, in_features]``. N is batch size.
+        - label (Tensor): target. The shapes is ``[N]``
+        - output1 (Tensor): The shape is ``[N]``
+        - output2 (Scalar).
+
+    Returns:
+        A callable object of AdaptiveLogSoftmaxWithLoss.
+
+    Examples:
+        .. code-block:: python
+
+            >>> import paddle
+            >>> import paddle.nn as nn
+            >>> paddle.seed(2024)
+
+            >>> input = paddle.randn([3, 5], dtype="float32")
+            >>> target = paddle.full((3,), 1, dtype='int64')
+            >>> asfm = nn.AdaptiveLogSoftmaxWithLoss(
+            ...     in_features=5,
+            ...     n_classes=3,
+            ...     cutoffs=[2],
+            ...     div_value=2.0,
+            ...     head_bias=False
+            ... )
+            >>> out, loss = asfm(input, target)
+            >>> print(out)
+            Tensor(shape=[3], dtype=float32, place=Place(cpu), stop_gradient=False,
+            [-1.04691017, -0.42341536, -1.16909981])
+            >>> print(loss)
+            Tensor(shape=[], dtype=float32, place=Place(cpu), stop_gradient=False,
+            0.87980843)
+            >>> out = asfm.log_prob(input)
+            >>> print(out)
+            Tensor(shape=[3, 3], dtype=float32, place=Place(cpu), stop_gradient=False,
+            [[-1.13710010, -1.04691017, -1.11403584],
+            [-1.51841831, -0.42341536, -2.07040048],
+            [-4.25405550, -1.16909981, -0.39282480]])
+            >>> out = asfm.predict(input)
+            >>> print(out)
+            Tensor(shape=[3], dtype=float32, place=Place(cpu), stop_gradient=True,
+            [1., 1., 2.])
+
+    Note:
+        Labels passed as inputs to this module should be sorted according to their frequency. This means that the most
+        frequent label should be represented by the index ``0``, and the least frequent label should be represented by
+        the index ``n_classes - 1``. To compute log-probabilities for all classes, the ``log_prob`` method can be used.
+    """
+
+    in_features: int
+    n_classes: int
+    cutoffs: Sequence[int]
+    weight_attr: ParamAttrLike | None
+    bias_attr: ParamAttrLike | None
+    div_value: float
+    head_bias: Tensor | None
+    head_weight: Tensor
+    tail_weights: list[list[Tensor]]
+    name: str | None
+
+    def __init__(
+        self,
+        in_features: int,
+        n_classes: int,
+        cutoffs: Sequence[int],
+        weight_attr: ParamAttrLike | None = None,
+        bias_attr: ParamAttrLike | None = None,
+        div_value: float = 4.0,
+        head_bias: bool = False,
+        name: str | None = None,
+    ) -> None:
+        super().__init__()
+        self._dtype = self._helper.get_default_dtype()
+        cutoffs = list(cutoffs)
+
+        if (
+            (cutoffs != sorted(cutoffs))
+            or (min(cutoffs) <= 0)
+            or (max(cutoffs) > (n_classes - 1))
+            or (len(set(cutoffs)) != len(cutoffs))
+            or any(int(c) != c for c in cutoffs)
+        ):
+            raise ValueError(
+                "cutoffs should be a sequence of unique, positive "
+                "integers sorted in an increasing order, where "
+                "each value is between 1 and n_classes-1"
+            )
+
+        self.in_features = in_features
+        self.n_classes = n_classes
+        self.cutoffs = [*cutoffs, n_classes]
+        self.div_value = div_value
+        self._weight_attr = weight_attr
+        self._bias_attr = bias_attr
+        self.is_head_bias = head_bias
+
+        self.shortlist_size = self.cutoffs[0]
+        self.n_clusters = len(self.cutoffs) - 1
+        self.head_size = self.shortlist_size + self.n_clusters
+
+        self.head_weight = self.create_parameter(
+            shape=[self.in_features, self.head_size],
+            attr=self._weight_attr,
+            dtype=self._dtype,
+            is_bias=False,
+        )
+        if self.is_head_bias:
+            self.head_bias = self.create_parameter(
+                shape=[self.head_size],
+                attr=self._bias_attr,
+                dtype=self._dtype,
+                is_bias=True,
+            )
+        else:
+            self.head_bias = None
+
+        self.tail_weights = []
+
+        for i in range(self.n_clusters):
+            hsz = int(self.in_features // (self.div_value ** (i + 1)))
+            osz = self.cutoffs[i + 1] - self.cutoffs[i]
+            projection = []
+            projection.append(
+                self.create_parameter(
+                    shape=[self.in_features, hsz],
+                    attr=self._weight_attr,
+                    dtype=self._dtype,
+                    is_bias=False,
+                )
+            )
+            projection.append(
+                self.create_parameter(
+                    shape=[hsz, osz],
+                    attr=self._weight_attr,
+                    dtype=self._dtype,
+                    is_bias=False,
+                )
+            )
+            self.tail_weights.append(projection)
+
+    def forward(self, input: Tensor, label: Tensor) -> tuple[Tensor, Tensor]:
+        return F.adaptive_log_softmax_with_loss(
+            input,
+            label,
+            self.head_weight,
+            self.tail_weights,
+            self.cutoffs,
+            self.head_bias,
+        )
+
+    def _get_full_log_prob(self, input: Tensor, head_output: Tensor) -> Tensor:
+        out = paddle.empty((head_output.shape[0], self.n_classes))
+        head_logprob = F.log_softmax(head_output, axis=1)
+
+        if paddle.in_dynamic_mode():
+            out[:, : self.shortlist_size] = head_logprob[
+                :, : self.shortlist_size
+            ]
+        else:
+            paddle.static.setitem(
+                out,
+                (
+                    slice(None, None, None),
+                    slice(None, self.shortlist_size, None),
+                ),
+                head_logprob,
+            )
+
+        for i, (start_idx, stop_idx) in enumerate(
+            zip(self.cutoffs, self.cutoffs[1:])
+        ):
+            cluster_output = F.linear(x=input, weight=self.tail_weights[i][0])
+            cluster_output = F.linear(
+                x=cluster_output, weight=self.tail_weights[i][1]
+            )
+            cluster_logprob = F.log_softmax(cluster_output, axis=1)
+            output_logprob = cluster_logprob + head_logprob[
+                :, self.shortlist_size + i
+            ].unsqueeze(1)
+
+            if paddle.in_dynamic_mode():
+                out[:, start_idx:stop_idx] = output_logprob
+            else:
+                paddle.static.setitem(
+                    out,
+                    (slice(None, None, None), slice(start_idx, stop_idx, None)),
+                    output_logprob,
+                )
+
+        return out
+
+    def log_prob(self, input: Tensor) -> Tensor:
+        head_output = F.linear(
+            x=input, weight=self.head_weight, bias=self.head_bias
+        )
+        return self._get_full_log_prob(input, head_output)
+
+    def predict(self, input: Tensor) -> Tensor:
+        head_output = F.linear(
+            x=input, weight=self.head_weight, bias=self.head_bias
+        )
+        output = paddle.argmax(head_output, axis=1).cast('float32')
+        not_in_shortlist = output >= self.shortlist_size
+        all_in_shortlist = not (not_in_shortlist.any())
+
+        if all_in_shortlist:
+            return output
+        elif not_in_shortlist.all():
+            log_prob = self._get_full_log_prob(input, head_output)
+            return paddle.argmax(log_prob, axis=1)
+        else:
+            log_prob = self._get_full_log_prob(
+                input[not_in_shortlist], head_output[not_in_shortlist]
+            )
+            indices = paddle.masked_select(
+                paddle.arange(len(not_in_shortlist)), not_in_shortlist
+            )
+            result = paddle.scatter(
+                output, indices, paddle.argmax(log_prob, axis=1).cast('float32')
+            )
+            return result

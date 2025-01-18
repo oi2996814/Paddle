@@ -22,9 +22,9 @@
 #include "paddle/fluid/framework/tensor_util.h"
 #include "paddle/fluid/inference/tensorrt/plugin/common/common.cuh"
 #include "paddle/fluid/inference/tensorrt/plugin/trt_plugin_utils.h"
-#include "paddle/fluid/operators/math/bert_encoder_functor.h"
-#include "paddle/fluid/platform/device_context.h"
+#include "paddle/phi/core/platform/device_context.h"
 #include "paddle/phi/kernels/funcs/blas/blas.h"
+#include "paddle/phi/kernels/funcs/multihead_matmul_functor.h"
 
 namespace paddle {
 namespace inference {
@@ -46,7 +46,7 @@ nvinfer1::DimsExprs MultiheadMatmulRoformerPlugin::getOutputDimensions(
   // output, (B, seq_len, hidden)
   PADDLE_ENFORCE_EQ(output_index,
                     0,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "There is only one output of the EmbEltwiseLayernorm, "
                         "so the index should be zero,"
                         "but it's (%d)",
@@ -54,7 +54,7 @@ nvinfer1::DimsExprs MultiheadMatmulRoformerPlugin::getOutputDimensions(
   PADDLE_ENFORCE_EQ(
       nb_inputs,
       4,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The Input of the EmbEltwiseLayernorm should be 3, but we found "
           "it has (%d) inputs",
           nb_inputs));
@@ -73,21 +73,21 @@ bool MultiheadMatmulRoformerPlugin::supportsFormatCombination(
     int nb_outputs) TRT_NOEXCEPT {
   PADDLE_ENFORCE_NOT_NULL(
       in_out,
-      platform::errors::InvalidArgument(
-          "The input of swish plugin shoule not be nullptr."));
+      common::errors::InvalidArgument(
+          "The input of swish plugin should not be nullptr."));
 
   PADDLE_ENFORCE_LT(
       pos,
       nb_inputs + nb_outputs,
-      platform::errors::InvalidArgument("The pos(%d) should be less than the "
-                                        "num(%d) of the input and the output.",
-                                        pos,
-                                        nb_inputs + nb_outputs));
+      common::errors::InvalidArgument("The pos(%d) should be less than the "
+                                      "num(%d) of the input and the output.",
+                                      pos,
+                                      nb_inputs + nb_outputs));
 
   const nvinfer1::PluginTensorDesc &in = in_out[pos];
   if (pos == 0) {
     if (with_fp16_) {
-#ifdef TRT_PLUGIN_FP16_AVALIABLE
+#ifdef TRT_PLUGIN_FP16_AVAILABLE
       return (in.type == nvinfer1::DataType::kFLOAT ||
               in.type == nvinfer1::DataType::kHALF) &&
              (in.format == nvinfer1::TensorFormat::kLINEAR);
@@ -117,7 +117,7 @@ nvinfer1::DataType MultiheadMatmulRoformerPlugin::getOutputDataType(
   PADDLE_ENFORCE_EQ(
       index,
       0,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The EmbEltwiseLayernorm Plugin only has one input, so the "
           "index value should be 0, but get %d.",
           index));
@@ -154,7 +154,7 @@ inline int round_up(int seq_len, int multiple = 32) {
   PADDLE_ENFORCE_GT(
       multiple,
       0,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "multiple should be a positive number, but it's (%d)", multiple));
   return ((seq_len + multiple - 1) / multiple) * multiple;
 }
@@ -197,11 +197,11 @@ int MultiheadMatmulRoformerPlugin::enqueue(
   auto input_type = input_desc[0].type;
   if (input_type == nvinfer1::DataType::kFLOAT) {
     VLOG(1) << "TRT Plugin DataType selected. RoformerQkvToContext-->fp32";
-    auto *multihead_temp_data = multihead_temp_tensor.mutable_data<float>(
-        platform::CUDAPlace(device_id));
+    auto *multihead_temp_data =
+        multihead_temp_tensor.mutable_data<float>(phi::GPUPlace(device_id));
     auto *temp_roformer_data =
         temp_roformer_tensor.mutable_data<float>(  // NOLINT
-            platform::CUDAPlace(device_id));
+            phi::GPUPlace(device_id));
     auto *tmp_roformer_ptr = reinterpret_cast<float *>(temp_roformer_data);
     auto *qkptr = multihead_temp_data;
     auto *tptr = multihead_temp_data + scratch_size;
@@ -212,8 +212,8 @@ int MultiheadMatmulRoformerPlugin::enqueue(
     float *qk_bias = const_cast<float *>(static_cast<const float *>(inputs[3]));
     if (ProductDim(input_desc[3].dims) == (batch * seq_len)) {
       temp_qk_bias_tensor.Resize({batch, head_number_, seq_len, seq_len});
-      auto *temp_qk_bias = temp_qk_bias_tensor.mutable_data<float>(
-          platform::CUDAPlace(device_id));
+      auto *temp_qk_bias =
+          temp_qk_bias_tensor.mutable_data<float>(phi::GPUPlace(device_id));
       int grid = batch * head_number_ * seq_len;
       int block = round_up(seq_len);
       broadcast<<<grid, block, 0, stream>>>(
@@ -250,11 +250,10 @@ int MultiheadMatmulRoformerPlugin::enqueue(
                                                  head_size_);  // k
 
     auto *device_ctx = static_cast<phi::GPUContext *>(
-        platform::DeviceContextPool::Instance().Get(
-            platform::CUDAPlace(device_id)));
+        phi::DeviceContextPool::Instance().Get(phi::GPUPlace(device_id)));
 
     const phi::GPUContext &dev_ctx = *device_ctx;
-    operators::math::MultiHeadGPUComputeFunctor<float> multihead_compute_func;
+    phi::funcs::MultiheadGPUComputeFunctor<float> multihead_compute_func;
     multihead_compute_func(dev_ctx,
                            batch,
                            seq_len,
@@ -274,15 +273,15 @@ int MultiheadMatmulRoformerPlugin::enqueue(
         tptr, output, batch, seq_len, head_number_, head_size_);
 
   } else if (input_type == nvinfer1::DataType::kHALF) {
-#ifdef TRT_PLUGIN_FP16_AVALIABLE
+#ifdef TRT_PLUGIN_FP16_AVAILABLE
     VLOG(1) << "TRT Plugin DataType selected. QkvToContext-->fp16";
     auto *multihead_temp_data =
         multihead_temp_tensor.mutable_data<int16_t>(  // NOLINT
-            platform::CUDAPlace(device_id));
+            phi::GPUPlace(device_id));
 
     auto *temp_roformer_data =
         temp_roformer_tensor.mutable_data<int16_t>(  // NOLINT
-            platform::CUDAPlace(device_id));
+            phi::GPUPlace(device_id));
     half *tmp_roformer_ptr = reinterpret_cast<half *>(temp_roformer_data);
     half *qkptr = reinterpret_cast<half *>(multihead_temp_data);
     half *tptr = qkptr + scratch_size;
@@ -293,9 +292,8 @@ int MultiheadMatmulRoformerPlugin::enqueue(
     half *qk_bias = const_cast<half *>(static_cast<const half *>(inputs[3]));
     if (ProductDim(input_desc[3].dims) == (batch * seq_len)) {
       temp_qk_bias_tensor.Resize({batch, head_number_, seq_len, seq_len});
-      auto *temp_qk_bias =
-          reinterpret_cast<half *>(temp_qk_bias_tensor.mutable_data<int16_t>(
-              platform::CUDAPlace(device_id)));
+      auto *temp_qk_bias = reinterpret_cast<half *>(
+          temp_qk_bias_tensor.mutable_data<int16_t>(phi::GPUPlace(device_id)));
       int grid = batch * head_number_ * seq_len;
       int block = round_up(seq_len);
       broadcast<<<grid, block, 0, stream>>>(
@@ -315,8 +313,7 @@ int MultiheadMatmulRoformerPlugin::enqueue(
                cudaMemcpyDeviceToDevice);
 
     auto *device_ctx = static_cast<phi::GPUContext *>(
-        platform::DeviceContextPool::Instance().Get(
-            platform::CUDAPlace(device_id)));
+        phi::DeviceContextPool::Instance().Get(phi::GPUPlace(device_id)));
 
     int n_q = seq_len * head_number_ * head_size_ * batch;
     constexpr int threads = 128;
@@ -341,7 +338,7 @@ int MultiheadMatmulRoformerPlugin::enqueue(
         tptr, static_cast<half>(scale_), n_q);
 
     const phi::GPUContext &dev_ctx = *device_ctx;
-    operators::math::MultiHeadGPUComputeFunctor<half> multihead_compute_func;
+    phi::funcs::MultiheadGPUComputeFunctor<half> multihead_compute_func;
     multihead_compute_func(dev_ctx,
                            batch,
                            seq_len,
@@ -360,15 +357,15 @@ int MultiheadMatmulRoformerPlugin::enqueue(
     transpose<half><<<grid, block, 0, stream>>>(
         tptr, output, batch, seq_len, head_number_, head_size_);
 #else
-    PADDLE_THROW(platform::errors::Fatal(
+    PADDLE_THROW(common::errors::Fatal(
         "The Ernie(Bert) TensorRT Plugin should be "
         "complied with CUDA version >= 10.0 when running with fp16. "
-        "Please recomplie it or try to use fp32 by set "
+        "Please recompile it or try to use fp32 by set "
         "config.SetTRTDynamicShapeInfo(min_input_shape, "
         "max_input_shape, opt_input_shape, true"));
 #endif
   } else {
-    PADDLE_THROW(platform::errors::Fatal(
+    PADDLE_THROW(common::errors::Fatal(
         "The QKV TRT Plugin's input type should be float or half."));
   }
   return cudaGetLastError() != cudaSuccess;

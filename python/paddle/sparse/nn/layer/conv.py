@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Literal
+
 import numpy as np
 
 from paddle.nn import Layer
@@ -21,26 +25,43 @@ from paddle.utils import convert_to_list
 
 from .. import functional as F
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from paddle import Tensor
+    from paddle._typing import (
+        ParamAttrLike,
+        Size2,
+        Size3,
+        Size4,
+        Size6,
+    )
+    from paddle.nn.functional.common import _PaddingSizeMode
+
 __all__ = []
 
 
 class _Conv3D(Layer):
+    weight: Tensor
+    bias: Tensor
+
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        kernel_size,
-        stride=1,
-        padding=0,
-        dilation=1,
-        groups=1,
-        subm=False,
-        key=None,
-        padding_mode='zeros',
-        weight_attr=None,
-        bias_attr=None,
-        data_format="NDHWC",
-    ):
+        in_channels: int,
+        out_channels: int,
+        kernel_size: Size3,
+        stride: Size3 = 1,
+        padding: _PaddingSizeMode | Size3 | Size6 | Sequence[Size2] = 0,
+        dilation: Size3 = 1,
+        groups: Literal[1] = 1,
+        subm: bool = False,
+        key: str | None = None,
+        padding_mode: Literal['zeros'] = 'zeros',
+        weight_attr: ParamAttrLike | None = None,
+        bias_attr: ParamAttrLike | None = None,
+        data_format: Literal['NDHWC'] = "NDHWC",
+        backend: Literal['igemm'] | None = None,
+    ) -> None:
         super().__init__()
         assert (
             weight_attr is not False
@@ -53,18 +74,21 @@ class _Conv3D(Layer):
         self._data_format = data_format
         self._subm = subm
         self._key = key
+        self._backend = backend
 
         assert (
             padding_mode == 'zeros'
         ), "Currently, only support padding_mode='zeros'"
         assert groups == 1, "Currently, only support groups=1"
+        assert backend in [
+            None,
+            'igemm',
+        ], "The value of 'backend' in Conv3D should be None or 'igemm'."
 
         valid_format = {'NDHWC'}
         if data_format not in valid_format:
             raise ValueError(
-                "data_format must be one of {}, but got data_format='{}'".format(
-                    valid_format, data_format
-                )
+                f"data_format must be one of {valid_format}, but got data_format='{data_format}'"
             )
 
         channel_last = data_format == "NDHWC"
@@ -80,7 +104,8 @@ class _Conv3D(Layer):
         )
 
         # the sparse conv restricts the shape is [D, H, W, in_channels, out_channels]
-        filter_shape = self._kernel_size + [
+        filter_shape = [
+            *self._kernel_size,
             self._in_channels,
             self._out_channels,
         ]
@@ -99,22 +124,40 @@ class _Conv3D(Layer):
             attr=self._bias_attr, shape=[self._out_channels], is_bias=True
         )
 
-    def forward(self, x):
-        out = F.conv._conv3d(
-            x,
-            self.weight,
-            bias=self.bias,
-            stride=self._stride,
-            padding=self._updated_padding,
-            dilation=self._dilation,
-            groups=self._groups,
-            subm=self._subm,
-            key=self._key,
-            data_format=self._data_format,
-        )
+    def forward(self, x: Tensor) -> Tensor:
+        if self._backend is None:
+            out = F.conv._conv3d(
+                x,
+                self.weight,
+                bias=self.bias,
+                stride=self._stride,
+                padding=self._updated_padding,
+                dilation=self._dilation,
+                groups=self._groups,
+                subm=self._subm,
+                key=self._key,
+                data_format=self._data_format,
+            )
+        elif self._backend == 'igemm':
+            out = F.conv._conv3d_igemm(
+                x,
+                self.weight,
+                bias=self.bias,
+                stride=self._stride,
+                padding=self._updated_padding,
+                dilation=self._dilation,
+                groups=self._groups,
+                subm=self._subm,
+                key=self._key,
+                data_format=self._data_format,
+            )
+        else:
+            raise ValueError(
+                f"The value of 'backend' in Conv3D should be None or 'igemm', but got {self._backend}."
+            )
         return out
 
-    def extra_repr(self):
+    def extra_repr(self) -> str:
         main_str = '{_in_channels}, {_out_channels}, kernel_size={_kernel_size}'
         if self._stride != [1] * len(self._stride):
             main_str += ', stride={_stride}'
@@ -131,22 +174,26 @@ class _Conv3D(Layer):
 
 
 class _Conv2D(Layer):
+    weight: Tensor
+    bias: Tensor
+
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        kernel_size,
-        stride=1,
-        padding=0,
-        dilation=1,
-        groups=1,
-        subm=False,
-        key=None,
-        padding_mode='zeros',
-        weight_attr=None,
-        bias_attr=None,
-        data_format="NHWC",
-    ):
+        in_channels: int,
+        out_channels: int,
+        kernel_size: Size2,
+        stride: Size2 = 1,
+        padding: _PaddingSizeMode | Size2 | Size4 | Sequence[Size2] = 0,
+        dilation: Size2 = 1,
+        groups: Literal[1] = 1,
+        subm: bool = False,
+        key: str | None = None,
+        padding_mode: Literal['zeros'] = 'zeros',
+        weight_attr: ParamAttrLike | None = None,
+        bias_attr: ParamAttrLike | None = None,
+        data_format: Literal["NHWC"] = "NHWC",
+        backend: Literal['igemm'] | None = None,
+    ) -> None:
         super().__init__()
         assert (
             weight_attr is not False
@@ -159,18 +206,21 @@ class _Conv2D(Layer):
         self._data_format = data_format
         self._subm = subm
         self._key = key
+        self._backend = backend
 
         assert (
             padding_mode == 'zeros'
         ), "Currently, only support padding_mode='zeros'"
         assert groups == 1, "Currently, only support groups=1"
+        assert backend in [
+            None,
+            'igemm',
+        ], "The value of 'backend' in Conv3D should be None or 'igemm'."
 
         valid_format = {'NHWC'}
         if data_format not in valid_format:
             raise ValueError(
-                "data_format must be one of {}, but got data_format='{}'".format(
-                    valid_format, data_format
-                )
+                f"data_format must be one of {valid_format}, but got data_format='{data_format}'"
             )
 
         channel_last = data_format == "NHWC"
@@ -186,7 +236,8 @@ class _Conv2D(Layer):
         )
 
         # the sparse conv restricts the shape is [H, W, in_channels, out_channels]
-        filter_shape = self._kernel_size + [
+        filter_shape = [
+            *self._kernel_size,
             self._in_channels,
             self._out_channels,
         ]
@@ -205,22 +256,40 @@ class _Conv2D(Layer):
             attr=self._bias_attr, shape=[self._out_channels], is_bias=True
         )
 
-    def forward(self, x):
-        out = F.conv._conv2d(
-            x,
-            self.weight,
-            bias=self.bias,
-            stride=self._stride,
-            padding=self._updated_padding,
-            dilation=self._dilation,
-            groups=self._groups,
-            subm=self._subm,
-            key=self._key,
-            data_format=self._data_format,
-        )
+    def forward(self, x: Tensor) -> Tensor:
+        if self._backend is None:
+            out = F.conv._conv2d(
+                x,
+                self.weight,
+                bias=self.bias,
+                stride=self._stride,
+                padding=self._updated_padding,
+                dilation=self._dilation,
+                groups=self._groups,
+                subm=self._subm,
+                key=self._key,
+                data_format=self._data_format,
+            )
+        elif self._backend == 'igemm':
+            out = F.conv._conv2d_igemm(
+                x,
+                self.weight,
+                bias=self.bias,
+                stride=self._stride,
+                padding=self._updated_padding,
+                dilation=self._dilation,
+                groups=self._groups,
+                subm=self._subm,
+                key=self._key,
+                data_format=self._data_format,
+            )
+        else:
+            raise ValueError(
+                f"The value of 'backend' in Conv2D should be None or 'igemm', but got {self._backend}."
+            )
         return out
 
-    def extra_repr(self):
+    def extra_repr(self) -> str:
         main_str = '{_in_channels}, {_out_channels}, kernel_size={_kernel_size}'
         if self._stride != [1] * len(self._stride):
             main_str += ', stride={_stride}'
@@ -238,7 +307,7 @@ class _Conv2D(Layer):
 
 class Conv3D(_Conv3D):
     r"""
-    **Sparse Convlution3d Layer**
+    **Sparse Convolution3d Layer**
     The Sparse convolution3d layer calculates the output based on the input, filter
     and strides, paddings, dilations, groups parameters. Input(Input) and
     Output(Output) are multidimensional SparseCooTensors with a shape of
@@ -267,11 +336,11 @@ class Conv3D(_Conv3D):
         stride(int|list|tuple, optional): The stride size. If stride is a list/tuple, it must
             contain three integers, (stride_D, stride_H, stride_W). Otherwise, the
             stride_D = stride_H = stride_W = stride. The default value is 1.
-        padding(int|str|tuple|list, optional): The padding size. Padding coule be in one of the following forms.
+        padding(int|str|tuple|list, optional): The padding size. Padding couple be in one of the following forms.
             1. a string in ['valid', 'same'].
-            2. an int, which means each spartial dimension(depth, height, width) is zero paded by size of `padding`
-            3. a list[int] or tuple[int] whose length is the number of spartial dimensions, which contains the amount of padding on each side for each spartial dimension. It has the form [pad_d1, pad_d2, ...].
-            4. a list[int] or tuple[int] whose length is 2 * number of spartial dimensions. It has the form  [pad_before, pad_after, pad_before, pad_after, ...] for all spartial dimensions.
+            2. an int, which means each spatial dimension(depth, height, width) is zero padded by size of `padding`
+            3. a list[int] or tuple[int] whose length is the number of spatial dimensions, which contains the amount of padding on each side for each spatial dimension. It has the form [pad_d1, pad_d2, ...].
+            4. a list[int] or tuple[int] whose length is 2 * number of spatial dimensions. It has the form  [pad_before, pad_after, pad_before, pad_after, ...] for all spatial dimensions.
             5. a list or tuple of pairs of ints. It has the form [[pad_before, pad_after], [pad_before, pad_after], ...]. Note that, the batch dimension and channel dimension are also included. Each pair of integers correspond to the amount of padding for a dimension of the input. Padding in batch dimension and channel dimension should be [0, 0] or (0, 0).
             The default value is 0.
         dilation(int|list|tuple, optional): The dilation size. If dilation is a list/tuple, it must
@@ -326,34 +395,34 @@ class Conv3D(_Conv3D):
 
         .. code-block:: python
 
-          import paddle
+            >>> import paddle
 
-          indices = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 1, 2], [1, 3, 2, 3]]
-          values = [[1], [2], [3], [4]]
-          indices = paddle.to_tensor(indices, dtype='int32')
-          values = paddle.to_tensor(values, dtype='float32')
-          dense_shape = [1, 1, 3, 4, 1]
-          sparse_x = paddle.sparse.sparse_coo_tensor(indices, values, dense_shape, stop_gradient=True)
-          conv = paddle.sparse.nn.Conv3D(1, 1, (1, 3, 3))
-          y = conv(sparse_x)
-          print(y.shape)
-          # (1, 1, 1, 2, 1)
+            >>> indices = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 1, 2], [1, 3, 2, 3]]
+            >>> values = [[1], [2], [3], [4]]
+            >>> indices = paddle.to_tensor(indices, dtype='int32')
+            >>> values = paddle.to_tensor(values, dtype='float32')
+            >>> dense_shape = [1, 1, 3, 4, 1]
+            >>> sparse_x = paddle.sparse.sparse_coo_tensor(indices, values, dense_shape, stop_gradient=True)
+            >>> conv = paddle.sparse.nn.Conv3D(1, 1, (1, 3, 3))
+            >>> y = conv(sparse_x)
+            >>> print(y.shape)
+            [1, 1, 1, 2, 1]
     """
 
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        kernel_size,
-        stride=1,
-        padding=0,
-        dilation=1,
-        groups=1,
-        padding_mode='zeros',
-        weight_attr=None,
-        bias_attr=None,
-        data_format="NDHWC",
-    ):
+        in_channels: int,
+        out_channels: int,
+        kernel_size: Size3,
+        stride: Size3 = 1,
+        padding: _PaddingSizeMode | Size3 | Size6 | Sequence[Size2] = 0,
+        dilation: Size3 = 1,
+        groups: Literal[1] = 1,
+        padding_mode: Literal['zeros'] = 'zeros',
+        weight_attr: ParamAttrLike | None = None,
+        bias_attr: ParamAttrLike | None = None,
+        data_format: Literal["NDHWC"] = "NDHWC",
+    ) -> None:
         super().__init__(
             in_channels,
             out_channels,
@@ -373,7 +442,7 @@ class Conv3D(_Conv3D):
 
 class Conv2D(_Conv2D):
     r"""
-    **Sparse Convlution2d Layer**
+    **Sparse Convolution2d Layer**
 
     The Sparse convolution2d layer calculates the output based on the input, filter
     and strides, paddings, dilations, groups parameters. Input(Input) and
@@ -403,12 +472,12 @@ class Conv2D(_Conv2D):
         stride(int|list|tuple, optional): The stride size. If stride is a list/tuple, it must
             contain three integers, (stride_H, stride_W). Otherwise, the
             stride_H = stride_W = stride. The default value is 1.
-        padding(int|str|tuple|list, optional): The padding size. Padding coule be in one of the following forms.
+        padding(int|str|tuple|list, optional): The padding size. Padding couple be in one of the following forms.
 
             1. a string in ['valid', 'same'].
-            2. an int, which means each spartial dimension(height, width) is zero paded by size of `padding`
-            3. a list[int] or tuple[int] whose length is the number of spartial dimensions, which contains the amount of padding on each side for each spartial dimension. It has the form [pad_d1, pad_d2, ...].
-            4. a list[int] or tuple[int] whose length is 2 * number of spartial dimensions. It has the form  [pad_before, pad_after, pad_before, pad_after, ...] for all spartial dimensions.
+            2. an int, which means each spatial dimension(height, width) is zero padded by size of `padding`
+            3. a list[int] or tuple[int] whose length is the number of spatial dimensions, which contains the amount of padding on each side for each spatial dimension. It has the form [pad_d1, pad_d2, ...].
+            4. a list[int] or tuple[int] whose length is 2 * number of spatial dimensions. It has the form  [pad_before, pad_after, pad_before, pad_after, ...] for all spatial dimensions.
             5. a list or tuple of pairs of ints. It has the form [[pad_before, pad_after], [pad_before, pad_after], ...].
 
             Note that, the batch dimension and channel dimension are also included. Each pair of integers correspond to the amount of padding for a dimension of the input. Padding in batch dimension and channel dimension should be [0, 0] or (0, 0).
@@ -461,34 +530,34 @@ class Conv2D(_Conv2D):
 
         .. code-block:: python
 
-          import paddle
+            >>> import paddle
 
-          indices = [[0, 0, 0, 0], [0, 0, 1, 2], [1, 3, 2, 3]]
-          values = [[1], [2], [3], [4]]
-          indices = paddle.to_tensor(indices, dtype='int32')
-          values = paddle.to_tensor(values, dtype='float32')
-          dense_shape = [1, 3, 4, 1]
-          sparse_x = paddle.sparse.sparse_coo_tensor(indices, values, dense_shape, stop_gradient=True)
-          conv = paddle.sparse.nn.Conv2D(1, 1, (3, 3))
-          y = conv(sparse_x)
-          print(y.shape)
-          # (1, 1, 2, 1)
+            >>> indices = [[0, 0, 0, 0], [0, 0, 1, 2], [1, 3, 2, 3]]
+            >>> values = [[1], [2], [3], [4]]
+            >>> indices = paddle.to_tensor(indices, dtype='int32')
+            >>> values = paddle.to_tensor(values, dtype='float32')
+            >>> dense_shape = [1, 3, 4, 1]
+            >>> sparse_x = paddle.sparse.sparse_coo_tensor(indices, values, dense_shape, stop_gradient=True)
+            >>> conv = paddle.sparse.nn.Conv2D(1, 1, (3, 3))
+            >>> y = conv(sparse_x)
+            >>> print(y.shape)
+            [1, 1, 2, 1]
     """
 
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        kernel_size,
-        stride=1,
-        padding=0,
-        dilation=1,
-        groups=1,
-        padding_mode='zeros',
-        weight_attr=None,
-        bias_attr=None,
-        data_format="NHWC",
-    ):
+        in_channels: int,
+        out_channels: int,
+        kernel_size: Size2,
+        stride: Size2 = 1,
+        padding: _PaddingSizeMode | Size2 | Size4 | Sequence[Size2] = 0,
+        dilation: Size2 = 1,
+        groups: Literal[1] = 1,
+        padding_mode: Literal['zeros'] = 'zeros',
+        weight_attr: ParamAttrLike | None = None,
+        bias_attr: ParamAttrLike | None = None,
+        data_format: Literal["NHWC"] = "NHWC",
+    ) -> None:
         super().__init__(
             in_channels,
             out_channels,
@@ -508,7 +577,7 @@ class Conv2D(_Conv2D):
 
 class SubmConv3D(_Conv3D):
     r"""
-    **Submanifold Sparse Convlution3d Layer**
+    **Submanifold Sparse Convolution3d Layer**
     The submanifold sparse convolution3d layer calculates the output based on the input, filter
     and strides, paddings, dilations, groups parameters. Input(Input) and
     Output(Output) are multidimensional SparseCooTensors with a shape of
@@ -537,11 +606,11 @@ class SubmConv3D(_Conv3D):
         stride(int|list|tuple, optional): The stride size. If stride is a list/tuple, it must
             contain three integers, (stride_D, stride_H, stride_W). Otherwise, the
             stride_D = stride_H = stride_W = stride. The default value is 1.
-        padding(int|str|tuple|list, optional): The padding size. Padding coule be in one of the following forms.
+        padding(int|str|tuple|list, optional): The padding size. Padding couple be in one of the following forms.
             1. a string in ['valid', 'same'].
-            2. an int, which means each spartial dimension(depth, height, width) is zero paded by size of `padding`
-            3. a list[int] or tuple[int] whose length is the number of spartial dimensions, which contains the amount of padding on each side for each spartial dimension. It has the form [pad_d1, pad_d2, ...].
-            4. a list[int] or tuple[int] whose length is 2 * number of spartial dimensions. It has the form  [pad_before, pad_after, pad_before, pad_after, ...] for all spartial dimensions.
+            2. an int, which means each spatial dimension(depth, height, width) is zero padded by size of `padding`
+            3. a list[int] or tuple[int] whose length is the number of spatial dimensions, which contains the amount of padding on each side for each spatial dimension. It has the form [pad_d1, pad_d2, ...].
+            4. a list[int] or tuple[int] whose length is 2 * number of spatial dimensions. It has the form  [pad_before, pad_after, pad_before, pad_after, ...] for all spatial dimensions.
             5. a list or tuple of pairs of ints. It has the form [[pad_before, pad_after], [pad_before, pad_after], ...]. Note that, the batch dimension and channel dimension are also included. Each pair of integers correspond to the amount of padding for a dimension of the input. Padding in batch dimension and channel dimension should be [0, 0] or (0, 0).
             The default value is 0.
         dilation(int|list|tuple, optional): The dilation size. If dilation is a list/tuple, it must
@@ -600,35 +669,36 @@ class SubmConv3D(_Conv3D):
 
         .. code-block:: python
 
-          import paddle
+            >>> import paddle
 
-          indices = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 1, 2], [1, 3, 2, 3]]
-          values = [[1], [2], [3], [4]]
-          dense_shape = [1, 1, 3, 4, 1]
-          indices = paddle.to_tensor(indices, dtype='int32')
-          values = paddle.to_tensor(values, dtype='float32')
-          sparse_x = paddle.sparse.sparse_coo_tensor(indices, values, dense_shape, stop_gradient=True)
-          subm_conv = paddle.sparse.nn.SubmConv3D(1, 1, (1, 3, 3))
-          y = subm_conv(sparse_x)
-          print(y.shape)
-          # (1, 1, 3, 4, 1)
+            >>> indices = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 1, 2], [1, 3, 2, 3]]
+            >>> values = [[1], [2], [3], [4]]
+            >>> dense_shape = [1, 1, 3, 4, 1]
+            >>> indices = paddle.to_tensor(indices, dtype='int32')
+            >>> values = paddle.to_tensor(values, dtype='float32')
+            >>> sparse_x = paddle.sparse.sparse_coo_tensor(indices, values, dense_shape, stop_gradient=True)
+            >>> subm_conv = paddle.sparse.nn.SubmConv3D(1, 1, (1, 3, 3))
+            >>> y = subm_conv(sparse_x)
+            >>> print(y.shape)
+            [1, 1, 3, 4, 1]
     """
 
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        kernel_size,
-        stride=1,
-        padding=0,
-        dilation=1,
-        groups=1,
-        padding_mode='zeros',
-        key=None,
-        weight_attr=None,
-        bias_attr=None,
-        data_format="NDHWC",
-    ):
+        in_channels: int,
+        out_channels: int,
+        kernel_size: Size3,
+        stride: Size3 = 1,
+        padding: _PaddingSizeMode | Size3 | Size6 | Sequence[Size2] = 0,
+        dilation: Size3 = 1,
+        groups: Literal[1] = 1,
+        padding_mode: Literal['zeros'] = 'zeros',
+        key: str | None = None,
+        weight_attr: ParamAttrLike | None = None,
+        bias_attr: ParamAttrLike | None = None,
+        data_format: Literal["NDHWC"] = "NDHWC",
+        backend: Literal['igemm'] | None = None,
+    ) -> None:
         super().__init__(
             in_channels,
             out_channels,
@@ -643,12 +713,13 @@ class SubmConv3D(_Conv3D):
             weight_attr=weight_attr,
             bias_attr=bias_attr,
             data_format=data_format,
+            backend=backend,
         )
 
 
 class SubmConv2D(_Conv2D):
     r"""
-    **Submanifold Sparse Convlution2d Layer**
+    **Submanifold Sparse Convolution2d Layer**
 
     The submanifold sparse convolution2d layer calculates the output based on the input, filter
     and strides, paddings, dilations, groups parameters. Input(Input) and
@@ -678,12 +749,12 @@ class SubmConv2D(_Conv2D):
         stride(int|list|tuple, optional): The stride size. If stride is a list/tuple, it must
             contain two integers, (stride_H, stride_W). Otherwise, the
             stride_H = stride_W = stride. The default value is 1.
-        padding(int|str|tuple|list, optional): The padding size. Padding coule be in one of the following forms.
+        padding(int|str|tuple|list, optional): The padding size. Padding couple be in one of the following forms.
 
             1. a string in ['valid', 'same'].
-            2. an int, which means each spartial dimension(depth, height, width) is zero paded by size of `padding`
-            3. a list[int] or tuple[int] whose length is the number of spartial dimensions, which contains the amount of padding on each side for each spartial dimension. It has the form [pad_d1, pad_d2, ...].
-            4. a list[int] or tuple[int] whose length is 2 * number of spartial dimensions. It has the form  [pad_before, pad_after, pad_before, pad_after, ...] for all spartial dimensions.
+            2. an int, which means each spatial dimension(depth, height, width) is zero padded by size of `padding`
+            3. a list[int] or tuple[int] whose length is the number of spatial dimensions, which contains the amount of padding on each side for each spatial dimension. It has the form [pad_d1, pad_d2, ...].
+            4. a list[int] or tuple[int] whose length is 2 * number of spatial dimensions. It has the form  [pad_before, pad_after, pad_before, pad_after, ...] for all spatial dimensions.
             5. a list or tuple of pairs of ints. It has the form [[pad_before, pad_after], [pad_before, pad_after], ...].
 
             Note that, the batch dimension and channel dimension are also included. Each pair of integers correspond to the amount of padding for a dimension of the input. Padding in batch dimension and channel dimension should be [0, 0] or (0, 0).
@@ -740,35 +811,36 @@ class SubmConv2D(_Conv2D):
 
         .. code-block:: python
 
-          import paddle
+            >>> import paddle
 
-          indices = [[0, 0, 0, 0], [0, 0, 1, 2], [1, 3, 2, 3]]
-          values = [[1], [2], [3], [4]]
-          dense_shape = [1, 3, 4, 1]
-          indices = paddle.to_tensor(indices, dtype='int32')
-          values = paddle.to_tensor(values, dtype='float32')
-          sparse_x = paddle.sparse.sparse_coo_tensor(indices, values, dense_shape, stop_gradient=True)
-          subm_conv = paddle.sparse.nn.SubmConv2D(1, 1, (3, 3))
-          y = subm_conv(sparse_x)
-          print(y.shape)
-          # (1, 3, 4, 1)
+            >>> indices = [[0, 0, 0, 0], [0, 0, 1, 2], [1, 3, 2, 3]]
+            >>> values = [[1], [2], [3], [4]]
+            >>> dense_shape = [1, 3, 4, 1]
+            >>> indices = paddle.to_tensor(indices, dtype='int32')
+            >>> values = paddle.to_tensor(values, dtype='float32')
+            >>> sparse_x = paddle.sparse.sparse_coo_tensor(indices, values, dense_shape, stop_gradient=True)
+            >>> subm_conv = paddle.sparse.nn.SubmConv2D(1, 1, (3, 3))
+            >>> y = subm_conv(sparse_x)
+            >>> print(y.shape)
+            [1, 3, 4, 1]
     """
 
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        kernel_size,
-        stride=1,
-        padding=0,
-        dilation=1,
-        groups=1,
-        padding_mode='zeros',
-        key=None,
-        weight_attr=None,
-        bias_attr=None,
-        data_format="NHWC",
-    ):
+        in_channels: int,
+        out_channels: int,
+        kernel_size: Size2,
+        stride: Size2 = 1,
+        padding: _PaddingSizeMode | Size2 | Size4 | Sequence[Size2] = 0,
+        dilation: Size2 = 1,
+        groups: Literal[1] = 1,
+        padding_mode: Literal['zeros'] = 'zeros',
+        key: str | None = None,
+        weight_attr: ParamAttrLike | None = None,
+        bias_attr: ParamAttrLike | None = None,
+        data_format: Literal["NHWC"] = "NHWC",
+        backend: Literal['igemm'] | None = None,
+    ) -> None:
         super().__init__(
             in_channels,
             out_channels,
@@ -783,4 +855,5 @@ class SubmConv2D(_Conv2D):
             weight_attr=weight_attr,
             bias_attr=bias_attr,
             data_format=data_format,
+            backend=backend,
         )

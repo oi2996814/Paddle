@@ -28,17 +28,17 @@ endif()
 
 if((NOT DEFINED CUDNN_FRONTEND_NAME) OR (NOT DEFINED CUDNN_FRONTEND_URL))
   set(CUDNN_FRONTEND_VER
-      "v0.9.1"
+      "v1.5.2"
       CACHE STRING "" FORCE)
   set(CUDNN_FRONTEND_NAME
       "cudnn-frontend"
       CACHE STRING "" FORCE)
   set(CUDNN_FRONTEND_URL
-      "https://github.com/NVIDIA/cudnn-frontend/archive/refs/tags/${CUDNN_FRONTEND_VER}.tar.gz"
+      "${GIT_URL}/NVIDIA/cudnn-frontend/archive/refs/tags/${CUDNN_FRONTEND_VER}.tar.gz"
       CACHE STRING "" FORCE)
 endif()
 set(CUDNN_FRONTEND_CACHE_FILENAME "${CUDNN_FRONTEND_VER}.tar.gz")
-set(CUDNN_FRONTEND_URL_MD5 "da7cbad1305427f687dd4fd737178f80")
+set(CUDNN_FRONTEND_URL_MD5 "5ccb6e50a534670b2af7b30de50e7641")
 
 message(
   STATUS

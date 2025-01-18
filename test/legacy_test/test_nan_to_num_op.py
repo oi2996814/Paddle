@@ -12,22 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import unittest
-from typing import Optional
 
 import numpy as np
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
-# from eager_op_test import OpTest
+# from op_test import OpTest
 
 
 def np_nan_to_num(
     x: np.ndarray,
     nan: float = 0.0,
-    posinf: Optional[float] = None,
-    neginf: Optional[float] = None,
+    posinf: float | None = None,
+    neginf: float | None = None,
 ) -> np.ndarray:
     return np.nan_to_num(x, True, nan=nan, posinf=posinf, neginf=neginf)
 
@@ -87,7 +88,7 @@ class TestNanToNum(unittest.TestCase):
     def test_dygraph(self):
         paddle.disable_static(place=self.place)
 
-        with paddle.fluid.dygraph.guard():
+        with paddle.base.dygraph.guard():
             # NOTE(tiancaishaonvjituizi): float64 input fails the test
             x_np = np.array([[1, np.nan, -2], [np.inf, 0, -np.inf]]).astype(
                 np.float32

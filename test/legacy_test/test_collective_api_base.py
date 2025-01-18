@@ -24,12 +24,12 @@ from contextlib import closing
 sys.path.append("../legacy_test")
 
 import numpy as np
-from eager_op_test import convert_float_to_uint16, convert_uint16_to_float
+from op_test import convert_float_to_uint16, convert_uint16_to_float
 
 import paddle
 import paddle.distributed as dist
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 
 def create_bool_test_data(shape=None, seed=None):
@@ -119,26 +119,26 @@ class TestCollectiveAPIRunnerBase:
         )
 
     def run_trainer(self, args):
-        train_prog = fluid.Program()
-        startup_prog = fluid.Program()
+        train_prog = base.Program()
+        startup_prog = base.Program()
         endpoints = args["endpoints"].split(",")
         rank = args["trainerid"]
         current_endpoint = args["currentendpoint"]
         nranks = 2
-        if args["use_comm_context"]:
+        if args['static_mode']:
             paddle.distributed.collective._init_parallel_env(args["backend"])
         else:
             paddle.distributed.init_parallel_env()
         if args['backend'] == 'nccl':
             device_id = int(os.getenv("FLAGS_selected_gpus", "0"))
-            place = fluid.CUDAPlace(
+            place = base.CUDAPlace(
                 device_id
-            )  # if args.use_gpu else fluid.CPUPlace()
+            )  # if args.use_gpu else base.CPUPlace()
         elif args['backend'] == 'bkcl':
             device_id = int(os.getenv("FLAGS_selected_xpus", "0"))
-            place = fluid.XPUPlace(device_id)
+            place = base.XPUPlace(device_id)
         else:
-            place = fluid.CPUPlace()
+            place = base.CPUPlace()
         indata = create_test_data(
             shape=(10, 1000), dtype=args["dtype"], seed=os.getpid()
         )
@@ -152,9 +152,13 @@ class TestCollectiveAPIRunnerBase:
                     reduce_type=args['reduce_type'],
                 )
                 if args["use_comm_context"]
-                else self.get_model(train_prog, startup_prog, rank)
+                else (
+                    self.get_model(
+                        train_prog, startup_prog, rank, dtype=args['dtype']
+                    )
+                )
             )
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             exe.run(startup_prog)
             fetch_list = []
             for elem in result:
@@ -189,12 +193,9 @@ class TestDistBase(unittest.TestCase):
     def setUp(self):
         self._port_set = set()
         self._trainers = 2
-        self._ps_endpoints = "127.0.0.1:{},127.0.0.1:{}".format(
-            self._find_free_port(),
-            self._find_free_port(),
-        )
+        self._ps_endpoints = f"127.0.0.1:{self._find_free_port()},127.0.0.1:{self._find_free_port()}"
         self._python_interp = sys.executable
-        self._master_endpoints = "127.0.0.1:%s" % (self._find_free_port())
+        self._master_endpoints = f"127.0.0.1:{self._find_free_port()}"
 
         self.temp_dir = tempfile.TemporaryDirectory()
 
@@ -274,10 +275,10 @@ class TestDistBase(unittest.TestCase):
         tr0_cmd = tr_cmd % (self._python_interp, model_file)
         tr1_cmd = tr_cmd % (self._python_interp, model_file)
         path0 = os.path.join(
-            self.temp_dir.name, "/tmp/tr0_err_%d.log" % os.getpid()
+            self.temp_dir.name, f"/tmp/tr0_err_{os.getpid()}.log"
         )
         path1 = os.path.join(
-            self.temp_dir.name, "/tmp/tr1_err_%d.log" % os.getpid()
+            self.temp_dir.name, f"/tmp/tr1_err_{os.getpid()}.log"
         )
         tr0_pipe = open(path0, "w")
         tr1_pipe = open(path1, "w")
@@ -298,15 +299,15 @@ class TestDistBase(unittest.TestCase):
 
         tr0_out, tr0_err = tr0_proc.communicate()
         tr1_out, tr1_err = tr1_proc.communicate()
-        sys.stderr.write('trainer 0 stderr: %s\n' % tr0_err)
-        sys.stderr.write('trainer 1 stderr: %s\n' % tr1_err)
+        sys.stderr.write(f'trainer 0 stderr: {tr0_err}\n')
+        sys.stderr.write(f'trainer 1 stderr: {tr1_err}\n')
         # close trainer file
         tr0_pipe.close()
         tr1_pipe.close()
         with open(path0, "r") as f:
-            sys.stderr.write('trainer 0 stderr file: %s\n' % f.read())
+            sys.stderr.write(f'trainer 0 stderr file: {f.read()}\n')
         with open(path1, "r") as f:
-            sys.stderr.write('trainer 1 stderr file: %s\n' % f.read())
+            sys.stderr.write(f'trainer 1 stderr file: {f.read()}\n')
 
         def load_and_remove(path):
             with open(path, 'rb') as f:
@@ -502,7 +503,7 @@ class TestDistBase(unittest.TestCase):
             np.testing.assert_allclose(
                 result_data, need_result, rtol=1e-05, atol=1e-05
             )
-        elif col_type == "alltoall":
+        elif col_type == "all_to_all":
             need_result1 = np.vstack(
                 (
                     input1[0 : input1.shape[0] // 2, :],
@@ -599,16 +600,23 @@ class TestDistBase(unittest.TestCase):
                     send_ptr2 = send_ptr2 + global_expert_count2[idx]
             result1 = []
             result2 = []
+
+            def is_empty_list(x):
+                if isinstance(x, list) and len(x) == 0:
+                    return True
+                return False
+
             for i in range(tot_expert):
                 for arr in output1[i]:
-                    if arr == []:
+                    if is_empty_list(arr):
                         continue
                     result1.append(arr)
             for i in range(tot_expert):
                 for arr in output2[i]:
-                    if arr == []:
+                    if is_empty_list(arr):
                         continue
                     result2.append(arr)
+
             if result1 == []:
                 output1 = np.array([])
             else:

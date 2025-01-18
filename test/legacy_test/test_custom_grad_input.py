@@ -12,18 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
 
 import paddle
-import paddle.fluid.dygraph as dg
+import paddle.base.dygraph as dg
 
 
 class TestTensorBackward(unittest.TestCase):
     def setUp(self):
         self._dtypes = ["float32", "float64"]
-        self._places = [paddle.CPUPlace()]
+        self._places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.is_compiled_with_cuda()
+        ):
+            self._places.append(paddle.CPUPlace())
         if paddle.is_compiled_with_cuda():
             self._places.append(paddle.CUDAPlace(0))
 
@@ -52,7 +59,13 @@ class TestTensorBackward(unittest.TestCase):
 class TestBackwardAPI(unittest.TestCase):
     def setUp(self):
         self._dtypes = ["float32", "float64"]
-        self._places = [paddle.CPUPlace()]
+        self._places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.is_compiled_with_cuda()
+        ):
+            self._places.append(paddle.CPUPlace())
         if paddle.is_compiled_with_cuda():
             self._places.append(paddle.CUDAPlace(0))
 

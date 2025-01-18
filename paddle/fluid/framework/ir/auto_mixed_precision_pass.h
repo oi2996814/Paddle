@@ -75,11 +75,12 @@ class AutoMixedPrecisionPass : public FusePassBase {
   mutable phi::Backend backend_{phi::Backend::UNDEFINED};
 
   mutable std::unordered_set<std::string> black_list_;
+  mutable std::unordered_set<std::string> white_list_;
 
   // subgraph id -> pointer to subgraph
   mutable std::vector<Graph*> subgraphes_;
   // var name -> real var node
-  mutable std::unordered_map<std::string, Node*> real_vars_;
+  mutable std::unordered_map<std::string, std::vector<Node*>> real_vars_;
   // subgraph id -> all op nodes in subgraph
   mutable std::vector<std::vector<Node*>> all_op_nodes_;
   // op's unique type -> the op's origin type
@@ -93,7 +94,8 @@ class AutoMixedPrecisionPass : public FusePassBase {
 bool OpSupportPrecision(const std::string& op_type,
                         phi::Backend backend,
                         phi::DataType precision,
-                        const std::unordered_set<std::string>& black_list);
+                        const std::unordered_set<std::string>& black_list,
+                        const std::unordered_set<std::string>& white_list);
 
 void DoInsertCastOp(Graph* graph,
                     Node* var_node,

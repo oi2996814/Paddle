@@ -12,15 +12,47 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import unittest
 
 import numpy as np
+
+sys.path.append("../deprecated/legacy_test")
 from test_softmax_op import stable_softmax
 from test_softmax_with_cross_entropy_op import cross_entropy
 
 import paddle
-from paddle import fluid
-from paddle.fluid import Program, program_guard
+from paddle import base
+from paddle.base import Program, program_guard
+
+
+def label_smooth(label, C, epsilon, is_onehot=True):
+    """
+    Smooths the labels, commonly used in machine learning and deep learning to address label noise issues.
+
+    Args:
+        label: Labels, of type np.ndarray, with shape (batch_size, C)
+        C: Number of classes
+        epsilon: Smoothing factor, should be greater than or equal to 0 and less than or equal to 1
+        is_onehot: Whether the labels are in one-hot encoding, default is True
+
+    Returns:
+        smooth_labels: Smoothed labels, of type np.ndarray, with the same shape as label
+    """
+    assert epsilon >= 0.0 and epsilon <= 1.0, "epsilon should be in [0.0, 1.0]"
+    confidence = 1.0 - epsilon
+
+    # one-hot label
+    if label.shape[-1] == C and is_onehot is True:
+        smooth_labels = label * confidence + epsilon / C
+
+    # index label
+    else:
+        # Convert index labels to one-hot labels
+        eye_matrix = np.eye(C)
+        onehot_labels = eye_matrix[label]
+        smooth_labels = onehot_labels * confidence + epsilon / C
+    return smooth_labels.astype(np.float64)
 
 
 def log_softmax(x, axis=-1):
@@ -177,7 +209,7 @@ def cross_entropy_soft_2d(
 class CrossEntropyLoss(unittest.TestCase):
     def setUp(self):
         self.dtype = (
-            'float32' if fluid.core.is_compiled_with_rocm() else 'float64'
+            'float32' if base.core.is_compiled_with_rocm() else 'float64'
         )
 
     # test for deprecated softmax_with_cross_entropy
@@ -185,7 +217,7 @@ class CrossEntropyLoss(unittest.TestCase):
         self.numeric_stable_mode = False
         self.soft_label = True
         self.dtype = (
-            'float32' if fluid.core.is_compiled_with_rocm() else 'float64'
+            'float32' if base.core.is_compiled_with_rocm() else 'float64'
         )
         self.axis = -1
         self.ignore_index = -100  # should not be changed
@@ -219,20 +251,22 @@ class CrossEntropyLoss(unittest.TestCase):
 
         paddle.disable_static()
         paddle_loss_swce = paddle.nn.functional.softmax_with_cross_entropy(
-            fluid.dygraph.to_variable(self.logits),
-            fluid.dygraph.to_variable(self.labels),
+            paddle.to_tensor(self.logits),
+            paddle.to_tensor(self.labels),
             soft_label=True,
             axis=self.axis,
         )
 
         paddle_loss_ce = paddle.nn.functional.cross_entropy(
-            fluid.dygraph.to_variable(self.logits),
-            fluid.dygraph.to_variable(self.labels),
+            paddle.to_tensor(self.logits),
+            paddle.to_tensor(self.labels),
             soft_label=True,
             axis=self.axis,
-            weight=fluid.dygraph.to_variable(self.weight)
-            if self.weight is not None
-            else None,
+            weight=(
+                paddle.to_tensor(self.weight)
+                if self.weight is not None
+                else None
+            ),
             reduction=self.reduction,
         )
 
@@ -243,11 +277,12 @@ class CrossEntropyLoss(unittest.TestCase):
 
     # soft_label test start
     # soft_label test 1
+
     def test_cross_entropy_loss_soft_1d(self):
         self.numeric_stable_mode = False
         self.soft_label = True
         self.dtype = (
-            'float32' if fluid.core.is_compiled_with_rocm() else 'float64'
+            'float32' if base.core.is_compiled_with_rocm() else 'float64'
         )
         self.axis = -1
         self.ignore_index = -100  # should not be changed
@@ -282,27 +317,29 @@ class CrossEntropyLoss(unittest.TestCase):
         # 2. dygraph
         paddle.disable_static()
         paddle_loss_none_weight = paddle.nn.functional.cross_entropy(
-            fluid.dygraph.to_variable(self.logits),
-            fluid.dygraph.to_variable(self.labels),
+            paddle.to_tensor(self.logits),
+            paddle.to_tensor(self.labels),
             soft_label=True,
             axis=self.axis,
-            weight=fluid.dygraph.to_variable(self.weight)
-            if self.weight is not None
-            else None,
+            weight=(
+                paddle.to_tensor(self.weight)
+                if self.weight is not None
+                else None
+            ),
             reduction=self.reduction,
         )
         dy_ret_value = paddle_loss_none_weight.numpy()
 
         # 3. static
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[self.N, self.C], dtype=self.dtype
             )
@@ -315,7 +352,7 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             ret = cross_entropy_loss(input, label)
 
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -331,11 +368,12 @@ class CrossEntropyLoss(unittest.TestCase):
         np.testing.assert_allclose(dy_ret_value, expected, rtol=1e-05)
 
     # soft_label test 2
+
     def test_cross_entropy_loss_soft_1d_weight(self):
         self.numeric_stable_mode = False
         self.soft_label = True
         self.dtype = (
-            'float32' if fluid.core.is_compiled_with_rocm() else 'float64'
+            'float32' if base.core.is_compiled_with_rocm() else 'float64'
         )
         self.axis = -1
         self.ignore_index = -100  # should not be changed
@@ -380,25 +418,25 @@ class CrossEntropyLoss(unittest.TestCase):
         # 2. dygraph
         paddle.disable_static()
         paddle_loss_none_weight = paddle.nn.functional.cross_entropy(
-            fluid.dygraph.to_variable(self.logits),
-            fluid.dygraph.to_variable(self.labels),
+            paddle.to_tensor(self.logits),
+            paddle.to_tensor(self.labels),
             soft_label=True,
             axis=self.axis,
-            weight=fluid.dygraph.to_variable(self.weight),
+            weight=paddle.to_tensor(self.weight),
             reduction=self.reduction,
         )
         dy_ret_value = paddle_loss_none_weight.numpy()
 
         # 3.static
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[self.N, self.C], dtype=self.dtype
             )
@@ -414,7 +452,7 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             ret = cross_entropy_loss(input, label)
 
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -431,11 +469,12 @@ class CrossEntropyLoss(unittest.TestCase):
         np.testing.assert_allclose(dy_ret_value, expected, rtol=1e-05)
 
     # soft_label test 3
+
     def test_cross_entropy_loss_soft_1d_mean(self):
         self.numeric_stable_mode = False
         self.soft_label = True
         self.dtype = (
-            'float32' if fluid.core.is_compiled_with_rocm() else 'float64'
+            'float32' if base.core.is_compiled_with_rocm() else 'float64'
         )
         self.axis = -1
         self.ignore_index = -100  # should not be changed
@@ -471,8 +510,8 @@ class CrossEntropyLoss(unittest.TestCase):
         # 2 dygraph
         paddle.disable_static()
         paddle_loss_mean = paddle.nn.functional.cross_entropy(
-            fluid.dygraph.to_variable(self.logits),
-            fluid.dygraph.to_variable(self.labels),
+            paddle.to_tensor(self.logits),
+            paddle.to_tensor(self.labels),
             soft_label=True,
             axis=self.axis,
             weight=self.weight,
@@ -482,14 +521,14 @@ class CrossEntropyLoss(unittest.TestCase):
 
         # 3. static
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[self.N, self.C], dtype=self.dtype
             )
@@ -502,7 +541,7 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             ret = cross_entropy_loss(input, label)
 
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={'input': self.logits, 'label': self.labels},
@@ -515,11 +554,12 @@ class CrossEntropyLoss(unittest.TestCase):
         np.testing.assert_allclose(dy_ret_value, expected, rtol=1e-05)
 
     # soft_label test 4
+
     def test_cross_entropy_loss_soft_1d_weight_mean(self):
         self.numeric_stable_mode = False
         self.soft_label = True
         self.dtype = (
-            'float32' if fluid.core.is_compiled_with_rocm() else 'float64'
+            'float32' if base.core.is_compiled_with_rocm() else 'float64'
         )
         self.axis = -1
         self.ignore_index = -100  # should not be changed
@@ -555,25 +595,25 @@ class CrossEntropyLoss(unittest.TestCase):
 
         # 2. dygraph
         paddle_loss_none_weight = paddle.nn.functional.cross_entropy(
-            fluid.dygraph.to_variable(self.logits),
-            fluid.dygraph.to_variable(self.labels),
+            paddle.to_tensor(self.logits),
+            paddle.to_tensor(self.labels),
             soft_label=True,
             axis=self.axis,
-            weight=fluid.dygraph.to_variable(self.weight),
+            weight=paddle.to_tensor(self.weight),
             reduction=self.reduction,
         )
         dy_ret_value = paddle_loss_none_weight.numpy()
 
         # 3. static
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[self.N, self.C], dtype=self.dtype
             )
@@ -588,7 +628,7 @@ class CrossEntropyLoss(unittest.TestCase):
                 weight=weight, reduction=self.reduction, soft_label=True
             )
             ret = cross_entropy_loss(input, label)
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -605,12 +645,13 @@ class CrossEntropyLoss(unittest.TestCase):
         np.testing.assert_allclose(dy_ret_value, expected, rtol=1e-05)
 
     # soft_label test 5
+
     def test_cross_entropy_loss_soft_2d(self):
         def inner_cross_entropy_loss_soft_2d(soft_label):
             self.numeric_stable_mode = False
             self.soft_label = soft_label
             self.dtype = (
-                'float32' if fluid.core.is_compiled_with_rocm() else 'float64'
+                'float32' if base.core.is_compiled_with_rocm() else 'float64'
             )
             self.axis = -1
             self.ignore_index = -100  # should not be changed
@@ -654,27 +695,29 @@ class CrossEntropyLoss(unittest.TestCase):
 
             # 2. dygraph
             paddle_loss_none_weight = paddle.nn.functional.cross_entropy(
-                fluid.dygraph.to_variable(self.logits),
-                fluid.dygraph.to_variable(self.labels),
+                paddle.to_tensor(self.logits),
+                paddle.to_tensor(self.labels),
                 soft_label=True,
                 axis=self.axis,
-                weight=fluid.dygraph.to_variable(self.weight)
-                if self.weight is not None
-                else None,
+                weight=(
+                    paddle.to_tensor(self.weight)
+                    if self.weight is not None
+                    else None
+                ),
                 reduction=self.reduction,
             )
             dy_ret_value = paddle_loss_none_weight.numpy()
 
             # 3. static
             paddle.enable_static()
-            prog = fluid.Program()
-            startup_prog = fluid.Program()
+            prog = base.Program()
+            startup_prog = base.Program()
             place = (
-                fluid.CUDAPlace(0)
-                if fluid.core.is_compiled_with_cuda()
-                else fluid.CPUPlace()
+                base.CUDAPlace(0)
+                if base.core.is_compiled_with_cuda()
+                else base.CPUPlace()
             )
-            with fluid.program_guard(prog, startup_prog):
+            with base.program_guard(prog, startup_prog):
                 input = paddle.static.data(
                     name='input',
                     shape=[self.N, self.H, self.W, self.C],
@@ -690,7 +733,7 @@ class CrossEntropyLoss(unittest.TestCase):
                     reduction=self.reduction, soft_label=True
                 )
                 ret = cross_entropy_loss(input, label)
-                exe = fluid.Executor(place)
+                exe = base.Executor(place)
                 static_ret = exe.run(
                     prog,
                     feed={
@@ -710,11 +753,12 @@ class CrossEntropyLoss(unittest.TestCase):
         inner_cross_entropy_loss_soft_2d(False)
 
     # soft_label test 6
+
     def test_cross_entropy_loss_soft_2d_weight_mean(self):
         self.numeric_stable_mode = False
         self.soft_label = True
         self.dtype = (
-            'float32' if fluid.core.is_compiled_with_rocm() else 'float64'
+            'float32' if base.core.is_compiled_with_rocm() else 'float64'
         )
         self.axis = -1
         self.ignore_index = -100  # should not be changed
@@ -754,25 +798,25 @@ class CrossEntropyLoss(unittest.TestCase):
 
         # 2. dygraph
         paddle_loss_none_weight = paddle.nn.functional.cross_entropy(
-            fluid.dygraph.to_variable(self.logits),
-            fluid.dygraph.to_variable(self.labels),
+            paddle.to_tensor(self.logits),
+            paddle.to_tensor(self.labels),
             soft_label=True,
             axis=self.axis,
-            weight=fluid.dygraph.to_variable(self.weight),
+            weight=paddle.to_tensor(self.weight),
             reduction=self.reduction,
         )
         dy_ret_value = paddle_loss_none_weight.numpy()
 
         # 3. static
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input',
                 shape=[self.N, self.H, self.W, self.C],
@@ -791,7 +835,7 @@ class CrossEntropyLoss(unittest.TestCase):
                 weight=weight, reduction=self.reduction, soft_label=True
             )
             ret = cross_entropy_loss(input, label)
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -810,18 +854,867 @@ class CrossEntropyLoss(unittest.TestCase):
 
     # soft_label test end
 
+    # label_smoothing test 1
+
+    def test_cross_entropy_loss_onehot_label_smoothing_1d(self):
+        self.numeric_stable_mode = False
+        self.soft_label = True
+        self.label_smoothing = np.random.uniform(0.1, 1.0)
+        self.dtype = (
+            'float32' if base.core.is_compiled_with_rocm() else 'float64'
+        )
+        self.axis = -1
+        self.ignore_index = -100  # should not be changed
+        self.N = 4
+        self.C = 3
+        self.shape = [self.N, self.C]
+        self.use_softmax = True
+        self.reduction = 'none'
+        self.weight = None
+        self.logits = getattr(
+            self,
+            "logits",
+            np.random.uniform(0.1, 1.0, self.shape).astype(self.dtype),
+        )
+        softmax = np.apply_along_axis(stable_softmax, self.axis, self.logits)
+
+        self.labels = np.zeros(self.shape, dtype=self.dtype)
+        indices = np.random.randint(0, self.C, self.N)
+        self.labels[np.arange(self.N), indices] = 1.0
+        self.soft_labels = label_smooth(
+            self.labels, self.C, epsilon=self.label_smoothing
+        )
+
+        expected = cross_entropy_soft(
+            softmax,
+            self.soft_labels,
+            self.axis,
+            self.N,
+            weight=self.weight,
+            reduction=self.reduction,
+            ignore_index=self.ignore_index,
+        )
+
+        paddle.set_device("cpu")
+
+        # 2. dygraph
+        paddle.disable_static()
+        paddle_loss_none_weight = paddle.nn.functional.cross_entropy(
+            paddle.to_tensor(self.logits),
+            paddle.to_tensor(self.labels),
+            soft_label=True,
+            label_smoothing=self.label_smoothing,
+            axis=self.axis,
+            weight=(
+                paddle.to_tensor(self.weight)
+                if self.weight is not None
+                else None
+            ),
+            reduction=self.reduction,
+        )
+        dy_ret_value = paddle_loss_none_weight.numpy()
+
+        # 3. static
+        paddle.enable_static()
+        prog = base.Program()
+        startup_prog = base.Program()
+        place = (
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
+        )
+        with base.program_guard(prog, startup_prog):
+            input = paddle.static.data(
+                name='input', shape=[self.N, self.C], dtype=self.dtype
+            )
+            label = paddle.static.data(
+                name='label', shape=[self.N, self.C], dtype=self.dtype
+            )
+
+            cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
+                reduction=self.reduction,
+                soft_label=True,
+                label_smoothing=self.label_smoothing,
+            )
+            ret = cross_entropy_loss(input, label)
+
+            exe = base.Executor(place)
+            static_ret = exe.run(
+                prog,
+                feed={
+                    'input': self.logits,
+                    'label': self.labels,
+                },
+                fetch_list=[ret],
+            )
+            self.assertIsNotNone(static_ret)
+        paddle.disable_static()
+
+        np.testing.assert_allclose(static_ret[0], expected, rtol=1e-05)
+        np.testing.assert_allclose(dy_ret_value, expected, rtol=1e-05)
+        paddle.enable_static()
+
+    # label_smoothing test 2
+
+    def test_cross_entropy_loss_onehot_label_smoothing_1d_weight_mean(self):
+        self.numeric_stable_mode = False
+        self.soft_label = True
+        self.label_smoothing = np.random.uniform(0.1, 1.0)
+        self.dtype = (
+            'float32' if base.core.is_compiled_with_rocm() else 'float64'
+        )
+        self.axis = -1
+        self.ignore_index = -100  # should not be changed
+        self.N = 4
+        self.C = 3
+        self.shape = [self.N, self.C]
+        self.use_softmax = True
+        self.reduction = 'mean'
+        self.weight = np.random.uniform(0.1, 1.0, self.C).astype(self.dtype)
+        self.logits = getattr(
+            self,
+            "logits",
+            np.random.uniform(0.1, 1.0, self.shape).astype(self.dtype),
+        )
+        softmax = np.apply_along_axis(stable_softmax, self.axis, self.logits)
+
+        self.labels = np.zeros(self.shape, dtype=self.dtype)
+        indices = np.random.randint(0, self.C, self.N)
+        self.labels[np.arange(self.N), indices] = 1.0
+        self.soft_labels = label_smooth(
+            self.labels, self.C, epsilon=self.label_smoothing
+        )
+
+        # 1. numpy
+        expected = cross_entropy_soft(
+            softmax,
+            self.soft_labels,
+            self.axis,
+            self.N,
+            weight=self.weight,
+            reduction=self.reduction,
+            ignore_index=self.ignore_index,
+        )
+
+        paddle.set_device("cpu")
+        paddle.disable_static()
+
+        # 2. dygraph
+        paddle_loss_none_weight = paddle.nn.functional.cross_entropy(
+            paddle.to_tensor(self.logits),
+            paddle.to_tensor(self.labels),
+            soft_label=True,
+            label_smoothing=self.label_smoothing,
+            axis=self.axis,
+            weight=paddle.to_tensor(self.weight),
+            reduction=self.reduction,
+        )
+        dy_ret_value = paddle_loss_none_weight.numpy()
+
+        # 3. static
+        paddle.enable_static()
+        prog = base.Program()
+        startup_prog = base.Program()
+        place = (
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
+        )
+        with base.program_guard(prog, startup_prog):
+            input = paddle.static.data(
+                name='input', shape=[self.N, self.C], dtype=self.dtype
+            )
+            label = paddle.static.data(
+                name='label', shape=[self.N, self.C], dtype=self.dtype
+            )
+            weight = paddle.static.data(
+                name='weight', shape=[self.C], dtype=self.dtype
+            )
+
+            cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
+                weight=weight,
+                reduction=self.reduction,
+                soft_label=True,
+                label_smoothing=self.label_smoothing,
+            )
+            ret = cross_entropy_loss(input, label)
+            exe = base.Executor(place)
+            static_ret = exe.run(
+                prog,
+                feed={
+                    'input': self.logits,
+                    'label': self.labels,
+                    "weight": self.weight,
+                },
+                fetch_list=[ret],
+            )
+            self.assertIsNotNone(static_ret)
+        paddle.disable_static()
+
+        np.testing.assert_allclose(static_ret[0], expected, rtol=1e-05)
+        np.testing.assert_allclose(dy_ret_value, expected, rtol=1e-05)
+
+    # label_smoothing test 3
+
+    def test_cross_entropy_loss_onehot_label_smoothing_2d(self):
+        self.numeric_stable_mode = False
+        self.soft_label = True
+        self.label_smoothing = np.random.uniform(0.1, 1.0)
+        self.dtype = (
+            'float32' if base.core.is_compiled_with_rocm() else 'float64'
+        )
+        self.axis = -1
+        self.ignore_index = -100  # should not be changed
+        self.N = 3
+        self.H = 2
+        self.W = 2
+        self.C = 5
+        self.shape = [self.N, self.H, self.W, self.C]
+        self.use_softmax = True
+        self.reduction = 'none'
+        self.weight = None
+        self.logits = getattr(
+            self,
+            "logits",
+            np.random.uniform(0.1, 1.0, self.shape).astype(self.dtype),
+        )
+        softmax = np.apply_along_axis(stable_softmax, self.axis, self.logits)
+
+        self.labels = np.zeros(self.shape, dtype=self.dtype)
+        indices = np.random.randint(0, self.C, self.shape[:-1])
+        for i in range(self.N):
+            self.labels[i, np.arange(self.H), np.arange(self.W), indices[i]] = (
+                1.0
+            )
+        self.soft_labels = label_smooth(
+            self.labels, self.C, epsilon=self.label_smoothing
+        )
+
+        # 1. numpy
+        expected = cross_entropy_soft_2d(
+            softmax,
+            self.soft_labels,
+            self.axis,
+            self.N,
+            self.H,
+            self.W,
+            weight=self.weight,
+            reduction=self.reduction,
+            ignore_index=self.ignore_index,
+        )
+
+        paddle.set_device("cpu")
+        paddle.disable_static()
+
+        # 2. dygraph
+        paddle_loss_none_weight = paddle.nn.functional.cross_entropy(
+            paddle.to_tensor(self.logits),
+            paddle.to_tensor(self.labels),
+            soft_label=True,
+            label_smoothing=self.label_smoothing,
+            axis=self.axis,
+            weight=(
+                paddle.to_tensor(self.weight)
+                if self.weight is not None
+                else None
+            ),
+            reduction=self.reduction,
+        )
+        dy_ret_value = paddle_loss_none_weight.numpy()
+
+        # 3. static
+        paddle.enable_static()
+        prog = base.Program()
+        startup_prog = base.Program()
+        place = (
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
+        )
+        with base.program_guard(prog, startup_prog):
+            input = paddle.static.data(
+                name='input',
+                shape=[self.N, self.H, self.W, self.C],
+                dtype=self.dtype,
+            )
+            label = paddle.static.data(
+                name='label',
+                shape=[self.N, self.H, self.W, self.C],
+                dtype=self.dtype,
+            )
+
+            cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
+                reduction=self.reduction,
+                soft_label=True,
+                label_smoothing=self.label_smoothing,
+            )
+            ret = cross_entropy_loss(input, label)
+            exe = base.Executor(place)
+            static_ret = exe.run(
+                prog,
+                feed={
+                    'input': self.logits,
+                    'label': self.labels,
+                },
+                fetch_list=[ret],
+            )
+            self.assertIsNotNone(static_ret)
+        paddle.disable_static()
+
+        np.testing.assert_allclose(static_ret[0], expected, rtol=1e-05)
+        np.testing.assert_allclose(dy_ret_value, expected, rtol=1e-05)
+
+    # label_smoothing test 4
+
+    def test_cross_entropy_loss_onehot_label_smoothing_2d_weight_mean(self):
+        self.numeric_stable_mode = False
+        self.soft_label = True
+        self.label_smoothing = np.random.uniform(0.1, 1.0)
+        self.dtype = (
+            'float32' if base.core.is_compiled_with_rocm() else 'float64'
+        )
+        self.axis = -1
+        self.ignore_index = -100  # should not be changed
+        self.N = 3
+        self.H = 2
+        self.W = 2
+        self.C = 5
+        self.shape = [self.N, self.H, self.W, self.C]
+        self.use_softmax = True
+        self.reduction = 'mean'
+        self.weight = np.random.uniform(0.1, 1.0, self.C).astype(self.dtype)
+        self.logits = getattr(
+            self,
+            "logits",
+            np.random.uniform(0.1, 1.0, self.shape).astype(self.dtype),
+        )
+        softmax = np.apply_along_axis(stable_softmax, self.axis, self.logits)
+
+        self.labels = np.zeros(self.shape, dtype=self.dtype)
+        indices = np.random.randint(0, self.C, self.shape[:-1])
+        for i in range(self.N):
+            self.labels[i, np.arange(self.H), np.arange(self.W), indices[i]] = (
+                1.0
+            )
+        self.soft_labels = label_smooth(
+            self.labels, self.C, epsilon=self.label_smoothing
+        )
+
+        # 1. numpy
+        expected = cross_entropy_soft_2d(
+            softmax,
+            self.soft_labels,
+            self.axis,
+            self.N,
+            self.H,
+            self.W,
+            weight=self.weight,
+            reduction=self.reduction,
+            ignore_index=self.ignore_index,
+        )
+
+        paddle.set_device("cpu")
+        paddle.disable_static()
+
+        # 2. dygraph
+        paddle_loss_none_weight = paddle.nn.functional.cross_entropy(
+            paddle.to_tensor(self.logits),
+            paddle.to_tensor(self.labels),
+            soft_label=True,
+            label_smoothing=self.label_smoothing,
+            axis=self.axis,
+            weight=paddle.to_tensor(self.weight),
+            reduction=self.reduction,
+        )
+        dy_ret_value = paddle_loss_none_weight.numpy()
+
+        # 3. static
+        paddle.enable_static()
+        prog = base.Program()
+        startup_prog = base.Program()
+        place = (
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
+        )
+        with base.program_guard(prog, startup_prog):
+            input = paddle.static.data(
+                name='input',
+                shape=[self.N, self.H, self.W, self.C],
+                dtype=self.dtype,
+            )
+            label = paddle.static.data(
+                name='label',
+                shape=[self.N, self.H, self.W, self.C],
+                dtype=self.dtype,
+            )
+            weight = paddle.static.data(
+                name='weight', shape=[self.C], dtype=self.dtype
+            )
+
+            cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
+                weight=weight,
+                reduction=self.reduction,
+                soft_label=True,
+                label_smoothing=self.label_smoothing,
+            )
+            ret = cross_entropy_loss(input, label)
+            exe = base.Executor(place)
+            static_ret = exe.run(
+                prog,
+                feed={
+                    'input': self.logits,
+                    'label': self.labels,
+                    "weight": self.weight,
+                },
+                fetch_list=[ret],
+            )
+            self.assertIsNotNone(static_ret)
+        paddle.disable_static()
+
+        np.testing.assert_allclose(static_ret[0], expected, rtol=1e-05)
+        np.testing.assert_allclose(dy_ret_value, expected, rtol=1e-05)
+
+    # label_smoothing test 5
+
+    def test_cross_entropy_loss_integer_label_smoothing_1d(self):
+        self.numeric_stable_mode = False
+        self.soft_label = True
+        self.label_smoothing = np.random.uniform(0.1, 1.0)
+        self.input_dtype = (
+            'float32' if base.core.is_compiled_with_rocm() else 'float64'
+        )
+        self.label_dtype = 'int64'
+        self.axis = -1
+        self.ignore_index = -100  # should not be changed
+        self.N = 4
+        self.C = 3
+        self.shape = [self.N, self.C]
+        self.use_softmax = True
+        self.reduction = 'none'
+        self.weight = None
+        self.logits = getattr(
+            self,
+            "logits",
+            np.random.uniform(0.1, 1.0, self.shape).astype(self.input_dtype),
+        )
+        softmax = np.apply_along_axis(stable_softmax, self.axis, self.logits)
+        self.labels = np.random.randint(0, self.C, size=self.N, dtype=np.int64)
+        self.soft_labels = label_smooth(
+            self.labels,
+            self.C,
+            epsilon=self.label_smoothing,
+            is_onehot=False,
+        )
+
+        expected = cross_entropy_soft(
+            softmax,
+            self.soft_labels,
+            self.axis,
+            self.N,
+            weight=self.weight,
+            reduction=self.reduction,
+            ignore_index=self.ignore_index,
+        )
+
+        paddle.set_device("cpu")
+
+        # 2. dygraph
+        paddle.disable_static()
+        paddle_loss_none_weight = paddle.nn.functional.cross_entropy(
+            paddle.to_tensor(self.logits),
+            paddle.to_tensor(self.labels),
+            soft_label=self.soft_label,
+            label_smoothing=self.label_smoothing,
+            axis=self.axis,
+            weight=(
+                paddle.to_tensor(self.weight)
+                if self.weight is not None
+                else None
+            ),
+            reduction=self.reduction,
+        )
+        dy_ret_value = paddle_loss_none_weight.numpy()
+
+        # 3. static
+        paddle.enable_static()
+        prog = base.Program()
+        startup_prog = base.Program()
+        place = (
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
+        )
+        with base.program_guard(prog, startup_prog):
+            input = paddle.static.data(
+                name='input', shape=[self.N, self.C], dtype=self.input_dtype
+            )
+            label = paddle.static.data(
+                name='label', shape=[self.N], dtype=self.label_dtype
+            )
+
+            cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
+                reduction=self.reduction,
+                soft_label=True,
+                label_smoothing=self.label_smoothing,
+            )
+            ret = cross_entropy_loss(input, label)
+
+            exe = base.Executor(place)
+            static_ret = exe.run(
+                prog,
+                feed={
+                    'input': self.logits,
+                    'label': self.labels,
+                },
+                fetch_list=[ret],
+            )
+            self.assertIsNotNone(static_ret)
+        paddle.disable_static()
+
+        np.testing.assert_allclose(static_ret[0], expected, rtol=1e-05)
+        np.testing.assert_allclose(dy_ret_value, expected, rtol=1e-05)
+
+    # label_smoothing test 6
+
+    def test_cross_entropy_loss_integer_label_smoothing_1d_weight_mean(self):
+        self.numeric_stable_mode = False
+        self.soft_label = True
+        self.label_smoothing = np.random.uniform(0.1, 1.0)
+        self.input_dtype = (
+            'float32' if base.core.is_compiled_with_rocm() else 'float64'
+        )
+        self.label_dtype = 'int64'
+        self.axis = -1
+        self.ignore_index = -100  # should not be changed
+        self.N = 4
+        self.C = 3
+        self.shape = [self.N, self.C]
+        self.use_softmax = True
+        self.reduction = 'mean'
+        self.weight = np.random.uniform(0.1, 1.0, self.C).astype(self.dtype)
+        self.logits = getattr(
+            self,
+            "logits",
+            np.random.uniform(0.1, 1.0, self.shape).astype(self.input_dtype),
+        )
+        softmax = np.apply_along_axis(stable_softmax, self.axis, self.logits)
+        self.labels = np.random.randint(0, self.C, size=self.N, dtype=np.int64)
+        self.soft_labels = label_smooth(
+            self.labels,
+            self.C,
+            epsilon=self.label_smoothing,
+            is_onehot=False,
+        )
+
+        expected = cross_entropy_soft(
+            softmax,
+            self.soft_labels,
+            self.axis,
+            self.N,
+            weight=self.weight,
+            reduction=self.reduction,
+            ignore_index=self.ignore_index,
+        )
+
+        paddle.set_device("cpu")
+
+        # 2. dygraph
+        paddle.disable_static()
+        paddle_loss_none_weight = paddle.nn.functional.cross_entropy(
+            paddle.to_tensor(self.logits),
+            paddle.to_tensor(self.labels),
+            soft_label=self.soft_label,
+            label_smoothing=self.label_smoothing,
+            axis=self.axis,
+            weight=(
+                paddle.to_tensor(self.weight)
+                if self.weight is not None
+                else None
+            ),
+            reduction=self.reduction,
+        )
+        dy_ret_value = paddle_loss_none_weight.numpy()
+
+        # 3. static
+        paddle.enable_static()
+        prog = base.Program()
+        startup_prog = base.Program()
+        place = (
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
+        )
+        with base.program_guard(prog, startup_prog):
+            input = paddle.static.data(
+                name='input', shape=[self.N, self.C], dtype=self.input_dtype
+            )
+            label = paddle.static.data(
+                name='label', shape=[self.N], dtype=self.label_dtype
+            )
+            weight = paddle.static.data(
+                name='weight', shape=[self.C], dtype=self.dtype
+            )
+
+            cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
+                weight=weight,
+                reduction=self.reduction,
+                soft_label=True,
+                label_smoothing=self.label_smoothing,
+            )
+            ret = cross_entropy_loss(input, label)
+
+            exe = base.Executor(place)
+            static_ret = exe.run(
+                prog,
+                feed={
+                    'input': self.logits,
+                    'label': self.labels,
+                    'weight': self.weight,
+                },
+                fetch_list=[ret],
+            )
+            self.assertIsNotNone(static_ret)
+        paddle.disable_static()
+
+        np.testing.assert_allclose(static_ret[0], expected, rtol=1e-05)
+        np.testing.assert_allclose(dy_ret_value, expected, rtol=1e-05)
+
+    # label_smoothing test 7
+
+    def test_cross_entropy_loss_integer_label_smoothing_2d(self):
+        self.numeric_stable_mode = False
+        self.soft_label = True
+        self.label_smoothing = np.random.uniform(0.1, 1.0)
+        self.input_dtype = (
+            'float32' if base.core.is_compiled_with_rocm() else 'float64'
+        )
+        self.label_dtype = 'int64'
+        self.axis = -1
+        self.ignore_index = -100  # should not be changed
+        self.N = 3
+        self.H = 2
+        self.W = 2
+        self.C = 5
+        self.shape = [self.N, self.H, self.W, self.C]
+        self.use_softmax = True
+        self.reduction = 'none'
+        self.weight = None
+        self.logits = getattr(
+            self,
+            "logits",
+            np.random.uniform(0.1, 1.0, self.shape).astype(self.input_dtype),
+        )
+        softmax = np.apply_along_axis(stable_softmax, self.axis, self.logits)
+
+        self.labels = np.random.randint(0, self.C, self.shape[:-1]).astype(
+            self.label_dtype
+        )
+        self.soft_labels = label_smooth(
+            self.labels, self.C, epsilon=self.label_smoothing, is_onehot=False
+        )
+
+        # 1. numpy
+        expected = cross_entropy_soft_2d(
+            softmax,
+            self.soft_labels,
+            self.axis,
+            self.N,
+            self.H,
+            self.W,
+            weight=self.weight,
+            reduction=self.reduction,
+            ignore_index=self.ignore_index,
+        )
+
+        paddle.set_device("cpu")
+        paddle.disable_static()
+
+        # 2. dygraph
+        paddle_loss_none_weight = paddle.nn.functional.cross_entropy(
+            paddle.to_tensor(self.logits),
+            paddle.to_tensor(self.labels),
+            soft_label=True,
+            label_smoothing=self.label_smoothing,
+            axis=self.axis,
+            weight=(
+                paddle.to_tensor(self.weight)
+                if self.weight is not None
+                else None
+            ),
+            reduction=self.reduction,
+        )
+        dy_ret_value = paddle_loss_none_weight.numpy()
+
+        # 3. static
+        paddle.enable_static()
+        prog = base.Program()
+        startup_prog = base.Program()
+        place = (
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
+        )
+        with base.program_guard(prog, startup_prog):
+            input = paddle.static.data(
+                name='input',
+                shape=[self.N, self.H, self.W, self.C],
+                dtype=self.input_dtype,
+            )
+            label = paddle.static.data(
+                name='label',
+                shape=[self.N, self.H, self.W],
+                dtype=self.label_dtype,
+            )
+
+            cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
+                reduction=self.reduction,
+                soft_label=True,
+                label_smoothing=self.label_smoothing,
+            )
+            ret = cross_entropy_loss(input, label)
+            exe = base.Executor(place)
+            static_ret = exe.run(
+                prog,
+                feed={
+                    'input': self.logits,
+                    'label': self.labels,
+                },
+                fetch_list=[ret],
+            )
+            self.assertIsNotNone(static_ret)
+        paddle.disable_static()
+
+        np.testing.assert_allclose(static_ret[0], expected, rtol=1e-05)
+        np.testing.assert_allclose(dy_ret_value, expected, rtol=1e-05)
+
+    # label_smoothing test 8
+
+    def test_cross_entropy_loss_integer_label_smoothing_2d_weight_mean(self):
+        self.numeric_stable_mode = False
+        self.soft_label = True
+        self.label_smoothing = np.random.uniform(0.1, 1.0)
+        self.input_dtype = (
+            'float32' if base.core.is_compiled_with_rocm() else 'float64'
+        )
+        self.label_dtype = 'int64'
+        self.axis = -1
+        self.ignore_index = -100  # should not be changed
+        self.N = 3
+        self.H = 2
+        self.W = 2
+        self.C = 5
+        self.shape = [self.N, self.H, self.W, self.C]
+        self.use_softmax = True
+        self.reduction = 'mean'
+        self.weight = np.random.uniform(0.1, 1.0, self.C).astype(self.dtype)
+        self.logits = getattr(
+            self,
+            "logits",
+            np.random.uniform(0.1, 1.0, self.shape).astype(self.input_dtype),
+        )
+        softmax = np.apply_along_axis(stable_softmax, self.axis, self.logits)
+
+        self.labels = np.random.randint(0, self.C, self.shape[:-1]).astype(
+            self.label_dtype
+        )
+        self.soft_labels = label_smooth(
+            self.labels, self.C, epsilon=self.label_smoothing, is_onehot=False
+        )
+
+        # 1. numpy
+        expected = cross_entropy_soft_2d(
+            softmax,
+            self.soft_labels,
+            self.axis,
+            self.N,
+            self.H,
+            self.W,
+            weight=self.weight,
+            reduction=self.reduction,
+            ignore_index=self.ignore_index,
+        )
+
+        paddle.set_device("cpu")
+        paddle.disable_static()
+
+        # 2. dygraph
+        paddle_loss_none_weight = paddle.nn.functional.cross_entropy(
+            paddle.to_tensor(self.logits),
+            paddle.to_tensor(self.labels),
+            soft_label=True,
+            label_smoothing=self.label_smoothing,
+            axis=self.axis,
+            weight=(
+                paddle.to_tensor(self.weight)
+                if self.weight is not None
+                else None
+            ),
+            reduction=self.reduction,
+        )
+        dy_ret_value = paddle_loss_none_weight.numpy()
+
+        # 3. static
+        paddle.enable_static()
+        prog = base.Program()
+        startup_prog = base.Program()
+        place = (
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
+        )
+        with base.program_guard(prog, startup_prog):
+            input = paddle.static.data(
+                name='input',
+                shape=[self.N, self.H, self.W, self.C],
+                dtype=self.input_dtype,
+            )
+            label = paddle.static.data(
+                name='label',
+                shape=[self.N, self.H, self.W],
+                dtype=self.label_dtype,
+            )
+            weight = paddle.static.data(
+                name='weight', shape=[self.C], dtype=self.dtype
+            )
+
+            cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
+                weight=weight,
+                reduction=self.reduction,
+                soft_label=True,
+                label_smoothing=self.label_smoothing,
+            )
+            ret = cross_entropy_loss(input, label)
+            exe = base.Executor(place)
+            static_ret = exe.run(
+                prog,
+                feed={
+                    'input': self.logits,
+                    'label': self.labels,
+                    'weight': self.weight,
+                },
+                fetch_list=[ret],
+            )
+            self.assertIsNotNone(static_ret)
+        paddle.disable_static()
+
+        np.testing.assert_allclose(static_ret[0], expected, rtol=1e-05)
+        np.testing.assert_allclose(dy_ret_value, expected, rtol=1e-05)
+
+    # label_smoothing test end
+
     def test_cross_entropy_loss_1d_with_mean_ignore(self):
         input_np = np.random.random([2, 4]).astype(self.dtype)
         label_np = np.random.randint(0, 4, size=(2)).astype(np.int64)
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[2, 4], dtype=self.dtype
             )
@@ -829,7 +1722,7 @@ class CrossEntropyLoss(unittest.TestCase):
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(ignore_index=0)
             ret = cross_entropy_loss(input, label)
 
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -841,13 +1734,13 @@ class CrossEntropyLoss(unittest.TestCase):
             self.assertIsNotNone(static_ret)
         expected = cross_entropy_loss_1d(input_np, label_np)[0]
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
                 axis=1, ignore_index=0
             )
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             self.assertIsNotNone(dy_ret_value)
@@ -862,14 +1755,14 @@ class CrossEntropyLoss(unittest.TestCase):
         input_np = np.random.random([N, C]).astype(self.dtype)
         label_np = -np.ones(N).astype(np.int64)
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[N, C], dtype=self.dtype
             )
@@ -878,7 +1771,7 @@ class CrossEntropyLoss(unittest.TestCase):
                 ignore_index=-1
             )
             ret = cross_entropy_loss(input, label)
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -889,13 +1782,13 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             self.assertIsNotNone(static_ret)
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
                 axis=1, ignore_index=-1
             )
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             self.assertIsNotNone(dy_ret_value)
@@ -912,14 +1805,14 @@ class CrossEntropyLoss(unittest.TestCase):
         label_np = np.random.randint(0, C, size=(N)).astype(np.int64)
         weight_np = np.random.random([C]).astype(self.dtype)
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[N, C], dtype=self.dtype
             )
@@ -932,7 +1825,7 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             ret = cross_entropy_loss(input, label)
 
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -944,15 +1837,15 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             self.assertIsNotNone(static_ret)
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
-                weight=fluid.dygraph.to_variable(weight_np),
+                weight=paddle.to_tensor(weight_np),
                 axis=1,
                 ignore_index=0,
             )
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             self.assertIsNotNone(dy_ret_value)
@@ -972,13 +1865,13 @@ class CrossEntropyLoss(unittest.TestCase):
         label_np[0] = 255
         weight_np = np.random.random([C]).astype(self.dtype)
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
-                weight=fluid.dygraph.to_variable(weight_np), ignore_index=255
+                weight=paddle.to_tensor(weight_np), ignore_index=255
             )
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             self.assertIsNotNone(dy_ret_value)
@@ -993,14 +1886,14 @@ class CrossEntropyLoss(unittest.TestCase):
         label_np = np.random.randint(0, 4, size=(2)).astype(np.int64)
         weight_np = np.random.random([4]).astype(self.dtype)  # shape:C
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[2, 4], dtype=self.dtype
             )
@@ -1011,7 +1904,7 @@ class CrossEntropyLoss(unittest.TestCase):
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(weight=weight)
             ret = cross_entropy_loss(input, label)
 
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -1026,13 +1919,13 @@ class CrossEntropyLoss(unittest.TestCase):
             0
         ]
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
-                weight=fluid.dygraph.to_variable(weight_np), axis=1
+                weight=paddle.to_tensor(weight_np), axis=1
             )
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             self.assertIsNotNone(dy_ret_value)
@@ -1048,14 +1941,14 @@ class CrossEntropyLoss(unittest.TestCase):
         label_np = np.random.randint(0, 100, size=(100)).astype(np.int64)  # N,1
         weight_np = np.random.random([200]).astype(self.dtype)  # C
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[100, 200], dtype=self.dtype
             )
@@ -1068,7 +1961,7 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             ret = cross_entropy_loss(input, label)
 
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -1079,13 +1972,13 @@ class CrossEntropyLoss(unittest.TestCase):
                 fetch_list=[ret],
             )
             self.assertIsNotNone(static_ret)
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
-                weight=fluid.dygraph.to_variable(weight_np), reduction='sum'
+                weight=paddle.to_tensor(weight_np), reduction='sum'
             )
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             self.assertIsNotNone(dy_ret_value)
@@ -1102,14 +1995,14 @@ class CrossEntropyLoss(unittest.TestCase):
         weight_np = np.random.random([200]).astype(self.dtype)  # C
 
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[100, 200], dtype=self.dtype
             )
@@ -1123,7 +2016,7 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             ret = cross_entropy_loss(input, label)
 
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -1135,13 +2028,13 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             static_ret = np.squeeze(static_ret)
             self.assertIsNotNone(static_ret)
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
-                weight=fluid.dygraph.to_variable(weight_np), reduction='none'
+                weight=paddle.to_tensor(weight_np), reduction='none'
             )
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             dy_ret_value = np.squeeze(dy_ret_value)
@@ -1158,14 +2051,14 @@ class CrossEntropyLoss(unittest.TestCase):
         label_np = np.random.randint(0, 100, size=(100)).astype(np.int64)  # N
         weight_np = np.random.random([200]).astype(self.dtype)  # C
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[100, 200], dtype=self.dtype
             )
@@ -1177,7 +2070,7 @@ class CrossEntropyLoss(unittest.TestCase):
                 input, label, weight=weight, reduction='none'
             )
 
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -1189,11 +2082,11 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             static_ret = np.squeeze(static_ret)
             self.assertIsNotNone(static_ret)
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             dy_ret = paddle.nn.functional.cross_entropy(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
-                weight=fluid.dygraph.to_variable(weight_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
+                weight=paddle.to_tensor(weight_np),
                 reduction='none',
             )
             dy_ret_value = dy_ret.numpy()
@@ -1210,32 +2103,32 @@ class CrossEntropyLoss(unittest.TestCase):
         input_np = np.random.random([100, 200]).astype(self.dtype)  # N,C
         label_np = np.random.randint(0, 100, size=(100)).astype(np.int64)  # N,1
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[100, 200], dtype=self.dtype
             )
             label = paddle.static.data(name='label', shape=[100], dtype='int64')
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss()
             ret = cross_entropy_loss(input, label)
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={'input': input_np, 'label': label_np},
                 fetch_list=[ret],
             )
             self.assertIsNotNone(static_ret)
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss()
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             self.assertIsNotNone(dy_ret_value)
@@ -1248,14 +2141,14 @@ class CrossEntropyLoss(unittest.TestCase):
         input_np = np.random.random([100, 200]).astype(self.dtype)  # N,C
         label_np = np.random.randint(0, 100, size=(100)).astype(np.int64)  # N,1
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[100, 200], dtype=self.dtype
             )
@@ -1264,20 +2157,20 @@ class CrossEntropyLoss(unittest.TestCase):
                 reduction='sum'
             )
             ret = cross_entropy_loss(input, label)
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={'input': input_np, 'label': label_np},
                 fetch_list=[ret],
             )
             self.assertIsNotNone(static_ret)
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
                 reduction='sum'
             )
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             self.assertIsNotNone(dy_ret_value)
@@ -1290,14 +2183,14 @@ class CrossEntropyLoss(unittest.TestCase):
         input_np = np.random.random([100, 200]).astype(self.dtype)  # N,C
         label_np = np.random.randint(0, 100, size=(100)).astype(np.int64)  # N,1
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[100, 200], dtype=self.dtype
             )
@@ -1306,7 +2199,7 @@ class CrossEntropyLoss(unittest.TestCase):
                 reduction='none'
             )
             ret = cross_entropy_loss(input, label)
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={'input': input_np, 'label': label_np},
@@ -1314,13 +2207,13 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             static_ret = np.squeeze(static_ret)
             self.assertIsNotNone(static_ret)
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
                 reduction='none'
             )
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             dy_ret_value = np.squeeze(dy_ret_value)
@@ -1340,14 +2233,14 @@ class CrossEntropyLoss(unittest.TestCase):
         weight_np = np.random.random(size=(3,)).astype(self.dtype)  # C
 
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[2, 2, 2, 3], dtype=self.dtype
             )
@@ -1362,7 +2255,7 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             ret = cross_entropy_loss(input, label)
 
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -1374,13 +2267,13 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             static_ret = np.squeeze(static_ret)
             self.assertIsNotNone(static_ret)
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
-                weight=fluid.dygraph.to_variable(weight_np), reduction='none'
+                weight=paddle.to_tensor(weight_np), reduction='none'
             )
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             dy_ret_value = np.squeeze(dy_ret_value)
@@ -1402,14 +2295,14 @@ class CrossEntropyLoss(unittest.TestCase):
         weight_np = np.random.random(size=(3,)).astype(self.dtype)  # C
 
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[2, 3, 2, 2], dtype=self.dtype
             )
@@ -1425,7 +2318,7 @@ class CrossEntropyLoss(unittest.TestCase):
             # specify the class channels to axis 1
             ret = cross_entropy_loss(input, label)
 
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -1437,15 +2330,15 @@ class CrossEntropyLoss(unittest.TestCase):
             )
 
             self.assertIsNotNone(static_ret)
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
-                weight=fluid.dygraph.to_variable(weight_np),
+                weight=paddle.to_tensor(weight_np),
                 reduction='mean',
                 axis=1,
             )
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             self.assertIsNotNone(dy_ret_value)
@@ -1468,13 +2361,13 @@ class CrossEntropyLoss(unittest.TestCase):
         label_np = np.random.randint(0, C, size=(N, H, W)).astype(np.int64)
         label_np[0, 0, 0] = 255
         weight_np = np.random.random([C]).astype(self.dtype)
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
-                weight=fluid.dygraph.to_variable(weight_np), ignore_index=255
+                weight=paddle.to_tensor(weight_np), ignore_index=255
             )
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             self.assertIsNotNone(dy_ret_value)
@@ -1492,14 +2385,14 @@ class CrossEntropyLoss(unittest.TestCase):
         )  # NHW
         weight_np = np.random.random(size=(3,)).astype(self.dtype)  # C
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[2, 2, 2, 3], dtype=self.dtype
             )
@@ -1514,7 +2407,7 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             ret = cross_entropy_loss(input, label)
 
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -1525,13 +2418,13 @@ class CrossEntropyLoss(unittest.TestCase):
                 fetch_list=[ret],
             )
             self.assertIsNotNone(static_ret)
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
-                weight=fluid.dygraph.to_variable(weight_np), reduction='mean'
+                weight=paddle.to_tensor(weight_np), reduction='mean'
             )
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             self.assertIsNotNone(dy_ret_value)
@@ -1552,14 +2445,14 @@ class CrossEntropyLoss(unittest.TestCase):
         weight_np = np.random.random(size=(3,)).astype(self.dtype)  # C
         paddle.enable_static()
 
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[2, 2, 2, 3], dtype=self.dtype
             )
@@ -1574,7 +2467,7 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             ret = cross_entropy_loss(input, label)
 
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -1585,13 +2478,13 @@ class CrossEntropyLoss(unittest.TestCase):
                 fetch_list=[ret],
             )
             self.assertIsNotNone(static_ret)
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
-                weight=fluid.dygraph.to_variable(weight_np), reduction='sum'
+                weight=paddle.to_tensor(weight_np), reduction='sum'
             )
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             self.assertIsNotNone(dy_ret_value)
@@ -1610,14 +2503,14 @@ class CrossEntropyLoss(unittest.TestCase):
             np.int64
         )  # NHW
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[2, 2, 2, 3], dtype=self.dtype
             )
@@ -1628,7 +2521,7 @@ class CrossEntropyLoss(unittest.TestCase):
                 reduction='none'
             )
             ret = cross_entropy_loss(input, label)
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -1639,13 +2532,13 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             static_ret = np.squeeze(static_ret)
             self.assertIsNotNone(static_ret)
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
                 reduction='none'
             )
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             dy_ret_value = np.squeeze(dy_ret_value)
@@ -1663,14 +2556,14 @@ class CrossEntropyLoss(unittest.TestCase):
             np.int64
         )  # NHW
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[2, 2, 2, 3], dtype=self.dtype
             )
@@ -1682,7 +2575,7 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             ret = cross_entropy_loss(input, label)
 
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -1692,13 +2585,13 @@ class CrossEntropyLoss(unittest.TestCase):
                 fetch_list=[ret],
             )
             self.assertIsNotNone(static_ret)
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
                 reduction='mean'
             )
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             self.assertIsNotNone(dy_ret_value)
@@ -1717,14 +2610,14 @@ class CrossEntropyLoss(unittest.TestCase):
             np.int64
         )  # NHW
         paddle.enable_static()
-        prog = fluid.Program()
-        startup_prog = fluid.Program()
+        prog = base.Program()
+        startup_prog = base.Program()
         place = (
-            fluid.CUDAPlace(0)
-            if fluid.core.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.core.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
-        with fluid.program_guard(prog, startup_prog):
+        with base.program_guard(prog, startup_prog):
             input = paddle.static.data(
                 name='input', shape=[2, 2, 2, 3], dtype=self.dtype
             )
@@ -1736,7 +2629,7 @@ class CrossEntropyLoss(unittest.TestCase):
             )
             ret = cross_entropy_loss(input, label)
 
-            exe = fluid.Executor(place)
+            exe = base.Executor(place)
             static_ret = exe.run(
                 prog,
                 feed={
@@ -1746,13 +2639,13 @@ class CrossEntropyLoss(unittest.TestCase):
                 fetch_list=[ret],
             )
             self.assertIsNotNone(static_ret)
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             cross_entropy_loss = paddle.nn.loss.CrossEntropyLoss(
                 reduction='sum'
             )
             dy_ret = cross_entropy_loss(
-                fluid.dygraph.to_variable(input_np),
-                fluid.dygraph.to_variable(label_np),
+                paddle.to_tensor(input_np),
+                paddle.to_tensor(label_np),
             )
             dy_ret_value = dy_ret.numpy()
             self.assertIsNotNone(dy_ret_value)
@@ -1818,14 +2711,14 @@ class TestCrossEntropyFAPIError(unittest.TestCase):
                 label_np = np.random.randint(0, 4, size=(2)).astype(np.int64)
                 weight_np = np.random.random([3]).astype('float32')
                 paddle.enable_static()
-                prog = fluid.Program()
-                startup_prog = fluid.Program()
+                prog = base.Program()
+                startup_prog = base.Program()
                 place = (
-                    fluid.CUDAPlace(0)
-                    if fluid.core.is_compiled_with_cuda()
-                    else fluid.CPUPlace()
+                    base.CUDAPlace(0)
+                    if base.core.is_compiled_with_cuda()
+                    else base.CPUPlace()
                 )
-                with fluid.program_guard(prog, startup_prog):
+                with base.program_guard(prog, startup_prog):
                     input = paddle.static.data(
                         name='input', shape=[2, 4], dtype='float32'
                     )
@@ -1840,7 +2733,7 @@ class TestCrossEntropyFAPIError(unittest.TestCase):
                     )
                     ret = cross_entropy_loss(input, label)
 
-                    exe = fluid.Executor(place)
+                    exe = base.Executor(place)
                     static_ret = exe.run(
                         prog,
                         feed={

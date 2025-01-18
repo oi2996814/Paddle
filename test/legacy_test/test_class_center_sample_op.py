@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, paddle_static_guard
+from op_test import OpTest, paddle_static_guard
 
 import paddle
-from paddle.fluid import Program, core, program_guard
+from paddle.base import core
 
 
 def class_center_sample_numpy(label, classes_list, num_samples):
@@ -113,7 +113,11 @@ class TestClassCenterSampleOp(OpTest):
         }
 
     def test_check_output(self):
-        self.check_output(no_check_set=['SampledLocalClassCenter'])
+        self.check_output(
+            no_check_set=['SampledLocalClassCenter'],
+            check_pir=True,
+            check_symbol_infer=False,
+        )
 
 
 class TestClassCenterSampleOpINT32(TestClassCenterSampleOp):
@@ -131,9 +135,9 @@ class TestClassCenterSampleV2(unittest.TestCase):
         self.initParams()
         np.random.seed(self.seed)
         paddle.framework.random._manual_program_seed(2021)
-        self.places = [paddle.fluid.CPUPlace()]
+        self.places = [paddle.base.CPUPlace()]
         if core.is_compiled_with_cuda():
-            self.places.append(paddle.fluid.CUDAPlace(0))
+            self.places.append(paddle.base.CUDAPlace(0))
 
     def initParams(self):
         self.batch_size = 10
@@ -152,7 +156,9 @@ class TestClassCenterSampleV2(unittest.TestCase):
 
     def check_static_result(self, place):
         with paddle_static_guard():
-            with program_guard(Program(), Program()):
+            main = paddle.static.Program()
+            startup = paddle.static.Program()
+            with paddle.static.program_guard(main, startup):
                 label_np = np.random.randint(
                     0, self.num_classes, (self.batch_size,), dtype=self.dtype
                 )
@@ -173,9 +179,8 @@ class TestClassCenterSampleV2(unittest.TestCase):
                 ) = class_center_sample_numpy(
                     label_np, [self.num_classes], self.num_samples
                 )
-                exe = paddle.fluid.Executor(place)
+                exe = paddle.base.Executor(place)
                 [remapped_label_res, sampled_class_index_res] = exe.run(
-                    paddle.fluid.default_main_program(),
                     feed={'label': label_np},
                     fetch_list=[remapped_label, sampled_class_index],
                 )
@@ -192,7 +197,7 @@ class TestClassCenterSampleV2(unittest.TestCase):
             self.check_dynamic_result(place=place)
 
     def check_dynamic_result(self, place):
-        with paddle.fluid.dygraph.guard(place):
+        with paddle.base.dygraph.guard(place):
             label_np = np.random.randint(
                 0, self.num_classes, (self.batch_size,), dtype=self.dtype
             )
@@ -230,9 +235,9 @@ class TestClassCenterSampleAPIError(unittest.TestCase):
     def setUp(self):
         self.initParams()
         np.random.seed(self.seed)
-        self.places = [paddle.fluid.CPUPlace()]
+        self.places = [paddle.base.CPUPlace()]
         if core.is_compiled_with_cuda():
-            self.places.append(paddle.fluid.CUDAPlace(0))
+            self.places.append(paddle.base.CUDAPlace(0))
 
     def initParams(self):
         self.batch_size = 20
@@ -247,7 +252,7 @@ class TestClassCenterSampleAPIError(unittest.TestCase):
     def test_dynamic_errors(self):
         def test_num_samples():
             for place in self.places:
-                with paddle.fluid.dygraph.guard(place):
+                with paddle.base.dygraph.guard(place):
                     label_np = np.random.randint(
                         0,
                         self.num_classes,
@@ -270,9 +275,9 @@ class TestClassCenterSampleAPIError1(unittest.TestCase):
     def setUp(self):
         self.initParams()
         np.random.seed(self.seed)
-        self.places = [paddle.fluid.CPUPlace()]
+        self.places = [paddle.base.CPUPlace()]
         if core.is_compiled_with_cuda():
-            self.places.append(paddle.fluid.CUDAPlace(0))
+            self.places.append(paddle.base.CUDAPlace(0))
 
     def initParams(self):
         self.batch_size = 5
@@ -287,7 +292,7 @@ class TestClassCenterSampleAPIError1(unittest.TestCase):
     def test_dynamic_errors(self):
         def test_empty_label():
             for place in self.places:
-                with paddle.fluid.dygraph.guard(place):
+                with paddle.base.dygraph.guard(place):
                     label = paddle.to_tensor(np.array([], dtype=self.dtype))
 
                     (
@@ -299,7 +304,7 @@ class TestClassCenterSampleAPIError1(unittest.TestCase):
 
         def test_group_value():
             for place in self.places:
-                with paddle.fluid.dygraph.guard(place):
+                with paddle.base.dygraph.guard(place):
                     label_np = np.random.randint(
                         0,
                         self.num_classes,

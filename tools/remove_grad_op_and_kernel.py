@@ -126,7 +126,7 @@ if __name__ == '__main__':
         xpu_kernel_pattern1 = r'REGISTER_OP_XPU_KERNEL\(.*?\);?'
         xpu_kernel_pattern2 = r'REGISTER_OP_XPU_KERNEL\(.*?_grad,.*?\);?'
 
-        # remove custom grad kernel, mkldnn or cudnn etc.
+        # remove custom grad kernel, onednn or cudnn etc.
         op_kernel_pattern1 = r'REGISTER_OP_KERNEL\(.*?\);?'
         op_kernel_pattern2 = r'REGISTER_OP_KERNEL\(.*?_grad,.*?\);?'
 
@@ -207,19 +207,13 @@ if __name__ == '__main__':
     )
 
     print('We erase all grad op and kernel for Paddle-Inference lib.')
-    print('%50s%10s' % ('type', 'count'))
-    print('%50s%10s' % ('REGISTER_OPERATOR', register_op_count))
-    print('%50s%10s' % ('REGISTER_OP_CPU_KERNEL', register_op_cpu_kernel_count))
+    print(f'{"type":>50}{"count":>10}')
+    print(f'{"REGISTER_OPERATOR":>50}{register_op_count:>10}')
+    print(f'{"REGISTER_OP_CPU_KERNEL":>50}{register_op_cpu_kernel_count:>10}')
+    print(f'{"REGISTER_OP_CUDA_KERNEL":>50}{register_op_cuda_kernel_count:>10}')
+    print(f'{"REGISTER_OP_XPU_KERNEL":>50}{register_op_xpu_kernel_count:>10}')
+    print(f'{"REGISTER_OP_KERNEL":>50}{register_op_kernel_count:>10}')
     print(
-        '%50s%10s' % ('REGISTER_OP_CUDA_KERNEL', register_op_cuda_kernel_count)
+        f'{"REGISTER_OP_KERNEL_WITH_CUSTOM_TYPE":>50}{register_op_kernel_with_custom_type_count:>10}'
     )
-    print('%50s%10s' % ('REGISTER_OP_XPU_KERNEL', register_op_xpu_kernel_count))
-    print('%50s%10s' % ('REGISTER_OP_KERNEL', register_op_kernel_count))
-    print(
-        '%50s%10s'
-        % (
-            'REGISTER_OP_KERNEL_WITH_CUSTOM_TYPE',
-            register_op_kernel_with_custom_type_count,
-        )
-    )
-    print('%50s%10s' % ('REGISTER_OP_PD_KERNEL', register_pd_kernel_count))
+    print(f'{"REGISTER_OP_PD_KERNEL":>50}{register_pd_kernel_count:>10}')

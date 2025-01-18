@@ -54,7 +54,7 @@ def custom_relu_static(
             out_v = exe.run(
                 static.default_main_program(),
                 feed={'X': np_x},
-                fetch_list=[out.name],
+                fetch_list=[out],
             )
 
     paddle.disable_static()
@@ -64,8 +64,8 @@ def custom_relu_static(
 class TestNewCustomOpXpuSetUpInstall(unittest.TestCase):
     def setUp(self):
         cur_dir = os.path.dirname(os.path.abspath(__file__))
-        cmd = 'cd {} && {} custom_relu_xpu_setup.py install'.format(
-            cur_dir, sys.executable
+        cmd = (
+            f'cd {cur_dir} && {sys.executable} custom_relu_xpu_setup.py install'
         )
         run_cmd(cmd)
 
@@ -75,9 +75,9 @@ class TestNewCustomOpXpuSetUpInstall(unittest.TestCase):
             for x in os.listdir(site_dir)
             if 'custom_relu_xpu_module_setup' in x
         ]
-        assert len(custom_egg_path) == 1, "Matched egg number is %d." % len(
-            custom_egg_path
-        )
+        assert (
+            len(custom_egg_path) == 1
+        ), f"Matched egg number is {len(custom_egg_path)}."
         sys.path.append(os.path.join(site_dir, custom_egg_path[0]))
 
         # usage: import the package directly

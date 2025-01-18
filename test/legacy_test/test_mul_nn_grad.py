@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import gradient_checker
@@ -19,8 +20,8 @@ import numpy as np
 from decorator_helper import prog_scope
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 paddle.enable_static()
 
@@ -40,12 +41,8 @@ class TestMatmulDoubleGradCheck(unittest.TestCase):
         eps = 0.005
         dtype = np.float64
         typename = "float64"
-        x = paddle.create_parameter(
-            dtype=typename, shape=self.x_shape, name='x'
-        )
-        y = paddle.create_parameter(
-            dtype=typename, shape=self.y_shape, name='y'
-        )
+        x = paddle.static.data(dtype=typename, shape=self.x_shape, name='x')
+        y = paddle.static.data(dtype=typename, shape=self.y_shape, name='y')
         out = paddle.matmul(
             x, y, self.transpose_x, self.transpose_y, name='out'
         )
@@ -57,9 +54,15 @@ class TestMatmulDoubleGradCheck(unittest.TestCase):
         )
 
     def test_grad(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 

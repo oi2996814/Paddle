@@ -12,26 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import gradient_checker
 import numpy as np
 from decorator_helper import prog_scope
-from eager_op_test import OpTest, convert_float_to_uint16
 from op import Operator
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
-from paddle.static import Program, program_guard
+from paddle import base
+from paddle.base import core
 
 
 class TestScaleOp(OpTest):
     def setUp(self):
         self.op_type = "scale"
         self.python_api = paddle.scale
-        self.dtype = np.float64
+        self.dtype = np.float32
         self.init_dtype_type()
+        self.public_python_api = paddle.scale
+        self.prim_op_type = "prim"
         self.inputs = {'X': np.random.random((10, 10)).astype(self.dtype)}
         self.attrs = {'scale': -2.3}
         self.outputs = {
@@ -42,10 +44,17 @@ class TestScaleOp(OpTest):
         pass
 
     def test_check_output(self):
-        self.check_output(check_cinn=True)
+        self.check_output(check_cinn=True, check_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Out')
+        self.check_grad(['X'], 'Out', check_pir=True, check_prim_pir=True)
+
+
+class TestScaleOpFP64(TestScaleOp):
+    def init_dtype_type(self):
+        self.dtype = np.float64
+        # NOTE(dev): Scalar.to<float> has diff with double.
+        self.rev_comp_atol = 1e-7
 
 
 class TestScaleOpScaleVariable(OpTest):
@@ -66,10 +75,10 @@ class TestScaleOpScaleVariable(OpTest):
         pass
 
     def test_check_output(self):
-        self.check_output(check_cinn=True)
+        self.check_output(check_cinn=True, check_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Out')
+        self.check_grad(['X'], 'Out', check_pir=True)
 
 
 class TestScaleOpSelectedRows(unittest.TestCase):
@@ -117,14 +126,26 @@ class TestScaleOpSelectedRows(unittest.TestCase):
         assert in_rows == out_rows
 
     def test_scale_selected_rows(self):
-        places = [core.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(core.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(core.CUDAPlace(0))
         for place in places:
             self.check_with_place(place, 'in', 'out')
 
     def test_scale_selected_rows_inplace(self):
-        places = [core.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(core.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(core.CUDAPlace(0))
         for place in places:
@@ -132,7 +153,10 @@ class TestScaleOpSelectedRows(unittest.TestCase):
 
 
 class TestScaleRaiseError(unittest.TestCase):
+
     def test_errors(self):
+        paddle.enable_static()
+
         def test_type():
             paddle.scale([10])
 
@@ -148,10 +172,10 @@ class TestScaleFp16Op(TestScaleOp):
         self.dtype = np.float16
 
     def test_check_output(self):
-        self.check_output(check_cinn=True)
+        self.check_output(check_cinn=True, check_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(["X"], "Out")
+        self.check_grad(["X"], "Out", check_pir=True, check_prim_pir=True)
 
 
 @unittest.skipIf(
@@ -162,6 +186,8 @@ class TestScaleBF16Op(OpTest):
     def setUp(self):
         self.op_type = "scale"
         self.python_api = paddle.scale
+        self.public_python_api = paddle.scale
+        self.prim_op_type = "prim"
         self.dtype = np.uint16
         self.attrs = {'scale': -2.3}
         x = np.random.random((10, 10)).astype(np.float32)
@@ -170,13 +196,15 @@ class TestScaleBF16Op(OpTest):
         self.outputs = {'Out': convert_float_to_uint16(out)}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
         self.check_grad(
             ['X'],
             'Out',
             numeric_grad_delta=0.8,
+            check_pir=True,
+            check_prim_pir=True,
         )
 
 
@@ -205,8 +233,8 @@ class TestScaleApiStatic(unittest.TestCase):
     def test_api(self):
         paddle.enable_static()
         input = np.random.random([2, 25]).astype("float32")
-        main_prog = Program()
-        with program_guard(main_prog, Program()):
+        main_prog = paddle.static.Program()
+        with paddle.static.program_guard(main_prog, paddle.static.Program()):
             x = paddle.static.data(name="x", shape=[2, 25], dtype="float32")
             out = self._executed_api(x, scale=2.0, bias=3.0)
 
@@ -244,7 +272,7 @@ class TestScaleDoubleGradCheck(unittest.TestCase):
 
     @prog_scope()
     def func(self, place):
-        # the shape of input variable should be clearly specified, not inlcude -1.
+        # the shape of input variable should be clearly specified, not include -1.
         eps = 0.005
         dtype = np.float32
 
@@ -262,9 +290,15 @@ class TestScaleDoubleGradCheck(unittest.TestCase):
 
     def test_grad(self):
         paddle.enable_static()
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
@@ -275,7 +309,7 @@ class TestScaleTripleGradCheck(unittest.TestCase):
 
     @prog_scope()
     def func(self, place):
-        # the shape of input variable should be clearly specified, not inlcude -1.
+        # the shape of input variable should be clearly specified, not include -1.
         eps = 0.005
         dtype = np.float32
 
@@ -293,25 +327,32 @@ class TestScaleTripleGradCheck(unittest.TestCase):
 
     def test_grad(self):
         paddle.enable_static()
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for p in places:
             self.func(p)
 
 
 class TestScaleOpZeroNumelVariable(unittest.TestCase):
     def test_check_zero_numel_cpu(self):
-        paddle.set_device('cpu')
-        data = paddle.ones([0, 1])
-        out = paddle.scale(data, 2)
-        self.assertEqual(out, data)
-
-        if paddle.is_compiled_with_cuda():
-            paddle.set_device('gpu')
+        with paddle.pir_utils.OldIrGuard():
+            paddle.set_device('cpu')
             data = paddle.ones([0, 1])
             out = paddle.scale(data, 2)
             self.assertEqual(out, data)
+
+            if paddle.is_compiled_with_cuda():
+                paddle.set_device('gpu')
+                data = paddle.ones([0, 1])
+                out = paddle.scale(data, 2)
+                self.assertEqual(out, data)
 
 
 if __name__ == "__main__":

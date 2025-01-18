@@ -164,7 +164,7 @@ All possible KernelSignatures returned by {{op["name"] | to_pascal_case }}OpArgu
 
 KernelSignature {{op["op_name"] | to_pascal_case }}OpArgumentMapping(const ArgumentMappingContext& ctx) {
   {% set kernel_args = op["kernel"]["param"] %}
-  {% set optional_inputs_name = op["inputs"]| find_optinal_inputs_name %}
+  {% set optional_inputs_name = op["inputs"]| find_optional_inputs_name %}
   {{get_input_list(op["inputs"], kernel_args)}};
   paddle::small_vector<const char*> attrs;
   {% for attr in op["attrs"]%}
@@ -423,7 +423,7 @@ class {{op["op_name"] | to_pascal_case}}Op : public framework::OperatorWithKerne
   {% set kernel = op["kernel"] %}
   {% if kernel["data_type"] is not none or kernel["backend"] is not none
       or kernel["force_backend"] is not none
-      or "complex_promote" in op or "data_transform" in op 
+      or "complex_promote" in op or "data_transform" in op
       or "get_expected_kernel_type" in op%}
  protected:
     {% if kernel["data_type"] is not none or kernel["backend"] is not none
@@ -565,15 +565,45 @@ class {{name | to_pascal_case}}OpMaker : public framework::SingleGradOpMaker<T> 
     grad_op->SetType("{{name}}");
 
   {% for input in op["inputs"] %}
+    {% if input["optional"] %}
+    {{generate_optional_input_for_backward(input["fluid_name"],
+    forward_input_names,
+    forward_output_names,
+    forward_input_orig_names,
+    forward_output_orig_names)}} {
+      grad_op->SetInput({{input["fluid_name"] | to_opmaker_name}}, this->{{extract_input_from_forward(
+        input["fluid_name"],
+        forward_input_names,
+        forward_output_names,
+        forward_input_orig_names,
+        forward_output_orig_names)}});
+    }
+    {% else %}
     grad_op->SetInput({{input["fluid_name"] | to_opmaker_name}}, this->{{extract_input_from_forward(
       input["fluid_name"],
       forward_input_names,
       forward_output_names,
       forward_input_orig_names,
       forward_output_orig_names)}});
+    {% endif %}
   {% endfor %}
 
   {% for output in op["outputs"] %}
+    {% if output["optional"] %}
+    {{generate_optional_output_for_backward(output["fluid_name"],
+          forward_input_names,
+          forward_output_names,
+          forward_input_orig_names,
+          forward_output_orig_names)}} {
+      grad_op->SetOutput({{output["fluid_name"] | to_opmaker_name}}, this->{{extract_output_from_forward(
+        output["fluid_name"],
+        forward_input_names,
+        forward_output_names,
+        forward_input_orig_names,
+        forward_output_orig_names,
+        output['drop_empty_grad'])}});
+    }
+    {% else %}
     grad_op->SetOutput({{output["fluid_name"] | to_opmaker_name}}, this->{{extract_output_from_forward(
       output["fluid_name"],
       forward_input_names,
@@ -581,6 +611,7 @@ class {{name | to_pascal_case}}OpMaker : public framework::SingleGradOpMaker<T> 
       forward_input_orig_names,
       forward_output_orig_names,
       output['drop_empty_grad'])}});
+    {% endif %}
   {% endfor %}
 
     grad_op->SetAttrMap(this->Attrs());
@@ -598,7 +629,7 @@ class {{name | to_pascal_case}}OpMaker : public framework::SingleGradOpMaker<T> 
       grad_op->SetInput("{{attr | to_int_array_tensors_name}}", this->Input("{{attr | to_int_array_tensors_name}}"));
     }
         {% endif %}
-      {% elif attr["typename"] is scalar and 
+      {% elif attr["typename"] is scalar and
       ("is_support_tensor" not in attr or attr["is_support_tensor"] is false)%}
     if (this->HasInput("{{attr | to_scalar_tensor_name}}")) {
       grad_op->SetInput("{{attr | to_scalar_tensor_name}}", this->Input("{{attr | to_scalar_tensor_name}}"));
@@ -710,8 +741,8 @@ class {{op_name | to_composite_grad_opmaker_name}} : public prim::CompositeGradO
 {{construct_composite_output(outputs, fluid_outputs, forward_fluid_inputs, forward_fluid_orig_inputs, output_dict)}}
     //get output ptr
 {{construct_composite_output_ptr(outputs, output_dict)}}
-    //get output orginal name
-{{get_composite_output_orginal_name(outputs, output_dict)}}
+    //get output original name
+{{get_composite_output_original_name(outputs, output_dict)}}
     //call composite backward func
 {{call_composite_backward_api(composite_func_info)}}
     //recover output name
@@ -780,7 +811,7 @@ class {{op_name | to_composite_grad_opmaker_name}} : public prim::CompositeGradO
     {% if "tensor_name" in attr_dict[attrs[i]] %}
     auto {{'tensor_' + attrs[i]}} = this->GetOptionalSingleForwardInput("{{attr_dict[attrs[i]]['tensor_name']}}");
     if ({{'tensor_' + attrs[i]}}) {
-      PADDLE_THROW(platform::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "We don't support dynamic tensor attribute {{attr_dict[attrs[i]]['tensor_name']}} for {{op_name}} composite"
           "for now. "));
     }
@@ -788,7 +819,7 @@ class {{op_name | to_composite_grad_opmaker_name}} : public prim::CompositeGradO
     {% if "tensors_name" in attr_dict[attrs[i]] %}
     auto {{'tensors_' + attrs[i]}} = this->GetOptionalMultiForwardInput("{{attr_dict[attrs[i]]['tensors_name']}}");
     if ({{'tensors_' + attrs[i]}}) {
-      PADDLE_THROW(platform::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "We don't support dynamic tensors attribute {{attr_dict[attrs[i]]['tensor_name']}} for {{op_name}} composite "
           "for now. "));
     }
@@ -817,7 +848,7 @@ class {{op_name | to_composite_grad_opmaker_name}} : public prim::CompositeGradO
     auto {{outputs[i] + "_t"}} = this->GetSingleInputGrad({{name_in_forward_orig | to_opmaker_name}});
     {% elif output_typename == "Tensor[]" %}
     auto {{outputs[i] + "_t"}} = this->GetMultiInputGrad({{name_in_forward_orig | to_opmaker_name}});
-    {%- endif %}    
+    {%- endif %}
   {%- endfor %}
 {%- endmacro %}
 
@@ -833,11 +864,11 @@ class {{op_name | to_composite_grad_opmaker_name}} : public prim::CompositeGradO
       {{outputs[i]}}[i] = &{{outputs[i] + "_t"}}[i];
     }
     {{outputs[i]}} = this->GetOutputPtr({{outputs[i]}});
-    {%- endif %}    
+    {%- endif %}
   {%- endfor %}
 {%- endmacro %}
 
-{% macro get_composite_output_orginal_name(outputs, output_dict) %}
+{% macro get_composite_output_original_name(outputs, output_dict) %}
   {% set outputs_length = outputs | length %}
   {% for i in range(outputs_length) %}
     {% set output_typename = output_dict[outputs[i]]["typename"] %}
@@ -845,7 +876,7 @@ class {{op_name | to_composite_grad_opmaker_name}} : public prim::CompositeGradO
     auto {{outputs[i] + "_name"}} = this->GetOutputName({{outputs[i] + "_t"}});
     {% elif output_typename == "Tensor[]" %}
     auto {{outputs[i] + "_name"}} = this->GetOutputName({{outputs[i] + "_t"}});
-    {%- endif %}    
+    {%- endif %}
   {%- endfor %}
 {%- endmacro %}
 
@@ -860,6 +891,25 @@ class {{op_name | to_composite_grad_opmaker_name}} : public prim::CompositeGradO
     this->RecoverOutputName({{outputs[i] + "_t"}}, {{outputs[i] + "_name"}});
   {% endfor %}
 {%- endmacro %}
+
+{% macro generate_optional_input_for_backward(name,
+  input_names, output_names,
+  input_orig_names, output_orig_names) %}{# inline #}
+  {% if name in input_names %}
+    {% set name_in_forward_orig = input_orig_names[input_names.index(name)]%}
+if (this->HasInput({{name_in_forward_orig | to_opmaker_name}}))
+  {%- elif name in output_names %}
+    {% set name_in_forward_orig = output_orig_names[output_names.index(name)]%}
+if (this->HasOutput({{name_in_forward_orig | to_opmaker_name}}))
+  {%- elif name.endswith("_grad") %}{# output grad#}
+    {% set name_in_forward = name[:-5] %}
+    {% if name_in_forward in output_names %}
+      {% set name_in_forward_orig = output_orig_names[output_names.index(name_in_forward)] %}
+if (this->HasOutput({{name_in_forward_orig | to_opmaker_name}}))
+    {%- endif %}
+  {%- endif %}
+{%- endmacro %}
+
 
 {% macro extract_input_from_forward(name,
   input_names, output_names,
@@ -876,6 +926,15 @@ Output({{name_in_forward_orig | to_opmaker_name}})
       {% set name_in_forward_orig = output_orig_names[output_names.index(name_in_forward)] %}
 OutputGrad({{name_in_forward_orig | to_opmaker_name}})
     {%- endif %}
+  {%- endif %}
+{%- endmacro %}
+
+{% macro generate_optional_output_for_backward(name, input_names, output_names,
+  input_orig_names, output_orig_names) %}{# inline #}
+  {% if name[:-5] in input_names %}
+    {% set name_in_forward = name[:-5] %}
+    {% set name_in_forward_orig = input_orig_names[input_names.index(name_in_forward)]%}
+if (this->HasInput({{name_in_forward_orig | to_opmaker_name}}))
   {%- endif %}
 {%- endmacro %}
 

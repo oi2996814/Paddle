@@ -15,13 +15,25 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
+
+import paddle
+
+
+def api_wrapper(
+    param, grad, learning_rate, clip=10.0, batch_size=16.0, sigma=1.0, seed=0
+):
+    return paddle._C_ops.dpsgd(
+        param, grad, learning_rate, clip, batch_size, sigma, seed
+    )
 
 
 class TestDpsgdOp(OpTest):
     def setUp(self):
         '''Test Dpsgd Operator with supplied attributes'''
         self.op_type = "dpsgd"
+        self.python_api = api_wrapper
+        self.python_out_sig = ["ParamOut"]
         param = np.random.uniform(-1, 1, (102, 105)).astype("float32")
         grad = np.random.uniform(-1, 1, (102, 105)).astype("float32")
 

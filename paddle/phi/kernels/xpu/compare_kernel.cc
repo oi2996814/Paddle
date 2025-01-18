@@ -33,8 +33,8 @@ void XPUCompareKernelImpl(const Context& dev_ctx,
                                             bool*,
                                             const std::vector<int>&,
                                             const std::vector<int>&)> func) {
-  auto x_shape = vectorize<int>(x.dims());
-  auto y_shape = vectorize<int>(y.dims());
+  auto x_shape = common::vectorize<int>(x.dims());
+  auto y_shape = common::vectorize<int>(y.dims());
 
   if (x.dims().size() == 0) {
     x_shape = std::vector<int>({1});
@@ -88,7 +88,8 @@ PD_REGISTER_KERNEL(less_than,
                    int,
                    int64_t,
                    float,
-                   phi::dtype::float16) {
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {
   kernel->OutputAt(0).SetDataType(phi::DataType::BOOL);
 }
 
@@ -101,9 +102,11 @@ PD_REGISTER_KERNEL(less_than,
                      int64_t,                             \
                      float,                               \
                      phi::dtype::float16,                 \
+                     phi::dtype::bfloat16,                \
                      bool) {                              \
     kernel->OutputAt(0).SetDataType(phi::DataType::BOOL); \
   }
+
 PD_REGISTER_COMPARE_KERNEL(less_equal, LessEqual)
 PD_REGISTER_COMPARE_KERNEL(greater_than, GreaterThan)
 PD_REGISTER_COMPARE_KERNEL(greater_equal, GreaterEqual)

@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, skip_check_grad_ci
+from op_test import OpTest, skip_check_grad_ci
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 '''
  test case for s8 * s8
@@ -77,9 +77,9 @@ class TestMKLDNNMulOpS8S8(OpTest):
         self.outputs = {'Out': output}
 
     def test_check_output(self):
-        # TODO(wangzhongpu): support mkldnn op in dygraph mode
+        # TODO(wangzhongpu): support onednn op in dygraph mode
         self.check_output_with_place(
-            core.CPUPlace(), atol=0, check_dygraph=False
+            core.CPUPlace(), atol=0, check_dygraph=False, check_pir_onednn=True
         )
 
 

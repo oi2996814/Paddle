@@ -13,13 +13,12 @@
 // limitations under the License.
 
 #include "paddle/utils/pybind.h"
-
+#include "paddle/common/flags.h"
+#include "paddle/phi/core/dense_tensor.h"
 #include "paddle/phi/core/enforce.h"
-#include "paddle/phi/core/flags.h"
 
-PHI_DECLARE_string(tensor_operants_mode);
-namespace paddle {
-namespace pybind {
+COMMON_DECLARE_string(tensor_operants_mode);
+namespace paddle::pybind {
 
 PyTypeObject* p_tensor_type = nullptr;
 PyTypeObject* p_string_tensor_type = nullptr;
@@ -39,17 +38,17 @@ void ShareTensor(PyObject* src, PyObject* dst) {
     const auto& dst_tensor = reinterpret_cast<TensorObject*>(dst)->tensor;
     src_tensor = dst_tensor;
   } else {
-    PADDLE_THROW(
-        phi::errors::InvalidArgument("Share tensor only support DenseTensor."));
+    PADDLE_THROW(common::errors::InvalidArgument(
+        "Share tensor only support DenseTensor."));
   }
 }
 
-paddle::Tensor CastPyArg2Tensor(PyObject* obj, Py_ssize_t arg_pos) {
+paddle::Tensor& CastPyArg2Tensor(PyObject* obj, Py_ssize_t arg_pos) {
   if (PyObject_TypeCheck(obj, p_tensor_type) ||
       PyObject_TypeCheck(obj, p_string_tensor_type)) {
     return reinterpret_cast<TensorObject*>(obj)->tensor;
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "argument (position %d) must be "
         "Tensor, but got %s",
         arg_pos + 1,
@@ -59,11 +58,11 @@ paddle::Tensor CastPyArg2Tensor(PyObject* obj, Py_ssize_t arg_pos) {
 
 PyObject* ToPyObject(const paddle::Tensor& value,
                      bool return_py_none_if_not_initialize) {
-  if (return_py_none_if_not_initialize && !value.initialized()) {
+  if (return_py_none_if_not_initialize && !value.has_allocation()) {
     RETURN_PY_NONE
   }
   PyObject* obj = nullptr;
-  if (value.initialized() && value.is_string_tensor()) {
+  if (value.has_allocation() && value.is_string_tensor()) {
     // In order to return the core.eager.StringTensor, there is need
     // to use p_string_tensor_type to create a python obj.
     obj = p_string_tensor_type->tp_alloc(p_string_tensor_type, 0);
@@ -76,12 +75,11 @@ PyObject* ToPyObject(const paddle::Tensor& value,
     v->tensor = value;
   } else {
     PADDLE_THROW(
-        phi::errors::Fatal("tp_alloc return null, can not new a PyObject."));
+        common::errors::Fatal("tp_alloc return null, can not new a PyObject."));
   }
   return obj;
 }
 
 void EnableTensorOperantsToPhiMode() { FLAGS_tensor_operants_mode = "phi"; }
 
-}  // namespace pybind
-}  // namespace paddle
+}  // namespace paddle::pybind

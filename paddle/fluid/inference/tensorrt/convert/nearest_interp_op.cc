@@ -12,9 +12,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/data_layout.h"
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 class NearestInterpolateOpConverter : public OpConverter {
  public:
@@ -33,7 +31,7 @@ class NearestInterpolateOpConverter : public OpConverter {
 
     auto data_layout = !op_desc.HasAttr("data_layout")
                            ? phi::DataLayout::kNCHW
-                           : phi::StringToDataLayout(PADDLE_GET_CONST(
+                           : common::StringToDataLayout(PADDLE_GET_CONST(
                                  std::string, op_desc.GetAttr("data_layout")));
     auto interp_method =
         PADDLE_GET_CONST(std::string, op_desc.GetAttr("interp_method"));
@@ -46,7 +44,14 @@ class NearestInterpolateOpConverter : public OpConverter {
     auto out_w = PADDLE_GET_CONST(int, op_desc.GetAttr("out_w"));
 
     auto layer = TRT_ENGINE_ADD_LAYER(engine_, Resize, *input);
+#if IS_TRT_VERSION_GE(8600)
+    if (align_corners) {
+      layer->setCoordinateTransformation(
+          nvinfer1::ResizeCoordinateTransformation::kALIGN_CORNERS);
+    }
+#else
     layer->setAlignCorners(align_corners);
+#endif
 
     auto in_dim = input->getDimensions();
 
@@ -59,7 +64,7 @@ class NearestInterpolateOpConverter : public OpConverter {
       scale_w = scale;
     } else {
       // axis are different in static/dynamic mode
-      bool with_dynamic = engine_->with_dynamic_shape();
+      bool with_dynamic = true;
 
       if (!with_dynamic) {
         int h_axis = (data_layout == phi::DataLayout::kNCHW) + with_dynamic;
@@ -72,9 +77,7 @@ class NearestInterpolateOpConverter : public OpConverter {
       }
     }
 
-    if (engine_->with_dynamic_shape()) {
-      scales.push_back(1.f);
-    }
+    scales.push_back(1.f);
 
     if (data_layout == phi::DataLayout::kNCHW) {
       scales.push_back(1.f);
@@ -86,17 +89,15 @@ class NearestInterpolateOpConverter : public OpConverter {
       scales.push_back(scale_w);
       scales.push_back(1.f);
     } else {
-      PADDLE_THROW(platform::errors::InvalidArgument(
-          "Data layout must be NCHW or NHWC."));
+      PADDLE_THROW(
+          common::errors::InvalidArgument("Data layout must be NCHW or NHWC."));
     }
     layer->setScales(scales.data(), scales.size());
 
-    RreplenishLayerAndOutput(layer, "nearest_interp", {output_name}, test_mode);
+    ReplenishLayerAndOutput(layer, "nearest_interp", {output_name}, test_mode);
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(nearest_interp, NearestInterpolateOpConverter);

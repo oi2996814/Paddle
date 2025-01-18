@@ -12,11 +12,8 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#ifndef PADDLE_WITH_HIP
-// To-do(qili93): fix this after issue resolved
-// https://github.com/ROCmSoftwarePlatform/rocPRIM/issues/202
-
 #include "paddle/phi/kernels/multinomial_kernel.h"
+#include "paddle/phi/kernels/funcs/multinomial_kernel_helper.h"
 
 #ifdef __NVCC__
 #include "cub/cub.cuh"
@@ -26,10 +23,10 @@ limitations under the License. */
 namespace cub = hipcub;
 #endif
 
+#include "paddle/common/ddim.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
 #include "paddle/phi/common/data_type.h"
 #include "paddle/phi/common/scalar.h"
-#include "paddle/phi/core/ddim.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/arg_min_max_kernel.h"
 #include "paddle/phi/kernels/empty_kernel.h"
@@ -107,14 +104,22 @@ __global__ void sampleMultinomialWithReplacement(
   size_t idx = gridDim.x * blockDim.x * blockIdx.y + blockDim.x * blockIdx.x +
                threadIdx.x;
 
+#if defined(__NVCC__)
   curandStatePhilox4_32_10_t state;
   curand_init(seed, idx, offset, &state);
+#else
+  hiprandStatePhilox4_32_10_t state;
+  hiprand_init(seed, idx, offset, &state);
+#endif
 
   int sample = blockIdx.x * blockDim.x + threadIdx.x;
   for (int dist = blockIdx.y; dist < num_distributions; dist += gridDim.y) {
     if (sample < num_samples) {
+#if defined(__NVCC__)
       T rng_number = static_cast<T>(curand_uniform4(&state).x);
-      // Find the bucket that a uniform random number lies in
+#else
+      T rng_number = static_cast<T>(hiprand_uniform4(&state).x);
+#endif
       int selected_category =
           binarySearchFunctor<T>(cumulative_probs_data + dist * num_categories,
                                  norm_probs_data + dist * num_categories,
@@ -144,35 +149,7 @@ void MultinomialKernel(const Context& dev_ctx,
   // If replacement is False, it's not a replaceable sample. Every category
   // can be used only once.
   if (!replacement) {
-    int64_t in_data_numel = x.numel();
-    int64_t out_data_numel = out->numel();
-
-    phi::DenseTensor cpu_tensor;
-    phi::Copy<Context>(dev_ctx, x, phi::CPUPlace(), false, &cpu_tensor);
-    T* cpu_in_data = cpu_tensor.data<T>();
-    for (size_t i = 0; i < num_distributions; ++i) {
-      int zero_num = 0;
-      for (size_t j = 0; j < num_categories; ++j) {
-        T weight = cpu_in_data[i * num_categories + j];
-        PADDLE_ENFORCE_GE(
-            static_cast<MT>(weight),
-            0,
-            errors::InvalidArgument(
-                "Each element of multinomial'input must >= 0, but got %f.",
-                static_cast<MT>(weight)));
-        if (weight == static_cast<T>(0)) {
-          zero_num++;
-        }
-      }
-      int valid_samples = num_categories - zero_num;
-      PADDLE_ENFORCE_LE(
-          int_num_samples,
-          valid_samples,
-          errors::InvalidArgument("When replacement=False, 'num_samples' "
-                                  "must less than or eaqual to the number of "
-                                  "positive item of input"));
-    }
-
+    MultinomialInputChecker<T, Context>(dev_ctx, x, num_samples);
     // Refer to [gumbel softmax algorithm]
     DenseTensor rand = EmptyLike<T, Context>(dev_ctx, x);
     T* rand_data = rand.data<T>();
@@ -187,9 +164,10 @@ void MultinomialKernel(const Context& dev_ctx,
 
     if (int_num_samples == 1) {
       ArgMaxKernel<T, Context>(
-          dev_ctx, rand, -1, true, false, 3 /*proto::VarType::INT64*/, out);
+          dev_ctx, rand, -1, true, false, DataType::INT64, out);
     } else {
-      std::vector<int64_t> out_dim_vec = vectorize<int64_t>(out->dims());
+      std::vector<int64_t> out_dim_vec =
+          common::vectorize<int64_t>(out->dims());
       DenseTensor value = Empty<T, Context>(dev_ctx, IntArray(out_dim_vec));
       TopkKernel<T, Context>(
           dev_ctx, rand, num_samples, -1, true, true, &value, out);
@@ -283,7 +261,7 @@ void MultinomialKernel(const Context& dev_ctx,
 
 }  // namespace phi
 
-PD_REGISTER_KERNEL(multinomial,  // cuda_only
+PD_REGISTER_KERNEL(multinomial,
                    GPU,
                    ALL_LAYOUT,
                    phi::MultinomialKernel,
@@ -293,5 +271,3 @@ PD_REGISTER_KERNEL(multinomial,  // cuda_only
                    double) {
   kernel->OutputAt(0).SetDataType(phi::DataType::INT64);
 }
-
-#endif

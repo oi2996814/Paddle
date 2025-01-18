@@ -16,17 +16,16 @@
 
 #include <memory>
 
+#include "paddle/common/errors.h"
 #include "paddle/fluid/framework/executor.h"
 #include "paddle/fluid/framework/scope.h"
-#include "paddle/fluid/platform/errors.h"
-#include "paddle/fluid/platform/place.h"
+#include "paddle/phi/common/place.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 using ir::Graph;
-using platform::Event;
-using platform::MemEvent;
+using phi::Event;
+using phi::MemEvent;
 
 const double CostData::NOT_MEASURED = -1;
 
@@ -87,13 +86,13 @@ bool CostData::SetCostData(const ProgramDesc& program,
   bool event_to_cost_success = true;
   size_t event_index = 0;
   for (size_t i = 0; i < op_size; ++i) {
-    const OpDesc* op_desc = global_block.Op(i);
+    const OpDesc* op_desc = global_block.Op(static_cast<int>(i));
     std::string op_type = op_desc->Type();
 
     while (event_index < main_thread_events.size()) {
       if (StringHasEnding(main_thread_events[event_index].name(), op_type) &&
           main_thread_events[event_index].type() ==
-              platform::EventType::kPushRange) {
+              phi::EventType::kPushRange) {
         break;
       }
       ++event_index;
@@ -112,8 +111,7 @@ bool CostData::SetCostData(const ProgramDesc& program,
       // block
       // TODO(zhhsplendid): make a more strict mapping between push and pop
       if (StringHasEnding(main_thread_events[event_index].name(), op_type) &&
-          main_thread_events[event_index].type() ==
-              platform::EventType::kPopRange) {
+          main_thread_events[event_index].type() == phi::EventType::kPopRange) {
         break;
       }
       ++event_index;
@@ -133,7 +131,7 @@ bool CostData::SetCostData(const ProgramDesc& program,
         main_thread_events[op_pop_index]);
 #endif
     double time_ms = gpu_time_ms + cpu_time_ms;
-    op_time_ms_[i] = time_ms;
+    op_time_ms_[static_cast<int>(i)] = time_ms;
   }
 
   event_index = 0;
@@ -141,9 +139,9 @@ bool CostData::SetCostData(const ProgramDesc& program,
   int stop_profiler_idx = -1;
   while (event_index < main_thread_events.size()) {
     if (main_thread_events[event_index].name() == "_start_profiler_") {
-      start_profiler_idx = event_index;
+      start_profiler_idx = static_cast<int>(event_index);
     } else if (main_thread_events[event_index].name() == "_stop_profiler_") {
-      stop_profiler_idx = event_index;
+      stop_profiler_idx = static_cast<int>(event_index);
       break;
     }
     ++event_index;
@@ -175,25 +173,21 @@ void PrintEvents(const std::vector<std::vector<Event>>* time_events,
                 << (*time_events)[i][j].attr() << std::endl;
         VLOG(4) << "This: " << &(*time_events)[i][j]
                 << ", Parent: " << (*time_events)[i][j].parent() << std::endl;
-        if ((*time_events)[i][j].role() == platform::EventRole::kInnerOp) {
+        if ((*time_events)[i][j].role() == phi::EventRole::kInnerOp) {
           VLOG(4) << "role kInnerOp" << std::endl;
-        } else if ((*time_events)[i][j].role() ==
-                   platform::EventRole::kUniqueOp) {
+        } else if ((*time_events)[i][j].role() == phi::EventRole::kUniqueOp) {
           VLOG(4) << "role kUniqueOp" << std::endl;
-        } else if ((*time_events)[i][j].role() ==
-                   platform::EventRole::kOrdinary) {
+        } else if ((*time_events)[i][j].role() == phi::EventRole::kOrdinary) {
           VLOG(4) << "role kOrdinary" << std::endl;
-        } else if ((*time_events)[i][j].role() ==
-                   platform::EventRole::kSpecial) {
+        } else if ((*time_events)[i][j].role() == phi::EventRole::kSpecial) {
           VLOG(4) << "role kSpecial" << std::endl;
         }
 
-        if ((*time_events)[i][j].type() == platform::EventType::kPopRange) {
+        if ((*time_events)[i][j].type() == phi::EventType::kPopRange) {
           VLOG(4) << "type kPopRange" << std::endl;
-        } else if ((*time_events)[i][j].type() ==
-                   platform::EventType::kPushRange) {
+        } else if ((*time_events)[i][j].type() == phi::EventType::kPushRange) {
           VLOG(4) << "type kPushRange" << std::endl;
-        } else if ((*time_events)[i][j].type() == platform::EventType::kMark) {
+        } else if ((*time_events)[i][j].type() == phi::EventType::kMark) {
           VLOG(4) << "type kMark" << std::endl;
         }
         VLOG(4) << std::endl;
@@ -227,17 +221,17 @@ CostData CostModel::ProfileMeasure(
   // TODO(zhhsplendid): support different fetch data
 
   platform::ProfilerState profiler_state;
-  platform::Place place;
+  phi::Place place;
 
   std::string device_lower_case = ToLowerCopy(device);
   if (device_lower_case == "cpu") {
     profiler_state = platform::ProfilerState::kCPU;
-    place = platform::CPUPlace();
+    place = phi::CPUPlace();
   } else if (device_lower_case == "gpu") {
     profiler_state = platform::ProfilerState::kAll;
-    place = platform::CUDAPlace();
+    place = phi::GPUPlace();
   } else {
-    PADDLE_THROW(platform::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "Not support %s in CostModel now", device));
   }
 
@@ -268,5 +262,4 @@ CostData CostModel::ProfileMeasure(
   return cost_data;
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

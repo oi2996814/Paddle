@@ -31,10 +31,12 @@ void SwishPlugin::terminate() TRT_NOEXCEPT {}
 bool SwishPlugin::supportsFormat(
     nvinfer1::DataType type, nvinfer1::PluginFormat format) const TRT_NOEXCEPT {
   if (with_fp16_) {
-    return type == nvinfer1::DataType::kFLOAT ||
-           type == nvinfer1::DataType::kHALF;
+    return (type == nvinfer1::DataType::kFLOAT ||
+            type == nvinfer1::DataType::kHALF) &&
+           (format == nvinfer1::TensorFormat::kLINEAR);
   }
-  return type == nvinfer1::DataType::kFLOAT;
+  return (type == nvinfer1::DataType::kFLOAT) &&
+         (format == nvinfer1::TensorFormat::kLINEAR);
 }
 
 nvinfer1::Dims SwishPlugin::getOutputDimensions(int index,
@@ -123,7 +125,7 @@ int SwishPlugin::enqueue(int batch_size,
     swish_kernel<<<blocks, threads, 0, stream>>>(
         num, input, output, (half)beta_);
   } else {
-    PADDLE_THROW(platform::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "The Swish TRT Plugin's input type should be float or half."));
   }
 
@@ -162,16 +164,16 @@ bool SwishPluginDynamic::supportsFormatCombination(
     int nb_outputs) TRT_NOEXCEPT {
   PADDLE_ENFORCE_NOT_NULL(
       in_out,
-      platform::errors::InvalidArgument(
-          "The input of swish plugin shoule not be nullptr."));
+      common::errors::InvalidArgument(
+          "The input of swish plugin should not be nullptr."));
 
   PADDLE_ENFORCE_LT(
       pos,
       nb_inputs + nb_outputs,
-      platform::errors::InvalidArgument("The pos(%d) should be less than the "
-                                        "num(%d) of the input and the output.",
-                                        pos,
-                                        nb_inputs + nb_outputs));
+      common::errors::InvalidArgument("The pos(%d) should be less than the "
+                                      "num(%d) of the input and the output.",
+                                      pos,
+                                      nb_inputs + nb_outputs));
   (in_out && pos < (nb_inputs + nb_outputs));
 
   const nvinfer1::PluginTensorDesc &in = in_out[pos];
@@ -179,13 +181,11 @@ bool SwishPluginDynamic::supportsFormatCombination(
     if (with_fp16_) {
       bool res = (in.type == nvinfer1::DataType::kFLOAT ||
                   in.type == nvinfer1::DataType::kHALF);
-// encounter trt crash bug
-#if IS_TRT_VERSION_LT(8000)
       res = res && (in.format == nvinfer1::TensorFormat::kLINEAR);
-#endif
       return res;
     } else {
-      return in.type == nvinfer1::DataType::kFLOAT;
+      return (in.type == nvinfer1::DataType::kFLOAT) &&
+             (in.format == nvinfer1::TensorFormat::kLINEAR);
     }
   }
   const nvinfer1::PluginTensorDesc &prev = in_out[pos - 1];
@@ -199,7 +199,7 @@ nvinfer1::DataType SwishPluginDynamic::getOutputDataType(
     int nb_inputs) const TRT_NOEXCEPT {
   PADDLE_ENFORCE_EQ(index,
                     0,
-                    platform::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The Swish Plugin only has one input, so the "
                         "index value should be 0, but get %d.",
                         index));
@@ -231,7 +231,7 @@ int SwishPluginDynamic::enqueue(const nvinfer1::PluginTensorDesc *input_desc,
     swish_kernel<half><<<blocks, threads, 0, stream>>>(
         num, input, output, static_cast<half>(beta_));
   } else {
-    PADDLE_THROW(platform::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "The Swish TRT Plugin's input type should be float or half."));
   }
   return cudaGetLastError() != cudaSuccess;

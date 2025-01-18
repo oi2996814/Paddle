@@ -38,13 +38,9 @@ from paddle.distributed.auto_parallel.static.process_group import (
     new_process_group,
 )
 from paddle.distributed.auto_parallel.static.reshard import Resharder
-from paddle.distributed.auto_parallel.static.utils import (
-    debug_program,
-    set_grad_var_shape,
-)
+from paddle.distributed.auto_parallel.static.utils import debug_program
 from paddle.distributed.passes import PassContext, new_pass
 from paddle.static import append_backward, program_guard
-from paddle.utils import unique_name
 
 from ..utils import get_logger
 from .algorithms import new_algorithm
@@ -92,20 +88,20 @@ def get_metric(results):
     assert isinstance(
         results, dict
     ), f"results should be type of dictionary, but got {type(results)}."
-    if 'Throughtput' in results and isinstance(results['Throughtput'], float):
-        return float(results['Throughtput'])
+    if 'Throughput' in results and isinstance(results['Throughput'], float):
+        return float(results['Throughput'])
     else:
         return -1.0
 
 
 def parse_results(results):
-    if results['Throughtput'] > 0:
-        return "Throughtput: {} step / s.".format(results['Throughtput'])
+    if results['Throughput'] > 0:
+        return "Throughput: {} step / s.".format(results['Throughput'])
     et = results.get("ErrorType", None)
     if et == "ResourceExhaustedError":
         return "Fail with OOM"
     else:
-        return "Fail with UNKWON ERROR"
+        return "Fail with UNKNOWN ERROR"
 
 
 # TODO only dependent on dist context
@@ -245,7 +241,7 @@ class OptimizationTuner:
     def device_id(self):
         return paddle.distributed.ParallelEnv().device_id
 
-    # TODO Generate compelet program with all parts like forward, backward, update
+    # TODO Generate complete program with all parts like forward, backward, update
     # as well as parallelism transformation.
     def _build_programs_without_optimization(self):
         serial_main_program = self._baseline_dist_context.serial_main_program
@@ -308,7 +304,7 @@ class OptimizationTuner:
                 self._baseline_dist_context.serial_feed_vars["inputs"]
                 + self._baseline_dist_context.serial_feed_vars["labels"]
             )
-            if config["use_pure_fp16"]:
+            if config["dtype"] == "float16" and config["level"] == "o2":
                 config["base_opt"] = dist_context.serial_optimizer
                 auto_parallel_fp16_pass = new_pass("auto_parallel_fp16", config)
                 auto_parallel_fp16_pass.apply(
@@ -347,14 +343,12 @@ class OptimizationTuner:
         # Generate optimizer
         # FIXME should be remove from apply pass after pass support optimizers
         with program_guard(dist_main_prog, dist_startup_prog):
-            with unique_name.guard("opt_"):
+            with dist_main_prog.switch_name_generator_guard("opt_"):
                 optimizer_ops = dist_context.serial_optimizer.apply_gradients(
                     dist_params_grads
                 )
         completer.complete_update_annotation(dist_main_prog)
 
-        # Do reshard process
-        set_grad_var_shape(dist_main_prog, dist_context)
         resharder = Resharder(
             dist_main_prog,
             dist_startup_prog,
@@ -417,15 +411,15 @@ class OptimizationTuner:
             paddle.distributed.ParallelEnv()
         )
         profile_ctx['group_map'] = parse_process_groups()
-        profile_ctx[
-            "loss_var_name"
-        ] = self._baseline_dist_context.serial_loss.name
-        profile_ctx[
-            "main_program_decs"
-        ] = trial.main_program.desc.serialize_to_string()
-        profile_ctx[
-            "startup_program_decs"
-        ] = trial.startup_program.desc.serialize_to_string()
+        profile_ctx["loss_var_name"] = (
+            self._baseline_dist_context.serial_loss.name
+        )
+        profile_ctx["main_program_decs"] = (
+            trial.main_program.desc.serialize_to_string()
+        )
+        profile_ctx["startup_program_decs"] = (
+            trial.startup_program.desc.serialize_to_string()
+        )
         self._dataset.batch_size = self._batch_size
         self._dataset.input_names = self._get_input_names()
 
@@ -465,7 +459,7 @@ class OptimizationTuner:
             + " "
             + profile_args
         )
-        cmd = [sys.executable, "-u"] + coverage_args + shlex.split(cmd_args)
+        cmd = [sys.executable, "-u", *coverage_args, *shlex.split(cmd_args)]
 
         parent_env = copy.copy(os.environ.copy())
         # env flags need for profile
@@ -518,7 +512,7 @@ class OptimizationTuner:
                 results = json.load(fp)
             return results
         except FileNotFoundError:
-            Error_results = {"Throughtput": -1, "ErrorType": 'FatalError'}
+            Error_results = {"Throughput": -1, "ErrorType": 'FatalError'}
             return Error_results
 
     def _evaluate_trial(self, trial):
@@ -538,18 +532,16 @@ class OptimizationTuner:
             )
 
         self._logger.info(
-            "Trial {} evaluation finish with {}.".format(
-                trial.name, parse_results(results)
-            )
+            f"Trial {trial.name} evaluation finish with {parse_results(results)}."
         )
         return results
 
     def _update(self, i, trial, results):
         self._finished_trials.append(trial)
 
-        cur_mertic = get_metric(results)
-        if self._best_metric is None or cur_mertic > self._best_metric:
-            self._best_metric = cur_mertic
+        cur_metric = get_metric(results)
+        if self._best_metric is None or cur_metric > self._best_metric:
+            self._best_metric = cur_metric
             self._best_iter = i
 
     def _get_trial_dir(self, trial):
@@ -572,15 +564,11 @@ class OptimizationTuner:
         """
         # TODO summary with the trial_name with metric_of_trial
         best_trial = self._finished_trials[self._best_iter]
-        summary_ = """
+        summary_ = f"""
 Tuning Result Summary
-Run total {} trials with {} min.
-The best trial is: [{}], whose configuration is following:
-        """.format(
-            len(self._finished_trials),
-            (time.time() - self._tuning_start_time) / 60,
-            best_trial.name,
-        )
+Run total {len(self._finished_trials)} trials with {(time.time() - self._tuning_start_time) / 60} min.
+The best trial is: [{best_trial.name}], whose configuration is following:
+        """
         summary_ += "\n" + best_trial.summary() + "\n"
         self._logger.info(summary_)
         with open(os.path.join(self.project_dir, "summary.txt"), "w+") as fw:
@@ -641,9 +629,7 @@ The best trial is: [{}], whose configuration is following:
                 and self._config.early_stop <= i - self._best_iter
             ):
                 self._logger.info(
-                    "Early stop the Tuning since there is no better trial found within [{}] trials".format(
-                        self._config.early_stop
-                    )
+                    f"Early stop the Tuning since there is no better trial found within [{self._config.early_stop}] trials"
                 )
                 break
 

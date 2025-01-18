@@ -31,6 +31,7 @@
 #include "paddle/cinn/poly/isl_utils.h"
 #include "paddle/cinn/poly/map.h"
 #include "paddle/cinn/poly/stage.h"
+#include "paddle/common/enforce.h"
 
 namespace cinn {
 namespace poly {
@@ -46,12 +47,16 @@ struct TimeDim {
 
   TimeDim() = default;
   TimeDim(const std::string &dim, int time) : dim(dim), time(time) {
-    CHECK(!dim.empty());
+    PADDLE_ENFORCE_EQ(
+        !dim.empty(),
+        true,
+        ::common::errors::InvalidArgument(
+            "The dimension is empty. Please provide a valid dimension."));
   }
 };
 
 class ScheduleGraphNode;
-struct ScheduleGraph : public common::Graph {};
+struct ScheduleGraph : public cinn::common::Graph {};
 
 /**
  * ISL schedule map with time space, used to generate the final schedule.
@@ -180,7 +185,7 @@ class SchedulerBase {
  * Schedule Kind.
  */
 enum class ScheduleKind {
-  //! Basic strategy, each status is scheduled seperately.
+  //! Basic strategy, each status is scheduled separately.
   Naive = 0,
   //! The strategy with iteration domain considered.
   Poly = 1,
@@ -205,9 +210,9 @@ std::unique_ptr<Schedule> CreateSchedule(
 // std::vector<Stage *> GatherStagesInTensors(const std::vector<ir::Tensor> &xs,
 // bool with_placeholder = false);
 
-struct ScheduleGraphEdge : public common::GraphEdge {
-  ScheduleGraphEdge(common::GraphNode *a, common::GraphNode *b)
-      : common::GraphEdge(a, b) {}
+struct ScheduleGraphEdge : public cinn::common::GraphEdge {
+  ScheduleGraphEdge(cinn::common::GraphNode *a, cinn::common::GraphNode *b)
+      : cinn::common::GraphEdge(a, b) {}
 
   //! Dependency level.
   int level{-1};
@@ -216,7 +221,7 @@ struct ScheduleGraphEdge : public common::GraphEdge {
 /**
  * Node in the schedule graph.
  */
-struct ScheduleGraphNode : public common::GraphNode {
+struct ScheduleGraphNode : public cinn::common::GraphNode {
   TimeSchedule time_schedule;
   Stage *stage{};
 

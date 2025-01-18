@@ -34,7 +34,7 @@ class TestCloudRoleMaker2(unittest.TestCase):
 
     def test_pslib_2(self):
         """Test cases for pslib."""
-        from paddle import fluid
+        from paddle import base
         from paddle.incubate.distributed.fleet.parameter_server.distribute_transpiler import (
             fleet,
         )
@@ -52,23 +52,23 @@ class TestCloudRoleMaker2(unittest.TestCase):
         os.environ["PADDLE_PSERVERS_IP_PORT_LIST"] = "127.0.0.1:36002"
         os.environ["PADDLE_TRAINER_ID"] = "0"
         os.environ["PADDLE_TRAINERS_NUM"] = "1"
-        place = fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CPUPlace()
+        exe = base.Executor(place)
         try:
             fleet.init(None)
         except:
             print("no mpi4py, skip test_pslib_2")
             return
-        train_program = fluid.Program()
-        startup_program = fluid.Program()
-        scope = fluid.Scope()
-        with fluid.program_guard(train_program, startup_program):
+        train_program = base.Program()
+        startup_program = base.Program()
+        scope = base.Scope()
+        with base.program_guard(train_program, startup_program):
             show = paddle.static.data(
-                name="show", shape=[-1, 1], dtype="float32", lod_level=1
+                name="show", shape=[-1, 1], dtype="float32"
             )
             fc = paddle.static.nn.fc(x=show, size=1, activation=None)
             label = paddle.static.data(
-                name="click", shape=[-1, 1], dtype="int64", lod_level=1
+                name="click", shape=[-1, 1], dtype="int64"
             )
             label_cast = paddle.cast(label, dtype='float32')
             cost = paddle.nn.functional.log_loss(fc, label_cast)
@@ -279,18 +279,18 @@ class TestCloudRoleMaker2(unittest.TestCase):
         tmp.barrier_worker()
         tmp.barrier_all()
         from paddle.incubate.distributed.fleet.role_maker import (
-            MPISymetricRoleMaker,
+            MPISymmetricRoleMaker,
         )
 
-        tmp1 = MPISymetricRoleMaker()
+        tmp1 = MPISymmetricRoleMaker()
         tmp1.all_gather(1)
         tmp1.all_gather(1)
-        tmp2 = MPISymetricRoleMaker()
+        tmp2 = MPISymmetricRoleMaker()
         tmp2.all_reduce_worker([], [])
-        tmp3 = MPISymetricRoleMaker()
+        tmp3 = MPISymmetricRoleMaker()
         tmp3.barrier_worker()
         tmp3.barrier_worker()
-        tmp4 = MPISymetricRoleMaker()
+        tmp4 = MPISymmetricRoleMaker()
         tmp4.barrier_all()
         tmp4.barrier_all()
 

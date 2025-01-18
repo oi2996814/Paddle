@@ -44,7 +44,7 @@ struct CPUContext::Impl {
     PADDLE_ENFORCE_NE(
         eigen_device_,
         nullptr,
-        phi::errors::Unavailable("the cpu eigen_device is nullptr."));
+        common::errors::Unavailable("the cpu eigen_device is nullptr."));
     return eigen_device_;
   }
 
@@ -65,9 +65,9 @@ CPUContext::CPUContext(const Place& place)
 
 CPUContext::~CPUContext() = default;
 
-CPUContext::CPUContext(CPUContext&&) = default;
+CPUContext::CPUContext(CPUContext&&) = default;  // NOLINT
 
-CPUContext& CPUContext::operator=(CPUContext&&) = default;
+CPUContext& CPUContext::operator=(CPUContext&&) = default;  // NOLINT
 
 Eigen::DefaultDevice* CPUContext::eigen_device() const {
   return impl_->GetEigenDevice();

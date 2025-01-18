@@ -14,16 +14,17 @@
 
 import copy
 import itertools
+import os
 import unittest
 
 import numpy as np
 import scipy
 import scipy.linalg
-from eager_op_test import OpTest
+from op_test import OpTest
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 
 def scipy_lu(A, pivot):
@@ -32,7 +33,7 @@ def scipy_lu(A, pivot):
         return scipy.linalg.lu(A, permute_l=not pivot)
     else:
         preshape = shape[:-2]
-        batchsize = np.product(shape) // (shape[-2] * shape[-1])
+        batchsize = np.prod(shape) // (shape[-2] * shape[-1])
         PP = []
         PL = []
         PU = []
@@ -57,7 +58,7 @@ def Pmat_to_perm(Pmat_org, cut):
     shape = Pmat.shape
     rows = shape[-2]
     cols = shape[-1]
-    batchsize = max(1, np.product(shape[:-2]))
+    batchsize = max(1, np.prod(shape[:-2]))
     P = Pmat.reshape(batchsize, rows, cols)
     permmat = []
     for b in range(batchsize):
@@ -73,8 +74,8 @@ def Pmat_to_perm(Pmat_org, cut):
         permmat.append(permlst)
     Pivot = (
         np.array(permmat).reshape(
-            list(shape[:-2])
-            + [
+            [
+                *shape[:-2],
                 rows,
             ]
         )
@@ -85,7 +86,7 @@ def Pmat_to_perm(Pmat_org, cut):
 
 def perm_to_Pmat(perm, dim):
     pshape = perm.shape
-    bs = int(np.product(perm.shape[:-1]).item())
+    bs = int(np.prod(perm.shape[:-1]).item())
     perm = perm.reshape((bs, pshape[-1]))
     oneslst = []
     for i in range(bs):
@@ -99,7 +100,7 @@ def perm_to_Pmat(perm, dim):
         ones = paddle.eye(dim)
         nmat = paddle.scatter(ones, paddle.to_tensor(idlst), ones)
         oneslst.append(nmat)
-    return np.array(oneslst).reshape(list(pshape[:-1]) + [dim, dim])
+    return np.array(oneslst).reshape([*pshape[:-1], dim, dim])
 
 
 # m < n
@@ -137,7 +138,7 @@ class TestLUOp(OpTest):
         self.output = NLU
         self.Pivots = Pmat_to_perm(sP, min(ashape[-2], ashape[-1]))
         self.Infos = (
-            np.zeros(self.x_shape[:-2]) if len(X.shape) > 2 else np.array([0])
+            np.zeros(self.x_shape[:-2]) if len(X.shape) > 2 else np.array(0)
         )
 
     def setUp(self):
@@ -156,10 +157,10 @@ class TestLUOp(OpTest):
         }
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X'], ['Out'])
+        self.check_grad(['X'], ['Out'], check_pir=True)
 
 
 # m = n 2D
@@ -202,9 +203,15 @@ class TestLUAPI(unittest.TestCase):
             min_mn = min(m, n)
             pivot = True
 
-            places = [fluid.CPUPlace()]
+            places = []
+            if (
+                os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+                in ['1', 'true', 'on']
+                or not core.is_compiled_with_cuda()
+            ):
+                places.append(base.CPUPlace())
             if core.is_compiled_with_cuda():
-                places.append(fluid.CUDAPlace(0))
+                places.append(base.CUDAPlace(0))
             for place in places:
                 paddle.disable_static(place)
                 batch_size = a.size // (a.shape[-1] * a.shape[-2])
@@ -253,11 +260,18 @@ class TestLUAPI(unittest.TestCase):
             pivot = True
 
             places = []
-            places = [fluid.CPUPlace()]
+            if (
+                os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+                in ['1', 'true', 'on']
+                or not core.is_compiled_with_cuda()
+            ):
+                places.append(base.CPUPlace())
             if core.is_compiled_with_cuda():
-                places.append(fluid.CUDAPlace(0))
+                places.append(base.CUDAPlace(0))
             for place in places:
-                with fluid.program_guard(fluid.Program(), fluid.Program()):
+                with paddle.static.program_guard(
+                    paddle.static.Program(), paddle.static.Program()
+                ):
                     batch_size = a.size // (a.shape[-1] * a.shape[-2])
                     sP, sl, sU = scipy_lu(a, pivot)
                     sL = np.tril(sl, -1)
@@ -282,9 +296,8 @@ class TestLUAPI(unittest.TestCase):
                         name="input", shape=shape, dtype=dtype
                     )
                     lu, p = paddle.linalg.lu(x, pivot=pivot)
-                    exe = fluid.Executor(place)
+                    exe = base.Executor(place)
                     fetches = exe.run(
-                        fluid.default_main_program(),
                         feed={"input": a},
                         fetch_list=[lu, p],
                     )
@@ -310,7 +323,7 @@ class TestLUAPI(unittest.TestCase):
 
 class TestLUAPIError(unittest.TestCase):
     def test_errors(self):
-        with paddle.fluid.dygraph.guard():
+        with paddle.base.dygraph.guard():
             # The size of input in lu should not be 0.
             def test_0_size():
                 array = np.array([], dtype=np.float32)

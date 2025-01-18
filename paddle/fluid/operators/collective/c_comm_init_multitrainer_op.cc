@@ -17,7 +17,7 @@ limitations under the License. */
 #if defined(PADDLE_WITH_RCCL)
 #include <rccl.h>
 #endif
-#include <stdint.h>
+#include <cstdint>
 
 #include <ostream>
 #include <string>
@@ -29,12 +29,11 @@ limitations under the License. */
 // #include "paddle/fluid/operators/distributed/distributed.h"
 // #include "paddle/fluid/operators/distributed/request_handler_impl.h"
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
-#include "paddle/fluid/platform/collective_helper.h"
 #include "paddle/fluid/platform/device/gpu/nccl_helper.h"
+#include "paddle/phi/core/platform/collective_helper.h"
 #endif
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class CCommInitMultiTrainerInferShape : public framework::InferShapeBase {
  public:
@@ -51,10 +50,10 @@ class CCommInitMultiTrainerOp : public framework::OperatorBase {
       : OperatorBase(type, inputs, outputs, attrs) {}
 
   void RunImpl(const framework::Scope& scope,
-               const platform::Place& place) const override {
+               const phi::Place& place) const override {
     auto var = scope.FindVar(Input("X"));
     PADDLE_ENFORCE_NOT_NULL(
-        var, platform::errors::InvalidArgument("Input X must be provided."));
+        var, common::errors::InvalidArgument("Input X must be provided."));
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
     ncclUniqueId* nccl_id = var->GetMutable<ncclUniqueId>();
 
@@ -70,8 +69,8 @@ class CCommInitMultiTrainerOp : public framework::OperatorBase {
     platform::NCCLCommContext::Instance().CreateNCCLCommMultiTrainer(
         devices, nccl_id, ntrainers, train_id, rid);
 #else
-    PADDLE_THROW(platform::errors::Unimplemented(
-        "PaddlePaddle should compile with GPU."));
+    PADDLE_THROW(
+        common::errors::Unimplemented("PaddlePaddle should compile with GPU."));
 #endif
   }
 };
@@ -83,7 +82,7 @@ class CCommInitMultiTrainerOpMaker : public framework::OpProtoAndCheckerMaker {
     AddComment(R"DOC(
 CCommInitMultiTrainer operator
 
-Initialize collective communicatoin context within this trainer
+Initialize collective communication context within this trainer
 )DOC");
     AddAttr<int>("ntrainers",
                  "(int) The number of trainers of distributed trainers");
@@ -98,8 +97,7 @@ Initialize collective communicatoin context within this trainer
   }
 };
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
 

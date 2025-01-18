@@ -16,7 +16,7 @@
 
 #include <thrust/random.h>
 
-#include "gflags/gflags.h"
+#include "paddle/common/flags.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/funcs/distribution_helper.h"
 #include "paddle/phi/kernels/funcs/index_impl.cu.h"
@@ -61,7 +61,7 @@ void UniformKernel(const Context& dev_ctx,
                    const Scalar& max,
                    int seed,
                    DenseTensor* out) {
-  out->Resize(phi::make_ddim(shape.GetData()));
+  out->Resize(common::make_ddim(shape.GetData()));
   dev_ctx.template Alloc<T>(out);
   if (seed == 0) {
     // Use global Generator seed

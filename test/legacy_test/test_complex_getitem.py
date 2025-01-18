@@ -12,19 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
 
-import paddle.fluid.dygraph as dg
-from paddle import fluid
+import paddle
+import paddle.base.dygraph as dg
+from paddle import base
 
 
 class TestComplexGetitemLayer(unittest.TestCase):
     def setUp(self):
-        self._places = [fluid.CPUPlace()]
-        if fluid.core.is_compiled_with_cuda():
-            self._places.append(fluid.CUDAPlace(0))
+        self._places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            self._places.append(base.CPUPlace())
+        if base.core.is_compiled_with_cuda():
+            self._places.append(base.CUDAPlace(0))
 
     def test_case1(self):
         x_np = np.random.randn(2, 3, 4) + 1j * np.random.randn(2, 3, 4)
@@ -32,7 +40,7 @@ class TestComplexGetitemLayer(unittest.TestCase):
 
         for place in self._places:
             with dg.guard(place):
-                x_var = dg.to_variable(x_np)
+                x_var = paddle.to_tensor(x_np)
                 x_var_slice = x_var[0]
 
             np.testing.assert_allclose(x_var_slice.numpy(), x_np_slice)
@@ -43,7 +51,7 @@ class TestComplexGetitemLayer(unittest.TestCase):
 
         for place in self._places:
             with dg.guard(place):
-                x_var = dg.to_variable(x_np)
+                x_var = paddle.to_tensor(x_np)
                 x_var_slice = x_var[0][1]
 
             np.testing.assert_allclose(x_var_slice.numpy(), x_np_slice)
@@ -54,7 +62,7 @@ class TestComplexGetitemLayer(unittest.TestCase):
 
         for place in self._places:
             with dg.guard(place):
-                x_var = dg.to_variable(x_np)
+                x_var = paddle.to_tensor(x_np)
                 x_var_slice = x_var[0][1][2]
 
             np.testing.assert_allclose(x_var_slice.numpy(), x_np_slice)
@@ -65,7 +73,7 @@ class TestComplexGetitemLayer(unittest.TestCase):
 
         for place in self._places:
             with dg.guard(place):
-                x_var = dg.to_variable(x_np)
+                x_var = paddle.to_tensor(x_np)
                 x_var_slice = x_var[0][1][0:3]
 
             np.testing.assert_allclose(x_var_slice.numpy(), x_np_slice)
@@ -76,7 +84,7 @@ class TestComplexGetitemLayer(unittest.TestCase):
 
         for place in self._places:
             with dg.guard(place):
-                x_var = dg.to_variable(x_np)
+                x_var = paddle.to_tensor(x_np)
                 x_var_slice = x_var[0][1][0:4:2]
 
             np.testing.assert_allclose(x_var_slice.numpy(), x_np_slice)
@@ -89,7 +97,7 @@ class TestComplexGetitemLayer(unittest.TestCase):
 
         for place in self._places:
             with dg.guard(place):
-                x_var = dg.to_variable(x_np)
+                x_var = paddle.to_tensor(x_np)
                 x_var_slice = x_var[0][1:3][0:4:2]
 
             np.testing.assert_allclose(x_var_slice.numpy(), x_np_slice)

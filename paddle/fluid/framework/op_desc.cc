@@ -25,10 +25,12 @@ limitations under the License. */
 #include "paddle/fluid/framework/var_type_inference.h"
 #include "paddle/fluid/operators/ops_extra_info.h"
 #include "paddle/phi/common/complex.h"
+#include "paddle/pir/include/core/block.h"
+#include "paddle/pir/include/core/program.h"
+#include "paddle/pir/include/core/value.h"
 #include "paddle/utils/blank.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 class CompileTimeInferShapeContext : public InferShapeContext {
  public:
@@ -56,13 +58,13 @@ class CompileTimeInferShapeContext : public InferShapeContext {
         paddle::framework::OpInfoMap::Instance().Get(op_.Type()).proto_;
     PADDLE_ENFORCE_LT(idx,
                       op_proto->inputs().size(),
-                      platform::errors::OutOfRange(
+                      common::errors::OutOfRange(
                           "The index should be less than the size of inputs of "
                           "operator %s, but got index is %d and size is %d",
                           op_.Type(),
                           idx,
                           op_proto->inputs().size()));
-    return op_proto->inputs()[idx].name();
+    return op_proto->inputs()[static_cast<int>(idx)].name();
   }
 
   std::string GetOutputNameByIdx(size_t idx) const override {
@@ -71,13 +73,13 @@ class CompileTimeInferShapeContext : public InferShapeContext {
     PADDLE_ENFORCE_LT(
         idx,
         op_proto->outputs().size(),
-        platform::errors::OutOfRange(
+        common::errors::OutOfRange(
             "The index should be less than the size of outputs of "
             "operator %s, but got index is %d and size is %d",
             op_.Type(),
             idx,
             op_proto->outputs().size()));
-    return op_proto->outputs()[idx].name();
+    return op_proto->outputs()[static_cast<int>(idx)].name();
   }
 
   void ShareDim(const std::string &in,
@@ -86,14 +88,14 @@ class CompileTimeInferShapeContext : public InferShapeContext {
                 size_t j = 0) override {
     PADDLE_ENFORCE_LT(i,
                       Inputs(in).size(),
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The input variable index is out of range, expected "
                           "index less than %d, but received index is %d.",
                           Inputs(in).size(),
                           i));
     PADDLE_ENFORCE_LT(j,
                       Outputs(out).size(),
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The output variable index is out of range, expected "
                           "index less than %d, but received index is %d.",
                           Outputs(out).size(),
@@ -104,11 +106,11 @@ class CompileTimeInferShapeContext : public InferShapeContext {
 
     PADDLE_ENFORCE_NE(input_n,
                       framework::kEmptyVarName,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The input variable %s[%d] is empty.", in, i));
     PADDLE_ENFORCE_NE(output_n,
                       framework::kEmptyVarName,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The output variable %s[%d] is empty.", out, j));
 
     auto *in_var = block_.FindVarRecursive(input_n);
@@ -117,7 +119,7 @@ class CompileTimeInferShapeContext : public InferShapeContext {
     PADDLE_ENFORCE_EQ(
         in_var->GetType(),
         out_var->GetType(),
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The type of input %s and output %s do not match. The input type "
             "is %s, output type is %s.",
             input_n,
@@ -136,7 +138,7 @@ class CompileTimeInferShapeContext : public InferShapeContext {
     PADDLE_ENFORCE_EQ(
         in_var_names.size(),
         out_var_names.size(),
-        platform::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "Op [%s]:  Input var number should be equal with output var number",
             op_.Type()));
 
@@ -147,10 +149,10 @@ class CompileTimeInferShapeContext : public InferShapeContext {
 
       auto *in_var = block_.FindVarRecursive(in_var_names[i]);
       auto *out_var = block_.FindVarRecursive(out_var_names[i]);
-      if (in_var->GetType() != proto::VarType::LOD_TENSOR &&
-          in_var->GetType() != proto::VarType::LOD_TENSOR_ARRAY) {
+      if (in_var->GetType() != proto::VarType::DENSE_TENSOR &&
+          in_var->GetType() != proto::VarType::DENSE_TENSOR_ARRAY) {
         VLOG(3) << "input " << in
-                << " is not phi::DenseTensor or LoDTensorArray.";
+                << " is not phi::DenseTensor or phi::TensorArray.";
         return;
       }
       out_var->SetLoDLevel(in_var->GetLoDLevel());
@@ -163,32 +165,32 @@ class CompileTimeInferShapeContext : public InferShapeContext {
                 size_t j = 0) const override {
     PADDLE_ENFORCE_LT(i,
                       Inputs(in).size(),
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The input variable index is out of range, expected "
                           "index less than %d, but received index is %d.",
                           Inputs(in).size(),
                           i));
     PADDLE_ENFORCE_LT(j,
                       Outputs(out).size(),
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The output variable index is out of range, expected "
                           "index less than %d, but received index is %d.",
                           Outputs(out).size(),
                           j));
     PADDLE_ENFORCE_NE(Inputs(in)[i],
                       framework::kEmptyVarName,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The input variable %s[%d] is empty.", in, i));
     PADDLE_ENFORCE_NE(Outputs(out)[j],
                       framework::kEmptyVarName,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The output variable %s[%d] is empty.", out, j));
     auto *in_var = block_.FindVarRecursive(Inputs(in)[i]);
     auto *out_var = block_.FindVarRecursive(Outputs(out)[j]);
-    if (in_var->GetType() != proto::VarType::LOD_TENSOR &&
-        in_var->GetType() != proto::VarType::LOD_TENSOR_ARRAY) {
+    if (in_var->GetType() != proto::VarType::DENSE_TENSOR &&
+        in_var->GetType() != proto::VarType::DENSE_TENSOR_ARRAY) {
       VLOG(3) << "input " << in
-              << " is not phi::DenseTensor or LoDTensorArray.";
+              << " is not phi::DenseTensor or phi::TensorArray.";
       return;
     }
     out_var->SetLoDLevel(in_var->GetLoDLevel());
@@ -197,7 +199,7 @@ class CompileTimeInferShapeContext : public InferShapeContext {
   int32_t GetLoDLevel(const std::string &in, size_t i = 0) const override {
     PADDLE_ENFORCE_LT(i,
                       Inputs(in).size(),
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The input variable index is out of range, input "
                           "variable %s of operator %s only has %d elements.",
                           in,
@@ -205,7 +207,7 @@ class CompileTimeInferShapeContext : public InferShapeContext {
                           Inputs(in).size()));
     PADDLE_ENFORCE_NE(Inputs(in)[i],
                       framework::kEmptyVarName,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The input variable %s[%d] of operator %s is empty.",
                           in,
                           i,
@@ -213,7 +215,7 @@ class CompileTimeInferShapeContext : public InferShapeContext {
     auto *in_var = block_.FindVarRecursive(Inputs(in)[i]);
     PADDLE_ENFORCE_NOT_NULL(
         in_var,
-        platform::errors::NotFound(
+        common::errors::NotFound(
             "The input variable %s[%d] of operator %s is not found.",
             in,
             i,
@@ -226,7 +228,7 @@ class CompileTimeInferShapeContext : public InferShapeContext {
                    size_t j = 0) const override {
     PADDLE_ENFORCE_LT(j,
                       Outputs(out).size(),
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The output variable index is out of range, output "
                           "variable %s of operator %s only has %d elements.",
                           out,
@@ -234,7 +236,7 @@ class CompileTimeInferShapeContext : public InferShapeContext {
                           Outputs(out).size()));
     PADDLE_ENFORCE_NE(Outputs(out)[j],
                       framework::kEmptyVarName,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The output variable %s[%d] of operator %s is empty.",
                           out,
                           j,
@@ -242,7 +244,7 @@ class CompileTimeInferShapeContext : public InferShapeContext {
     auto *out_var = block_.FindVarRecursive(Outputs(out)[j]);
     PADDLE_ENFORCE_NOT_NULL(
         out_var,
-        platform::errors::NotFound(
+        common::errors::NotFound(
             "The output variable %s[%d] of operator %s is not found.",
             out,
             j,
@@ -284,7 +286,7 @@ class CompileTimeInferShapeContext : public InferShapeContext {
     const std::vector<std::string> &arg_names = Inputs(name);
     PADDLE_ENFORCE_EQ(arg_names.size(),
                       1UL,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The input(%s) should hold only one element, but now "
                           "it holds %d elements.",
                           name,
@@ -319,8 +321,8 @@ class CompileTimeInferShapeContext : public InferShapeContext {
     auto arg_names = Outputs(name);
     PADDLE_ENFORCE_EQ(arg_names.size(),
                       1UL,
-                      platform::errors::InvalidArgument(
-                          "The iutput(%s) should hold only one element, but "
+                      common::errors::InvalidArgument(
+                          "The input(%s) should hold only one element, but "
                           "now it holds %d elements.",
                           name,
                           arg_names.size()));
@@ -346,14 +348,13 @@ class CompileTimeInferShapeContext : public InferShapeContext {
       const std::vector<std::string> &names) const {
     std::vector<proto::VarType::Type> retv;
     retv.resize(names.size());
-    std::transform(
-        names.begin(),
-        names.end(),
-        retv.begin(),
-        std::bind(
-            std::mem_fn(&CompileTimeInferShapeContext::GetVarType),  // NOLINT
-            this,
-            std::placeholders::_1));
+    std::transform(names.begin(),
+                   names.end(),
+                   retv.begin(),
+                   std::bind(  // NOLINT
+                       std::mem_fn(&CompileTimeInferShapeContext::GetVarType),
+                       this,
+                       std::placeholders::_1));
     return retv;
   }
 
@@ -362,11 +363,11 @@ class CompileTimeInferShapeContext : public InferShapeContext {
   DDim GetDim(const std::string &name) const {
     auto var = block_.FindVarRecursive(name);
     PADDLE_ENFORCE_NOT_NULL(
-        var, platform::errors::NotFound("Variable %s is not found.", name));
+        var, common::errors::NotFound("Variable %s is not found.", name));
     DDim res;
     try {
       auto shape = var->GetShape();
-      res = phi::make_ddim(shape);
+      res = common::make_ddim(shape);
     } catch (...) {
       VLOG(5) << "GetDim of variable " << name << " error";
       std::rethrow_exception(std::current_exception());
@@ -392,7 +393,7 @@ class CompileTimeInferShapeContext : public InferShapeContext {
     size_t length = names.size();
     PADDLE_ENFORCE_EQ(length,
                       dims.size(),
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The input variables number(%d) and input dimensions "
                           "number(%d) do not match.",
                           length,
@@ -434,6 +435,9 @@ OpDesc::OpDesc(const std::string &type,
   InitRuntimeAttributeMapByOpExtraInfo(type, &runtime_attrs_);
 }
 
+OpDesc::OpDesc() = default;
+
+OpDesc::~OpDesc() = default;
 OpDesc::OpDesc(const OpDesc &other) {
   CopyFrom(other);
   block_ = other.block_;
@@ -513,6 +517,9 @@ OpDesc::OpDesc(const proto::OpDesc &desc, BlockDesc *block)
 // Explicitly implement the assign operator, Since the added
 // unique_ptr data member does not have the implicit assign operator.
 OpDesc &OpDesc::operator=(const OpDesc &other) {
+  if (this == &other) {
+    return *this;
+  }
   CopyFrom(other);
   block_ = other.block_;
   need_update_ = true;
@@ -524,12 +531,14 @@ proto::OpDesc *OpDesc::Proto() {
   return &desc_;
 }
 
+void OpDesc::SetType(const std::string &type) { desc_.set_type(type); }
+
 const std::vector<std::string> &OpDesc::Input(const std::string &name) const {
   auto it = inputs_.find(name);
   PADDLE_ENFORCE_NE(
       it,
       inputs_.end(),
-      platform::errors::NotFound(
+      common::errors::NotFound(
           "Input %s cannot be found in operator %s.", name, Type()));
   return it->second;
 }
@@ -575,7 +584,7 @@ const std::vector<std::string> &OpDesc::Output(const std::string &name) const {
   PADDLE_ENFORCE_NE(
       it,
       outputs_.end(),
-      platform::errors::NotFound(
+      common::errors::NotFound(
           "Output %s cannot be found in operator %s.", name, Type()));
   return it->second;
 }
@@ -744,7 +753,7 @@ void OpDesc::SetAttr(const std::string &name, const Attribute &v) {
         return;
       }
       default:
-        PADDLE_THROW(platform::errors::Unimplemented(
+        PADDLE_THROW(common::errors::Unimplemented(
             "Unsupported attribute type (code %d).", attr_type));
     }
     need_update_ = true;
@@ -814,13 +823,13 @@ Attribute OpDesc::GetAttr(const std::string &name, bool with_attr_var) const {
     PADDLE_ENFORCE_NE(
         it,
         runtime_attrs_.end(),
-        platform::errors::NotFound("Attribute %s is not found.", name));
+        common::errors::NotFound("Attribute %s is not found.", name));
   }
   if (!with_attr_var) {
     PADDLE_ENFORCE_EQ(
         HasAttrVar(it->second),
         false,
-        platform::errors::NotFound(
+        common::errors::NotFound(
             "Attribute %s with constant value is not found, but found it with "
             "Variable(s) type, which maybe not supported in some scenarios "
             "currently, such as TensorRT et.al",
@@ -839,7 +848,7 @@ const proto::OpProto::Attr &OpDesc::GetProtoAttr(
     }
   }
 
-  PADDLE_THROW(platform::errors::NotFound(
+  PADDLE_THROW(common::errors::NotFound(
       "Attribute %s is not found in proto %s.", name, proto.type()));
 }
 
@@ -857,7 +866,7 @@ std::vector<int> OpDesc::GetBlocksAttrIds(const std::string &name) const {
   PADDLE_ENFORCE_NE(
       it,
       attrs_.end(),
-      platform::errors::NotFound(
+      common::errors::NotFound(
           "Attribute `%s` is not found in operator `%s`.", name, desc_.type()));
   auto blocks = PADDLE_GET_CONST(std::vector<BlockDesc *>, it->second);
 
@@ -874,7 +883,7 @@ int OpDesc::GetBlockAttrId(const std::string &name) const {
   PADDLE_ENFORCE_NE(
       it,
       attrs_.end(),
-      platform::errors::NotFound(
+      common::errors::NotFound(
           "Attribute `%s` is not found in operator `%s`.", name, desc_.type()));
   return PADDLE_GET_CONST(BlockDesc *, it->second)->ID();
 }
@@ -962,7 +971,15 @@ struct SetAttrDescVisitor {
   void operator()(const std::vector<bool> &v) const {
     VectorToRepeated(v, attr_->mutable_bools());
   }
-
+  void operator()(const std::vector<pir::Value> &v) const {
+    // just do nothing.
+  }
+  void operator()(const std::vector<pir::Block *> &v) const {
+    // just do nothing.
+  }
+  void operator()(const std::shared_ptr<pir::Program> &v) const {
+    // just do nothing.
+  }
   void operator()(const std::vector<VarDesc *> &v) const {
     std::vector<std::string> var_names;
     for (auto var : v) {
@@ -1005,7 +1022,7 @@ struct SetAttrDescVisitor {
   }
 
   void operator()(paddle::blank) const {
-    PADDLE_THROW(platform::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "Unsupported calling method of SetAttrDescVisitor object for "
         "`boost::blank` type."));
   }
@@ -1070,7 +1087,7 @@ void OpDesc::Flush() {
 void OpDesc::CheckAttrs() {
   PADDLE_ENFORCE_EQ(Type().empty(),
                     false,
-                    platform::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "CheckAttrs() can not be called before type is set."));
   auto *checker = OpInfoMap::Instance().Get(Type()).Checker();
   if (checker == nullptr) {
@@ -1098,8 +1115,8 @@ void OpDesc::InferShape(const BlockDesc &block) {
     PADDLE_ENFORCE_EQ(
         static_cast<bool>(infer_shape),
         true,
-        platform::errors::NotFound(
-            "Operator %s's infer_shape is not registered.", this->Type()));
+        common::errors::NotFound("Operator %s's infer_shape is not registered.",
+                                 this->Type()));
     CompileTimeInferShapeContext ctx(*this, block);
     if (VLOG_IS_ON(10)) {
       std::ostringstream sout;
@@ -1119,7 +1136,7 @@ void OpDesc::InferShape(const BlockDesc &block) {
     infer_shape(&ctx);
   } catch (platform::EnforceNotMet &exception) {
     framework::AppendErrorOpHint(Type(), &exception);
-    throw std::move(exception);
+    throw exception;
   } catch (...) {
     std::rethrow_exception(std::current_exception());
   }
@@ -1127,8 +1144,8 @@ void OpDesc::InferShape(const BlockDesc &block) {
 
 void OpDesc::InferVarType(BlockDesc *block) const {
   // There are a few places that var type can be set.
-  // When VarDesc is created, default set to LOD_TENSOR.
-  // When output variable is created, default is default set to LOD_TENSOR.
+  // When VarDesc is created, default set to DENSE_TENSOR.
+  // When output variable is created, default is default set to DENSE_TENSOR.
   // We limit here to be the only place that operator defines its customized
   // var type inference. Hence, we don't do any "default" setting here.
   auto &info = OpInfoMap::Instance().Get(this->Type());
@@ -1163,7 +1180,7 @@ void OpDesc::UpdateVarAttr(const std::string &name, const Attribute &attr) {
     PADDLE_ENFORCE_EQ(
         attr_type,
         type,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Required attr.type == proto::AttrType::VAR, but received %s",
             attr_type));
     auto *var_desc = PADDLE_GET_CONST(VarDesc *, attr);
@@ -1173,7 +1190,7 @@ void OpDesc::UpdateVarAttr(const std::string &name, const Attribute &attr) {
     PADDLE_ENFORCE_EQ(
         attr_type,
         type,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Required attr.type == proto::AttrType::VARS, but received %s",
             attr_type));
     auto vars_desc = PADDLE_GET_CONST(std::vector<VarDesc *>, attr);
@@ -1195,10 +1212,10 @@ VarDesc *OpDesc::FindVarRecursive(const std::string &name) {
     }
     cur_block = cur_block->ParentBlock();
   }
-  PADDLE_THROW(platform::errors::NotFound(
+  PADDLE_THROW(common::errors::NotFound(
       "Not found Var(%s) from Block(%d) back into global Block.",
       name,
-      block_->ID()));
+      block_->ID()));  // NOLINT
 }
 
 CompileTimeInferShapeContext::CompileTimeInferShapeContext(
@@ -1219,10 +1236,10 @@ bool CompileTimeInferShapeContext::HasInput(const std::string &name) const {
   PADDLE_ENFORCE_EQ(
       length,
       1UL,
-      platform::errors::InvalidArgument("Input(%s) should have only one value, "
-                                        "but it has %d values now.",
-                                        name,
-                                        length));
+      common::errors::InvalidArgument("Input(%s) should have only one value, "
+                                      "but it has %d values now.",
+                                      name,
+                                      length));
   return block_.HasVarRecursive(input_names[0]);
 }
 
@@ -1235,13 +1252,13 @@ bool CompileTimeInferShapeContext::HasOutput(const std::string &name) const {
   if (length == 0) {
     return false;
   }
-  PADDLE_ENFORCE_EQ(length,
-                    1UL,
-                    platform::errors::InvalidArgument(
-                        "Output(%s) should have only one value, "
-                        "but it has %d values now.",
-                        name,
-                        length));
+  PADDLE_ENFORCE_EQ(
+      length,
+      1UL,
+      common::errors::InvalidArgument("Output(%s) should have only one value, "
+                                      "but it has %d values now.",
+                                      name,
+                                      length));
   return block_.HasVarRecursive(output_names[0]);
 }
 
@@ -1300,12 +1317,12 @@ std::vector<DDim> CompileTimeInferShapeContext::GetRepeatedDims(
     const std::string &name) const {
   auto var = block_.FindVarRecursive(name);
   PADDLE_ENFORCE_NOT_NULL(
-      var, platform::errors::NotFound("Variable %s is not found.", name));
+      var, common::errors::NotFound("Variable %s is not found.", name));
   std::vector<DDim> res;
   try {
     auto shapes = var->GetShapes();
     for (const auto &s : shapes) {
-      res.push_back(phi::make_ddim(s));
+      res.push_back(common::make_ddim(s));
     }
   } catch (...) {
     VLOG(5) << "GetRepeatedDim of variable " << name << " error.";
@@ -1316,16 +1333,17 @@ std::vector<DDim> CompileTimeInferShapeContext::GetRepeatedDims(
 
 void CompileTimeInferShapeContext::SetDim(const std::string &name,
                                           const DDim &dim) {
-  block_.FindVarRecursive(name)->SetShape(vectorize(dim));
+  block_.FindVarRecursive(name)->SetShape(common::vectorize(dim));
 }
 
 void CompileTimeInferShapeContext::SetRepeatedDims(
     const std::string &name, const std::vector<DDim> &dims) {
   auto var = block_.FindVarRecursive(name);
   PADDLE_ENFORCE_NOT_NULL(
-      var, platform::errors::NotFound("Variable %s is not found.", name));
+      var, common::errors::NotFound("Variable %s is not found.", name));
   std::vector<std::vector<int64_t>> dim_vec(dims.size());
-  std::transform(dims.begin(), dims.end(), dim_vec.begin(), phi::vectorize<>);
+  std::transform(
+      dims.begin(), dims.end(), dim_vec.begin(), common::vectorize<>);
   var->SetShapes(dim_vec);
 }
 
@@ -1347,12 +1365,11 @@ std::vector<std::string> AttrVarNames(const Attribute &attr) {
       vars_name.emplace_back(iter->Name());
     }
   } else {
-    PADDLE_THROW(platform::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "Unsupported Attribute value type `%s` for AttrVarNames",
-        platform::demangle(attr.type().name())));
+        common::demangle(attr.type().name())));
   }
   return vars_name;
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

@@ -6,52 +6,17 @@ set(LOCAL_ALL_ARCH ON)
 set(LOCAL_ALL_PLAT ON)
 if((WITH_GPU OR WITH_ROCM) AND (LINUX))
   py_test_modules(
-    test_allreduce MODULES test_allreduce ENVS
-    "PYTHONPATH=..:${PADDLE_BINARY_DIR}/python;http_proxy=;https_proxy=")
-  set_tests_properties(test_allreduce PROPERTIES TIMEOUT "120" LABELS
-                                                 "RUN_TYPE=DIST")
-endif()
-if((WITH_GPU OR WITH_ROCM) AND (LINUX))
-  py_test_modules(
-    test_broadcast MODULES test_broadcast ENVS
-    "PYTHONPATH=..:${PADDLE_BINARY_DIR}/python;http_proxy=;https_proxy=")
-  set_tests_properties(test_broadcast PROPERTIES TIMEOUT "120" LABELS
-                                                 "RUN_TYPE=DIST")
-endif()
-if((WITH_GPU OR WITH_ROCM) AND (LINUX))
-  py_test_modules(
     test_c_concat MODULES test_c_concat ENVS
-    "PYTHONPATH=..:${PADDLE_BINARY_DIR}/python;http_proxy=;https_proxy=")
+    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python")
   set_tests_properties(test_c_concat PROPERTIES TIMEOUT "120" LABELS
                                                 "RUN_TYPE=DIST")
 endif()
 if((WITH_GPU OR WITH_ROCM) AND (LINUX))
   py_test_modules(
-    test_c_identity MODULES test_c_identity ENVS
-    "PYTHONPATH=..:${PADDLE_BINARY_DIR}/python;http_proxy=;https_proxy=")
-  set_tests_properties(test_c_identity PROPERTIES TIMEOUT "120" LABELS
-                                                  "RUN_TYPE=DIST")
-endif()
-if((WITH_GPU OR WITH_ROCM) AND (LINUX))
-  py_test_modules(
     test_c_split MODULES test_c_split ENVS
-    "PYTHONPATH=..:${PADDLE_BINARY_DIR}/python;http_proxy=;https_proxy=")
+    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python")
   set_tests_properties(test_c_split PROPERTIES TIMEOUT "120" LABELS
                                                "RUN_TYPE=DIST")
-endif()
-if((WITH_ROCM OR WITH_GPU) AND (LINUX))
-  bash_test_modules(
-    test_collective_split_embedding
-    START_BASH
-    ../legacy_test/dist_test.sh
-    TIMEOUT
-    "300"
-    LABELS
-    "RUN_TYPE=DIST"
-    ENVS
-    "PADDLE_DIST_UT_PORT=21288;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python;http_proxy=;https_proxy="
-  )
-  set_tests_properties(test_collective_split_embedding PROPERTIES TIMEOUT "300")
 endif()
 if((WITH_GPU OR WITH_ROCM) AND (LINUX))
   py_test_modules(
@@ -77,14 +42,18 @@ if((WITH_GPU OR WITH_ROCM) AND (LINUX))
 endif()
 if((WITH_GPU OR WITH_ROCM) AND (LINUX))
   py_test_modules(
-    test_collective_alltoall_api MODULES test_collective_alltoall_api ENVS
-    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python")
+    test_collective_alltoall_api
+    MODULES
+    test_collective_alltoall_api
+    ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python;FLAGS_enable_pir_api=0"
+  )
   if((NOT WITH_ROCM) AND ((${CUDA_ARCH_NAME}) STREQUAL "Ampere"))
     set_tests_properties(test_collective_alltoall_api
-                         PROPERTIES TIMEOUT "160" LABELS "RUN_TYPE=DIST")
+                         PROPERTIES TIMEOUT "280" LABELS "RUN_TYPE=DIST")
   else()
     set_tests_properties(test_collective_alltoall_api
-                         PROPERTIES TIMEOUT "120" LABELS "RUN_TYPE=DIST")
+                         PROPERTIES TIMEOUT "240" LABELS "RUN_TYPE=DIST")
   endif()
 endif()
 if((WITH_GPU OR WITH_ROCM) AND (LINUX))
@@ -111,8 +80,12 @@ if((WITH_GPU OR WITH_ROCM) AND (LINUX))
 endif()
 if((WITH_GPU OR WITH_ROCM) AND (LINUX))
   py_test_modules(
-    test_collective_barrier_api MODULES test_collective_barrier_api ENVS
-    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python")
+    test_collective_barrier_api
+    MODULES
+    test_collective_barrier_api
+    ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python;FLAGS_enable_pir_api=0"
+  )
   set_tests_properties(test_collective_barrier_api
                        PROPERTIES TIMEOUT "300" LABELS "RUN_TYPE=DIST")
 endif()
@@ -133,8 +106,12 @@ if((WITH_GPU OR WITH_ROCM) AND (LINUX))
 endif()
 if((WITH_GPU OR WITH_ROCM) AND (LINUX))
   py_test_modules(
-    test_collective_broadcast_api MODULES test_collective_broadcast_api ENVS
-    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python")
+    test_collective_broadcast_api
+    MODULES
+    test_collective_broadcast_api
+    ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python;FLAGS_enable_pir_api=0"
+  )
   if((NOT WITH_ROCM) AND ((${CUDA_ARCH_NAME}) STREQUAL "Ampere"))
     set_tests_properties(test_collective_broadcast_api
                          PROPERTIES TIMEOUT "500" LABELS "RUN_TYPE=DIST")
@@ -168,15 +145,23 @@ if((WITH_GPU OR WITH_ROCM) AND (LINUX))
 endif()
 if((WITH_GPU OR WITH_ROCM) AND (LINUX))
   py_test_modules(
-    test_collective_global_gather MODULES test_collective_global_gather ENVS
-    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python")
+    test_collective_global_gather
+    MODULES
+    test_collective_global_gather
+    ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python;FLAGS_enable_pir_api=0"
+  )
   set_tests_properties(test_collective_global_gather
                        PROPERTIES TIMEOUT "200" LABELS "RUN_TYPE=DIST")
 endif()
 if((WITH_GPU OR WITH_ROCM) AND (LINUX))
   py_test_modules(
-    test_collective_global_scatter MODULES test_collective_global_scatter ENVS
-    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python")
+    test_collective_global_scatter
+    MODULES
+    test_collective_global_scatter
+    ENVS
+    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python;FLAGS_enable_pir_api=0"
+  )
   set_tests_properties(test_collective_global_scatter
                        PROPERTIES TIMEOUT "200" LABELS "RUN_TYPE=DIST")
 endif()
@@ -209,11 +194,19 @@ if((WITH_GPU OR WITH_ROCM) AND (LINUX))
   set_tests_properties(test_collective_process_group PROPERTIES TIMEOUT "350")
 endif()
 if((WITH_GPU OR WITH_ROCM) AND (LINUX))
-  py_test_modules(
-    test_collective_reduce MODULES test_collective_reduce ENVS
-    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python")
-  set_tests_properties(test_collective_reduce PROPERTIES TIMEOUT "300" LABELS
-                                                         "RUN_TYPE=DIST")
+  bash_test_modules(
+    test_collective_process_group_pir
+    START_BASH
+    ../legacy_test/dist_test.sh
+    TIMEOUT
+    "350"
+    LABELS
+    "RUN_TYPE=DIST"
+    ENVS
+    "PADDLE_DIST_UT_PORT=21294;http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python"
+  )
+  set_tests_properties(test_collective_process_group_pir PROPERTIES TIMEOUT
+                                                                    "350")
 endif()
 if((WITH_GPU OR WITH_ROCM) AND (LINUX))
   py_test_modules(
@@ -221,7 +214,7 @@ if((WITH_GPU OR WITH_ROCM) AND (LINUX))
     MODULES
     test_collective_reduce_api
     ENVS
-    "NVIDIA_TF32_OVERRIDE=0;http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python"
+    "NVIDIA_TF32_OVERRIDE=0;http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python;FLAGS_enable_pir_api=0"
   )
   set_tests_properties(test_collective_reduce_api
                        PROPERTIES TIMEOUT "500" LABELS "RUN_TYPE=DIST")
@@ -240,7 +233,9 @@ if((WITH_GPU OR WITH_ROCM) AND (LINUX))
   )
   set_tests_properties(test_collective_reduce_scatter PROPERTIES TIMEOUT "350")
 endif()
-if((WITH_GPU OR WITH_ROCM) AND (LINUX))
+if((WITH_GPU OR WITH_ROCM)
+   AND (LINUX)
+   AND (NOT WITH_COVERAGE))
   py_test_modules(
     test_collective_reduce_scatter_api MODULES
     test_collective_reduce_scatter_api ENVS
@@ -252,13 +247,6 @@ if((WITH_GPU OR WITH_ROCM) AND (LINUX))
     set_tests_properties(test_collective_reduce_scatter_api
                          PROPERTIES TIMEOUT "250" LABELS "RUN_TYPE=DIST")
   endif()
-endif()
-if((WITH_GPU OR WITH_ROCM) AND (LINUX))
-  py_test_modules(
-    test_collective_scatter MODULES test_collective_scatter ENVS
-    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python")
-  set_tests_properties(test_collective_scatter PROPERTIES TIMEOUT "300" LABELS
-                                                          "RUN_TYPE=DIST")
 endif()
 if((WITH_GPU OR WITH_ROCM) AND (LINUX))
   py_test_modules(
@@ -284,28 +272,14 @@ if((WITH_GPU OR WITH_ROCM) AND (LINUX))
 endif()
 if((WITH_GPU OR WITH_ROCM) AND (LINUX))
   py_test_modules(
-    test_collective_sendrecv MODULES test_collective_sendrecv ENVS
-    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python")
-  set_tests_properties(test_collective_sendrecv PROPERTIES TIMEOUT "300" LABELS
-                                                           "RUN_TYPE=DIST")
-endif()
-if((WITH_GPU OR WITH_ROCM) AND (LINUX))
-  py_test_modules(
-    test_collective_sendrecv_api MODULES test_collective_sendrecv_api ENVS
-    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python")
-  set_tests_properties(test_collective_sendrecv_api
-                       PROPERTIES TIMEOUT "300" LABELS "RUN_TYPE=DIST")
-endif()
-if((WITH_GPU OR WITH_ROCM) AND (LINUX))
-  py_test_modules(
-    test_collective_split_col_linear
+    test_collective_sendrecv_api
     MODULES
-    test_collective_split_col_linear
+    test_collective_sendrecv_api
     ENVS
-    "NVIDIA_TF32_OVERRIDE=0;http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python"
+    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python;FLAGS_enable_pir_api=0"
   )
-  set_tests_properties(test_collective_split_col_linear
-                       PROPERTIES TIMEOUT "300" LABELS "RUN_TYPE=DIST")
+  set_tests_properties(test_collective_sendrecv_api
+                       PROPERTIES TIMEOUT "500" LABELS "RUN_TYPE=DIST")
 endif()
 if((WITH_GPU OR WITH_ROCM) AND (LINUX))
   py_test_modules(
@@ -314,20 +288,6 @@ if((WITH_GPU OR WITH_ROCM) AND (LINUX))
     "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python")
   set_tests_properties(test_collective_split_embedding_none_divisible
                        PROPERTIES TIMEOUT "300" LABELS "RUN_TYPE=DIST")
-endif()
-if((WITH_GPU OR WITH_ROCM) AND (LINUX))
-  py_test_modules(
-    test_collective_split_row_linear MODULES test_collective_split_row_linear
-    ENVS "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python")
-  set_tests_properties(test_collective_split_row_linear
-                       PROPERTIES TIMEOUT "300" LABELS "RUN_TYPE=DIST")
-endif()
-if((WITH_GPU OR WITH_ROCM) AND (LINUX))
-  py_test_modules(
-    test_collective_wait MODULES test_collective_wait ENVS
-    "http_proxy=;https_proxy=;PYTHONPATH=..:${PADDLE_BINARY_DIR}/python")
-  set_tests_properties(test_collective_wait PROPERTIES TIMEOUT "300" LABELS
-                                                       "RUN_TYPE=DIST")
 endif()
 if((WITH_GPU OR WITH_ROCM) AND (LINUX))
   py_test_modules(

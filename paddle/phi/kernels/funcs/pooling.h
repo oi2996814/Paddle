@@ -18,10 +18,10 @@ limitations under the License. */
 #include <string>
 #include <vector>
 
+#include "paddle/common/hostdevice.h"
+#include "paddle/common/macros.h"  // import FLT_MAX
 #include "paddle/phi/common/amp_type_traits.h"
 #include "paddle/phi/core/dense_tensor.h"
-#include "paddle/phi/core/hostdevice.h"
-#include "paddle/phi/core/macros.h"  // import FLT_MAX
 
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 #include "paddle/phi/backends/gpu/gpu_decls.h"
@@ -69,6 +69,27 @@ class AvgPool {
 };
 
 template <class T>
+class LPPool {
+  using MT = typename dtype::MPTypeTrait<T>::Type;
+  MT intermediate_res;
+  float norm_type;
+
+ public:
+  HOSTDEVICE inline void setNormType(float ntype) { norm_type = ntype; }
+  DEVICE inline T initial() {
+    intermediate_res = static_cast<MT>(0.0f);
+    return static_cast<T>(0);
+  }
+  DEVICE inline void compute(const T& x, T* y UNUSED) {
+    intermediate_res += static_cast<MT>(powf(x, norm_type));
+  }
+
+  DEVICE inline void finalize(const T& pool_field UNUSED, T* y) {
+    *y = static_cast<T>(powf(intermediate_res, 1.0 / norm_type));
+  }
+};
+
+template <class T>
 class MaxPoolGrad {
  public:
   static constexpr bool use_x = true;
@@ -88,6 +109,21 @@ class AvgPoolGrad {
   }
 };
 
+template <class T>
+class LPPoolGrad {
+  float norm_type;
+
+ public:
+  static constexpr bool use_x = true;
+  HOSTDEVICE inline void setNormType(float ntype) { norm_type = ntype; }
+  HOSTDEVICE inline void compute(
+      const T& x, const T& y, const T& dy, T scale UNUSED, T* dx) {
+    *dx += static_cast<T>(static_cast<double>(dy) *
+                          powf(static_cast<double>(x) / static_cast<double>(y),
+                               norm_type - 1.0f));
+  }
+};
+
 /* used for adaptive pool to calculate start and end index of each divided grid
  */
 HOSTDEVICE inline int AdaptStartIndex(int ph, int input_size, int output_size) {
@@ -98,6 +134,45 @@ HOSTDEVICE inline int AdaptStartIndex(int ph, int input_size, int output_size) {
 HOSTDEVICE inline int AdaptEndIndex(int ph, int input_size, int output_size) {
   return static_cast<int>(
       ceil(static_cast<float>((ph + 1) * input_size) / output_size));
+}
+
+/* used for fractional pool to calculate start and end index of each divided
+ * grid
+ */
+HOSTDEVICE inline float FractionalRationalU(
+    float u, float alpha, int input, int output, int pool_size = 0) {
+  if (pool_size > 0) {
+    return u;
+  }
+
+  int base = input / output;
+
+  float u_max1 = static_cast<float>(base + 2) / alpha - 1;
+  float u_max2 = static_cast<float>(input + 1 - base) / alpha -
+                 static_cast<float>(output - 1);
+  float max_u = std::min(u_max1, u_max2);
+
+  return u * max_u;
+}
+
+HOSTDEVICE inline int FractionalStartIndex(int idx,
+                                           float alpha,
+                                           float u,
+                                           int pool_size = 0) {
+  // paper use ceil instead: static_cast<int>(ceil(alpha * (idx + u) - 1));
+  return static_cast<int>((idx + u) * alpha) - static_cast<int>(u * alpha);
+}
+
+HOSTDEVICE inline int FractionalEndIndex(int idx,
+                                         float alpha,
+                                         float u,
+                                         int pool_size = 0) {
+  if (pool_size > 0) {
+    return static_cast<int>((idx + u) * alpha) - static_cast<int>(u * alpha) +
+           pool_size;
+  }
+  // paper use ceil instead: static_cast<int>(ceil(alpha * (idx + 1 + u) - 1));
+  return static_cast<int>((idx + 1 + u) * alpha) - static_cast<int>(u * alpha);
 }
 
 /*
@@ -365,6 +440,64 @@ class MaxPool3dWithIndexGradFunctor {
                   DenseTensor* input_grad);
 };
 
+/*
+ * \brief Getting fractional max pooling results and corresponding max index,
+ * and calculating gradient. In up-sampling-pooling, it is necessary to know max
+ * element index. In pool2d, all tensors are in NCHW format. In pool3d, all
+ * tensors are in NCDHW format.
+ */
+template <typename Context, typename T1, typename T2>
+class FractionalMaxPool2dFunctor {
+ public:
+  void operator()(const Context& context,
+                  const DenseTensor& input,
+                  const std::vector<int>& output_size,
+                  const std::vector<int>& kernel_size,
+                  float random_u,
+                  bool return_mask,
+                  DenseTensor* output,
+                  DenseTensor* mask);
+};
+
+template <typename Context, typename T1, typename T2>
+class FractionalMaxPool2dGradFunctor {
+ public:
+  void operator()(const Context& context,
+                  const DenseTensor& output_grad,
+                  const DenseTensor& mask,
+                  const std::vector<int>& output_size,
+                  const std::vector<int>& kernel_size,
+                  float random_u,
+                  bool return_mask,
+                  DenseTensor* input_grad);
+};
+
+template <typename Context, typename T1, typename T2>
+class FractionalMaxPool3dFunctor {
+ public:
+  void operator()(const Context& context,
+                  const DenseTensor& input,
+                  const std::vector<int>& output_size,
+                  const std::vector<int>& kernel_size,
+                  float random_u,
+                  bool return_mask,
+                  DenseTensor* output,
+                  DenseTensor* mask);
+};
+
+template <typename Context, typename T1, typename T2>
+class FractionalMaxPool3dGradFunctor {
+ public:
+  void operator()(const Context& context,
+                  const DenseTensor& output_grad,
+                  const DenseTensor& mask,
+                  const std::vector<int>& output_size,
+                  const std::vector<int>& kernel_size,
+                  float random_u,
+                  bool return_mask,
+                  DenseTensor* input_grad);
+};
+
 inline int PoolOutputSize(int input_size,
                           int filter_size,
                           int padding_1,
@@ -374,7 +507,7 @@ inline int PoolOutputSize(int input_size,
   PADDLE_ENFORCE_NE(
       stride,
       0,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The stride of PoolOutputSize shall not be 0, but received %d.",
           stride));
 
@@ -405,17 +538,18 @@ inline int PoolOutputSize(int input_size,
   return output_size;
 }
 
-inline int MaxPoolOutputSize(int input_size,
-                             int filter_size,
-                             int padding,
-                             int stride) {
+inline int MaxPoolOutputSize(
+    int input_size, int filter_size, int padding, int stride, bool ceil_mode) {
   PADDLE_ENFORCE_NE(
       stride,
       0,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The stride of MaxPool shall not be 0, but received %d.", stride));
-  int output_size = (input_size - filter_size + 2 * padding) / stride + 1;
-  return output_size;
+  if (ceil_mode) {
+    return (input_size - filter_size + 2 * padding + stride - 1) / stride + 1;
+  } else {
+    return (input_size - filter_size + 2 * padding) / stride + 1;
+  }
 }
 
 template <typename T = int>
@@ -427,7 +561,7 @@ inline void UpdatePadding(std::vector<T>* paddings,
                           const std::vector<T>& strides,
                           const std::vector<T>& kernel_size) {
   // set padding size == data_dims.size() * 2
-  auto data_shape = vectorize<T>(data_dims);
+  auto data_shape = common::vectorize<T>(data_dims);
   if (static_cast<int>(paddings->size()) == data_dims.size()) {
     for (int i = 0; i < data_dims.size(); ++i) {
       T copy_pad = *(paddings->begin() + 2 * i);

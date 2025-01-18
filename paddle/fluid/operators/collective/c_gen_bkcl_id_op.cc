@@ -19,10 +19,10 @@ limitations under the License. */
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/framework/var_type_traits.h"
-#include "paddle/fluid/platform/device_context.h"
 #include "paddle/fluid/platform/enforce.h"
-#include "paddle/fluid/platform/gen_comm_id_helper.h"
-#include "paddle/fluid/platform/place.h"
+#include "paddle/phi/common/place.h"
+#include "paddle/phi/core/platform/device_context.h"
+#include "paddle/phi/core/platform/gen_comm_id_helper.h"
 
 namespace paddle {
 namespace operators {
@@ -32,7 +32,7 @@ static void GenBKCLID(std::vector<BKCLUniqueId>* bkcl_ids) {
     BKCLResult_t ret = bkcl_get_unique_id(&(*bkcl_ids)[i]);
     PADDLE_ENFORCE_EQ(BKCL_SUCCESS,
                       ret,
-                      platform::errors::PreconditionNotMet(
+                      common::errors::PreconditionNotMet(
                           "bkcl get unique id failed [%d]", ret));
   }
 }
@@ -45,8 +45,8 @@ static void CopyBKCLIDToVar(const std::vector<BKCLUniqueId>& bkcl_ids,
     auto var = scope.FindVar(var_name);
     PADDLE_ENFORCE_NOT_NULL(
         var,
-        platform::errors::NotFound("Variable with name %s is not found",
-                                   var_name.c_str()));
+        common::errors::NotFound("Variable with name %s is not found",
+                                 var_name.c_str()));
     auto bkcl_id = var->GetMutable<BKCLUniqueId>();
     memcpy(bkcl_id, &bkcl_ids[i], sizeof(BKCLUniqueId));
   }
@@ -61,26 +61,13 @@ class CGenBKCLIdOp : public framework::OperatorBase {
       : OperatorBase(type, inputs, outputs, attrs) {}
 
   void RunImpl(const framework::Scope& scope,
-               const platform::Place& dev_place) const override {
-    int rank = Attr<int>("rank");
-    int ring_id = Attr<int>("ring_id");
-
+               const phi::Place& dev_place) const override {
     std::function<std::string(size_t)> func = [&](size_t i) -> std::string {
       return Output("Out");
     };
 
     std::vector<BKCLUniqueId> bkcl_ids;
     bkcl_ids.resize(1);
-
-    if (rank == 0) {
-      GenBKCLID(&bkcl_ids);
-      std::vector<std::string> endpoint_list =
-          Attr<std::vector<std::string>>("other_endpoints");
-      platform::SendBroadCastCommID(endpoint_list, &bkcl_ids, ring_id);
-    } else {
-      std::string endpoint = Attr<std::string>("endpoint");
-      platform::RecvBroadCastCommID(endpoint, &bkcl_ids, ring_id);
-    }
 
     CopyBKCLIDToVar(bkcl_ids, func, scope);
   }

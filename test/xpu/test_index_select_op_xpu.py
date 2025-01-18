@@ -23,8 +23,8 @@ from get_test_cover_info import (
 from op_test_xpu import XPUOpTest
 
 import paddle
-from paddle import fluid
-from paddle.fluid import Program, program_guard
+from paddle import base
+from paddle.base import Program, program_guard
 
 paddle.enable_static()
 
@@ -47,7 +47,7 @@ class XPUTestIndexSelect(XPUOpTestWrapper):
             self.inputs = {'X': x_np, 'Index': index_np}
             self.attrs = {'dim': self.dim}
             outer_loop = np.prod(self.x_shape[: self.dim])
-            x_reshape = [outer_loop] + list(self.x_shape[self.dim :])
+            x_reshape = [outer_loop, *self.x_shape[self.dim :]]
             x_np_reshape = np.reshape(x_np, tuple(x_reshape))
             out_list = []
             for i in range(outer_loop):
@@ -101,10 +101,10 @@ class TestIndexSelectAPI(unittest.TestCase):
             x = paddle.static.data(name='x', shape=[-1, 4], dtype='float32')
             index = paddle.static.data(name='index', shape=[3], dtype='int32')
             z = paddle.index_select(x, index, axis=1)
-            exe = fluid.Executor(fluid.XPUPlace(0))
+            exe = base.Executor(base.XPUPlace(0))
             (res,) = exe.run(
                 feed={'x': self.data_x, 'index': self.data_index},
-                fetch_list=[z.name],
+                fetch_list=[z],
                 return_numpy=False,
             )
         expect_out = np.array(
@@ -117,10 +117,10 @@ class TestIndexSelectAPI(unittest.TestCase):
             x = paddle.static.data(name='x', shape=[-1, 4], dtype='float32')
             index = paddle.static.data(name='index', shape=[3], dtype='int32')
             z = paddle.index_select(x, index)
-            exe = fluid.Executor(fluid.XPUPlace(0))
+            exe = base.Executor(base.XPUPlace(0))
             (res,) = exe.run(
                 feed={'x': self.data_x, 'index': self.data_index},
-                fetch_list=[z.name],
+                fetch_list=[z],
                 return_numpy=False,
             )
         expect_out = np.array(
@@ -131,9 +131,9 @@ class TestIndexSelectAPI(unittest.TestCase):
     def test_dygraph_api(self):
         self.input_data()
         # case 1:
-        with fluid.dygraph.guard():
-            x = fluid.dygraph.to_variable(self.data_x)
-            index = fluid.dygraph.to_variable(self.data_index)
+        with base.dygraph.guard():
+            x = paddle.to_tensor(self.data_x)
+            index = paddle.to_tensor(self.data_index)
             z = paddle.index_select(x, index)
             np_z = z.numpy()
         expect_out = np.array(
@@ -142,9 +142,9 @@ class TestIndexSelectAPI(unittest.TestCase):
         np.testing.assert_allclose(expect_out, np_z, rtol=1e-05)
 
         # case 2:
-        with fluid.dygraph.guard():
-            x = fluid.dygraph.to_variable(self.data_x)
-            index = fluid.dygraph.to_variable(self.data_index)
+        with base.dygraph.guard():
+            x = paddle.to_tensor(self.data_x)
+            index = paddle.to_tensor(self.data_index)
             z = paddle.index_select(x, index, axis=1)
             np_z = z.numpy()
         expect_out = np.array(

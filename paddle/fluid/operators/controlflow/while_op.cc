@@ -1,4 +1,4 @@
-// Copyright (c) 2018 PaddlePaddle Authors. All Rights Reserved.
+// Copyright (c) 2019 PaddlePaddle Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,15 +20,11 @@
 #include "paddle/fluid/operators/controlflow/while_op_helper.h"
 
 #ifdef PADDLE_WITH_DNNL
-#include "paddle/fluid/platform/mkldnn_helper.h"
+#include "paddle/fluid/platform/onednn_helper.h"
 #endif
-#include "paddle/fluid/platform/flags.h"
+#include "paddle/common/flags.h"
 
-PADDLE_DEFINE_EXPORTED_bool(
-    cache_inference_while_scope,
-    false,
-    "Cache the scope of the while op to avoid repeated creation of the scope "
-    "for each iteration and improve inference performance.");
+COMMON_DECLARE_bool(cache_inference_while_scope);
 
 namespace paddle {
 namespace framework {
@@ -55,40 +51,6 @@ static std::string GetSkipEagerDeletionVarsDebugString(
   return str;
 }
 
-static void TransferVariablePlace(const framework::Scope *scope,
-                                  const std::string &var_name,
-                                  const phi::Place &dst_place,
-                                  const platform::DeviceContext &dev_ctx) {
-  framework::Variable *var = scope->FindVar(var_name);
-  if (var == nullptr) {
-    VLOG(4) << "[TransferVariablePlace]"
-            << "lost in_var: " << var_name;
-    return;
-  }
-  if (var->Type() != framework::proto::VarType::LOD_TENSOR) {
-    VLOG(10) << "[TransferVariablePlace]" << var_name << " type changed:"
-             << framework::TransToPhiDataType(
-                    framework::ToVarType(var->Type()));
-    return;
-  }
-  phi::DenseTensor *t = var->GetMutable<phi::DenseTensor>();
-  if (t->place() == dst_place) {
-    VLOG(10) << "[TransferVariablePlace]"
-             << "no need transfer: " << var_name;
-    return;
-  }
-
-  phi::DenseTensor *new_t = new phi::DenseTensor;
-  framework::TensorCopy(*t, dst_place, new_t);
-  dev_ctx.Wait();
-
-  t->set_meta(new_t->meta());
-  t->ResetHolder(new_t->Holder());
-
-  VLOG(4) << "[TransferVariablePlace]" << var_name
-          << " place: " << new_t->place();
-}
-
 }  // namespace
 
 class WhileOp : public framework::OperatorBase {
@@ -101,16 +63,16 @@ class WhileOp : public framework::OperatorBase {
 
  private:
   void RunImpl(const framework::Scope &scope,
-               const platform::Place &dev_place) const override {
-    PADDLE_ENFORCE_NOT_NULL(scope.FindVar(Input(kCondition)),
-                            platform::errors::NotFound(
-                                "Input(Condition) of WhileOp is not found."));
+               const phi::Place &dev_place) const override {
+    PADDLE_ENFORCE_NOT_NULL(
+        scope.FindVar(Input(kCondition)),
+        common::errors::NotFound("Input(Condition) of WhileOp is not found."));
 
     auto &cond = scope.FindVar(Input(kCondition))->Get<phi::DenseTensor>();
     PADDLE_ENFORCE_EQ(
         cond.numel(),
         1,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The numel of Input(Condition) of WhileOp must be 1. But now "
             "the Condition's numel is ",
             cond.numel(),
@@ -125,7 +87,7 @@ class WhileOp : public framework::OperatorBase {
     auto *block = Attr<framework::BlockDesc *>(kStepBlock);
 
     // get device context from pool
-    platform::DeviceContextPool &pool = platform::DeviceContextPool::Instance();
+    phi::DeviceContextPool &pool = phi::DeviceContextPool::Instance();
     auto &dev_ctx = *pool.Get(dev_place);
 
     bool is_test = Attr<bool>("is_test");
@@ -151,7 +113,7 @@ class WhileOp : public framework::OperatorBase {
         const framework::VariableNameMap &output_var_names = op->Outputs();
         for (auto &ipt : input_var_names) {
           for (const std::string &var_name : ipt.second) {
-            if (StrInVaraiableNameMap(var_name, output_var_names)) {
+            if (StrInVariableNameMap(var_name, output_var_names)) {
               no_copy_var_names.insert(var_name);
             }
           }
@@ -163,7 +125,7 @@ class WhileOp : public framework::OperatorBase {
         scope.FindVar(Output(kStepScopes))->GetMutable<StepScopeVar>();
 
     if (!step_scopes->empty()) {
-      platform::DeviceContextPool::Instance().Get(dev_place)->Wait();
+      phi::DeviceContextPool::Instance().Get(dev_place)->Wait();
       for (auto &s : *step_scopes) {
         if (scope.HasKid(s)) {
           scope.DeleteScope(s);
@@ -174,7 +136,7 @@ class WhileOp : public framework::OperatorBase {
 
     PADDLE_ENFORCE_EQ(step_scopes->size(),
                       0,
-                      platform::errors::PreconditionNotMet(
+                      common::errors::PreconditionNotMet(
                           "The Output(StepScope) of WhileOp should be empty."));
 
     bool cond_data = GetCondData(cond);
@@ -195,32 +157,40 @@ class WhileOp : public framework::OperatorBase {
                 << "input not found:" << in_name;
       }
 
-      if (var->Type() == framework::proto::VarType::LOD_TENSOR) {
+      if (var->Type() == framework::proto::VarType::DENSE_TENSOR) {
         input_var_original_places[in_name] =
             (var->Get<phi::DenseTensor>()).place();
       } else {
         VLOG(10) << "[while op]"
                  << "skip backup input " << in_name << " type:"
-                 << framework::TransToPhiDataType(
-                        framework::ToVarType(var->Type()));
+                 << phi::TransToPhiDataType(framework::ToVarType(var->Type()));
       }
     }
 
     LOG_FIRST_N(INFO, 1) << "[ControlFlow][WhileOp] New Executor is Running.";
-    if (!core_ || !platform::is_same_place(core_->GetPlace(), dev_place)) {
+    if (!core_ || !phi::is_same_place(core_->GetPlace(), dev_place)) {
       framework::Scope placeholder;  // Don't care if it's valid, just for
                                      // initialize InterpreterCore
       framework::interpreter::ExecutionConfig execution_config;
+      if (HasAttr("used_for_inference") && Attr<bool>("used_for_inference")) {
+        execution_config.used_for_inference = true;
+      }
       execution_config.create_local_scope = false;
       execution_config.used_for_control_flow_op = true;
       execution_config.skip_gc_vars =
           std::set<std::string>(skip_vars.begin(), skip_vars.end());
+// add for performance in gpugraph transformer mode
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_HETERPS) && \
+    defined(PADDLE_WITH_PSCORE)
+      execution_config.used_for_inference = true;
+#endif
 
       core_.reset(new framework::InterpreterCore(
           dev_place, *block, &placeholder, execution_config));
     }
 
-    core_->SetOutputHooks(hookfuncs_);
+    core_->SetOutputHooks(output_hookfuncs_);
+    core_->SetInputHooks(input_hookfuncs_);
 
     if (!is_test) {
       while (cond_data) {
@@ -287,11 +257,11 @@ class WhileOp : public framework::OperatorBase {
           if (var->IsType<phi::DenseTensor>()) {
             // Clear all lod information for all lod_tensors.
             auto *t = var->GetMutable<phi::DenseTensor>();
-            framework::LoD empty_lod;
+            phi::LegacyLoD empty_lod;
             t->set_lod(empty_lod);
-          } else if (var->IsType<framework::LoDTensorArray>()) {
+          } else if (var->IsType<phi::TensorArray>()) {
             // Clear elements of all tensor arrays.
-            auto *t = var->GetMutable<framework::LoDTensorArray>();
+            auto *t = var->GetMutable<phi::TensorArray>();
             t->clear();
           }
         }
@@ -355,14 +325,14 @@ class WhileGradOp : public framework::OperatorBase {
 
  private:
   void RunImpl(const framework::Scope &scope,
-               const platform::Place &dev_place) const override {
+               const phi::Place &dev_place) const override {
     PADDLE_ENFORCE_EQ(
         Attr<bool>("is_test"),
         false,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "WhileGradOp is only callable when is_test is false."));
     // get device context from pool
-    platform::DeviceContextPool &pool = platform::DeviceContextPool::Instance();
+    phi::DeviceContextPool &pool = phi::DeviceContextPool::Instance();
     auto &dev_ctx = *pool.Get(dev_place);
 
     auto *block = Attr<framework::BlockDesc *>(kStepBlock);
@@ -380,7 +350,7 @@ class WhileGradOp : public framework::OperatorBase {
 
     PADDLE_ENFORCE_EQ(outside_og_names.size(),
                       inside_og_names.size(),
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The number of original output gradient names "
                           "does not match the number of backward input "
                           "gradient names. The number of Backward input "
@@ -391,7 +361,7 @@ class WhileGradOp : public framework::OperatorBase {
 
     LOG_FIRST_N(INFO, 1)
         << "[ControlFlow][WhileGradOp] New Executor is Running.";
-    if (!core_ || !platform::is_same_place(core_->GetPlace(), dev_place)) {
+    if (!core_ || !phi::is_same_place(core_->GetPlace(), dev_place)) {
       std::set<std::string> skip_gc_vars(skip_vars.begin(), skip_vars.end());
       framework::Scope placeholder;  // Don't care if it's valid, just for
                                      // initialize InterpreterCore
@@ -427,17 +397,17 @@ class WhileGradOp : public framework::OperatorBase {
               !og_outside.GetMutable<phi::DenseTensor>()->IsInitialized()) {
             auto *var_desc = parent_block->FindVarRecursive(outside_og_name);
             PADDLE_ENFORCE_NOT_NULL(var_desc,
-                                    platform::errors::PreconditionNotMet(
+                                    common::errors::PreconditionNotMet(
                                         "Var `%s` is not found in parent "
                                         "block, can't fill constant.",
                                         outside_og_name));
             auto shape = var_desc->GetShape();
             VLOG(8) << "Found uninitialized tensor " << outside_og_name
                     << " in step 0, fill it with 0.0f. dims="
-                    << phi::make_ddim(shape);
+                    << common::make_ddim(shape);
             framework::AttributeMap attrs;
             attrs["dtype"] = var_desc->GetDataType();
-            attrs["shape"] = phi::vectorize<int>(phi::make_ddim(shape));
+            attrs["shape"] = common::vectorize<int>(common::make_ddim(shape));
             attrs["value"] = 0.0f;
 
             auto var_name = outside_og_name;
@@ -457,11 +427,9 @@ class WhileGradOp : public framework::OperatorBase {
           auto &inside_tensor = *og_inside.GetMutable<phi::DenseTensor>();
           inside_tensor.set_lod(outside_tensor.lod());
           inside_tensor.ShareDataWith(outside_tensor);
-        } else if (og_outside.IsType<framework::LoDTensorArray>()) {
-          auto outside_array =
-              og_outside.GetMutable<framework::LoDTensorArray>();
-          auto &inside_array =
-              *og_inside.GetMutable<framework::LoDTensorArray>();
+        } else if (og_outside.IsType<phi::TensorArray>()) {
+          auto outside_array = og_outside.GetMutable<phi::TensorArray>();
+          auto &inside_array = *og_inside.GetMutable<phi::TensorArray>();
           inside_array.clear();
           inside_array.resize(outside_array->size());
           VLOG(8) << outside_og_name << " size = " << outside_array->size();
@@ -478,8 +446,8 @@ class WhileGradOp : public framework::OperatorBase {
               PADDLE_ENFORCE_EQ(
                   inside_array[j].numel(),
                   0,
-                  platform::errors::InvalidArgument(
-                      "The numel of %d-th element of var %s (LoDTensorArray) "
+                  common::errors::InvalidArgument(
+                      "The numel of %d-th element of var %s (DenseTensorArray) "
                       "in while block must be 0, but received its numel is %d.",
                       j,
                       inside_og_name,
@@ -487,7 +455,7 @@ class WhileGradOp : public framework::OperatorBase {
             }
           }
         } else {
-          PADDLE_THROW(platform::errors::Unimplemented(
+          PADDLE_THROW(common::errors::Unimplemented(
               "Currently only support phi::DenseTensor and "
               "phi::DenseTensorArray in "
               "WhileGradOp."));
@@ -504,7 +472,7 @@ class WhileGradOp : public framework::OperatorBase {
       auto &p_names = Inputs(kX);
       PADDLE_ENFORCE_EQ(pg_ig_names.size(),
                         p_names.size(),
-                        platform::errors::PreconditionNotMet(
+                        common::errors::PreconditionNotMet(
                             "The number of names in Outputs(X@GRAD) does not "
                             "match the number of names in Inputs(X). The "
                             "number of names in Outputs(X@GRAD) is %d and "
@@ -523,11 +491,10 @@ class WhileGradOp : public framework::OperatorBase {
         auto pg_ig_var = cur_scope.FindVar(inside_grad_name);
         PADDLE_ENFORCE_NOT_NULL(
             pg_ig_var,
-            platform::errors::NotFound("Variable %s is not found.",
-                                       inside_grad_name));
-        if (pg_ig_var->IsType<framework::LoDTensorArray>()) {
-          auto pg_ig_lod_t_arr =
-              pg_ig_var->GetMutable<framework::LoDTensorArray>();
+            common::errors::NotFound("Variable %s is not found.",
+                                     inside_grad_name));
+        if (pg_ig_var->IsType<phi::TensorArray>()) {
+          auto pg_ig_lod_t_arr = pg_ig_var->GetMutable<phi::TensorArray>();
           bool empty = true;
           for (auto &each : *pg_ig_lod_t_arr) {
             if (each.numel() != 0) {
@@ -561,14 +528,14 @@ class WhileGradOp : public framework::OperatorBase {
           auto *var = (*cur_scope_iter)->FindVar(inside_grad_name);
           PADDLE_ENFORCE_NOT_NULL(
               var,
-              platform::errors::NotFound("Variable %s is not found.",
-                                         inside_grad_name));
+              common::errors::NotFound("Variable %s is not found.",
+                                       inside_grad_name));
           PADDLE_ENFORCE_EQ(
-              var->IsType<framework::LoDTensorArray>() ||
+              var->IsType<phi::TensorArray>() ||
                   var->IsType<phi::DenseTensor>(),
               true,
-              platform::errors::InvalidArgument(
-                  "Currently the type of var only can be LoDTensorArray, "
+              common::errors::InvalidArgument(
+                  "Currently the type of var only can be phi::TensorArray, "
                   "or phi::DenseTensor, but the received var[%s] is %s.",
                   inside_grad_name,
                   framework::ToTypeName(var->Type())));
@@ -578,7 +545,7 @@ class WhileGradOp : public framework::OperatorBase {
             framework::AttributeMap attrs;
             attrs["dtype"] =
                 framework::TransToProtoVarType(inside_tensor.dtype());
-            attrs["shape"] = phi::vectorize<int>(inside_tensor.dims());
+            attrs["shape"] = common::vectorize<int>(inside_tensor.dims());
             attrs["value"] = 0.0f;
 
             auto var_name = pg_ig_names[param_id];
@@ -621,9 +588,9 @@ class WhileGradOp : public framework::OperatorBase {
         to_var->GetMutable<phi::DenseTensor>()->ShareDataWith(
             from_var->Get<phi::DenseTensor>());
       }
-    } else if (from_var->IsType<framework::LoDTensorArray>()) {
-      auto from_arr = from_var->GetMutable<framework::LoDTensorArray>();
-      auto to_arr = to_var->GetMutable<framework::LoDTensorArray>();
+    } else if (from_var->IsType<phi::TensorArray>()) {
+      auto from_arr = from_var->GetMutable<phi::TensorArray>();
+      auto to_arr = to_var->GetMutable<phi::TensorArray>();
       to_arr->clear();
       to_arr->resize(from_arr->size());
       for (size_t i = 0; i < to_arr->size(); ++i) {
@@ -751,7 +718,7 @@ class WhileGradOpShapeInference : public framework::InferShapeBase {
     auto out_var_ptrs = ctx->GetOutputVarPtrs(kXGRAD);
     PADDLE_ENFORCE_EQ(in_var_ptrs.size(),
                       out_var_ptrs.size(),
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The size of Inputs(X) must be the same as "
                           "the size of Outputs(X@GRAD)."));
 

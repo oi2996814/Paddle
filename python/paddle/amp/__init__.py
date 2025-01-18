@@ -11,26 +11,33 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
-from .auto_cast import auto_cast  # noqa: F401
-from .auto_cast import decorate  # noqa: F401
-from .auto_cast import amp_guard  # noqa: F401
-from .auto_cast import amp_decorate  # noqa: F401
-from .amp_lists import white_list  # noqa: F401
-from .amp_lists import black_list  # noqa: F401
-
-from . import grad_scaler  # noqa: F401
-from .grad_scaler import GradScaler  # noqa: F401
-from .grad_scaler import AmpScaler  # noqa: F401
-from .grad_scaler import OptimizerState  # noqa: F401
-
-from . import debugging  # noqa: F401
-from . import accuracy_compare  # noqa: F401
-
-from paddle.fluid import core
-from paddle.fluid.framework import (
+from paddle.base import core
+from paddle.base.framework import (
     _current_expected_place,
     _get_paddle_place,
+)
+
+from . import (  # noqa: F401
+    accuracy_compare,
+    debugging,
+    grad_scaler,
+)
+from .amp_lists import (  # noqa: F401
+    black_list,
+    white_list,
+)
+from .auto_cast import (  # noqa: F401
+    amp_decorate,
+    amp_guard,
+    auto_cast,
+    decorate,
+)
+from .grad_scaler import (  # noqa: F401
+    AmpScaler,
+    GradScaler,
+    OptimizerState,
 )
 
 __all__ = [
@@ -42,7 +49,7 @@ __all__ = [
 ]
 
 
-def is_float16_supported(device=None):
+def is_float16_supported(device: str | None = None) -> bool:
     """
     Determine whether the place supports float16 in the auto-mixed-precision training.
 
@@ -53,10 +60,11 @@ def is_float16_supported(device=None):
 
     Examples:
 
-     .. code-block:: python
+        .. code-block:: python
 
-        import paddle
-        paddle.amp.is_float16_supported() # True or False
+            >>> import paddle
+            >>> paddle.amp.is_float16_supported() # True or False
+            False
     """
 
     device = (
@@ -68,7 +76,7 @@ def is_float16_supported(device=None):
     return core.is_float16_supported(device)
 
 
-def is_bfloat16_supported(device=None):
+def is_bfloat16_supported(device: str | None = None) -> bool:
     """
     Determine whether the place supports bfloat16 in the auto-mixed-precision training.
 
@@ -79,10 +87,11 @@ def is_bfloat16_supported(device=None):
 
     Examples:
 
-     .. code-block:: python
+        .. code-block:: python
 
-        import paddle
-        paddle.amp.is_bfloat16_supported() # True or False
+            >>> import paddle
+            >>> paddle.amp.is_bfloat16_supported() # True or False
+            True
     """
 
     device = (

@@ -15,12 +15,13 @@
 import unittest
 
 import numpy as np
-from eager_op_test import skip_check_grad_ci
 from get_test_cover_info import (
     XPUOpTestWrapper,
+    check_run_big_shape_test,
     create_test_class,
     get_xpu_op_support_types,
 )
+from op_test import convert_float_to_uint16
 from op_test_xpu import XPUOpTest
 
 import paddle
@@ -33,24 +34,29 @@ class XPUTestStackOp(XPUOpTestWrapper):
         self.op_name = 'stack'
         self.use_dynamic_create_class = False
 
-    @skip_check_grad_ci(reason="There is no grad kernel for stack_xpu op.")
     class TestStackOp(XPUOpTest):
         def initDefaultParameters(self):
             self.num_inputs = 4
             self.input_dim = (5, 6, 7)
             self.axis = 0
-            self.dtype = np.float32
 
         def setUp(self):
             self.initDefaultParameters()
             self.initParameters()
             self.__class__.use_xpu = True
             self.__class__.op_type = 'stack'
+            self.dtype = self.in_type
             self.x = []
             for i in range(self.num_inputs):
-                self.x.append(
-                    np.random.random(size=self.input_dim).astype(self.dtype)
-                )
+                if self.dtype == np.uint16:
+                    data = np.random.random(size=self.input_dim).astype(
+                        np.float32
+                    )
+                    self.x.append(convert_float_to_uint16(data))
+                else:
+                    self.x.append(
+                        np.random.random(size=self.input_dim).astype(self.dtype)
+                    )
 
             tmp = []
             x_names = self.get_x_names()
@@ -60,9 +66,6 @@ class XPUTestStackOp(XPUOpTestWrapper):
             self.inputs = {'X': tmp}
             self.outputs = {'Y': np.stack(self.x, axis=self.axis)}
             self.attrs = {'axis': self.axis}
-
-        def init_dtype(self):
-            self.dtype = self.in_type
 
         def initParameters(self):
             pass
@@ -77,12 +80,9 @@ class XPUTestStackOp(XPUOpTestWrapper):
             self.check_output_with_place(paddle.XPUPlace(0))
 
         def test_check_grad(self):
-            if self.dtype == np.int32 or self.dtype == np.int64:
-                pass
-            else:
-                self.check_grad_with_place(
-                    paddle.XPUPlace(0), self.get_x_names(), 'Y'
-                )
+            self.check_grad_with_place(
+                paddle.XPUPlace(0), self.get_x_names(), 'Y'
+            )
 
     class TestStackOp1(TestStackOp):
         def initParameters(self):
@@ -96,15 +96,9 @@ class XPUTestStackOp(XPUOpTestWrapper):
         def initParameters(self):
             self.axis = -1
 
-        def test_check_grad(self):
-            pass
-
     class TestStackOp4(TestStackOp):
         def initParameters(self):
             self.axis = -4
-
-        def test_check_grad(self):
-            pass
 
     class TestStackOp5(TestStackOp):
         def initParameters(self):
@@ -121,9 +115,6 @@ class XPUTestStackOp(XPUOpTestWrapper):
             self.axis = 0
             self.dtype = np.int64
 
-        def test_check_grad(self):
-            pass
-
     class TestStackOp8(TestStackOp):
         def initParameters(self):
             self.num_inputs = 4
@@ -131,8 +122,91 @@ class XPUTestStackOp(XPUOpTestWrapper):
             self.axis = 0
             self.dtype = np.int32
 
-        def test_check_grad(self):
-            pass
+    @check_run_big_shape_test()
+    class TestStackOpLargeShape1(TestStackOp):
+        def initParameters(self):
+            self.num_inputs = 5
+            self.input_dim = (1, 8192, 64)
+            self.axis = 2
+
+
+class TestStackSkipScenarioDynamic(unittest.TestCase):
+    def test_skip_scenario(self):
+        paddle.disable_static()
+        paddle.set_device("xpu")
+
+        def print_hook(name):
+            def hook(grad):
+                temp = grad  # Nonsense, just do something with the input
+
+            return hook
+
+        # Build tensors: first 5 each row need grad, rest 15 are no-grad
+        d = []
+        for j in range(4):
+            a = []
+            for i in range(20):
+                b = paddle.to_tensor([float(j * 20 + i)], dtype='float32')
+                if i < 5:
+                    b.stop_gradient = False
+                    b.register_hook(print_hook(f'i_{i}_j_{j}'))
+                else:
+                    b.stop_gradient = True
+                a.append(b)
+
+            c = paddle.stack(a)  # shape=[20]
+            d.append(c)
+
+        e = paddle.concat(d, axis=-1)  # shape=[20,4]
+        e.backward()
+        paddle.enable_static()
+
+
+class TestStackSkipScenarioDynamic2(unittest.TestCase):
+    def test_skip_scenario_mixed_segments(self):
+        """
+        Scenario:
+          - For each of 4 rows, we create 20 single-element tensors:
+            * Indices [0..4]   : stop_gradient = True
+            * Indices [5..9]   : stop_gradient = False
+            * Indices [10..14] : stop_gradient = True
+            * Indices [15..19] : stop_gradient = False
+        """
+
+        paddle.disable_static()
+        paddle.set_device("xpu")
+
+        def print_hook(name):
+            def hook(grad):
+                temp = grad  # Nonsense, just do something with the input
+
+            return hook
+
+        d = []
+        for j in range(4):
+            a = []
+            for i in range(20):
+                val = float(j * 20 + i)
+                b = paddle.to_tensor([val], dtype='float32')
+
+                # First 5 => no grad
+                # Second 5 => grad
+                # Third 5 => no grad
+                # Fourth 5 => grad
+                if (0 <= i < 5) or (10 <= i < 15):
+                    b.stop_gradient = True
+                else:
+                    b.stop_gradient = False
+                    b.register_hook(print_hook(f'i_{i}_j_{j}'))
+
+                a.append(b)
+
+            c = paddle.stack(a)  # shape=[20]
+            d.append(c)
+
+        e = paddle.concat(d, axis=-1)  # shape=[20,4]
+        e.backward()
+        paddle.enable_static()
 
 
 support_types = get_xpu_op_support_types('stack')

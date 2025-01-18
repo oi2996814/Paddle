@@ -63,12 +63,12 @@ void ClassCenterSampleKernel(const Context& dev_ctx,
   auto* label_ptr = label.data<T>();
 
   // get unique positive class center by ascending
-  std::set<T, std::less<T>> unique_label;
+  std::set<T, std::less<T>> unique_label;  // NOLINT
   for (int64_t i = 0; i < numel; ++i) {
     unique_label.insert(label_ptr[i]);
   }
 
-  // constrcut a lookup table and get sampled_local_class_center
+  // construct a lookup table and get sampled_local_class_center
   std::vector<T> actual_sampled;
   std::map<T, T> new_class_dict;
   T idx = 0;
@@ -80,7 +80,7 @@ void ClassCenterSampleKernel(const Context& dev_ctx,
 
   if (!fix_seed) {
     std::random_device rnd;
-    seed = rnd();
+    seed = static_cast<int>(rnd());
   }
   std::uniform_int_distribution<T> dist(0, num_classes - 1);
   std::shared_ptr<std::mt19937_64> engine;
@@ -112,9 +112,9 @@ void ClassCenterSampleKernel(const Context& dev_ctx,
   }
 
   // remap the input label to sampled class
-  auto* remmaped_label_ptr = dev_ctx.template Alloc<T>(remapped_label);
+  auto* remapped_label_ptr = dev_ctx.template Alloc<T>(remapped_label);
   for (int64_t i = 0; i < numel; ++i) {
-    remmaped_label_ptr[i] = new_class_dict[label_ptr[i]];
+    remapped_label_ptr[i] = new_class_dict[label_ptr[i]];
   }
 }
 

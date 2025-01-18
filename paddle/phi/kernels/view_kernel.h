@@ -25,6 +25,12 @@ void ViewShapeKernel(const Context& dev_ctx,
                      DenseTensor* out);
 
 template <typename Context>
+void ViewShapeStridedKernel(const Context& dev_ctx,
+                            const DenseTensor& input,
+                            const std::vector<int64_t>& dims,
+                            DenseTensor* out);
+
+template <typename Context>
 void ViewDtypeKernel(const Context& dev_ctx,
                      const DenseTensor& input,
                      DataType dtype,

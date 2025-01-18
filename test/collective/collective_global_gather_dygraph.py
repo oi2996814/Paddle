@@ -21,7 +21,7 @@ from legacy_test.test_collective_api_base import (
 )
 
 import paddle
-from paddle import fluid
+from paddle import base
 from paddle.distributed.utils import moe_utils
 
 
@@ -30,7 +30,7 @@ class TestCollectiveGlobalGatherAPI(TestCollectiveAPIRunnerBase):
         self.global_ring_id = 0
 
     def get_model(self, main_prog, startup_program, rank, indata=None):
-        with fluid.program_guard(main_prog, startup_program):
+        with base.program_guard(main_prog, startup_program):
             seed = os.getpid()
             np.random.seed(seed)
             in_feat = 2
@@ -43,7 +43,7 @@ class TestCollectiveGlobalGatherAPI(TestCollectiveAPIRunnerBase):
             local_expert_count = paddle.to_tensor(local_expert_count)
             global_expert_count = []
             paddle.distributed.alltoall(
-                paddle.split(local_expert_count, 2, axis=0), global_expert_count
+                global_expert_count, paddle.split(local_expert_count, 2, axis=0)
             )
             global_expert_count = paddle.concat(global_expert_count, axis=0)
             fwd_expert_count = sum(global_expert_count)

@@ -43,6 +43,10 @@
 // clang-format on
 #endif
 
+#include "paddle/common/flags.h"
+
+COMMON_DECLARE_bool(manually_trans_conv_filter);
+
 namespace phi {
 
 template <typename T, typename Context>
@@ -231,7 +235,7 @@ void ConvCudnnKernelImplV8(const DenseTensor* input_tensor,
   PADDLE_ENFORCE_EQ(
       groups,
       1,
-      phi::errors::Unimplemented(
+      common::errors::Unimplemented(
           "Group concolution using CUDNNv8 API unsupported for now"));
 
   T* input_data = const_cast<T*>(input_tensor->data<T>());
@@ -264,7 +268,8 @@ void ConvCudnnKernelImplV8(const DenseTensor* input_tensor,
   if (plan_cache.FindPlan(op_graph, handle)) {
     const cudnn_frontend::ExecutionPlan* cached_plan = nullptr;
     int64_t workspace_size = 0;
-    plan_cache.GetPlan(op_graph, &cached_plan, &workspace_size, handle);
+    plan_cache.GetPlanAndWorkspaceSize(
+        op_graph, &cached_plan, &workspace_size, handle);
     helper::ExecutePlan(handle,
                         &workspace_handle,
                         input_data,
@@ -323,8 +328,8 @@ void ConvCudnnKernel(const Context& ctx,
   bool deterministic = FLAGS_cudnn_deterministic;
   PADDLE_ENFORCE_EQ(exhaustive_search && deterministic,
                     false,
-                    phi::errors::InvalidArgument(
-                        "Cann't set exhaustive_search True and "
+                    common::errors::InvalidArgument(
+                        "Can't set exhaustive_search True and "
                         "FLAGS_cudnn_deterministic True at same time."));
 
   const bool channel_last = (data_format == "NHWC" || data_format == "NDHWC");
@@ -372,7 +377,8 @@ void ConvCudnnKernel(const Context& ctx,
     transformed_input_channel.ShareDataWith(input);
     transformed_output.ShareDataWith(*output);
   }
-  if (compute_format == phi::backends::gpu::DataLayout::kNHWC) {
+  if (compute_format == phi::backends::gpu::DataLayout::kNHWC &&
+      !FLAGS_manually_trans_conv_filter) {
     VLOG(3) << "Transform filter tensor from NCHW to NHWC.";
     ResizeToChannelLast<Context, T>(ctx, &filter, &transformed_filter_channel);
     TransToChannelLast<Context, T>(ctx, &filter, &transformed_filter_channel);
@@ -394,7 +400,7 @@ void ConvCudnnKernel(const Context& ctx,
     filter_data_dims = slice_ddim(filter_dims, 1, filter_dims.size() - 1);
   }
 
-  std::vector<int> ksize = vectorize<int>(filter_data_dims);
+  std::vector<int> ksize = common::vectorize<int>(filter_data_dims);
   UpdatePaddingAndDilation(
       &paddings, &dilations, padding_algorithm, in_data_dims, strides, ksize);
 
@@ -434,7 +440,7 @@ void ConvCudnnKernel(const Context& ctx,
         input_pad[2 * i + 2 + 1] = paddings[2 * i + 1] - padding_common[i];
       }
     }
-    DDim new_input_shape(make_ddim(new_input_shape_vec));
+    DDim new_input_shape(common::make_ddim(new_input_shape_vec));
     transformed_input.Resize(new_input_shape);
     ctx.template Alloc<T>(&transformed_input);
 
@@ -456,7 +462,7 @@ void ConvCudnnKernel(const Context& ctx,
                                           &transformed_input);
       } break;
       default:
-        PADDLE_THROW(phi::errors::InvalidArgument(
+        PADDLE_THROW(common::errors::InvalidArgument(
             "ConvOp only support tensors with 4 or 5 dimensions."));
     }
 
@@ -616,6 +622,17 @@ PD_REGISTER_KERNEL(conv3d,
                    phi::Conv3DCudnnKernel,
                    float,
                    double,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}
+#elif CUDNN_VERSION_MIN(8, 6, 0) && CUDA_VERSION >= 11800 && \
+    defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 890
+PD_REGISTER_KERNEL(conv2d,
+                   GPUDNN,
+                   ALL_LAYOUT,
+                   phi::ConvCudnnKernel,
+                   float,
+                   double,
+                   phi::dtype::float8_e4m3fn,
                    phi::dtype::float16,
                    phi::dtype::bfloat16) {}
 #else

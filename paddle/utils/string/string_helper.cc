@@ -14,14 +14,13 @@
 
 #include "paddle/utils/string/string_helper.h"
 
-#include <ctype.h>
-#include <stdio.h>
+#include <cctype>
+#include <cstdio>
 
 #include <cstring>
 #include <string>
 
-namespace paddle {
-namespace string {
+namespace paddle::string {
 
 // remove leading and tailing spaces
 std::string trim_spaces(const std::string& str) {
@@ -63,7 +62,8 @@ bool ends_with(std::string const& input, std::string const& test) {
 // doesn't need to know the maximum possible length of a line.
 char* LineFileReader::getdelim(FILE* f, char delim) {
 #ifndef _WIN32
-  int32_t ret = ::getdelim(&_buffer, &_buf_size, delim, f);
+  int32_t ret =
+      static_cast<int32_t>(::getdelim(&_buffer, &_buf_size, delim, f));
 
   if (ret >= 0) {
     if (ret >= 1 && _buffer[ret - 1] == delim) {
@@ -84,5 +84,4 @@ char* LineFileReader::getdelim(FILE* f, char delim) {
 #endif
 }
 
-}  // end namespace string
-}  // end namespace paddle
+}  // namespace paddle::string

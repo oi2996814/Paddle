@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 paddle.enable_static()
 
@@ -26,7 +26,9 @@ paddle.enable_static()
 class TestTruncOp(OpTest):
     def setUp(self):
         self.op_type = "trunc"
+        self.prim_op_type = "prim"
         self.python_api = paddle.trunc
+        self.public_python_api = paddle.trunc
         self.init_dtype_type()
         np.random.seed(2021)
         self.inputs = {'X': np.random.random((20, 20)).astype(self.dtype)}
@@ -36,10 +38,18 @@ class TestTruncOp(OpTest):
         self.dtype = np.float64
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(
+            check_pir=True, check_prim_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Out', numeric_grad_delta=1e-5)
+        self.check_grad(
+            ['X'],
+            'Out',
+            numeric_grad_delta=1e-5,
+            check_pir=True,
+            check_prim_pir=True,
+        )
 
 
 class TestFloatTruncOp(TestTruncOp):
@@ -99,7 +109,7 @@ class TestTruncFP16OP(TestTruncOp):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestTruncBF16OP(OpTest):
     def setUp(self):
@@ -114,11 +124,15 @@ class TestTruncBF16OP(OpTest):
 
     def test_check_output(self):
         place = core.CUDAPlace(0)
-        self.check_output_with_place(place)
+        self.check_output_with_place(
+            place, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         place = core.CUDAPlace(0)
-        self.check_grad_with_place(place, ['X'], 'Out', numeric_grad_delta=1e-5)
+        self.check_grad_with_place(
+            place, ['X'], 'Out', numeric_grad_delta=1e-5, check_pir=True
+        )
 
 
 if __name__ == "__main__":

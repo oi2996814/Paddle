@@ -22,8 +22,8 @@ ch = logging.StreamHandler()
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
+from paddle.base import core
 from paddle.distributed.fleet.meta_optimizers.common import OP_ROLE_KEY
-from paddle.fluid import core
 from paddle.static import Parameter
 
 _supported_optimizer_type = [
@@ -44,7 +44,7 @@ def tensor_parallel_sync_filter_fn(
     param, pos_emb=True, layer_norm=True, bias=True
 ):
     """
-    Layer fliter function for tensor parallelism transformer.
+    Layer filter function for tensor parallelism transformer.
 
     In tensor parallelism of transformer like model, there is 4 kind of param
     that are supposed to be the same in all tensor parallel peers:
@@ -99,9 +99,11 @@ def copy_parameters(block_, params):
             shape=param.shape,
             dtype=param.dtype,
             type=param.type,
-            lod_level=param.lod_level
-            if param.type == core.VarDesc.VarType.LOD_TENSOR
-            else None,
+            lod_level=(
+                param.lod_level
+                if param.type == core.VarDesc.VarType.DENSE_TENSOR
+                else None
+            ),
             stop_gradient=param.stop_gradient,
             trainable=param.trainable,
             optimize_attr=param.optimize_attr,
@@ -111,7 +113,7 @@ def copy_parameters(block_, params):
         )
         assert (
             param.is_distributed is False
-        ), f"Try to sync Distribted Parameter: {param}"
+        ), f"Try to sync Distributed Parameter: {param}"
         new_p.is_distributed = False
 
     block_.vars[new_p.name] = new_p
@@ -123,13 +125,12 @@ def insert_sync_op(
     if sync_mode == "broadcast":
         block._insert_op_without_sync(
             idx,
-            type='c_broadcast',
-            inputs={'X': varname},
-            outputs={'Out': varname},
+            type='broadcast',
+            inputs={'x': varname},
+            outputs={'out': varname},
             attrs={
                 'ring_id': sync_ring_id,
                 'root': src_rank,
-                'use_calc_stream': True,
                 OP_ROLE_KEY: op_role,
             },
         )
@@ -268,9 +269,7 @@ def insert_synchronization(
 
     assert (
         len(unsync_param_names) == 0
-    ), "The following param is unsync by some error: {}".format(
-        unsync_param_names
-    )
+    ), f"The following param is unsync by some error: {unsync_param_names}"
 
 
 def add_extra_synchronization(
@@ -293,7 +292,7 @@ def add_extra_synchronization(
 
     sync_mode(string): select from
         "broadcast": parameter is sync by broadcasted from 'src_rank' to all other ranks.
-        "average": paramter is sync by average amonge all ranks
+        "average": parameter is sync by average among all ranks
 
     src_rank(int): the src used in broadcast sync_mode.
 
@@ -308,9 +307,7 @@ def add_extra_synchronization(
 
     logger.info("Constructing Extra Parameter Synchronization.")
     logger.info(
-        "Tensor Parallel Degree: {}, Synchronization mode: {}".format(
-            tp_degree, sync_mode
-        )
+        f"Tensor Parallel Degree: {tp_degree}, Synchronization mode: {sync_mode}"
     )
 
     # adopt for pipeline opt
@@ -328,7 +325,7 @@ def add_extra_synchronization(
         if params_filter_fn(param):
             params_to_sync.append(param)
     logger.info(
-        "The following param are goning to be synchronization everytime the optimizer update phase of the program is runned: "
+        "The following param are going to be synchronization everytime the optimizer update phase of the program is run: "
     )
     logger.info([p.name for p in params_to_sync])
 

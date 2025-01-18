@@ -29,26 +29,10 @@ void FusedSoftmaxMaskKernel(const Context& dev_ctx,
 
   auto x_dim = x.dims();
   auto mask_dim = mask.dims();
-  auto query_seq_len = x_dim[2];
-  auto key_seq_len = x_dim[3];
-
-  PADDLE_ENFORCE_GT(query_seq_len,
-                    1,
-                    phi::errors::InvalidArgument(
-                        "Input x's second last dim must be large than 1 but "
-                        "received the second last dimension of x is %d",
-                        query_seq_len));
-
-  PADDLE_ENFORCE_EQ(key_seq_len >= 32 && key_seq_len < 8192,
-                    true,
-                    phi::errors::InvalidArgument(
-                        "Input x's last dim must be between [32, 8192) "
-                        "received the last dimension of x is %d",
-                        key_seq_len));
 
   PADDLE_ENFORCE_EQ(mask_dim[1],
                     1,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Input mask's second dim must be 1 "
                         "received the second dimension of mask is %d",
                         mask_dim[1]));
@@ -59,7 +43,7 @@ void FusedSoftmaxMaskKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         x_dim[idx],
         mask_dim[idx],
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Input x's %dth dim should be equal with input mask's %dth dim "
             "but "
             "received the %dth dimension of x and mask are not equal "
@@ -72,8 +56,8 @@ void FusedSoftmaxMaskKernel(const Context& dev_ctx,
             idx,
             mask_dim[idx]));
   }
-  std::vector<int64_t> x_shape = phi::vectorize<int64_t>(x.dims());
-  std::vector<int64_t> mask_shape = phi::vectorize<int64_t>(mask.dims());
+  std::vector<int64_t> x_shape = common::vectorize<int64_t>(x.dims());
+  std::vector<int64_t> mask_shape = common::vectorize<int64_t>(mask.dims());
 
   // int softmax_with_mask(Context* ctx, const T* x, const T* mask, T* y, const
   // std::vector<int64_t>& x_shape, const std::vector<int64_t>& mask_shape);

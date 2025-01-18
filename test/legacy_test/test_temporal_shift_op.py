@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 
 def temporal_shift(x, seg_num, shift_ratio, data_format):
@@ -73,10 +73,10 @@ class TestTemporalShift(OpTest):
         self.dtype = 'float64'
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad_ignore_uv(self):
-        self.check_grad(['X'], 'Out')
+        self.check_grad(['X'], 'Out', check_pir=True)
 
     def initTestCase(self):
         self.x_shape = (6, 4, 4, 4)
@@ -123,12 +123,12 @@ class TestTemporalShiftFP16(TestTemporalShift):
     def test_check_output(self):
         place = core.CUDAPlace(0)
         if core.is_float16_supported(place):
-            self.check_output_with_place(place)
+            self.check_output_with_place(place, check_pir=True)
 
     def test_check_grad_ignore_uv(self):
         place = core.CUDAPlace(0)
         if core.is_float16_supported(place):
-            self.check_grad_with_place(place, ['X'], 'Out')
+            self.check_grad_with_place(place, ['X'], 'Out', check_pir=True)
 
 
 class TestTemporalShiftAPI(unittest.TestCase):
@@ -140,14 +140,14 @@ class TestTemporalShiftAPI(unittest.TestCase):
         )
 
         # dygraph
-        with paddle.fluid.dygraph.guard():
+        with paddle.base.dygraph.guard():
             input = paddle.randn([6, 4, 2, 2])
             out = paddle.nn.functional.temporal_shift(
                 x=input, seg_num=2, shift_ratio=0.2
             )
 
     def test_static_fp16_gpu(self):
-        if paddle.fluid.core.is_compiled_with_cuda():
+        if paddle.base.core.is_compiled_with_cuda():
             place = paddle.CUDAPlace(0)
             with paddle.static.program_guard(
                 paddle.static.Program(), paddle.static.Program()
@@ -189,7 +189,7 @@ class TestTemporalShiftFP16OP(TestTemporalShift):
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not complied with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA and not support the bfloat16",
 )
 class TestTemporalShiftBF16(OpTest):
     def initTestCase(self):
@@ -224,11 +224,11 @@ class TestTemporalShiftBF16(OpTest):
 
     def test_check_output(self):
         place = core.CUDAPlace(0)
-        self.check_output_with_place(place)
+        self.check_output_with_place(place, check_pir=True)
 
     def test_check_grad_ignore_uv(self):
         place = core.CUDAPlace(0)
-        self.check_grad_with_place(place, ['X'], 'Out')
+        self.check_grad_with_place(place, ['X'], 'Out', check_pir=True)
 
 
 if __name__ == "__main__":

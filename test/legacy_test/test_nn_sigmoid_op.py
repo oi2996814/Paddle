@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
 
 import paddle
-from paddle import fluid, nn
-from paddle.fluid import core
+from paddle import base, nn
+from paddle.base import core
 from paddle.nn import functional
 
 
@@ -45,11 +46,16 @@ class TestNNSigmoidAPI(unittest.TestCase):
             x = paddle.static.data(name='x', shape=self.x_shape)
             x.stop_gradient = False
             y = mysigmoid(x)
-            fluid.backward.append_backward(paddle.mean(y))
+            base.backward.append_backward(paddle.mean(y))
         exe = paddle.static.Executor(place)
         out = exe.run(main_program, feed={'x': self.x}, fetch_list=[y])
         np.testing.assert_allclose(out[0], self.y, rtol=1e-05)
-        self.assertTrue(y.name.startswith("api_sigmoid"))
+
+        if paddle.framework.in_pir_mode():
+            y_name = y.get_defining_op().name()
+            self.assertTrue(y_name.startswith("pd_op.sigmoid"))
+        else:
+            self.assertTrue(y.name.startswith("api_sigmoid"))
 
     def check_dynamic_api(self, place):
         paddle.disable_static(place)
@@ -59,9 +65,15 @@ class TestNNSigmoidAPI(unittest.TestCase):
         np.testing.assert_allclose(y.numpy(), self.y, rtol=1e-05)
 
     def test_check_api(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for place in places:
             self.check_dynamic_api(place)
             self.check_static_api(place)
@@ -85,7 +97,7 @@ class TestNNFunctionalSigmoidAPI(unittest.TestCase):
         with paddle.static.program_guard(main_program):
             x = paddle.static.data(name='x', shape=self.x_shape)
             y = functional.sigmoid(x, name="api_sigmoid")
-        exe = paddle.static.Executor(fluid.CPUPlace())
+        exe = paddle.static.Executor(base.CPUPlace())
         out = exe.run(main_program, feed={'x': self.x}, fetch_list=[y])
         np.testing.assert_allclose(out[0], self.y, rtol=1e-05)
 
@@ -96,9 +108,19 @@ class TestNNFunctionalSigmoidAPI(unittest.TestCase):
         np.testing.assert_allclose(y.numpy(), self.y, rtol=1e-05)
 
     def test_check_api(self):
-        places = [fluid.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+            places.append(base.CUDAPlace(0))
         for place in places:
             self.check_static_api(place)
             self.check_dynamic_api()
+
+
+if __name__ == '__main__':
+    unittest.main()

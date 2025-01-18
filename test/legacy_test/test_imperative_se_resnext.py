@@ -18,9 +18,9 @@ import numpy as np
 from test_imperative_base import new_program_scope
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
-from paddle.fluid.layer_helper import LayerHelper
+from paddle import base
+from paddle.base import core
+from paddle.base.layer_helper import LayerHelper
 from paddle.nn import BatchNorm
 
 batch_size = 8
@@ -54,7 +54,7 @@ def optimizer_setting(params, parameter_list=None):
         # bd = [step * e for e in ls["epochs"]]
         # base_lr = params["lr"]
         # lr = [base_lr * (0.1**i) for i in range(len(bd) + 1)]
-        if fluid.in_dygraph_mode():
+        if base.in_dygraph_mode():
             optimizer = paddle.optimizer.SGD(
                 learning_rate=0.01, parameters=parameter_list
             )
@@ -199,9 +199,7 @@ class SeResNeXt(paddle.nn.Layer):
         supported_layers = [50, 101, 152]
         assert (
             layers in supported_layers
-        ), "supported layers are {} but input layer is {}".format(
-            supported_layers, layers
-        )
+        ), f"supported layers are {supported_layers} but input layer is {layers}"
 
         if layers == 50:
             cardinality = 32
@@ -265,7 +263,7 @@ class SeResNeXt(paddle.nn.Layer):
             shortcut = False
             for i in range(depth[block]):
                 bottleneck_block = self.add_sublayer(
-                    'bb_%d_%d' % (block, i),
+                    f'bb_{block}_{i}',
                     BottleneckBlock(
                         num_channels=num_channels,
                         num_filters=num_filters[block],
@@ -314,13 +312,13 @@ class SeResNeXt(paddle.nn.Layer):
 
 class TestImperativeResneXt(unittest.TestCase):
     def reader_decorator(self, reader):
-        def _reader_imple():
+        def _reader_simple():
             for item in reader():
                 doc = np.array(item[0]).reshape(3, 224, 224)
                 label = np.array(item[1]).astype('int64').reshape(1)
                 yield doc, label
 
-        return _reader_imple
+        return _reader_simple
 
     def test_se_resnext_float32(self):
         seed = 90
@@ -339,7 +337,7 @@ class TestImperativeResneXt(unittest.TestCase):
             )
             np.random.seed(seed)
 
-            batch_py_reader = fluid.io.PyReader(capacity=1)
+            batch_py_reader = base.io.PyReader(capacity=1)
             batch_py_reader.decorate_sample_list_generator(
                 paddle.batch(
                     self.reader_decorator(
@@ -348,7 +346,7 @@ class TestImperativeResneXt(unittest.TestCase):
                     batch_size=batch_size,
                     drop_last=True,
                 ),
-                places=fluid.CPUPlace(),
+                places=base.CPUPlace(),
             )
 
             dy_param_init_value = {}
@@ -406,7 +404,7 @@ class TestImperativeResneXt(unittest.TestCase):
                         dy_grad_value,
                     )
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             (
                 dy_out,
                 dy_param_init_value,
@@ -414,7 +412,7 @@ class TestImperativeResneXt(unittest.TestCase):
                 dy_grad_value,
             ) = run_dygraph()
 
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             (
                 eager_out,
                 eager_param_init_value,
@@ -426,10 +424,10 @@ class TestImperativeResneXt(unittest.TestCase):
             paddle.seed(seed)
             paddle.framework.random._manual_program_seed(seed)
 
-            exe = fluid.Executor(
-                fluid.CPUPlace()
+            exe = base.Executor(
+                base.CPUPlace()
                 if not core.is_compiled_with_cuda()
-                else fluid.CUDAPlace(0)
+                else base.CUDAPlace(0)
             )
 
             se_resnext = SeResNeXt()
@@ -449,7 +447,7 @@ class TestImperativeResneXt(unittest.TestCase):
                 name='label', shape=[-1, 1], dtype='int64'
             )
             out = se_resnext(img)
-            softmax_out = paddle.nn.function.softmax(out)
+            softmax_out = paddle.nn.functional.softmax(out)
             loss = paddle.nn.functional.cross_entropy(
                 input=softmax_out,
                 label=label,
@@ -472,7 +470,7 @@ class TestImperativeResneXt(unittest.TestCase):
                     )
 
             out = exe.run(
-                fluid.default_startup_program(),
+                base.default_startup_program(),
                 fetch_list=static_param_name_list,
             )
 
@@ -496,7 +494,7 @@ class TestImperativeResneXt(unittest.TestCase):
                     fetch_list.extend(static_param_name_list)
                     fetch_list.extend(static_grad_name_list)
                     out = exe.run(
-                        fluid.default_main_program(),
+                        base.default_main_program(),
                         feed={"pixel": static_x_data, "label": y_data},
                         fetch_list=fetch_list,
                     )

@@ -16,15 +16,15 @@ limitations under the License. */
 #include <iostream>
 #include <random>
 
-#include "gflags/gflags.h"
 #include "glog/logging.h"
 #include "gtest/gtest.h"
+#include "paddle/common/flags.h"
 #include "paddle/phi/backends/cpu/cpu_info.h"
 #include "paddle/phi/common/place.h"
 #include "paddle/phi/core/enforce.h"
 #include "paddle/phi/kernels/funcs/jit/kernels.h"
 
-DEFINE_double(acc, 1e-5, "Test accuracy threshold.");
+PD_DEFINE_double(acc, 1e-5, "Test accuracy threshold.");
 
 template <typename T>
 void RandomVec(const int n,
@@ -75,7 +75,7 @@ void TestAllImpls(const typename KernelTuple::attr_type& attr,
                   const Tester& verifier,
                   const Args&... args) {
   auto funcs = jit::GetAllCandidateFuncsWithTypes<KernelTuple, PlaceType>(attr);
-  for (auto f : funcs) {
+  for (auto const& f : funcs) {
     VLOG(10) << "Test Kernel " << f.first;
     verifier(f.second, args...);
   }
@@ -234,7 +234,8 @@ void TestKernelLSTM() {
   VLOG(10) << "Test JITKernel: " << jit::to_string(KernelTuple::kernel_type);
   std::vector<std::string> all_acts = {"sigmoid", "tanh", "relu", "identity"};
   auto test_sizes = TestSizes();
-  test_sizes.erase(std::remove(test_sizes.begin(), test_sizes.end(), 1000));
+  test_sizes.erase(std::remove(test_sizes.begin(), test_sizes.end(), 1000),
+                   test_sizes.end());
   for (int d : test_sizes) {
     for (bool use_peephole : {true, false}) {
       for (auto& act_gate : all_acts) {
@@ -331,7 +332,8 @@ void TestKernelGRU() {
   VLOG(10) << "Test JITKernel: " << jit::to_string(KernelTuple::kernel_type);
   std::vector<std::string> all_acts = {"sigmoid", "tanh", "relu", "identity"};
   auto test_sizes = TestSizes();
-  test_sizes.erase(std::remove(test_sizes.begin(), test_sizes.end(), 1000));
+  test_sizes.erase(std::remove(test_sizes.begin(), test_sizes.end(), 1000),
+                   test_sizes.end());
   for (int d : test_sizes) {
     for (auto& act_gate : all_acts) {
       for (auto& act_cand : all_acts) {
@@ -491,7 +493,8 @@ void TestKernelCRFDecoding() {
   VLOG(10) << "Test JITKernel: " << jit::to_string(KernelTuple::kernel_type);
   constexpr int state_trans_base_idx = 2;
   auto test_sizes = TestSizes();
-  test_sizes.erase(std::remove(test_sizes.begin(), test_sizes.end(), 2000));
+  test_sizes.erase(std::remove(test_sizes.begin(), test_sizes.end(), 2000),
+                   test_sizes.end());
   for (int seq_len : {1, 11, 17, 50}) {
     for (int tag_num : test_sizes) {
       auto ref = jit::GetReferFunc<KernelTuple>();
@@ -550,7 +553,8 @@ void TestKernelSeqPool() {
   std::vector<jit::SeqPoolType> pool_types = {
       jit::SeqPoolType::kSum, jit::SeqPoolType::kAvg, jit::SeqPoolType::kSqrt};
   auto test_sizes = TestSizes();
-  test_sizes.erase(std::remove(test_sizes.begin(), test_sizes.end(), 1000));
+  test_sizes.erase(std::remove(test_sizes.begin(), test_sizes.end(), 1000),
+                   test_sizes.end());
   for (auto type : pool_types) {
     for (int w : test_sizes) {
       jit::seq_pool_attr_t attr(w, type);
@@ -592,7 +596,8 @@ void TestKernelEmbSeqPool() {
   std::vector<jit::SeqPoolType> pool_types = {
       jit::SeqPoolType::kSum};  // only support sum yet
   auto test_sizes = TestSizes();
-  test_sizes.erase(std::remove(test_sizes.begin(), test_sizes.end(), 1000));
+  test_sizes.erase(std::remove(test_sizes.begin(), test_sizes.end(), 1000),
+                   test_sizes.end());
   for (int tbl_w : test_sizes) {
     std::vector<T> table(tbl_h * tbl_w);
     RandomVec<T>(tbl_h * tbl_w, table.data());
@@ -690,184 +695,178 @@ void TestKernelMatMul() {
 
 template <typename KernelTuple, typename PlaceType>
 void TestKernelAdam() {
-  using T = typename KernelTuple::data_type;
-  VLOG(10) << "Test JITKernel: " << jit::to_string(KernelTuple::kernel_type);
-  const T lr = 0.1;
-  const T beta1 = 0.99;
-  const T beta2 = 0.95;
-  const T beta1_pow = beta1 * beta1;
-  const T beta2_pow = beta2 * beta2;
+  for (bool amsgrad : {false, true}) {
+    using T = typename KernelTuple::data_type;
+    VLOG(10) << "Test JITKernel: " << jit::to_string(KernelTuple::kernel_type);
+    const T lr = 0.1;
+    const T beta1 = 0.99;
+    const T beta2 = 0.95;
+    const T beta1_pow = beta1 * beta1;
+    const T beta2_pow = beta2 * beta2;
 
-  const T epsilon = 0.000001;
-  const int64_t numel = 123;
+    const T epsilon = 0.000001;
+    const int64_t numel = 123;
 
-  T learning_rate = lr * (sqrt(1 - beta2_pow) / (1 - beta1_pow));
-  T eps = epsilon * sqrt(1 - beta2_pow);
+    T learning_rate = lr * (sqrt(1 - beta2_pow) / (1 - beta1_pow));
+    T eps = epsilon * sqrt(1 - beta2_pow);
 
-  std::vector<T> param(numel);
-  std::vector<T> grad(numel);
-  std::vector<T> mom1(numel);
-  std::vector<T> mom2(numel);
+    std::vector<T> param(numel);
+    std::vector<T> grad(numel);
+    std::vector<T> mom1(numel);
+    std::vector<T> mom2(numel);
+    std::vector<T> mom2_max(numel);
 
-  std::vector<T> param_out(param.size());
-  std::vector<T> mom1_out(mom1.size());
-  std::vector<T> mom2_out(mom2.size());
+    std::vector<T> param_out(param.size());
+    std::vector<T> mom1_out(mom1.size());
+    std::vector<T> mom2_out(mom2.size());
+    std::vector<T> mom2_max_out(mom2_max.size());
 
-  RandomVec<T>(numel, param.data(), 0.5f);
-  RandomVec<T>(numel, grad.data(), 0.5f);
-  RandomVec<T>(numel, mom1.data(), 0.5f);
-  RandomVec<T>(numel, mom2.data(), 0.5f);
+    RandomVec<T>(numel, param.data(), 0.5f);
+    RandomVec<T>(numel, grad.data(), 0.5f);
+    RandomVec<T>(numel, mom1.data(), 0.5f);
+    RandomVec<T>(numel, mom2.data(), 0.5f);
+    if (amsgrad) {
+      RandomVec<T>(numel, mom2_max.data(), 0.5f);
+    }
 
-  auto ref = jit::GetReferFunc<KernelTuple>();
-  EXPECT_TRUE(ref != nullptr);
-  jit::adam_attr_t attr(beta1, beta2);
-  ref(beta1,
-      beta2,
-      -learning_rate,
-      eps,
-      numel,
-      grad.data(),
-      mom1.data(),
-      mom2.data(),
-      param.data(),
-      mom1_out.data(),
-      mom2_out.data(),
-      param_out.data());
+    auto ref = jit::GetReferFunc<KernelTuple>();
+    EXPECT_TRUE(ref != nullptr);
+    jit::adam_attr_t attr(beta1, beta2, amsgrad);
 
-  auto verifier = [](const typename KernelTuple::func_type tgt,
-                     T beta1,
-                     T beta2,
-                     T lr,
-                     T eps,
-                     int64_t numel,
-                     const std::vector<T>& grad,
-                     const std::vector<T>& mom1,
-                     const std::vector<T>& mom2,
-                     const std::vector<T>& param,
-                     const std::vector<T>& ref_mom1_out,
-                     const std::vector<T>& ref_mom2_out,
-                     const std::vector<T>& ref_param_out) {
-    EXPECT_TRUE(tgt != nullptr);
-    EXPECT_EQ(param.size(), static_cast<size_t>(numel));
-    EXPECT_EQ(grad.size(), static_cast<size_t>(numel));
-    EXPECT_EQ(mom1.size(), static_cast<size_t>(numel));
-    EXPECT_EQ(mom2.size(), static_cast<size_t>(numel));
-
-    std::vector<T> jit_mom1_out(ref_mom1_out.size());
-    std::vector<T> jit_mom2_out(ref_mom2_out.size());
-    std::vector<T> jit_param_out(ref_param_out.size());
-
-    tgt(beta1,
+    ref(beta1,
         beta2,
-        -lr,
+        -learning_rate,
         eps,
         numel,
         grad.data(),
         mom1.data(),
         mom2.data(),
+        mom2_max.data(),
         param.data(),
-        jit_mom1_out.data(),
-        jit_mom2_out.data(),
-        jit_param_out.data());
+        mom1_out.data(),
+        mom2_out.data(),
+        mom2_max_out.data(),
+        param_out.data(),
+        amsgrad);
 
-    ExpectEQ<T>(ref_mom1_out.data(), jit_mom1_out.data(), numel);
-    ExpectEQ<T>(ref_mom2_out.data(), jit_mom2_out.data(), numel);
-    ExpectEQ<T>(ref_param_out.data(), jit_param_out.data(), numel);
-  };
-  TestAllImpls<KernelTuple, PlaceType>(attr,
-                                       verifier,
-                                       beta1,
-                                       beta2,
-                                       learning_rate,
-                                       eps,
-                                       numel,
-                                       grad,
-                                       mom1,
-                                       mom2,
-                                       param,
-                                       mom1_out,
-                                       mom2_out,
-                                       param_out);
+    auto verifier = [](const typename KernelTuple::func_type tgt,
+                       T beta1,
+                       T beta2,
+                       T lr,
+                       T eps,
+                       int64_t numel,
+                       const std::vector<T>& grad,
+                       const std::vector<T>& mom1,
+                       const std::vector<T>& mom2,
+                       const std::vector<T>& mom2_max,
+                       const std::vector<T>& param,
+                       const std::vector<T>& ref_mom1_out,
+                       const std::vector<T>& ref_mom2_out,
+                       const std::vector<T>& ref_mom2_max_out,
+                       const std::vector<T>& ref_param_out,
+                       bool amsgrad) {
+      EXPECT_TRUE(tgt != nullptr);
+      EXPECT_EQ(param.size(), static_cast<size_t>(numel));
+      EXPECT_EQ(grad.size(), static_cast<size_t>(numel));
+      EXPECT_EQ(mom1.size(), static_cast<size_t>(numel));
+      EXPECT_EQ(mom2.size(), static_cast<size_t>(numel));
+      if (amsgrad) {
+        EXPECT_EQ(mom2_max.size(), static_cast<size_t>(numel));
+      }
+
+      std::vector<T> jit_mom1_out(ref_mom1_out.size());
+      std::vector<T> jit_mom2_out(ref_mom2_out.size());
+      std::vector<T> jit_mom2_max_out(ref_mom2_max_out.size());
+      std::vector<T> jit_param_out(ref_param_out.size());
+
+      tgt(beta1,
+          beta2,
+          -lr,
+          eps,
+          numel,
+          grad.data(),
+          mom1.data(),
+          mom2.data(),
+          mom2_max.data(),
+          param.data(),
+          jit_mom1_out.data(),
+          jit_mom2_out.data(),
+          jit_mom2_max_out.data(),
+          jit_param_out.data(),
+          amsgrad);
+
+      ExpectEQ<T>(ref_mom1_out.data(), jit_mom1_out.data(), numel);
+      ExpectEQ<T>(ref_mom2_out.data(), jit_mom2_out.data(), numel);
+      if (amsgrad) {
+        ExpectEQ<T>(ref_mom2_max_out.data(), jit_mom2_max_out.data(), numel);
+      }
+      ExpectEQ<T>(ref_param_out.data(), jit_param_out.data(), numel);
+    };
+    TestAllImpls<KernelTuple, PlaceType>(attr,
+                                         verifier,
+                                         beta1,
+                                         beta2,
+                                         learning_rate,
+                                         eps,
+                                         numel,
+                                         grad,
+                                         mom1,
+                                         mom2,
+                                         mom2_max,
+                                         param,
+                                         mom1_out,
+                                         mom2_out,
+                                         mom2_max_out,
+                                         param_out,
+                                         amsgrad);
+  }
 }
 
 template <typename KernelTuple, typename PlaceType>
 void TestKernelAdamW() {
-  using T = typename KernelTuple::data_type;
-  VLOG(10) << "Test JITKernel: " << jit::to_string(KernelTuple::kernel_type);
-  const T old_lr = 0.1;
-  const T beta1 = 0.99;
-  const T beta2 = 0.95;
-  const T beta1_pow = beta1 * beta1;
-  const T beta2_pow = beta2 * beta2;
+  for (bool amsgrad : {false, true}) {
+    using T = typename KernelTuple::data_type;
+    VLOG(10) << "Test JITKernel: " << jit::to_string(KernelTuple::kernel_type);
+    const T old_lr = 0.1;
+    const T beta1 = 0.99;
+    const T beta2 = 0.95;
+    const T beta1_pow = beta1 * beta1;
+    const T beta2_pow = beta2 * beta2;
 
-  const T epsilon = 0.000001;
-  const int64_t numel = 123;
-  const T lr_ratio = 0.2;
-  const T coeff = 0.3;
+    const T epsilon = 0.000001;
+    const int64_t numel = 123;
+    const T lr_ratio = 0.2;
+    const T coeff = 0.3;
 
-  T learning_rate = old_lr * (sqrt(1 - beta2_pow) / (1 - beta1_pow));
-  T eps = epsilon * sqrt(1 - beta2_pow);
+    T learning_rate = old_lr * (sqrt(1 - beta2_pow) / (1 - beta1_pow));
+    T eps = epsilon * sqrt(1 - beta2_pow);
 
-  std::vector<T> param(numel);
-  std::vector<T> grad(numel);
-  std::vector<T> mom1(numel);
-  std::vector<T> mom2(numel);
+    std::vector<T> param(numel);
+    std::vector<T> grad(numel);
+    std::vector<T> mom1(numel);
+    std::vector<T> mom2(numel);
+    std::vector<T> mom2_max(numel);
 
-  std::vector<T> param_out(param.size());
-  std::vector<T> mom1_out(mom1.size());
-  std::vector<T> mom2_out(mom2.size());
+    std::vector<T> param_out(param.size());
+    std::vector<T> mom1_out(mom1.size());
+    std::vector<T> mom2_out(mom2.size());
+    std::vector<T> mom2_max_out(mom2_max.size());
 
-  RandomVec<T>(numel, param.data(), 0.5f);
-  RandomVec<T>(numel, grad.data(), 0.5f);
-  RandomVec<T>(numel, mom1.data(), 0.5f);
-  RandomVec<T>(numel, mom2.data(), 0.5f);
-  auto ref = jit::GetReferFunc<KernelTuple>();
-  EXPECT_TRUE(ref != nullptr);
-  ref(beta1,
-      beta2,
-      -learning_rate,
-      eps,
-      old_lr,
-      lr_ratio,
-      coeff,
-      numel,
-      grad.data(),
-      mom1.data(),
-      mom2.data(),
-      param.data(),
-      mom1_out.data(),
-      mom2_out.data(),
-      param_out.data());
+    RandomVec<T>(numel, param.data(), 0.5f);
+    RandomVec<T>(numel, grad.data(), 0.5f);
+    RandomVec<T>(numel, mom1.data(), 0.5f);
+    RandomVec<T>(numel, mom2.data(), 0.5f);
+    if (amsgrad) {
+      RandomVec<T>(numel, mom2_max.data());
+    }
 
-  auto verifier = [](const typename KernelTuple::func_type tgt,
-                     T beta1,
-                     T beta2,
-                     T lr,
-                     T eps,
-                     T old_lr,
-                     T lr_ratio,
-                     T coeff,
-                     int64_t numel,
-                     const std::vector<T>& grad,
-                     const std::vector<T>& mom1,
-                     const std::vector<T>& mom2,
-                     const std::vector<T>& param,
-                     const std::vector<T>& ref_mom1_out,
-                     const std::vector<T>& ref_mom2_out,
-                     const std::vector<T>& ref_param_out) {
-    EXPECT_TRUE(tgt != nullptr);
-    EXPECT_EQ(param.size(), static_cast<size_t>(numel));
-    EXPECT_EQ(grad.size(), static_cast<size_t>(numel));
-    EXPECT_EQ(mom1.size(), static_cast<size_t>(numel));
-    EXPECT_EQ(mom2.size(), static_cast<size_t>(numel));
+    auto ref = jit::GetReferFunc<KernelTuple>();
+    EXPECT_TRUE(ref != nullptr);
+    jit::adamw_attr_t attr(beta1, beta2, coeff, amsgrad);
 
-    std::vector<T> jit_mom1_out(ref_mom1_out.size());
-    std::vector<T> jit_mom2_out(ref_mom2_out.size());
-    std::vector<T> jit_param_out(ref_param_out.size());
-
-    tgt(beta1,
+    ref(beta1,
         beta2,
-        -lr,
+        -learning_rate,
         eps,
         old_lr,
         lr_ratio,
@@ -876,33 +875,95 @@ void TestKernelAdamW() {
         grad.data(),
         mom1.data(),
         mom2.data(),
+        mom2_max.data(),
         param.data(),
-        jit_mom1_out.data(),
-        jit_mom2_out.data(),
-        jit_param_out.data());
+        mom1_out.data(),
+        mom2_out.data(),
+        mom2_max_out.data(),
+        param_out.data(),
+        amsgrad);
 
-    ExpectEQ<T>(ref_mom1_out.data(), jit_mom1_out.data(), numel);
-    ExpectEQ<T>(ref_mom2_out.data(), jit_mom2_out.data(), numel);
-    ExpectEQ<T>(ref_param_out.data(), jit_param_out.data(), numel);
-  };
+    auto verifier = [](const typename KernelTuple::func_type tgt,
+                       T beta1,
+                       T beta2,
+                       T lr,
+                       T eps,
+                       T old_lr,
+                       T lr_ratio,
+                       T coeff,
+                       int64_t numel,
+                       const std::vector<T>& grad,
+                       const std::vector<T>& mom1,
+                       const std::vector<T>& mom2,
+                       const std::vector<T>& mom2_max,
+                       const std::vector<T>& param,
+                       const std::vector<T>& ref_mom1_out,
+                       const std::vector<T>& ref_mom2_out,
+                       const std::vector<T>& ref_mom2_max_out,
+                       const std::vector<T>& ref_param_out,
+                       bool amsgrad) {
+      EXPECT_TRUE(tgt != nullptr);
+      EXPECT_EQ(param.size(), static_cast<size_t>(numel));
+      EXPECT_EQ(grad.size(), static_cast<size_t>(numel));
+      EXPECT_EQ(mom1.size(), static_cast<size_t>(numel));
+      EXPECT_EQ(mom2.size(), static_cast<size_t>(numel));
+      if (amsgrad) {
+        EXPECT_EQ(mom2_max.size(), static_cast<size_t>(numel));
+      }
 
-  TestAllImpls<KernelTuple, PlaceType>(1,
-                                       verifier,
-                                       beta1,
-                                       beta2,
-                                       learning_rate,
-                                       eps,
-                                       old_lr,
-                                       lr_ratio,
-                                       coeff,
-                                       numel,
-                                       grad,
-                                       mom1,
-                                       mom2,
-                                       param,
-                                       mom1_out,
-                                       mom2_out,
-                                       param_out);
+      std::vector<T> jit_mom1_out(ref_mom1_out.size());
+      std::vector<T> jit_mom2_out(ref_mom2_out.size());
+      std::vector<T> jit_mom2_max_out(ref_mom2_max_out.size());
+      std::vector<T> jit_param_out(ref_param_out.size());
+
+      tgt(beta1,
+          beta2,
+          -lr,
+          eps,
+          old_lr,
+          lr_ratio,
+          coeff,
+          numel,
+          grad.data(),
+          mom1.data(),
+          mom2.data(),
+          mom2_max.data(),
+          param.data(),
+          jit_mom1_out.data(),
+          jit_mom2_out.data(),
+          jit_mom2_max_out.data(),
+          jit_param_out.data(),
+          amsgrad);
+
+      ExpectEQ<T>(ref_mom1_out.data(), jit_mom1_out.data(), numel);
+      ExpectEQ<T>(ref_mom2_out.data(), jit_mom2_out.data(), numel);
+      if (amsgrad) {
+        ExpectEQ<T>(ref_mom2_max_out.data(), jit_mom2_max_out.data(), numel);
+      }
+      ExpectEQ<T>(ref_param_out.data(), jit_param_out.data(), numel);
+    };
+
+    TestAllImpls<KernelTuple, PlaceType>(attr,
+                                         verifier,
+                                         beta1,
+                                         beta2,
+                                         learning_rate,
+                                         eps,
+                                         old_lr,
+                                         lr_ratio,
+                                         coeff,
+                                         numel,
+                                         grad,
+                                         mom1,
+                                         mom2,
+                                         mom2_max,
+                                         param,
+                                         mom1_out,
+                                         mom2_out,
+                                         mom2_max_out,
+                                         param_out,
+                                         amsgrad);
+  }
 }
 
 template <typename KernelTuple, typename PlaceType>
@@ -915,7 +976,7 @@ void TestKernelSgd() {
                                   const int64_t upper) -> std::vector<int64_t> {
     PADDLE_ENFORCE_LE(static_cast<size_t>(upper - lower),
                       n - 1,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The range of Sgd (upper - lower) should be lower "
                           "than n-1 (Sgd size -1). But the upper - lower is %d "
                           "and n-1 is %d.",
@@ -924,7 +985,7 @@ void TestKernelSgd() {
     PADDLE_ENFORCE_GT(
         n,
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The Sgd size should be larger than 0. But the n is %d.", n));
     std::vector<int64_t> all, out;
     for (int i = 0; i < n; ++i) {
@@ -1172,9 +1233,9 @@ TEST(JITKernel_helper, GetAllCandidateFuncs) {
 
 TEST(JITKernel_helper, pack_weights) {
   const int N = 8 * 60, K = 2;
-  std::array<std::array<float, N>, K> src;
-  std::array<std::array<float, N>, K> yref;
-  std::array<float, N * K> y;
+  std::array<std::array<float, N>, K> src = {};
+  std::array<std::array<float, N>, K> yref = {};
+  std::array<float, N* K> y = {};
   float* x = &(src[0][0]);
   float* ref = &(yref[0][0]);
   for (int i = 0; i < N * K; ++i) {
@@ -1372,16 +1433,35 @@ TEST(JITKernel_key, emb_seq_pool) {
 }
 
 TEST(JITKernel_key, adam) {
-  jit::adam_attr_t attr1(0.4f, 0.9f);
-  jit::adam_attr_t attr2(0.4f, 0.9f);
-  jit::adam_attr_t attr3(0.1f, 0.3f);
+  jit::adam_attr_t attr1(0.4f, 0.9f, true);
+  jit::adam_attr_t attr2(0.4f, 0.9f, true);
+  jit::adam_attr_t attr3(0.1f, 0.3f, true);
+  jit::adam_attr_t attr4(0.1f, 0.3f, false);
 
   auto key1 = jit::JitCodeKey<jit::adam_attr_t>(attr1);
   auto key2 = jit::JitCodeKey<jit::adam_attr_t>(attr2);
   auto key3 = jit::JitCodeKey<jit::adam_attr_t>(attr3);
+  auto key4 = jit::JitCodeKey<jit::adam_attr_t>(attr4);
 
   EXPECT_TRUE(key1 == key2);
   EXPECT_TRUE(key2 != key3);
+  EXPECT_TRUE(key3 != key4);
+}
+
+TEST(JITKernel_key, adamw) {
+  jit::adamw_attr_t attr1(0.4f, 0.9f, 0.7f, true);
+  jit::adamw_attr_t attr2(0.4f, 0.9f, 0.7f, true);
+  jit::adamw_attr_t attr3(0.1f, 0.3f, 0.2f, true);
+  jit::adamw_attr_t attr4(0.1f, 0.3f, 0.7f, false);
+
+  auto key1 = jit::JitCodeKey<jit::adamw_attr_t>(attr1);
+  auto key2 = jit::JitCodeKey<jit::adamw_attr_t>(attr2);
+  auto key3 = jit::JitCodeKey<jit::adamw_attr_t>(attr3);
+  auto key4 = jit::JitCodeKey<jit::adamw_attr_t>(attr4);
+
+  EXPECT_TRUE(key1 == key2);
+  EXPECT_TRUE(key2 != key3);
+  EXPECT_TRUE(key3 != key4);
 }
 
 TEST(JITKernel_key, sgd) {

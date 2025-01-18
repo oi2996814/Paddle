@@ -113,19 +113,19 @@ TEST(GraphToProgramPass, Basic) {
 void BuildProgramWithMultiBlock(ProgramDesc* program) {
   auto* global_block = program->MutableBlock(0);
   auto* mul_1_x = global_block->Var("Mul_1_X");
-  mul_1_x->SetType(proto::VarType::LOD_TENSOR);
+  mul_1_x->SetType(proto::VarType::DENSE_TENSOR);
   mul_1_x->SetLoDLevel(0);
   mul_1_x->SetDataType(proto::VarType::FP32);
   mul_1_x->SetShape({1000, 784});
 
   auto* mul_1_y = global_block->Var("Mul_1_Y");
-  mul_1_y->SetType(proto::VarType::LOD_TENSOR);
+  mul_1_y->SetType(proto::VarType::DENSE_TENSOR);
   mul_1_y->SetLoDLevel(0);
   mul_1_y->SetDataType(proto::VarType::FP32);
   mul_1_y->SetShape({784, 100});
 
   auto* mul_1_out = global_block->Var("Mul_1_Out");
-  mul_1_out->SetType(proto::VarType::LOD_TENSOR);
+  mul_1_out->SetType(proto::VarType::DENSE_TENSOR);
   auto* mul_op_1 = global_block->AppendOp();
 
   mul_op_1->SetType("mul");
@@ -137,13 +137,13 @@ void BuildProgramWithMultiBlock(ProgramDesc* program) {
   auto* less_than_op_1 = global_block->AppendOp();
   less_than_op_1->SetType("less_than");
   auto* less_than_1_x = global_block->Var("Less_than_1_X");
-  less_than_1_x->SetType(proto::VarType::LOD_TENSOR);
+  less_than_1_x->SetType(proto::VarType::DENSE_TENSOR);
   less_than_1_x->SetLoDLevel(0);
   less_than_1_x->SetDataType(proto::VarType::FP32);
   less_than_1_x->SetShape({1});
 
   auto* less_than_1_y = global_block->Var("Less_than_1_Y");
-  less_than_1_y->SetType(proto::VarType::LOD_TENSOR);
+  less_than_1_y->SetType(proto::VarType::DENSE_TENSOR);
   less_than_1_y->SetLoDLevel(0);
   less_than_1_y->SetDataType(proto::VarType::FP32);
   less_than_1_y->SetShape({1});
@@ -169,7 +169,7 @@ void BuildProgramWithMultiBlock(ProgramDesc* program) {
   while_op->SetAttr("sub_block", sub_blocks[0]);
 
   auto* while_x = global_block->Var("While_X");
-  while_x->SetType(proto::VarType::LOD_TENSOR);
+  while_x->SetType(proto::VarType::DENSE_TENSOR);
   while_x->SetLoDLevel(0);
   while_x->SetDataType(proto::VarType::FP32);
   while_x->SetShape({1});
@@ -178,7 +178,7 @@ void BuildProgramWithMultiBlock(ProgramDesc* program) {
   while_op->SetInput("kCondition", {less_than_1_out->Name()});
 
   auto* while_out = global_block->Var("While_Out");
-  while_out->SetType(proto::VarType::LOD_TENSOR);
+  while_out->SetType(proto::VarType::DENSE_TENSOR);
   while_out->SetLoDLevel(0);
   while_out->SetDataType(proto::VarType::FP32);
   while_out->SetShape({1});
@@ -189,13 +189,13 @@ void BuildProgramWithMultiBlock(ProgramDesc* program) {
   while_op->SetOutput("kStepScopes", {steps->Name()});
 
   auto* mul_2_x = global_block->Var("Mul_2_X");
-  mul_2_x->SetType(proto::VarType::LOD_TENSOR);
+  mul_2_x->SetType(proto::VarType::DENSE_TENSOR);
   mul_2_x->SetLoDLevel(0);
   mul_2_x->SetDataType(proto::VarType::FP32);
   mul_2_x->SetShape({1000, 784});
 
   auto* mul_2_y = global_block->Var("Mul_2_Y");
-  mul_2_y->SetType(proto::VarType::LOD_TENSOR);
+  mul_2_y->SetType(proto::VarType::DENSE_TENSOR);
   mul_2_y->SetLoDLevel(0);
   mul_2_y->SetDataType(proto::VarType::FP32);
   mul_2_y->SetShape({784, 100});
@@ -206,19 +206,19 @@ void BuildProgramWithMultiBlock(ProgramDesc* program) {
   mul_op_2->SetInput("Y", {mul_2_y->Name()});
 
   auto* mul_2_out = global_block->Var("Mul_2_Out");
-  mul_2_out->SetType(proto::VarType::LOD_TENSOR);
+  mul_2_out->SetType(proto::VarType::DENSE_TENSOR);
   mul_op_2->SetOutput("Y", {mul_2_out->Name()});
 
   auto* less_than_op_2 = sub_blocks[0]->AppendOp();
   less_than_op_2->SetType("less_than");
   auto* less_than_2_x = global_block->Var("Less_than_2_X");
-  less_than_2_x->SetType(proto::VarType::LOD_TENSOR);
+  less_than_2_x->SetType(proto::VarType::DENSE_TENSOR);
   less_than_2_x->SetLoDLevel(0);
   less_than_2_x->SetDataType(proto::VarType::FP32);
   less_than_2_x->SetShape({1});
 
   auto* less_than_2_y = global_block->Var("Less_than_2_Y");
-  less_than_2_y->SetType(proto::VarType::LOD_TENSOR);
+  less_than_2_y->SetType(proto::VarType::DENSE_TENSOR);
   less_than_2_y->SetLoDLevel(0);
   less_than_2_y->SetDataType(proto::VarType::FP32);
   less_than_2_y->SetShape({1});
@@ -235,7 +235,7 @@ void BuildProgramWithMultiBlock(ProgramDesc* program) {
   cond_op->SetAttr("sub_block", sub_blocks[1]);
 
   auto* cond_x = sub_blocks[0]->Var("Cond_X");
-  cond_x->SetType(proto::VarType::LOD_TENSOR);
+  cond_x->SetType(proto::VarType::DENSE_TENSOR);
   cond_x->SetLoDLevel(0);
   cond_x->SetDataType(proto::VarType::FP32);
   cond_x->SetShape({1});
@@ -244,7 +244,7 @@ void BuildProgramWithMultiBlock(ProgramDesc* program) {
   cond_op->SetInput("kCondition", {less_than_2_out->Name()});
 
   auto* cond_out = sub_blocks[0]->Var("Cond_Out");
-  cond_out->SetType(proto::VarType::LOD_TENSOR);
+  cond_out->SetType(proto::VarType::DENSE_TENSOR);
   cond_out->SetLoDLevel(0);
   cond_out->SetDataType(proto::VarType::FP32);
   cond_out->SetShape({1});
@@ -256,19 +256,19 @@ void BuildProgramWithMultiBlock(ProgramDesc* program) {
   cond_op->SetOutput("kScope", {scope->Name()});
 
   auto* mul_3_x = global_block->Var("Mul_3_X");
-  mul_3_x->SetType(proto::VarType::LOD_TENSOR);
+  mul_3_x->SetType(proto::VarType::DENSE_TENSOR);
   mul_3_x->SetLoDLevel(0);
   mul_3_x->SetDataType(proto::VarType::FP32);
   mul_3_x->SetShape({1000, 784});
 
   auto* mul_3_y = global_block->Var("Mul_3_Y");
-  mul_3_y->SetType(proto::VarType::LOD_TENSOR);
+  mul_3_y->SetType(proto::VarType::DENSE_TENSOR);
   mul_3_y->SetLoDLevel(0);
   mul_3_y->SetDataType(proto::VarType::FP32);
   mul_3_y->SetShape({784, 100});
 
   auto* mul_3_out = global_block->Var("Mul_3_Out");
-  mul_3_out->SetType(proto::VarType::LOD_TENSOR);
+  mul_3_out->SetType(proto::VarType::DENSE_TENSOR);
 
   auto* mul_op_3 = sub_blocks[1]->AppendOp();
   mul_op_3->SetType("mul");
@@ -354,8 +354,8 @@ void CheckBlockOpsEqual(const BlockDesc& before_block,
 
   // op's order must be the same
   for (size_t op_idx = 0; op_idx < before_block.OpSize(); ++op_idx) {
-    const auto& before_op = before_block.Op(op_idx);
-    const auto& after_op = after_block.Op(op_idx);
+    const auto& before_op = before_block.Op(static_cast<int>(op_idx));
+    const auto& after_op = after_block.Op(static_cast<int>(op_idx));
 
     EXPECT_EQ(before_op->Type(), after_op->Type());
 
@@ -408,81 +408,6 @@ TEST(GraphToProgramPass, MultiBlock) {
 
   // Recover FLAGS_convert_all_blocks.
   FLAGS_convert_all_blocks = flag_temp;
-}
-
-void BuildProgramWithScaleLossGrad(Graph* g) {
-  OpDesc op1;
-  op1.SetType("op1");
-  OpDesc op2;
-  op2.SetType("op2");
-  OpDesc op3;
-  op3.SetType("op3");
-  OpDesc op4;
-  op4.SetType("op4");
-  VarDesc var1("var1");
-  VarDesc var2("var2");
-
-  ir::Node* o1 = g->CreateOpNode(&op1);
-  ir::Node* o2 = g->CreateOpNode(&op2);
-  ir::Node* o3 =
-      g->CreateEmptyNode("scale_loss_grad", ir::Node::Type::kOperation);
-  ir::Node* o4 =
-      g->CreateEmptyNode("scale_loss_grad", ir::Node::Type::kOperation);
-  ir::Node* v1 = g->CreateVarNode(&var1);
-  ir::Node* v2 = g->CreateVarNode(&var2);
-
-  // o1->v1->o2
-  o1->outputs.push_back(v1);
-  o2->inputs.push_back(v1);
-  v1->inputs.push_back(o1);
-  v1->outputs.push_back(o2);
-  // o3->v1
-  o3->outputs.push_back(v1);
-  v1->inputs.push_back(o1);
-  v1->inputs.push_back(o3);
-  // o4->v2
-  o4->outputs.push_back(v2);
-  v2->inputs.push_back(o4);
-}
-
-TEST(GraphToProgramPass, ReplaceScaleLossGrad) {
-  // Step1: Build a program with multi block
-  ProgramDesc before_prog;
-  Graph before_graph(before_prog);
-  BuildProgramWithScaleLossGrad(&before_graph);
-
-  // Step2 : Convert graph back to program
-  auto pass = paddle::framework::ir::PassRegistry::Instance().Get(
-      "graph_to_program_pass");
-
-  ProgramDesc after_prog;
-  pass->SetNotOwned<paddle::framework::ProgramDesc>("program", &after_prog);
-  pass->Apply(&before_graph);
-
-  // Step3 : statistics scale_loss_grad and fill_constant number
-  int scale_node_num = 0, fill_node_num = 0;
-  const auto& before_nodes_set = before_graph.Nodes();
-  for (const auto& n : before_nodes_set) {
-    if (n->Name() == "scale_loss_grad") {
-      ++scale_node_num;
-    } else if (n->Name() == "fill_constant") {
-      ++fill_node_num;
-    }
-  }
-
-  int scale_op_num = 0, fill_op_num = 0;
-  const auto& block = after_prog.Block(0);
-  for (const auto& op : block.AllOps()) {
-    if (op->Type() == "fill_constant") {
-      ++fill_op_num;
-    } else if (op->Type() == "scale_loss_grad") {
-      ++scale_op_num;
-    }
-  }
-
-  // Check pass OK
-  EXPECT_EQ(scale_op_num, 0);
-  EXPECT_EQ(scale_node_num + fill_node_num, fill_op_num);
 }
 
 }  // namespace ir

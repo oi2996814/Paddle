@@ -59,7 +59,7 @@ if(WITH_MKL)
   add_dependencies(cinn_mklml ${MKLML_PROJECT})
   add_definitions(-DCINN_WITH_MKL_CBLAS)
 endif()
-if(WITH_MKLDNN)
+if(WITH_ONEDNN)
   add_definitions(-DCINN_WITH_DNNL)
 endif()
 
@@ -69,6 +69,10 @@ if(WITH_GPU)
   if(WITH_CUDNN)
     message(STATUS "Enable CINN CUDNN")
     add_definitions(-DCINN_WITH_CUDNN)
+  endif()
+  if(WITH_CUTLASS)
+    message(STATUS "Enable CINN CUTLASS")
+    add_definitions(-DCINN_WITH_CUTLASS)
   endif()
   enable_language(CUDA)
   find_package(CUDA REQUIRED)
@@ -100,6 +104,18 @@ if(WITH_GPU)
                                              /usr/lib /usr/lib64 REQUIRED)
 endif()
 
+if(WITH_ROCM)
+  message(STATUS "CINN Compile with ROCM support")
+  add_definitions(-DCINN_WITH_HIP)
+endif()
+
+if(CINN_WITH_SYCL)
+  message(STATUS "CINN Compile with SYCL support")
+  set(DPCPP_DIR ${PROJECT_SOURCE_DIR}/cmake/cinn)
+  find_package(DPCPP REQUIRED CONFIG)
+  add_definitions(-DCINN_WITH_SYCL)
+endif()
+
 set(cinnapi_src CACHE INTERNAL "" FORCE)
 set(core_src CACHE INTERNAL "" FORCE)
 set(core_includes CACHE INTERNAL "" FORCE)
@@ -113,10 +129,6 @@ include(cmake/cinn/system.cmake)
 include(cmake/cinn/core.cmake)
 include(cmake/cinn/nvrtc.cmake)
 include(cmake/cinn/nvtx.cmake)
-
-if(CINN_ONLY)
-  link_libraries(gflags)
-endif()
 
 set(LINK_FLAGS
     "-Wl,--version-script ${CMAKE_CURRENT_SOURCE_DIR}/cmake/cinn/export.map"
@@ -156,30 +168,28 @@ cinn_cc_library(
   DEPS
   glog
   ${llvm_libs}
-  cinn_framework_proto
   param_proto
   auto_schedule_proto
   schedule_desc_proto
+  tile_config_proto
   absl
   isl
   ginac
-  pybind
+  op_fusion
+  cinn_op_dialect
   ${jitify_deps})
 add_dependencies(cinnapi GEN_LLVM_RUNTIME_IR_HEADER ZLIB::ZLIB)
 add_dependencies(cinnapi GEN_LLVM_RUNTIME_IR_HEADER ${core_deps})
-if(NOT CINN_ONLY)
-  target_link_libraries(cinnapi phi)
-  add_dependencies(cinnapi phi)
-endif()
+target_link_libraries(cinnapi op_dialect pir phi)
+add_dependencies(cinnapi op_dialect pir phi)
 
-target_link_libraries(cinnapi ${PYTHON_LIBRARIES})
-
+add_dependencies(cinnapi python)
 if(WITH_MKL)
   target_link_libraries(cinnapi cinn_mklml)
   add_dependencies(cinnapi cinn_mklml)
-  if(WITH_MKLDNN)
-    target_link_libraries(cinnapi ${MKLDNN_LIB})
-    add_dependencies(cinnapi ${MKLDNN_PROJECT})
+  if(WITH_ONEDNN)
+    target_link_libraries(cinnapi ${ONEDNN_LIB})
+    add_dependencies(cinnapi ${ONEDNN_PROJECT})
   endif()
 endif()
 
@@ -198,6 +208,11 @@ if(WITH_GPU)
   endif()
 endif()
 
+if(WITH_CUTLASS)
+  target_link_libraries(cinnapi cutlass)
+  add_dependencies(cinnapi cutlass)
+endif()
+
 function(gen_cinncore LINKTYPE)
   set(CINNCORE_TARGET cinncore)
   if(${LINKTYPE} STREQUAL "STATIC")
@@ -211,29 +226,31 @@ function(gen_cinncore LINKTYPE)
     DEPS
     glog
     ${llvm_libs}
-    cinn_framework_proto
     param_proto
     auto_schedule_proto
     schedule_desc_proto
+    tile_config_proto
     absl
     isl
-    ginac)
+    ginac
+    pybind
+    op_fusion
+    cinn_op_dialect
+    ${jitify_deps})
   add_dependencies(${CINNCORE_TARGET} GEN_LLVM_RUNTIME_IR_HEADER ZLIB::ZLIB)
   add_dependencies(${CINNCORE_TARGET} GEN_LLVM_RUNTIME_IR_HEADER ${core_deps})
-  if(NOT CINN_ONLY)
-    target_link_libraries(${CINNCORE_TARGET} phi)
-    add_dependencies(${CINNCORE_TARGET} phi)
-  endif()
+  target_link_libraries(${CINNCORE_TARGET} op_dialect pir phi)
+  add_dependencies(${CINNCORE_TARGET} op_dialect pir phi)
 
-  add_dependencies(${CINNCORE_TARGET} pybind)
+  # add_dependencies(${CINNCORE_TARGET} pybind)
   target_link_libraries(${CINNCORE_TARGET} ${PYTHON_LIBRARIES})
 
   if(WITH_MKL)
     target_link_libraries(${CINNCORE_TARGET} cinn_mklml)
     add_dependencies(${CINNCORE_TARGET} cinn_mklml)
-    if(WITH_MKLDNN)
-      target_link_libraries(${CINNCORE_TARGET} ${MKLDNN_LIB})
-      add_dependencies(${CINNCORE_TARGET} ${MKLDNN_PROJECT})
+    if(WITH_ONEDNN)
+      target_link_libraries(${CINNCORE_TARGET} ${ONEDNN_LIB})
+      add_dependencies(${CINNCORE_TARGET} ${ONEDNN_PROJECT})
     endif()
   endif()
 
@@ -246,11 +263,16 @@ function(gen_cinncore LINKTYPE)
       ${CUBLAS}
       ${CUDNN}
       ${CURAND}
-      ${CUSOLVER}
-      ${jitify_deps})
+      ${CUSOLVER})
+    # ${jitify_deps})
     if(NVTX_FOUND)
       target_link_libraries(${CINNCORE_TARGET} ${CUDA_NVTX_LIB})
     endif()
+  endif()
+
+  if(WITH_CUTLASS)
+    target_link_libraries(${CINNCORE_TARGET} cutlass)
+    add_dependencies(${CINNCORE_TARGET} cutlass)
   endif()
 endfunction()
 
@@ -262,6 +284,10 @@ set(PUBLISH_LIBS ON)
 if(PUBLISH_LIBS)
   set(core_includes
       "${core_includes};paddle/cinn/runtime/cuda/cinn_cuda_runtime_source.cuh")
+  set(core_includes
+      "${core_includes};paddle/cinn/runtime/hip/cinn_hip_runtime_source.h")
+  set(core_includes
+      "${core_includes};paddle/common/flags.h;paddle/utils/test_macros.h")
   foreach(header ${core_includes})
     get_filename_component(prefix ${header} DIRECTORY)
     file(COPY ${header}
@@ -289,19 +315,8 @@ if(PUBLISH_LIBS)
   add_custom_command(
     TARGET cinncore_static
     POST_BUILD
-    COMMAND
-      cmake -E copy ${PROJECT_SOURCE_DIR}/tools/cinn/tutorials_demo/demo.cc
-      ${CMAKE_BINARY_DIR}/dist/demo.cc
-    COMMAND
-      cmake -E copy
-      ${PROJECT_SOURCE_DIR}/tools/cinn/tutorials_demo/build_demo.sh
-      ${CMAKE_BINARY_DIR}/dist/build_demo.sh
     COMMAND cmake -E copy ${CMAKE_BINARY_DIR}/libcinncore_static.a
             ${CMAKE_BINARY_DIR}/dist/cinn/lib/libcinncore_static.a
-    COMMAND
-      cmake -E copy
-      ${CMAKE_BINARY_DIR}/paddle/cinn/frontend/paddle/libcinn_framework_proto.a
-      ${CMAKE_BINARY_DIR}/dist/cinn/lib/libcinn_framework_proto.a
     COMMAND
       cmake -E copy ${CMAKE_BINARY_DIR}/paddle/cinn/hlir/pe/libparam_proto.a
       ${CMAKE_BINARY_DIR}/dist/cinn/lib/libparam_proto.a

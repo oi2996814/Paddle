@@ -18,9 +18,8 @@ import numpy as np
 from test_imperative_base import new_program_scope
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
-from paddle.fluid.dygraph.base import to_variable
+from paddle import base
+from paddle.base import core
 from paddle.nn import Linear
 
 
@@ -58,11 +57,11 @@ class TestDygraphGAN(unittest.TestCase):
         seed = 90
         paddle.seed(1)
         paddle.framework.random._manual_program_seed(1)
-        startup = fluid.Program()
-        discriminate_p = fluid.Program()
-        generate_p = fluid.Program()
+        startup = base.Program()
+        discriminate_p = base.Program()
+        generate_p = base.Program()
 
-        scope = fluid.core.Scope()
+        scope = base.core.Scope()
         with new_program_scope(
             main=discriminate_p, startup=startup, scope=scope
         ):
@@ -116,13 +115,13 @@ class TestDygraphGAN(unittest.TestCase):
             sgd = paddle.optimizer.SGD(learning_rate=1e-3)
             sgd.minimize(g_loss)
 
-        exe = fluid.Executor(
-            fluid.CPUPlace()
+        exe = base.Executor(
+            base.CPUPlace()
             if not core.is_compiled_with_cuda()
-            else fluid.CUDAPlace(0)
+            else base.CUDAPlace(0)
         )
         static_params = {}
-        with fluid.scope_guard(scope):
+        with base.scope_guard(scope):
             img = np.ones([2, 1], np.float32)
             noise = np.ones([2, 2], np.float32)
             exe.run(startup)
@@ -142,9 +141,11 @@ class TestDygraphGAN(unittest.TestCase):
                 )
 
         dy_params = {}
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             paddle.seed(1)
-            paddle.framework.random._manual_program_seed(1)
+            with paddle.pir_utils.OldIrGuard():
+                # Note: dygraph use self.main_program.global_block().create_parameter(), it's need manual seed to old Program
+                paddle.framework.random._manual_program_seed(1)
 
             discriminator = Discriminator()
             generator = Generator()
@@ -155,20 +156,23 @@ class TestDygraphGAN(unittest.TestCase):
                 ),
             )
 
-            d_real = discriminator(to_variable(np.ones([2, 1], np.float32)))
+            d_real = discriminator(
+                paddle.to_tensor(np.ones([2, 1], np.float32))
+            )
             d_loss_real = paddle.mean(
                 paddle.nn.functional.binary_cross_entropy_with_logits(
-                    logit=d_real, label=to_variable(np.ones([2, 1], np.float32))
+                    logit=d_real,
+                    label=paddle.to_tensor(np.ones([2, 1], np.float32)),
                 )
             )
 
             d_fake = discriminator(
-                generator(to_variable(np.ones([2, 2], np.float32)))
+                generator(paddle.to_tensor(np.ones([2, 2], np.float32)))
             )
             d_loss_fake = paddle.mean(
                 paddle.nn.functional.binary_cross_entropy_with_logits(
                     logit=d_fake,
-                    label=to_variable(np.zeros([2, 1], np.float32)),
+                    label=paddle.to_tensor(np.zeros([2, 1], np.float32)),
                 )
             )
 
@@ -179,11 +183,12 @@ class TestDygraphGAN(unittest.TestCase):
             generator.clear_gradients()
 
             d_fake = discriminator(
-                generator(to_variable(np.ones([2, 2], np.float32)))
+                generator(paddle.to_tensor(np.ones([2, 2], np.float32)))
             )
             g_loss = paddle.mean(
                 paddle.nn.functional.binary_cross_entropy_with_logits(
-                    logit=d_fake, label=to_variable(np.ones([2, 1], np.float32))
+                    logit=d_fake,
+                    label=paddle.to_tensor(np.ones([2, 1], np.float32)),
                 )
             )
             g_loss.backward()
@@ -197,8 +202,8 @@ class TestDygraphGAN(unittest.TestCase):
             dy_d_loss = d_loss.numpy()
 
         dy_params2 = {}
-        with fluid.dygraph.guard():
-            fluid.set_flags({'FLAGS_sort_sum_gradient': True})
+        with base.dygraph.guard():
+            base.set_flags({'FLAGS_sort_sum_gradient': True})
             paddle.seed(1)
             paddle.framework.random._manual_program_seed(1)
             discriminator2 = Discriminator()
@@ -210,21 +215,23 @@ class TestDygraphGAN(unittest.TestCase):
                 ),
             )
 
-            d_real2 = discriminator2(to_variable(np.ones([2, 1], np.float32)))
+            d_real2 = discriminator2(
+                paddle.to_tensor(np.ones([2, 1], np.float32))
+            )
             d_loss_real2 = paddle.mean(
                 paddle.nn.functional.binary_cross_entropy_with_logits(
                     logit=d_real2,
-                    label=to_variable(np.ones([2, 1], np.float32)),
+                    label=paddle.to_tensor(np.ones([2, 1], np.float32)),
                 )
             )
 
             d_fake2 = discriminator2(
-                generator2(to_variable(np.ones([2, 2], np.float32)))
+                generator2(paddle.to_tensor(np.ones([2, 2], np.float32)))
             )
             d_loss_fake2 = paddle.mean(
                 paddle.nn.functional.binary_cross_entropy_with_logits(
                     logit=d_fake2,
-                    label=to_variable(np.zeros([2, 1], np.float32)),
+                    label=paddle.to_tensor(np.zeros([2, 1], np.float32)),
                 )
             )
 
@@ -235,12 +242,12 @@ class TestDygraphGAN(unittest.TestCase):
             generator2.clear_gradients()
 
             d_fake2 = discriminator2(
-                generator2(to_variable(np.ones([2, 2], np.float32)))
+                generator2(paddle.to_tensor(np.ones([2, 2], np.float32)))
             )
             g_loss2 = paddle.mean(
                 paddle.nn.functional.binary_cross_entropy_with_logits(
                     logit=d_fake2,
-                    label=to_variable(np.ones([2, 1], np.float32)),
+                    label=paddle.to_tensor(np.ones([2, 1], np.float32)),
                 )
             )
             g_loss2.backward()
@@ -265,4 +272,5 @@ class TestDygraphGAN(unittest.TestCase):
 
 
 if __name__ == '__main__':
+    paddle.enable_static()
     unittest.main()

@@ -16,19 +16,15 @@ limitations under the License. */
 #include "paddle/fluid/inference/tensorrt/engine.h"
 #include "paddle/phi/common/data_type.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Scope;
 
-namespace proto {
+}  // namespace paddle::framework
+namespace paddle::framework::proto {
 class OpDesc;
-}  // namespace proto
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::proto
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 template <typename RegistFunc, typename SetDilationFunc>
 void ConvertConv2d(TensorRTEngine* engine,
@@ -56,7 +52,7 @@ void ConvertConv2d(TensorRTEngine* engine,
     PADDLE_ENFORCE_EQ(
         Y_t->dims().size(),
         4UL,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The conv2d filter's dims size should be 4, but got %d",
             Y_t->dims().size()));
     n_output = Y_t->dims()[0];
@@ -68,7 +64,7 @@ void ConvertConv2d(TensorRTEngine* engine,
     PADDLE_ENFORCE_EQ(
         filter->getDimensions().nbDims,
         4UL,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The conv2d filter's dims size should be 4, but got %d",
             filter->getDimensions().nbDims));
     n_output = filter->getDimensions().d[0];
@@ -132,7 +128,7 @@ void ConvertConv2d(TensorRTEngine* engine,
   bias.SetDataType(weight.get().type);
   bias.SetCount(0);
   bias.SetValues(nullptr);
-  if (op_desc.Type() == "conv2d_fusion") {
+  if (op_desc.Type() == "fused_conv2d_add_act") {
     auto* bias_tensor = scope.GetVar(op_desc.Input("Bias").front());
     auto* bias_tensor_data = bias_tensor->GetMutable<phi::DenseTensor>();
     bias =
@@ -156,8 +152,8 @@ void ConvertConv2d(TensorRTEngine* engine,
 
   PADDLE_ENFORCE_NOT_NULL(
       layer,
-      platform::errors::Fatal("TensorRT create conv2d/conv2d_transpose"
-                              " layer failed."));
+      common::errors::Fatal("TensorRT create conv2d/conv2d_transpose"
+                            " layer failed."));
   layer->setStrideNd(nv_strides);
 
   layer->setPrePadding(nv_pre_paddings);
@@ -169,7 +165,7 @@ void ConvertConv2d(TensorRTEngine* engine,
     nv_post_paddings.d[1] -= output_padding[1];
   }
   if (nv_post_paddings.d[0] < 0 || nv_post_paddings.d[1] < 0) {
-    PADDLE_THROW(platform::errors::Fatal(
+    PADDLE_THROW(common::errors::Fatal(
         "The value in conv2d_transpose's PostPadding should be >= 0."));
   }
   layer->setPostPadding(nv_post_paddings);
@@ -198,6 +194,8 @@ class Conv2dOpConverter : public OpConverter {
   void operator()(const framework::proto::OpDesc& op,
                   const framework::Scope& scope,
                   bool test_mode) override {
+    framework::OpDesc op_desc(op, nullptr);
+    auto output_name = op_desc.Output("Output").front();
     ConvertConv2d(
         engine_,
         op,
@@ -215,10 +213,11 @@ class Conv2dOpConverter : public OpConverter {
                                              ksize,
                                              weight.get(),
                                              bias.get());
+          SupportFP32MixPrecision(output_name, op_desc.Type(), layer);
           return layer;
         },
         [](nvinfer1::IConvolutionLayer* layer, nvinfer1::DimsHW& dilations) {
-          layer->setDilation(dilations);
+          layer->setDilationNd(dilations);
         },
         "conv2d");
   }
@@ -229,6 +228,8 @@ class Deconv2dOpConverter : public OpConverter {
   void operator()(const framework::proto::OpDesc& op,
                   const framework::Scope& scope,
                   bool test_mode) override {
+    framework::OpDesc op_desc(op, nullptr);
+    auto output_name = op_desc.Output("Output").front();
     ConvertConv2d(
         engine_,
         op,
@@ -240,12 +241,13 @@ class Deconv2dOpConverter : public OpConverter {
             TensorRTEngine::Weight& weight,
             TensorRTEngine::Weight& bias) -> nvinfer1::IDeconvolutionLayer* {
           auto* layer = TRT_ENGINE_ADD_LAYER(engine_,
-                                             Deconvolution,
+                                             DeconvolutionNd,
                                              *inputs,
                                              n_output,
                                              ksize,
                                              weight.get(),
                                              bias.get());
+          SupportFP32MixPrecision(output_name, op_desc.Type(), layer);
           return layer;
         },
         [](nvinfer1::IDeconvolutionLayer* layer, nvinfer1::DimsHW& dilations) {
@@ -254,10 +256,8 @@ class Deconv2dOpConverter : public OpConverter {
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(conv2d, Conv2dOpConverter);
-REGISTER_TRT_OP_CONVERTER(conv2d_fusion, Conv2dOpConverter);
+REGISTER_TRT_OP_CONVERTER(fused_conv2d_add_act, Conv2dOpConverter);
 REGISTER_TRT_OP_CONVERTER(conv2d_transpose, Deconv2dOpConverter);

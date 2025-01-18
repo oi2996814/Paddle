@@ -15,15 +15,11 @@
 import unittest
 
 import numpy as np
-from eager_op_test import (
-    OpTest,
-    convert_float_to_uint16,
-    convert_uint16_to_float,
-)
+from op_test import OpTest, convert_float_to_uint16, convert_uint16_to_float
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 
 def _mode1D(a):
@@ -116,12 +112,12 @@ class TestModeOp(OpTest):
 
     def test_check_output(self):
         paddle.enable_static()
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad(self):
         paddle.enable_static()
         grad = self.init_numeric_grads()
-        self.check_grad({'X'}, 'Out', user_defined_grads=[grad])
+        self.check_grad({'X'}, 'Out', user_defined_grads=[grad], check_pir=True)
 
 
 @unittest.skipIf(
@@ -152,7 +148,7 @@ class TestModeBF16Op(TestModeOp):
         place = core.CUDAPlace(0)
         paddle.enable_static()
         if core.is_bfloat16_supported(place):
-            self.check_output_with_place(place)
+            self.check_output_with_place(place, check_pir=True)
 
     def test_check_grad(self):
         place = core.CUDAPlace(0)
@@ -161,7 +157,7 @@ class TestModeBF16Op(TestModeOp):
 
         if core.is_bfloat16_supported(place):
             self.check_grad_with_place(
-                place, {'X'}, 'Out', user_defined_grads=[grad]
+                place, {'X'}, 'Out', user_defined_grads=[grad], check_pir=True
             )
 
 
@@ -191,7 +187,7 @@ class TestModeBF16OpLastdim(TestModeBF16Op):
 
 class TestModeOpKernels(unittest.TestCase):
     def setUp(self):
-        self.axises = [-1, 1]
+        self.axes = [-1, 1]
         np.random.seed(666)
         self.inputs = np.ceil(np.random.rand(2, 10, 10) * 1000)
 
@@ -199,7 +195,7 @@ class TestModeOpKernels(unittest.TestCase):
         def test_cpu_kernel():
             paddle.set_device('cpu')
             tensor = paddle.to_tensor(self.inputs)
-            for axis in self.axises:
+            for axis in self.axes:
                 value_expect, indice_expect = cal_mode(self.inputs, axis)
                 v, inds = paddle.mode(tensor, axis)
                 np.testing.assert_allclose(v.numpy(), value_expect, rtol=1e-05)
@@ -213,7 +209,7 @@ class TestModeOpKernels(unittest.TestCase):
         def test_gpu_kernel():
             paddle.set_device('gpu')
             tensor = paddle.to_tensor(self.inputs)
-            for axis in self.axises:
+            for axis in self.axes:
                 value_expect, indice_expect = cal_mode(self.inputs, axis)
                 v, inds = paddle.mode(tensor, axis)
                 np.testing.assert_allclose(v.numpy(), value_expect, rtol=1e-05)
@@ -226,7 +222,7 @@ class TestModeOpKernels(unittest.TestCase):
 
         paddle.disable_static()
         test_cpu_kernel()
-        if fluid.core.is_compiled_with_cuda():
+        if base.core.is_compiled_with_cuda():
             test_gpu_kernel()
 
 
@@ -267,7 +263,7 @@ class TestModeOpInStatic(unittest.TestCase):
 
 class TestModeZeroError(unittest.TestCase):
     def test_errors(self):
-        with paddle.fluid.dygraph.guard():
+        with paddle.base.dygraph.guard():
 
             def test_0_size():
                 array = np.array([], dtype=np.float32)

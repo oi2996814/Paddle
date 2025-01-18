@@ -19,8 +19,8 @@
 #include <vector>
 
 #include "paddle/cinn/common/common.h"
-#include "paddle/cinn/ir/utils/ir_mutator.h"
-#include "paddle/cinn/ir/utils/ir_printer.h"
+#include "paddle/cinn/ir/ir_mutator.h"
+#include "paddle/cinn/ir/ir_printer.h"
 #include "paddle/cinn/runtime/intrinsic.h"
 #include "paddle/cinn/utils/string.h"
 
@@ -101,8 +101,6 @@ struct StoreDebugInfoBuilder : public ir::IRVisitor {
   void Visit(const ir::Free *x) override {}
   void Visit(const ir::_Buffer_ *x) override {}
   void Visit(const ir::_Tensor_ *x) override {}
-  void Visit(const ir::_LoweredFunc_ *x) override {}
-  void Visit(const ir::_Module_ *x) override {}
   void Visit(const ir::Let *x) override {}
   void Visit(const ir::Reduce *x) override {}
   void Visit(const ir::Ramp *x) override {}
@@ -131,7 +129,10 @@ struct InsertDebugLogCalleeMutator : public ir::IRMutator<> {
   void Visit(const ir::_LoweredFunc_ *op, Expr *expr) {
     auto *node = expr->As<ir::_LoweredFunc_>();
     auto *body_block = node->body.As<ir::Block>();
-    CHECK(body_block);
+    PADDLE_ENFORCE_NOT_NULL(
+        body_block,
+        ::common::errors::InvalidArgument(
+            "Expected 'body_block' to be non-null, but got null."));
 
     auto msg = StringFormat("running : %s", GetDebugString(*expr).c_str());
     auto debug_node = CreateDebugStatement(msg);
@@ -139,7 +140,7 @@ struct InsertDebugLogCalleeMutator : public ir::IRMutator<> {
     ir::IRMutator<>::Visit(&node->body, &node->body);
 
     auto deal_with_exprs =
-        [&](std::vector<Expr> *exprs) {  // deal with op->argument_preapre_exprs
+        [&](std::vector<Expr> *exprs) {  // deal with op->argument_prepare_exprs
           std::vector<Expr> new_stmts;
           for (auto &expr : *exprs) {
             auto msg =
@@ -220,7 +221,7 @@ struct InsertDebugLogCalleeMutator : public ir::IRMutator<> {
            << " with condition: " << node->condition << ">";
         break;
       }
-      case ir::IrNodeTy::_LoweredFunc_: {
+      case ir::IrNodeTy::LoweredFunc: {
         auto *node = e.As<ir::_LoweredFunc_>();
         ss << "<LoweredFunc " << node->name << ">";
         break;

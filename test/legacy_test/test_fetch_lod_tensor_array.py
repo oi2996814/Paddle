@@ -18,13 +18,13 @@ import numpy as np
 from simple_nets import simple_fc_net, simple_fc_net_with_inputs
 
 import paddle
-from paddle import fluid
+from paddle import base
 
 
-class TestFetchLoDTensorArray(unittest.TestCase):
+class TestFetchDenseTensorArray(unittest.TestCase):
     def build_program(self, main_program, startup_program):
-        with fluid.unique_name.guard():
-            with fluid.program_guard(main_program, startup_program):
+        with base.unique_name.guard():
+            with base.program_guard(main_program, startup_program):
                 i = paddle.zeros(shape=[1], dtype='int64')
                 img = paddle.static.data(
                     name='image', shape=[-1, 784], dtype='float32'
@@ -46,8 +46,8 @@ class TestFetchLoDTensorArray(unittest.TestCase):
                 return loss, array
 
     def check_network(self, use_cuda=True):
-        main_program = fluid.Program()
-        startup_program = fluid.Program()
+        main_program = base.Program()
+        startup_program = base.Program()
 
         loss, array = self.build_program(main_program, startup_program)
 
@@ -55,15 +55,18 @@ class TestFetchLoDTensorArray(unittest.TestCase):
         image = np.random.normal(size=(batch_size, 784)).astype('float32')
         label = np.random.randint(0, 10, (batch_size, 1), dtype="int64")
 
-        place = fluid.CUDAPlace(0) if use_cuda else fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        place = base.CUDAPlace(0) if use_cuda else base.CPUPlace()
+        exe = base.Executor(place)
         exe.run(startup_program)
         feed_dict = {'image': image, 'label': label}
 
-        build_strategy = fluid.BuildStrategy()
-        binary = fluid.CompiledProgram(
-            main_program, build_strategy=build_strategy
-        )
+        if not paddle.base.framework.use_pir_api():
+            build_strategy = base.BuildStrategy()
+            binary = base.CompiledProgram(
+                main_program, build_strategy=build_strategy
+            )
+        else:
+            binary = main_program
 
         for _ in range(3):
             loss_v, array_v = exe.run(
@@ -75,8 +78,8 @@ class TestFetchLoDTensorArray(unittest.TestCase):
             self.assertEqual(array_v[2].shape, ())
             np.testing.assert_allclose(loss_v, array_v[2], rtol=1e-05)
 
-    def test_fetch_lod_tensor_array(self):
-        if fluid.core.is_compiled_with_cuda():
+    def test_fetch_dense_tensor_array(self):
+        if base.core.is_compiled_with_cuda():
             self.check_network(use_cuda=True)
         self.check_network(use_cuda=False)
 

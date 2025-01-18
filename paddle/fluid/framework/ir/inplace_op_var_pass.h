@@ -24,6 +24,7 @@ class Graph;
 
 class InplaceOpVarPass : public FusePassBase {
  protected:
+  using FusePassBase::ApplyImpl;
   void ApplyImpl(ir::Graph* graph) const override;
 
  private:

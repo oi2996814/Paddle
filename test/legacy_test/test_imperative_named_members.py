@@ -17,7 +17,7 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle import fluid
+from paddle import base
 
 
 class MyLayer(paddle.nn.Layer):
@@ -32,9 +32,35 @@ class MyLayer(paddle.nn.Layer):
         return x
 
 
+class MyLayerDuplicatedParamters(paddle.nn.Layer):
+    def __init__(self):
+        super().__init__()
+        self.fc = paddle.nn.Linear(1, 1)
+        w_tmp = self.create_parameter([2, 3])
+        self.add_parameter("w_tmp1", w_tmp)
+        self.add_parameter("w_tmp2", w_tmp)
+
+    def forward(self, x):
+        x = self.fc(x)
+        return x
+
+
+class MyLayerDuplicatedBuffers(paddle.nn.Layer):
+    def __init__(self):
+        super().__init__()
+        self.fc = paddle.nn.Linear(1, 1)
+        buffer_tmp = paddle.ones([2, 3])
+        self.register_buffer('buffer1', buffer_tmp)
+        self.register_buffer('buffer2', buffer_tmp)
+
+    def forward(self, x):
+        x = self.fc(x)
+        return x
+
+
 class TestImperativeNamedSubLayers(unittest.TestCase):
     def test_named_sublayers(self):
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             fc1 = paddle.nn.Linear(10, 3)
             fc2 = paddle.nn.Linear(3, 10, bias_attr=False)
             custom = MyLayer(3, 10)
@@ -58,13 +84,43 @@ class TestImperativeNamedSubLayers(unittest.TestCase):
 
             self.assertListEqual(
                 [l for _, l in list(model.named_sublayers(include_self=True))],
-                [model] + expected_sublayers,
+                [model, *expected_sublayers],
             )
+
+
+class TestImperativeNamedSublayersDuplicated(unittest.TestCase):
+    def test_not_remove_duplicate(self):
+        with base.dygraph.guard():
+            l = paddle.nn.Linear(10, 3)
+            model = paddle.nn.Sequential(l, l)
+            named_sublayers = model.named_sublayers(remove_duplicate=False)
+            list_named_sublayers = list(named_sublayers)
+
+            expected_sublayers = [l, l]
+            self.assertEqual(len(list_named_sublayers), len(expected_sublayers))
+            for (name, sublayer), expected_sublayer in zip(
+                list_named_sublayers, expected_sublayers
+            ):
+                self.assertEqual(sublayer, expected_sublayer)
+
+    def test_remove_duplicate(self):
+        with base.dygraph.guard():
+            l = paddle.nn.Linear(10, 3)
+            model = paddle.nn.Sequential(l, l)
+            named_sublayers = model.named_sublayers(remove_duplicate=True)
+            list_named_sublayers = list(named_sublayers)
+
+            expected_sublayers = [l]
+            self.assertEqual(len(list_named_sublayers), len(expected_sublayers))
+            for (name, sublayer), expected_sublayer in zip(
+                list_named_sublayers, expected_sublayers
+            ):
+                self.assertEqual(sublayer, expected_sublayer)
 
 
 class TestImperativeNamedParameters(unittest.TestCase):
     def test_named_parameters(self):
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             fc1 = paddle.nn.Linear(10, 3)
             fc2 = paddle.nn.Linear(3, 10, bias_attr=False)
             custom = MyLayer(3, 10)
@@ -82,7 +138,7 @@ class TestImperativeNamedParameters(unittest.TestCase):
             self.assertListEqual(expected_named_parameters, named_parameters)
 
     def test_dir_layer(self):
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
 
             class Mymodel(paddle.nn.Layer):
                 def __init__(self):
@@ -91,12 +147,12 @@ class TestImperativeNamedParameters(unittest.TestCase):
                     self.linear2 = paddle.nn.Linear(5, 5)
                     self.conv2d = paddle.nn.Conv2D(3, 2, 3)
                     self.embedding = paddle.nn.Embedding(128, 16)
-                    self.h_0 = fluid.dygraph.to_variable(
+                    self.h_0 = paddle.to_tensor(
                         np.zeros([10, 10]).astype('float32')
                     )
                     self.weight = self.create_parameter(
                         shape=[2, 3],
-                        attr=fluid.ParamAttr(),
+                        attr=base.ParamAttr(),
                         dtype="float32",
                         is_bias=False,
                     )
@@ -128,6 +184,42 @@ class TestImperativeNamedParameters(unittest.TestCase):
                 "weight" in expected_members,
                 "model should contain parameter: weight",
             )
+
+
+class TestImperativeNamedParametersDuplicated(unittest.TestCase):
+    def test_not_remove_duplicate(self):
+        with base.dygraph.guard():
+            model = MyLayerDuplicatedParamters()
+
+            named_parameters = list(
+                model.named_parameters(remove_duplicate=False)
+            )
+            self.assertEqual(len(named_parameters), 4)
+
+    def test_remove_duplicate(self):
+        with base.dygraph.guard():
+            model = MyLayerDuplicatedParamters()
+
+            named_parameters = list(
+                model.named_parameters(remove_duplicate=True)
+            )
+            self.assertEqual(len(named_parameters), 3)
+
+
+class TestImperativeNamedBuffersDuplicated(unittest.TestCase):
+    def test_not_remove_duplicate(self):
+        with base.dygraph.guard():
+            model = MyLayerDuplicatedBuffers()
+
+            named_parameters = list(model.named_buffers(remove_duplicate=False))
+            self.assertEqual(len(named_parameters), 2)
+
+    def test_remove_duplicate(self):
+        with base.dygraph.guard():
+            model = MyLayerDuplicatedBuffers()
+
+            named_parameters = list(model.named_buffers(remove_duplicate=True))
+            self.assertEqual(len(named_parameters), 1)
 
 
 if __name__ == '__main__':

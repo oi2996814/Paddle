@@ -17,8 +17,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/phi/kernels/funcs/math_function.h"
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 constexpr int64_t kNoPadding = -1;
 
@@ -29,11 +28,11 @@ class DistributedPushSparseOp : public framework::OperatorWithKernel {
   void InferShape(framework::InferShapeContext *ctx) const override {
     PADDLE_ENFORCE_EQ(ctx->HasInputs("Ids"),
                       true,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Input(Ids) of PushSparseOp should not be null."));
     PADDLE_ENFORCE_EQ(ctx->HasOutputs("Outputs"),
                       true,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Output(Outs) of PushSparseOp should not be null."));
 
     auto ids_dims = ctx->GetInputsDim("Ids");
@@ -41,7 +40,7 @@ class DistributedPushSparseOp : public framework::OperatorWithKernel {
     for (auto &ids_dim : ids_dims) {
       PADDLE_ENFORCE_EQ(ids_dim.size(),
                         2,
-                        platform::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "The dimension of the 'Ids' tensor must be 2."));
     }
 
@@ -125,8 +124,7 @@ random value and set the value into the table for the next looking up.
 )DOC");
   }
 };
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
 

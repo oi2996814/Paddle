@@ -23,16 +23,11 @@ namespace phi {
 class DenseTensor;
 }  // namespace phi
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Scope;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 
-namespace paddle {
-namespace framework {
-namespace ir {
-namespace patterns {
+namespace paddle::framework::ir::patterns {
 
 struct AssignWithSameInputOutputNamePattern : public PatternBase {
   AssignWithSameInputOutputNamePattern(PDPattern* pattern,
@@ -54,7 +49,8 @@ AssignWithSameInputOutputNamePattern::AssignWithSameInputOutputNamePattern(
       });
 }
 
-}  // namespace patterns
+}  // namespace paddle::framework::ir::patterns
+namespace paddle::framework::ir {
 
 /*
 Delete "assign" if its input and output is same.
@@ -69,7 +65,7 @@ class DeleteAssignOpPass : public FusePassBase {
 
 void DeleteAssignOpPass::ApplyImpl(ir::Graph* graph) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, platform::errors::PreconditionNotMet("graph should not be null."));
+      graph, common::errors::PreconditionNotMet("graph should not be null."));
   Init(name_scope_, graph);
   GraphPatternDetector gpd;
   patterns::AssignWithSameInputOutputNamePattern pattern(gpd.mutable_pattern(),
@@ -90,9 +86,7 @@ void DeleteAssignOpPass::ApplyImpl(ir::Graph* graph) const {
   AddStatis(found_subgraph_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(delete_assign_op_pass, paddle::framework::ir::DeleteAssignOpPass);
 

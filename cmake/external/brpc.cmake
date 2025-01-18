@@ -13,7 +13,9 @@
 # limitations under the License.
 
 include(ExternalProject)
-
+if(NOT WITH_ARM)
+  set(OPENSSL_USE_STATIC_LIBS ON)
+endif()
 find_package(OpenSSL REQUIRED)
 
 message(STATUS "ssl:" ${OPENSSL_SSL_LIBRARY})
@@ -38,13 +40,20 @@ include_directories(${BRPC_INCLUDE_DIR})
 
 # clone brpc to Paddle/third_party
 set(BRPC_SOURCE_DIR ${PADDLE_SOURCE_DIR}/third_party/brpc)
-set(BRPC_URL https://github.com/apache/brpc.git)
+set(BRPC_URL ${GIT_URL}/apache/brpc.git)
 set(BRPC_TAG 1.4.0)
 
 # Reference https://stackoverflow.com/questions/45414507/pass-a-list-of-prefix-paths-to-externalproject-add-in-cmake-args
 set(prefix_path
     "${THIRD_PARTY_PATH}/install/gflags|${THIRD_PARTY_PATH}/install/leveldb|${THIRD_PARTY_PATH}/install/snappy|${THIRD_PARTY_PATH}/install/gtest|${THIRD_PARTY_PATH}/install/protobuf|${THIRD_PARTY_PATH}/install/zlib|${THIRD_PARTY_PATH}/install/glog"
 )
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND ${CMAKE_CXX_COMPILER_VERSION}
+                                            VERSION_GREATER_EQUAL 13.0)
+  file(TO_NATIVE_PATH ${PADDLE_SOURCE_DIR}/patches/brpc/http2.h.patch
+       http2_h_patch)
+  set(BRPC_PATCH_COMMAND_GCC13 git apply ${http2_h_patch})
+endif()
 
 # If minimal .a is need, you can set  WITH_DEBUG_SYMBOLS=OFF
 ExternalProject_Add(
@@ -53,6 +62,9 @@ ExternalProject_Add(
   SOURCE_DIR ${BRPC_SOURCE_DIR}
   PREFIX ${BRPC_PREFIX_DIR}
   UPDATE_COMMAND ""
+  PATCH_COMMAND
+  COMMAND git checkout -- . && git checkout ${BRPC_TAG}
+  COMMAND ${BRPC_PATCH_COMMAND_GCC13}
   CMAKE_ARGS -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
              -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
              -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}
@@ -91,3 +103,16 @@ add_dependencies(brpc extern_brpc)
 add_definitions(-DBRPC_WITH_GLOG)
 
 list(APPEND external_project_dependencies brpc)
+
+set(EXTERNAL_BRPC_DEPS
+    brpc
+    protobuf
+    ssl
+    crypto
+    leveldb
+    glog
+    snappy)
+
+if(NOT WITH_GFLAGS)
+  set(EXTERNAL_BRPC_DEPS ${EXTERNAL_BRPC_DEPS} gflags)
+endif()

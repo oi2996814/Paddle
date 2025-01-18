@@ -24,13 +24,14 @@
 #include "paddle/phi/core/dense_tensor.h"
 #include "paddle/phi/kernels/funcs/dropout_impl_util.h"
 #include "paddle/phi/kernels/funcs/functors.h"
+#include "paddle/phi/kernels/fusion/gpu/fused_bias_act_utils.h"
 #include "paddle/phi/kernels/fusion/gpu/fused_dropout_act_bias.h"
 #include "paddle/phi/kernels/fusion/gpu/fused_dropout_common.h"
 #include "paddle/phi/kernels/fusion/gpu/fused_layernorm_residual_dropout_bias.h"
 #include "paddle/phi/kernels/fusion/gpu/fused_residual_dropout_bias.h"
 #include "paddle/phi/kernels/layer_norm_kernel.h"
 
-PHI_DECLARE_bool(use_fast_math);
+COMMON_DECLARE_bool(use_fast_math);
 
 namespace phi {
 namespace fusion {
@@ -230,31 +231,31 @@ class FusedDropoutHelper {
             quant_max_bound,
             quant_min_bound);
       } else {
-        phi::fusion::GeluFunctor<T> gelu;
-        phi::fusion::LaunchDropoutActBias<T,
-                                          MaskType,
-                                          phi::fusion::GeluFunctor<T>,
-                                          InType,
-                                          OutType>(
-            gelu,
-            dropout_param_.seed,
-            rows_,
-            cols_,
-            dropout_param_.increment,
-            dropout_param_.dropout_prob,
-            dropout_param_.is_upscale_in_train,
-            dropout_param_.is_test,
-            src,
-            bias,
-            out,
-            mask,
-            ctx,
-            quant_last_in_scale,
-            dequant_out_scale_data,
-            quant_next_in_scale,
-            quant_round_type,
-            quant_max_bound,
-            quant_min_bound);
+        phi::fusion::LayerNormParamTypeGeluFunctor<T> gelu;
+        phi::fusion::LaunchDropoutActBias<
+            T,
+            MaskType,
+            phi::fusion::LayerNormParamTypeGeluFunctor<T>,
+            InType,
+            OutType>(gelu,
+                     dropout_param_.seed,
+                     rows_,
+                     cols_,
+                     dropout_param_.increment,
+                     dropout_param_.dropout_prob,
+                     dropout_param_.is_upscale_in_train,
+                     dropout_param_.is_test,
+                     src,
+                     bias,
+                     out,
+                     mask,
+                     ctx,
+                     quant_last_in_scale,
+                     dequant_out_scale_data,
+                     quant_next_in_scale,
+                     quant_round_type,
+                     quant_max_bound,
+                     quant_min_bound);
       }
     } else if (act_method == "relu") {
       phi::funcs::ReluFunctor<T> relu;
@@ -336,8 +337,8 @@ class FusedDropoutHelper {
   }
 
  protected:
-  int rows_;
-  int cols_;
+  int64_t rows_;
+  int64_t cols_;
   DropoutParam dropout_param_;
   float residual_alpha_;
 };
@@ -350,8 +351,8 @@ class FusedDropoutLayerNormHelper
     : public FusedDropoutHelper<T, MaskType, InType, OutType> {
  public:
   FusedDropoutLayerNormHelper() {}
-  FusedDropoutLayerNormHelper(const int rows,
-                              const int cols,
+  FusedDropoutLayerNormHelper(const int64_t rows,
+                              const int64_t cols,
                               const float epsilon,
                               const float residual_alpha = 1.0) {
     using U = phi::funcs::LayerNormParamType<T>;
@@ -362,8 +363,8 @@ class FusedDropoutLayerNormHelper
   }
 
   FusedDropoutLayerNormHelper(const phi::GPUContext& ctx,
-                              const int rows,
-                              const int cols,
+                              const int64_t rows,
+                              const int64_t cols,
                               const DropoutParam& dropout_param,
                               const float epsilon,
                               const float residual_alpha = 1.0)
@@ -387,7 +388,7 @@ class FusedDropoutLayerNormHelper
     phi::LayerNormDirectCUDAFunctor<InDataType,
                                     phi::funcs::LayerNormParamType<T>>
         layer_norm;
-    std::vector<int> src_shape{this->rows_, this->cols_};
+    std::vector<int64_t> src_shape{this->rows_, this->cols_};
     layer_norm(ctx.stream(),
                reinterpret_cast<const InDataType*>(src),
                src_shape,

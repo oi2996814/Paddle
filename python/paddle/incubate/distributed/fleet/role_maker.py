@@ -17,7 +17,7 @@ import os
 import time
 from multiprocessing import Manager, Process
 
-from paddle import fluid
+from paddle import base
 
 __all__ = []
 
@@ -30,7 +30,7 @@ class Role:
 
 class MockBarrier:
     """
-    MockBarrier is a empty impletation for barrier
+    MockBarrier is a empty implementation for barrier
     mock as a real barrier for never-barrier in a specific scenario
     """
 
@@ -142,12 +142,7 @@ class RoleMakerBase:
         return self._server_endpoints
 
     def to_string(self):
-        return "role: {}, current_id: {}, worker_endpoints: {}, server_endpoints: {}".format(
-            self._role,
-            self._current_id,
-            self._worker_endpoints,
-            self._server_endpoints,
-        )
+        return f"role: {self._role}, current_id: {self._current_id}, worker_endpoints: {self._worker_endpoints}, server_endpoints: {self._server_endpoints}"
 
     def all_gather(self, input):
         """
@@ -160,7 +155,6 @@ class RoleMakerBase:
             return a list of values
         """
         print("warning: RoleMakerBase does not have all gather.")
-        return None
 
     def all_reduce_worker(self, input, output, mode="sum"):
         """
@@ -264,9 +258,9 @@ class MPIRoleMaker(RoleMakerBase):
         raise NotImplementedError("Please implement this method in child class")
 
 
-class MPISymetricRoleMaker(MPIRoleMaker):
+class MPISymmetricRoleMaker(MPIRoleMaker):
     """
-    MPISymetricRoleMaker is designed for worker and server assignment
+    MPISymmetricRoleMaker is designed for worker and server assignment
     under MPI. Typically, a worker and a server node will be appointed
     on each physical node. This role maker can be only used under MPI.
     """
@@ -438,7 +432,7 @@ class MPISymetricRoleMaker(MPIRoleMaker):
         elif mode == "min":
             mode = self.MPI.MIN
         else:
-            raise ValueError("unknown mode: %s" % mode)
+            raise ValueError(f"unknown mode: {mode}")
         self._node_type_comm.Allreduce(input, output, op=mode)
 
     def _barrier_worker(self):
@@ -664,7 +658,7 @@ class GeneralRoleMaker(RoleMakerBase):
                 self._node_type = 1
                 self._cur_endpoint = worker_endpoints[current_id]
                 if self._is_barrier_all:
-                    gloo = fluid.core.Gloo()
+                    gloo = base.core.Gloo()
                     gloo.set_rank(current_id)
                     gloo.set_size(len(worker_endpoints))
                     gloo.set_prefix(self._prefix)
@@ -687,7 +681,7 @@ class GeneralRoleMaker(RoleMakerBase):
                     gloo.init()
                     self._node_type_comm = gloo
                     if self._use_ps_gpu or self._use_metric:
-                        Gloo_strategy = fluid.core.GlooParallelStrategy()
+                        Gloo_strategy = base.core.GlooParallelStrategy()
                         Gloo_strategy.rank = current_id
                         Gloo_strategy.rank_num = len(worker_endpoints)
                         Gloo_strategy.ip_address = self._http_ip_port[0]
@@ -698,7 +692,7 @@ class GeneralRoleMaker(RoleMakerBase):
                             Default_init_timeout_seconds
                         )
                         Gloo_strategy.run_seconds = Default_run_timeout_seconds
-                        Gloo = fluid.core.GlooParallelContext(Gloo_strategy)
+                        Gloo = base.core.GlooParallelContext(Gloo_strategy)
                         Gloo.init()
                 else:
                     self._all_comm = MockBarrier()
@@ -715,7 +709,7 @@ class GeneralRoleMaker(RoleMakerBase):
                     current_id = eplist.index(cur_endpoint)
                 self._node_type = 0
                 self._cur_endpoint = cur_endpoint
-                gloo = fluid.core.Gloo()
+                gloo = base.core.Gloo()
                 gloo.set_rank(current_id)
                 gloo.set_size(len(eplist))
                 gloo.set_prefix(self._prefix)
@@ -738,7 +732,7 @@ class GeneralRoleMaker(RoleMakerBase):
                 gloo.init()
                 self._node_type_comm = gloo
 
-            gloo = fluid.core.Gloo()
+            gloo = base.core.Gloo()
             all_list = worker_endpoints + eplist
             gloo.set_rank(all_list.index(self._cur_endpoint))
             gloo.set_size(len(all_list))
@@ -870,7 +864,7 @@ class GeneralRoleMaker(RoleMakerBase):
 
     def worker_num(self):
         """
-        retrun the current number of worker
+        return the current number of worker
         """
         if not self._role_is_generated:
             self.generate_role()
@@ -1071,7 +1065,7 @@ class HeterRoleMaker(GeneralRoleMaker):
                 current_id = int(os.environ["PADDLE_TRAINER_ID"])
                 self._node_type = 1
                 self._cur_endpoint = worker_endpoints[current_id]
-                gloo = fluid.core.Gloo()
+                gloo = base.core.Gloo()
 
                 gloo.set_rank(current_id)
                 gloo.set_size(len(worker_endpoints))
@@ -1092,7 +1086,7 @@ class HeterRoleMaker(GeneralRoleMaker):
                 current_id = int(os.environ["PADDLE_XPU_ID"])
                 self._node_type = 2
                 self._cur_endpoint = xpu_endpoints[current_id]
-                gloo = fluid.core.Gloo()
+                gloo = base.core.Gloo()
 
                 gloo.set_rank(current_id)
                 gloo.set_size(len(xpu_endpoints))
@@ -1121,7 +1115,7 @@ class HeterRoleMaker(GeneralRoleMaker):
                     current_id = eplist.index(cur_endpoint)
                 self._node_type = 0
                 self._cur_endpoint = cur_endpoint
-                gloo = fluid.core.Gloo()
+                gloo = base.core.Gloo()
                 gloo.set_rank(current_id)
                 gloo.set_size(len(eplist))
                 gloo.set_prefix(self._prefix)
@@ -1138,7 +1132,7 @@ class HeterRoleMaker(GeneralRoleMaker):
                 self._node_type_comm = gloo
 
             if training_role == "TRAINER" or training_role == "XPU":
-                gloo = fluid.core.Gloo()
+                gloo = base.core.Gloo()
                 heter_list = worker_endpoints + xpu_endpoints
 
                 gloo.set_rank(heter_list.index(self._cur_endpoint))
@@ -1156,7 +1150,7 @@ class HeterRoleMaker(GeneralRoleMaker):
                 gloo.init()
                 self._heter_comm = gloo
 
-            gloo = fluid.core.Gloo()
+            gloo = base.core.Gloo()
             all_list = worker_endpoints + eplist + xpu_endpoints
 
             gloo.set_rank(all_list.index(self._cur_endpoint))

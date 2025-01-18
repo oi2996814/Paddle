@@ -16,15 +16,15 @@ import os
 
 import paddle
 import paddle.distributed.transpiler.distribute_transpiler as dist_transpiler
-from paddle import fluid
-from paddle.distributed.fleet.meta_optimizers import RawProgramOptimizer
-from paddle.fluid.compiler import CompiledProgram
-from paddle.fluid.executor import Executor
-from paddle.fluid.framework import Program
-from paddle.fluid.incubate.checkpoint.checkpoint_saver import (
+from paddle import base
+from paddle.base.compiler import CompiledProgram
+from paddle.base.executor import Executor
+from paddle.base.framework import Program
+from paddle.base.incubate.checkpoint.checkpoint_saver import (
     CheckpointSaver,
     PaddleModel,
 )
+from paddle.distributed.fleet.meta_optimizers import RawProgramOptimizer
 from paddle.incubate.distributed.fleet.base import (
     DistributedOptimizer,
     Fleet,
@@ -203,7 +203,7 @@ class Collective(Fleet):
 fleet = Collective()
 
 
-class DistributedStrategy(fluid.BuildStrategy):
+class DistributedStrategy(base.BuildStrategy):
     """
     Init function of DistributedStrategy
     """
@@ -221,8 +221,6 @@ class DistributedStrategy(fluid.BuildStrategy):
         self.recompute_checkpoints = []
         self.use_amp = False  # use mixed precision optimizer
         self.amp_loss_scaling = 2**15
-
-        self.exec_strategy = fluid.ExecutionStrategy()
 
         # configurations below are used for unit test
         self._ut4grad_allreduce = False
@@ -258,8 +256,8 @@ class CollectiveOpBasedOptimizer(DistributedOptimizer):
 
 class CollectiveOptimizer(DistributedOptimizer):
     """
-    DistributedOptimizer is a wrapper for paddle.fluid.optimizer
-    A user should pass a paddle.fluid.optimizer to DistributedOptimizer
+    DistributedOptimizer is a wrapper for paddle.base.optimizer
+    A user should pass a paddle.base.optimizer to DistributedOptimizer
     minimize() function is implemented.
     DistributedOptimizer is the starting point for a user who wants to
     run distributed training. The optimized information will be stored in
@@ -355,10 +353,8 @@ class CollectiveOptimizer(DistributedOptimizer):
 
         if self.print_config:
             print(
-                "worker_endpoints:{} trainers_num:{} current_endpoint:{} \
-                  trainer_id:{}".format(
-                    worker_endpoints, trainers_num, current_endpoint, trainer_id
-                )
+                f"worker_endpoints:{worker_endpoints} trainers_num:{trainers_num} current_endpoint:{current_endpoint} \
+                  trainer_id:{trainer_id}"
             )
 
         # call transpiler
@@ -410,9 +406,7 @@ class CollectiveOptimizer(DistributedOptimizer):
 
     def _try_to_compile(self, startup_program, main_program):
         node_num = self._node_num()
-        assert node_num >= 1, "nccl2 node_num must >= 1, now:{}" % node_num
-
-        exec_strategy = self._strategy.exec_strategy
+        assert node_num >= 1, f"nccl2 node_num must >= 1, now:{node_num}"
 
         if node_num <= 1:
             if self._strategy.nccl_comm_num > 1:
@@ -426,22 +420,12 @@ class CollectiveOptimizer(DistributedOptimizer):
             self._strategy.use_hierarchical_allreduce = False
 
         sync_allreduce = os.getenv("FLAGS_sync_nccl_allreduce")
-        if sync_allreduce is None or sync_allreduce == "1":
-            exec_strategy.num_threads = self._strategy.nccl_comm_num + 1
-            if self._strategy.use_hierarchical_allreduce:
-                exec_strategy.num_threads = 2 * self._strategy.nccl_comm_num + 1
-            if exec_strategy.num_threads > 4:
-                logging.warn(
-                    "if you use use_hierarchical_allreduce or "
-                    "with multi nccl comm, please export FLAGS_sync_nccl_allreduce = 0"
-                )
 
         # NOTE. open sync_batch_norm will hang when use multi num_threads
         sync_batch_norm = self._strategy.sync_batch_norm
         if sync_batch_norm is not None and sync_batch_norm is True:
             self._strategy.nccl_comm_num = 1
             self._strategy.use_hierarchical_allreduce = False
-            exec_strategy.num_threads = 1
             logging.warn(
                 "use sync_batch_norm will hang when set num_threads > 1, so "
                 "set num_threads=1, nccl_comm_num=1, use_hierarchical_allreduce=False."
@@ -451,8 +435,6 @@ class CollectiveOptimizer(DistributedOptimizer):
             print(
                 "node_num:",
                 node_num,
-                "num_threads:",
-                exec_strategy.num_threads,
                 "use_hierarchical_allreduce:",
                 self._strategy.use_hierarchical_allreduce,
                 "nccl_comm_num:",
@@ -550,7 +532,7 @@ class CollectiveOptimizer(DistributedOptimizer):
 
         main_program = loss.block.program
         if startup_program is None:
-            startup_program = fluid.default_startup_program()
+            startup_program = base.default_startup_program()
         fleet.startup_program = startup_program
 
         self._loss = loss

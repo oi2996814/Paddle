@@ -16,12 +16,13 @@ limitations under the License. */
 
 #include <memory>
 
-#include "paddle/phi/api/include/dll_decl.h"
+#include "paddle/common/macros.h"
 #include "paddle/phi/common/data_type.h"
 #include "paddle/phi/common/place.h"
 #include "paddle/phi/core/allocator.h"
 #include "paddle/phi/core/distributed/comm_context.h"
 #include "paddle/phi/core/generator.h"
+#include "paddle/phi/core/utils/data_type.h"
 #include "paddle/phi/core/utils/type_registry.h"
 
 namespace phi {
@@ -48,12 +49,12 @@ class PADDLE_API DeviceContext {
   /**
    * @brief Move construct.
    */
-  DeviceContext(DeviceContext&&);
+  DeviceContext(DeviceContext&&) noexcept;
 
   /**
    * @brief Move assign operator.
    */
-  DeviceContext& operator=(DeviceContext&&);
+  DeviceContext& operator=(DeviceContext&&) noexcept;
 
   /**
    * @brief Default destruct.
@@ -115,7 +116,7 @@ class PADDLE_API DeviceContext {
 
   const Allocator& GetPinnedAllocator() const;
 
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
   /**
    * @brief Set the CUDA graph Allocator object.
    *
@@ -152,9 +153,9 @@ class PADDLE_API DeviceContext {
                       bool fake_alloc = false) const;
 
   template <typename T>
-  T* Alloc(TensorBase* tensor,
-           size_t requested_size = 0,
-           bool pinned = false) const;
+  TEST_API T* Alloc(TensorBase* tensor,
+                    size_t requested_size = 0,
+                    bool pinned = false) const;
 
   /**
    * @brief Allocate host memory for tensor.

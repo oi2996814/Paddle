@@ -58,8 +58,10 @@ class DistributedOperator:
     def get_serial_input(self, name):
         if self._serial_op.type == "create_py_reader":
             tensor = None
-        else:
+        elif self._serial_op.block._find_var_recursive(name) is not None:
             tensor = self._serial_op.block._var_recursive(name)
+        else:
+            tensor = None
         return tensor
 
     def get_serial_output(self, name):
@@ -111,11 +113,7 @@ class DistributedOperator:
         return True
 
     def __str__(self):
-        str = "{{op type: {}, op id: {}, op original_id: {}".format(
-            self.serial_op.desc.type(),
-            self.serial_op.desc.id(),
-            self.serial_op.desc.original_id(),
-        )
+        str = f"{{op type: {self.serial_op.desc.type()}, op id: {self.serial_op.desc.id()}, op original_id: {self.serial_op.desc.original_id()}"
 
         # str += ", {}".format(self.dist_attr)
         # return str
@@ -124,18 +122,18 @@ class DistributedOperator:
             annotated_str = "annotated"
         else:
             annotated_str = "non-annotated"
-        str += ", process_mesh ({}): {}".format(
-            annotated_str, self.dist_attr.process_mesh
+        str += (
+            f", process_mesh ({annotated_str}): {self.dist_attr.process_mesh}"
         )
+
+        str += f" , execution_stream: {self.dist_attr.execution_stream}"
 
         for arg_name in self.serial_op.desc.input_arg_names():
             try:
                 dims_mapping = self.dist_attr.get_input_dims_mapping(arg_name)
             except IndexError:
                 raise IndexError(
-                    "There is not input var '{}''s dist_attr in current op '{}'".format(
-                        arg_name, self.serial_op.desc.type()
-                    )
+                    f"There is not input var '{arg_name}''s dist_attr in current op '{self.serial_op.desc.type()}'"
                 )
             if self.dist_attr.is_annotated_input_dims_mapping(arg_name):
                 annotated_str = "annotated"
@@ -148,18 +146,19 @@ class DistributedOperator:
                     is_parameter_str = "non-parameter"
             else:
                 is_parameter_str = "non-parameter"
-            str += ", {}'s dims_mapping (input, {}, {}): {}".format(
-                arg_name, annotated_str, is_parameter_str, dims_mapping
-            )
+
+            # partial
+            input_dist_attr = self.dist_attr.get_input_dist_attr(arg_name)
+            partial_dims = sorted(input_dist_attr._partial_dims())
+
+            str += f"; {arg_name}'s dims_mapping (input, {annotated_str}, {is_parameter_str}): {dims_mapping}, partial on dims: {partial_dims}"
 
         for arg_name in self.serial_op.desc.output_arg_names():
             try:
                 dims_mapping = self.dist_attr.get_output_dims_mapping(arg_name)
             except IndexError:
                 raise IndexError(
-                    "There is not output var '{}''s dist_attr in current op '{}'".format(
-                        arg_name, self.serial_op.desc.type()
-                    )
+                    f"There is not output var '{arg_name}''s dist_attr in current op '{self.serial_op.desc.type()}'"
                 )
             if self.dist_attr.is_annotated_output_dims_mapping(arg_name):
                 annotated_str = "annotated"
@@ -172,13 +171,14 @@ class DistributedOperator:
                     is_parameter_str = "non-parameter"
             else:
                 is_parameter_str = "non-parameter"
-            str += ", {}'s dims_mapping (output, {}, {}): {}".format(
-                arg_name, annotated_str, is_parameter_str, dims_mapping
-            )
 
-        str += ", dist_impl idx: {} , dist_impl type {} }}".format(
-            self.dist_attr.impl_idx, self.dist_attr.impl_type
-        )
+            # partial
+            output_dist_attr = self.dist_attr.get_output_dist_attr(arg_name)
+            partial_dims = sorted(output_dist_attr._partial_dims())
+
+            str += f"; {arg_name}'s dims_mapping (output, {annotated_str}, {is_parameter_str}): {dims_mapping}, partial on dims: {partial_dims}"
+
+        str += f", dist_impl idx: {self.dist_attr.impl_idx} , dist_impl type: {self.dist_attr.impl_type}, chunk_id: {self.dist_attr.chunk_id} }}"
 
         return str
 
@@ -200,12 +200,18 @@ class DistributedOperator:
 
 class DistributedOperatorHelper:
     def __init__(
-        self, serial_op, process_mesh, in_dims_mappings, out_dims_mappings
+        self,
+        serial_op,
+        process_mesh,
+        in_dims_mappings,
+        out_dims_mappings,
+        kwargs,
     ):
         self._serial_op = serial_op
         self._process_mesh = process_mesh
         self._in_dims_mappings = in_dims_mappings
         self._out_dims_mappings = out_dims_mappings
+        self._chunk_id = kwargs["chunk_id"] if "chunk_id" in kwargs else 0
 
     def __call__(self, *args, **kwargs):
         tensor_to_dims_mapping = {}
@@ -213,9 +219,7 @@ class DistributedOperatorHelper:
         if self._in_dims_mappings:
             assert len(args) + len(kwargs) == len(
                 self._in_dims_mappings
-            ), "The length of dims_mapping {} does not matching the length output {}.".format(
-                len(self._in_dims_mappings), len(args) + len(kwargs)
-            )
+            ), f"The length of dims_mapping {len(self._in_dims_mappings)} does not matching the length output {len(args) + len(kwargs)}."
         for arg in args:
             if isinstance(arg, Variable) and self._in_dims_mappings:
                 tensor_to_dims_mapping[arg.name] = self._in_dims_mappings[index]
@@ -228,7 +232,12 @@ class DistributedOperatorHelper:
         default_prog = paddle.static.default_main_program()
         cur_block = default_prog.current_block()
         op_size = len(cur_block.ops)
-        output = self._serial_op(*args, **kwargs)
+        if paddle.base.dygraph.base.in_to_static_mode():
+            output = paddle.jit.dy2static.convert_call_func.convert_call(
+                self._serial_op
+            )(*args, **kwargs)
+        else:
+            output = self._serial_op(*args, **kwargs)
         new_op_size = len(cur_block.ops)
 
         if isinstance(output, (tuple, list)):
@@ -241,9 +250,7 @@ class DistributedOperatorHelper:
         if self._out_dims_mappings:
             assert len(new_output) == len(
                 self._out_dims_mappings
-            ), "The length of dims_mapping {} does not matching the length output {}.".format(
-                len(self._out_dims_mappings), len(new_output)
-            )
+            ), f"The length of dims_mapping {len(self._out_dims_mappings)} does not matching the length output {len(new_output)}."
         for i, item in enumerate(new_output):
             if isinstance(item, Variable) and self._out_dims_mappings:
                 tensor_to_dims_mapping[item.name] = self._out_dims_mappings[i]
@@ -275,9 +282,7 @@ class DistributedOperatorHelper:
                         )
                         assert verify_shard_spec(
                             shard_spec, tensor_shape, self._process_mesh
-                        ), "For tensor {}, shard_spec {} is invalid with tensor_shape {} and process_mesh {}.".format(
-                            name, shard_spec, tensor_shape, self._process_mesh
-                        )
+                        ), f"For tensor {name}, shard_spec {shard_spec} is invalid with tensor_shape {tensor_shape} and process_mesh {self._process_mesh}."
                         tensor_dist_attr.dims_mapping = dims_mapping
                         tensor_dist_attr.mark_annotated("dims_mapping")
             for name in dist_op.serial_op.output_arg_names:
@@ -301,12 +306,11 @@ class DistributedOperatorHelper:
                         )
                         assert verify_shard_spec(
                             shard_spec, tensor_shape, self._process_mesh
-                        ), "For tensor {}, shard_spec {} is invalid with tensor_shape {} and process_mesh {}.".format(
-                            name, shard_spec, tensor_shape, self._process_mesh
-                        )
+                        ), f"For tensor {name}, shard_spec {shard_spec} is invalid with tensor_shape {tensor_shape} and process_mesh {self._process_mesh}."
                         tensor_dist_attr.dims_mapping = dims_mapping
                         tensor_dist_attr.mark_annotated("dims_mapping")
             dist_op.dist_attr.process_mesh = self._process_mesh
+            dist_op.dist_attr.chunk_id = self._chunk_id
             if self._process_mesh is not None:
                 dist_op.dist_attr.mark_annotated("process_mesh")
             default_dist_ctx.add_dist_op_for_program(dist_op)

@@ -15,12 +15,12 @@
 # This file contains composite rules of nonbasic operations. There are some notes:
 # 1. When define composite rule of some op, you can only use primitive ops defined in primitives.py.
 # 2. The name and args of target op must be corresponding with standard description of op in
-#    ops.yaml or legacy_ops.yaml.
+#    ops.yaml or dygraph_ops.yaml.
 
 import functools
 import operator
 
-from paddle.fluid import core
+from paddle.base import core
 
 from .primitives import *  # noqa: F403
 from .primreg import REGISTER_COMPOSITE, lookup_composite
@@ -35,7 +35,7 @@ def _composite(op, *args):
 def softmax_composite(x, axis):
     """define composite rule of op softmax"""
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
     # Softmax need fp32 compute since it has sum op in
     dtype = convert_dtype(x.dtype)
@@ -74,11 +74,11 @@ def composite_batchnorm(
 ):
     """
     define composite rule of op batch_norm
-    As the same with op kernel, the position of savedvariance indeed return inverse std.
+    As the same with op kernel, the position of saved variance indeed return inverse std.
     """
 
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
     dtype = convert_dtype(x.dtype)
     if dtype in ["float16", "uint16"]:
@@ -136,7 +136,7 @@ def composite_batchnorm(
     run_mean_ = assign(run_mean)
     run_var_ = assign(run_var)
 
-    # reserve_space is not needed in composite rule, but still ruturn None to keep same as phi op definition.
+    # reserve_space is not needed in composite rule, but still return None to keep same as phi op definition.
     reserve_space = None
     if not use_run_stat:
         return y, run_mean_, run_var_, batch_mean_, inv_std_, reserve_space
@@ -152,7 +152,7 @@ def layernorm_composite(x, scale, bias, epsilon, begin_norm_axis):
     var = mean((x-mean(x))^2)
     """
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
     dtype = convert_dtype(x.dtype)
     if dtype in ["float16", "uint16"]:
@@ -171,16 +171,17 @@ def layernorm_composite(x, scale, bias, epsilon, begin_norm_axis):
     out = difference * rsqrt_var
 
     if scale is not None:
-        if x.shape[begin_norm_axis:] is not scale.shape:
+        if x.shape[begin_norm_axis:] != scale.shape:
             scale = reshape(scale, x.shape[begin_norm_axis:])
         out = out * scale
     if bias is not None:
-        if x.shape[begin_norm_axis:] is not bias.shape:
+        if x.shape[begin_norm_axis:] != bias.shape:
             bias = reshape(bias, x.shape[begin_norm_axis:])
         out = out + bias
 
-    mean_ = reshape(mean_, [-1])
-    variance = reshape(variance, [-1])
+    # keep the mean and variance shape as input x before begin_norm_axis
+    mean_ = reshape(mean_, x.shape[:begin_norm_axis])
+    variance = reshape(variance, x.shape[:begin_norm_axis])
     if is_amp:
         out = cast(out, dtype)
     return out, mean_, variance
@@ -194,7 +195,7 @@ def instancenorm_composite(x, scale, bias, epsilon):
     var = mean((x-mean(x))^2)
     """
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
     dtype = convert_dtype(x.dtype)
     if dtype in ["float16", "uint16"]:
@@ -259,15 +260,16 @@ def gelu_composite(x, approximate):
 def mean_composite(x, axis, keepdim):
     """define composite rule of op mean"""
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
     dtype = convert_dtype(x.dtype)
     if dtype in ["float16", "uint16"]:
         is_amp = True
         x = cast(x, "float32")
 
-    axes = axis or list(range(0, len(x.shape)))
-    axes = [axes] if isinstance(axes, int) else axes
+    if axis in (None, []):
+        axis = tuple(range(0, len(x.shape)))
+    axes = (axis,) if isinstance(axis, int) else axis
     sum_x = sum(x, axis=axes, keepdim=keepdim)
     ele_nums_list = [x.shape[axis] for axis in axes]
     if ele_nums_list == []:
@@ -288,7 +290,7 @@ def mean_composite(x, axis, keepdim):
 @REGISTER_COMPOSITE('expand_v2')
 def expand_v2_composite(x, shape):
     """
-    define composite rule of op expnad_v2, expand_v2->expand
+    define composite rule of op expand_v2, expand_v2->expand
     repeat_times = shape / x.shape
     out = tile(x, repeat_times = repeat_times)
     """
@@ -322,7 +324,7 @@ def expand_v2_composite(x, shape):
 @REGISTER_COMPOSITE('expand_as_v2')
 def expand_as_v2_composite(x, y, target_shape):
     """
-    define composite rule of op expnad_as_v2, expand_as_v2->expand_as
+    define composite rule of op expand_as_v2, expand_as_v2->expand_as
     repeat_times = target_shape / x.shape
     out = tile(x, repeat_times = repeat_times)
     """
@@ -418,7 +420,7 @@ def dropout_composite(x, seed_tensor, p, is_test, mode, seed, fix_seed):
 
     if upscale_in_train:
         if not is_test:
-            # Process p=1.0 for avoid devide zero error (x*mask/(1.0-p))
+            # Process p=1.0 for avoid divide zero error (x*mask/(1.0-p))
             if p == 1.0:
                 return 0.0 * x, zeros(x.shape, core.VarDesc.VarType.UINT8)
             else:
@@ -435,7 +437,7 @@ def dropout_composite(x, seed_tensor, p, is_test, mode, seed, fix_seed):
 
 
 def bernoulli(shape, dtype, p, seed=0):
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
     # TODO(jiabin) Fix uniform doesn't support float16 error in CINN
     new_dtype = (
@@ -455,7 +457,7 @@ def hard_swish_composite(x):
     """define composite rule of op hard_swish.
     offset=3, threshold=6, scale=6
     out = minimum(
-        maxmum(x + offset, 0), threshold
+        maximum(x + offset, 0), threshold
     ) * x / scale
     """
     threshold = 6.0
@@ -492,7 +494,7 @@ def sigmoid_composite(x):
     res = 1 / (1 + exp(-x))
     """
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
     dtype = convert_dtype(x.dtype)
     if dtype in ["float16", "uint16"]:
@@ -511,7 +513,7 @@ def silu_composite(x):
     res = x / (1 + exp(-x))
     """
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
     dtype = convert_dtype(x.dtype)
     if dtype in ["float16", "uint16"]:
@@ -591,7 +593,7 @@ def sqrt_composite(x):
     res = pow(x, 0.5)
     """
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
     dtype = convert_dtype(x.dtype)
     if dtype in ["float16", "uint16"]:
@@ -610,7 +612,7 @@ def pow_composite(x, y):
     res = x^y
     """
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
     dtype = convert_dtype(x.dtype)
     if dtype in ["float16", "uint16"]:
@@ -655,22 +657,6 @@ def unsqueeze_composite(x, axis):
     return [out, None]
 
 
-@REGISTER_COMPOSITE('rsqrt')
-def rsqrt_composite(x):
-    """define composite rule of op rsqrt."""
-    # rsqrt(x) = x^(-0.5)
-    is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
-
-    dtype = convert_dtype(x.dtype)
-    if dtype in ["float16", "uint16"]:
-        is_amp = True
-        x = cast(x, "float32")
-    y = full(x.shape if len(x.shape) == 0 else [1], -0.5, x.dtype)
-    res = pow(x, y)
-    return res if not is_amp else cast(res, dtype)
-
-
 @REGISTER_COMPOSITE('group_norm')
 def group_norm_composite(x, scale, bias, epsilon, groups, data_layout):
     """
@@ -683,7 +669,7 @@ def group_norm_composite(x, scale, bias, epsilon, groups, data_layout):
     N, C, H, W = x.shape
 
     is_amp = False
-    from paddle.fluid.data_feeder import convert_dtype
+    from paddle.base.data_feeder import convert_dtype
 
     dtype = convert_dtype(x.dtype)
     # when inputs are float16 or bfloat16, convert to float32 in computing

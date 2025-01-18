@@ -15,10 +15,10 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16
+from op_test import OpTest, convert_float_to_uint16
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 
 @unittest.skipIf(
@@ -47,7 +47,7 @@ class TestCastBF16ToFP32MKLDNNOp(OpTest):
         self.op_type = 'cast'
 
     def test_check_output(self):
-        self.check_output(check_dygraph=False)
+        self.check_output(check_dygraph=False, check_pir_onednn=True)
 
     def test_check_grad(self):
         self.check_grad_with_place(
@@ -57,6 +57,7 @@ class TestCastBF16ToFP32MKLDNNOp(OpTest):
             check_dygraph=False,
             user_defined_grads=[self.inputs['X']],
             user_defined_grad_outputs=[self.outputs['Out']],
+            check_pir_onednn=True,
         )
 
     def init_shape(self):

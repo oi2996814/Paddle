@@ -55,9 +55,9 @@ void ConcatKernel(const Context& dev_ctx,
         PADDLE_ENFORCE_EQ(
             x[i]->lod().size(),
             lod_size_0,
-            phi::errors::Unimplemented(
-                "The lod level of all input LoDTensors should be same. "
-                "Maybe different lod level of input LoDTensors can concat,"
+            common::errors::Unimplemented(
+                "The lod level of all input DenseTensors should be same. "
+                "Maybe different lod level of input DenseTensors can concat,"
                 "it is not supported currently. The lod level of %dth input "
                 "is %d and first input is %d.",
                 i,
@@ -71,8 +71,8 @@ void ConcatKernel(const Context& dev_ctx,
     if (lod_size) {
       auto* out_lod = out->mutable_lod();
       for (size_t i = 1; i < x.size(); ++i) {
-        auto in_lod = phi::ConvertToLengthBasedLoD(x[i]->lod());
-        phi::AppendLoD(out_lod, in_lod);
+        auto in_lod = phi::ConvertToLengthBasedLegacyLoD(x[i]->lod());
+        phi::AppendLegacyLoD(out_lod, in_lod);
       }
     }
   }
@@ -84,8 +84,8 @@ void ConcatKernel(const Context& dev_ctx,
       if (in->numel() == 0UL) {
         continue;
       }
-      auto in_stride = phi::stride_numel(in->dims());
-      auto out_stride = phi::stride_numel(out->dims());
+      auto in_stride = common::stride_numel(in->dims());
+      auto out_stride = common::stride_numel(out->dims());
       phi::funcs::StridedNumelCopyWithAxis<T, Context>(
           dev_ctx,
           axis,
@@ -93,8 +93,8 @@ void ConcatKernel(const Context& dev_ctx,
           out_stride,
           in->data<T>(),
           in_stride,
-          in_stride[axis]);
-      output_offset += in_stride[axis];
+          in_stride[static_cast<int>(axis)]);
+      output_offset += in_stride[static_cast<int>(axis)];
     }
   } else {
     // TODO(chenweihang): concat functor support vector<DenseTensor*> input
@@ -125,6 +125,7 @@ PD_REGISTER_KERNEL(concat,
                    int,
                    uint8_t,
                    int8_t,
+                   int16_t,
                    phi::dtype::float16,
                    phi::dtype::bfloat16,
                    phi::dtype::complex<float>,

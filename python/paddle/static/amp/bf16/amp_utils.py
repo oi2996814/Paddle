@@ -19,9 +19,10 @@ import struct
 
 import numpy as np
 
-from paddle.fluid import core, framework, global_scope
-from paddle.fluid.log_helper import get_logger
-from paddle.fluid.wrapped_decorator import signature_safe_contextmanager
+import paddle
+from paddle.base import core, framework, global_scope
+from paddle.base.log_helper import get_logger
+from paddle.base.wrapped_decorator import signature_safe_contextmanager
 
 from ..fp16_utils import (
     _rename_arg,
@@ -36,9 +37,9 @@ _logger = get_logger(
 )
 
 _valid_types = [
-    core.VarDesc.VarType.LOD_TENSOR,
+    core.VarDesc.VarType.DENSE_TENSOR,
     core.VarDesc.VarType.SELECTED_ROWS,
-    core.VarDesc.VarType.LOD_TENSOR_ARRAY,
+    core.VarDesc.VarType.DENSE_TENSOR_ARRAY,
 ]
 
 _bf16_guard_pattern = "__use_bf16__"
@@ -60,7 +61,7 @@ def _dtype_to_str(dtype):
     Args:
         dtype (VarType): Variable type.
     """
-    if dtype == core.VarDesc.VarType.BF16:
+    if dtype == paddle.bfloat16:
         return 'bf16'
     else:
         return 'fp32'
@@ -83,7 +84,7 @@ def _insert_cast_op(block, op, idx, src_dtype, dest_dtype):
     num_cast_ops = 0
 
     for in_name in op.input_names:
-        if src_dtype == core.VarDesc.VarType.FP32 and op.type in [
+        if src_dtype == paddle.float32 and op.type in [
             'batch_norm',
             'fused_bn_add_activation',
             'layer_norm',
@@ -120,10 +121,7 @@ def _insert_cast_op(block, op, idx, src_dtype, dest_dtype):
             else:
                 if op.has_attr('in_dtype'):
                     op._set_attr('in_dtype', dest_dtype)
-    if (
-        src_dtype == core.VarDesc.VarType.FP32
-        and dest_dtype == core.VarDesc.VarType.BF16
-    ):
+    if src_dtype == paddle.float32 and dest_dtype == paddle.bfloat16:
         for out_name in op.output_names:
             if (
                 op.type
@@ -135,7 +133,7 @@ def _insert_cast_op(block, op, idx, src_dtype, dest_dtype):
                 out_var = block.var(out_var_name)
                 if out_var.type not in _valid_types:
                     continue
-                if out_var.dtype == core.VarDesc.VarType.FP32:
+                if out_var.dtype == paddle.float32:
                     out_var.desc.set_dtype(core.VarDesc.VarType.BF16)
                     if op.has_attr('out_dtype'):
                         op._set_attr('out_dtype', core.VarDesc.VarType.BF16)
@@ -152,9 +150,7 @@ def _insert_cast_post_op(
 
     assert (
         target_var.dtype == src_dtype
-    ), "The real dtype({}) is not equal to the src dtype({})".format(
-        _dtype_to_str(target_var.dtype), _dtype_to_str(src_dtype)
-    )
+    ), f"The real dtype({_dtype_to_str(target_var.dtype)}) is not equal to the src dtype({_dtype_to_str(src_dtype)})"
 
     cast_name = target_var.name + '.cast_' + _dtype_to_str(dest_dtype)
     cast_var = block.vars.get(cast_name)
@@ -230,18 +226,18 @@ def bf16_guard():
     Examples:
         .. code-block:: python
 
-            import numpy as np
-            import paddle
-            import paddle.nn.functional as F
-            paddle.enable_static()
-            data = paddle.static.data(name='X', shape=[None, 1, 28, 28], dtype='float32')
-            conv2d = paddle.static.nn.conv2d(input=data, num_filters=6, filter_size=3)
+            >>> import numpy as np
+            >>> import paddle
+            >>> import paddle.nn.functional as F
+            >>> paddle.enable_static()
+            >>> data = paddle.static.data(name='X', shape=[None, 1, 28, 28], dtype='float32')
+            >>> conv2d = paddle.static.nn.conv2d(input=data, num_filters=6, filter_size=3)
 
-            with paddle.static.amp.bf16_guard():
-                bn = paddle.static.nn.batch_norm(input=conv2d, act="relu")
-                pool = F.max_pool2d(bn, kernel_size=2, stride=2)
-                hidden = paddle.static.nn.fc(pool, size=10)
-                loss = paddle.mean(hidden)
+            >>> with paddle.static.amp.bf16.bf16_guard():
+            ...     bn = paddle.static.nn.batch_norm(input=conv2d, act="relu")
+            ...     pool = F.max_pool2d(bn, kernel_size=2, stride=2)
+            ...     hidden = paddle.static.nn.fc(pool, size=10)
+            ...     loss = paddle.mean(hidden)
     """
     with framework.name_scope(prefix=_bf16_guard_pattern):
         yield
@@ -282,7 +278,7 @@ def cast_initializers_to_bf16(
 
             if change_op and are_post_ops_bf16(op_post_ops, keep_fp32_ops):
                 for out_var in op_out_vars:
-                    if out_var.dtype == core.VarDesc.VarType.FP32:
+                    if out_var.dtype == paddle.float32:
                         out_var.desc.set_dtype(core.VarDesc.VarType.BF16)
                     if (
                         to_bf16_var_names is not None
@@ -341,29 +337,23 @@ def cast_model_to_bf16(
                         in_var = block.var(in_var_name)
                     except ValueError as e:
                         _logger.debug(
-                            "-- {}, try to get it in the global block --".format(
-                                e
-                            )
+                            f"-- {e}, try to get it in the global block --"
                         )
                         in_var = global_block.var(in_var_name)
                         if in_var is not None:
                             _logger.debug(
-                                "-- var {} is got in the global block --".format(
-                                    in_var_name
-                                )
+                                f"-- var {in_var_name} is got in the global block --"
                             )
 
                     if in_var is None or in_var.type not in _valid_types:
                         continue
 
-                    if in_var.dtype == core.VarDesc.VarType.FP32:
+                    if in_var.dtype == paddle.float32:
                         in_var.desc.set_dtype(core.VarDesc.VarType.BF16)
                         to_bf16_var_names.add(in_var_name)
 
                     _logger.debug(
-                        "-- op type: {}, in var name: {}, in var dtype: {} --".format(
-                            op.type, in_var_name, in_var.dtype
-                        )
+                        f"-- op type: {op.type}, in var name: {in_var_name}, in var dtype: {in_var.dtype} --"
                     )
 
             for out_name in op.output_names:
@@ -379,39 +369,29 @@ def cast_model_to_bf16(
                         out_var = block.var(out_var_name)
                     except ValueError as e:
                         _logger.debug(
-                            "-- {}, try to get it in the global block --".format(
-                                e
-                            )
+                            f"-- {e}, try to get it in the global block --"
                         )
                         out_var = global_block.var(out_var_name)
                         if out_var is not None:
                             _logger.debug(
-                                "-- var {} is got in the global block --".format(
-                                    out_var_name
-                                )
+                                f"-- var {out_var_name} is got in the global block --"
                             )
 
                     if out_var is None or out_var.type not in _valid_types:
                         continue
 
-                    if out_var.dtype == core.VarDesc.VarType.FP32:
+                    if out_var.dtype == paddle.float32:
                         out_var.desc.set_dtype(core.VarDesc.VarType.BF16)
 
                     _logger.debug(
-                        "-- op type: {}, out var name: {}, out var dtype: {} --".format(
-                            op.type, out_var_name, out_var.dtype
-                        )
+                        f"-- op type: {op.type}, out var name: {out_var_name}, out var dtype: {out_var.dtype} --"
                     )
             for attr_name in ['in_dtype', 'out_dtype', 'dtype']:
                 if (
                     op.has_attr(attr_name)
-                    and op.attr(attr_name) == core.VarDesc.VarType.FP32
+                    and op.attr(attr_name) == paddle.float32
                 ):
                     op._set_attr(attr_name, core.VarDesc.VarType.BF16)
-            if op.has_attr('use_mkldnn'):
-                op._set_attr('use_mkldnn', True)
-            if op.has_attr('mkldnn_data_type'):
-                op._set_attr('mkldnn_data_type', 'bfloat16')
 
         if startup_prog is not None:
             cast_initializers_to_bf16(
@@ -456,7 +436,7 @@ def cast_model_to_bf16(
                     out_var = block.vars.get(out_var_name)
                     if out_var is None or out_var.type not in _valid_types:
                         continue
-                    if out_var.dtype == core.VarDesc.VarType.BF16:
+                    if out_var.dtype == paddle.bfloat16:
                         out_var.desc.set_dtype(core.VarDesc.VarType.FP32)
                         post_ops = find_true_post_op(ops, op, out_var_name)
                         for post_op in post_ops:
@@ -483,9 +463,9 @@ def cast_parameters_to_bf16(place, program, scope=None, to_bf16_var_names=None):
     Traverse all parameters in the whole model and set them to the BF16 data type.
     Whereas, this function will keep parameters of batchnorms in FP32.
     Args:
-        place(fluid.CPUPlace|fluid.CUDAPlace): `place` is used to restore the BF16 weight tensors.
+        place(base.CPUPlace|base.CUDAPlace): `place` is used to restore the BF16 weight tensors.
         program (Program): The used program.
-        scope(fluid.Scope, optional): `scope` is used to get the FP32 weight tensor values.
+        scope(base.Scope, optional): `scope` is used to get the FP32 weight tensor values.
                                       Default is None.
         to_bf16_var_names(set|list, optional): The data types of vars in `to_bf16_var_names`
                                                will be set to BF16. Usually, it is the returned
@@ -532,7 +512,7 @@ def rewrite_program_bf16(main_prog, amp_lists=None):
     bf16_op_set = set()
     fp32_op_set = set()
     for op in ops:
-        # NOTE(zhiqiu): 'create_py_reader' and 'read' is used in non-iterable DataLoder,
+        # NOTE(zhiqiu): 'create_py_reader' and 'read' is used in non-iterable DataLoader,
         # we don't need to handle reader op and the input of 'create_py_reader' is not
         # in block, which may result in errors.
         # See GeneratorLoader._init_non_iterable() for details.
@@ -601,10 +581,7 @@ def rewrite_program_bf16(main_prog, amp_lists=None):
                 core.VarDesc.VarType.FP32,
             )
         elif op in bf16_op_set:
-            if op.has_attr('use_mkldnn'):
-                op._set_attr('use_mkldnn', True)
-                op._set_attr('mkldnn_data_type', 'bfloat16')
-            elif (
+            if (
                 op.has_attr('dtype')
                 and op.attr('dtype') == core.VarDesc.VarType.FP32
             ):

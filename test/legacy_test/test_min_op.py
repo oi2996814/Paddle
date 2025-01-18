@@ -12,15 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import unittest
 
+sys.path.append("../../legacy_test")
+import os
+
 import numpy as np
-from eager_op_test import check_out_dtype
+from op_test import check_out_dtype
 from test_sum_op import TestReduceOPTensorAxisBase
+from utils import dygraph_guard, static_guard
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+from paddle import base
+from paddle.base import core
 
 
 class ApiMinTest(unittest.TestCase):
@@ -83,6 +88,15 @@ class ApiMinTest(unittest.TestCase):
         z_expected = np.array(np.min(np_x, axis=0))
         self.assertEqual((np_z == z_expected).all(), True)
 
+    def test_support_tuple(self):
+        paddle.disable_static()
+        np_x = np.array([10, 10]).astype('float64')
+        x = paddle.to_tensor(np_x)
+        z = paddle.min(x, axis=(0,))
+        np_z = z.numpy()
+        z_expected = np.array(np.min(np_x, axis=0))
+        self.assertEqual((np_z == z_expected).all(), True)
+
 
 class TestOutDtype(unittest.TestCase):
     def test_min(self):
@@ -120,7 +134,7 @@ class TestMinWithTensorAxis2(TestReduceOPTensorAxisBase):
 
 class TestMinAPIWithEmptyTensor(unittest.TestCase):
     def test_empty_tensor(self):
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             with self.assertRaises(ValueError):
                 data = np.array([], dtype=np.float32)
                 data = np.reshape(data, [0, 0, 0, 0, 0, 0, 0])
@@ -129,6 +143,51 @@ class TestMinAPIWithEmptyTensor(unittest.TestCase):
                 tensor_axis = paddle.to_tensor(np_axis, dtype='int64')
 
                 out = paddle.min(x, tensor_axis)
+
+
+class TestMinWithNan(unittest.TestCase):
+    def _get_places(self):
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
+        if paddle.is_compiled_with_cuda():
+            places.append(base.CUDAPlace(0))
+        return places
+
+    def _test_with_nan_static(
+        self, func, shape, dtype=np.float32, place=paddle.CPUPlace()
+    ):
+        with static_guard():
+            with paddle.static.program_guard(
+                paddle.static.Program(), paddle.static.Program()
+            ):
+                x_np = np.arange(np.prod(shape), dtype=dtype).reshape(shape)
+                x_np[0, 0] = np.nan
+                x = paddle.static.data(name='x', shape=shape, dtype=dtype)
+                out = func(x)
+                exe = paddle.static.Executor(place)
+                res = exe.run(feed={'x': x_np}, fetch_list=[out])
+                self.assertTrue(np.isnan(res[0]), "Result should be NaN")
+
+    def _test_with_nan_dynamic(
+        self, func, shape, dtype=np.float32, place=paddle.CPUPlace()
+    ):
+        with dygraph_guard():
+            x_np = np.arange(np.prod(shape), dtype=dtype).reshape(shape)
+            x_np[0, 0] = np.nan
+            x = paddle.to_tensor(x_np, place=place)
+            out = func(x)
+            self.assertTrue(paddle.isnan(out), "Result should be NaN")
+
+    def test_with_nan(self):
+        places = self._get_places()
+        for place in places:
+            self._test_with_nan_dynamic(paddle.min, (2, 3), place=place)
+            self._test_with_nan_static(paddle.min, (2, 3), place=place)
 
 
 if __name__ == '__main__':

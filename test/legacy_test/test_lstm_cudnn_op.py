@@ -17,10 +17,10 @@ import random
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
 
 import paddle
-from paddle.fluid import core
+from paddle.base import core
 
 random.seed(2)
 np.set_printoptions(threshold=np.inf)
@@ -35,7 +35,7 @@ class RandomWeight:
     def __init__(self):
         pass
 
-    def updata_weight(self, hidden_size, input_size, dtype):
+    def update_weight(self, hidden_size, input_size, dtype):
         std = 1.0 / math.sqrt(hidden_size)
         self.hidden_size = hidden_size
         self.input_size = input_size
@@ -134,7 +134,7 @@ def update_state(mask, new, old):
     if not isinstance(old, (tuple, list)):
         return np.where(mask, new, old)
     else:
-        return tuple(map(lambda x, y: np.where(mask, x, y), new, old))
+        return tuple(np.where(mask, x, y) for x, y in zip(new, old))
 
 
 def rnn(
@@ -218,8 +218,7 @@ def flatten(nested):
 def _flatten(nested):
     for item in nested:
         if isinstance(item, (list, tuple)):
-            for subitem in _flatten(item):
-                yield subitem
+            yield from _flatten(item)
         else:
             yield item
 
@@ -385,7 +384,7 @@ class LSTM(RNNMixin):
         else:
             raise ValueError(
                 "direction should be forward, backward or bidirectional, "
-                "received direction = {}".format(direction)
+                f"received direction = {direction}"
             )
 
         self.input_size = input_size
@@ -433,7 +432,7 @@ class TestCUDNNLstmOp(OpTest):
         input[9][3:][:] = 0
         input[8][4:][:] = 0
 
-        weight.updata_weight(hidden_size, input_size, self.dtype)
+        weight.update_weight(hidden_size, input_size, self.dtype)
         rnn1 = LSTM(
             input_size,
             hidden_size,

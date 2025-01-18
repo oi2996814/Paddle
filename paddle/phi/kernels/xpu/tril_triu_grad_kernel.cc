@@ -27,7 +27,7 @@ void TrilTriuGradKernel(const Context& ctx,
                         DenseTensor* x_grad) {
   using XPUType = typename XPUTypeTrait<T>::Type;
   ctx.template Alloc<T>(x_grad);
-  auto dy_shape = vectorize<int>(out_grad.dims());
+  auto dy_shape = common::vectorize<int>(out_grad.dims());
   int r = 0;
   if (lower) {
     r = xpu::tril(ctx.x_context(),
@@ -69,19 +69,28 @@ PD_REGISTER_KERNEL(tril_grad,
                    ALL_LAYOUT,
                    phi::TrilGradKernel,
                    int,
+                   int64_t,
                    float,
-                   phi::dtype::float16) {}
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16,
+                   bool) {}
 PD_REGISTER_KERNEL(triu_grad,
                    XPU,
                    ALL_LAYOUT,
                    phi::TriuGradKernel,
                    int,
+                   int64_t,
                    float,
-                   phi::dtype::float16) {}
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16,
+                   bool) {}
 PD_REGISTER_KERNEL(tril_triu_grad,
                    XPU,
                    ALL_LAYOUT,
                    phi::TrilTriuGradKernel,
                    int,
+                   int64_t,
                    float,
-                   phi::dtype::float16) {}
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16,
+                   bool) {}

@@ -33,7 +33,7 @@ class LoDResetOp : public framework::OperatorWithKernel {
       PADDLE_ENFORCE_GT(
           static_cast<int64_t>(level0.size()),
           0,
-          platform::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "If Input(Y) is not provided, the output's LoD should be "
               "specified by attribute 'target_lod'. But the size of "
               "'target_lod' is 0."));
@@ -96,7 +96,7 @@ class LoDResetOpVarTypeInference
       SetLoDLevel(ctx, out_var_name, 1);
     }
     SetDataType(ctx, out_var_name, GetDataType(ctx, x_var_name));
-    SetType(ctx, out_var_name, paddle::framework::proto::VarType::LOD_TENSOR);
+    SetType(ctx, out_var_name, paddle::framework::proto::VarType::DENSE_TENSOR);
   }
 };
 
@@ -140,7 +140,7 @@ Given a 1-level phi::DenseTensor input(X):
 
 attr(target_lod): [0, 4, 6]
 
-then we get a 1-level LoDTensor:
+then we get a 1-level DenseTensor:
     Out.lod =  [[ 0,                   4,            6 ]]
     Out.data = [[1.0], [2.0], [3.0], [4.0], [5.0], [6.0]]
     Out.dims = [6, 1]
@@ -156,7 +156,7 @@ input(Y) is a Tensor:
     Y.data = [[0, 2, 6]]
     Y.dims = [1, 3]
 
-then we get a 1-level LoDTensor:
+then we get a 1-level DenseTensor:
     Out.lod =  [[ 0,     2,                          6 ]]
     Out.data = [[1.0], [2.0], [3.0], [4.0], [5.0], [6.0]]
     Out.dims = [6, 1]
@@ -168,12 +168,12 @@ Given a 1-level phi::DenseTensor input(X):
     X.data = [[1.0], [2.0], [3.0], [4.0], [5.0], [6.0]]
     X.dims = [6, 1]
 
-input(Y) is a 2-level LoDTensor:
+input(Y) is a 2-level DenseTensor:
     Y.lod =  [[0, 2, 4], [0, 2, 5, 6]]
     Y.data = [[1.1], [2.1], [3.1], [4.1], [5.1], [6.1]]
     Y.dims = [6, 1]
 
-then we get a 2-level LoDTensor:
+then we get a 2-level DenseTensor:
     Out.lod =  [[0, 2, 4], [0, 2, 5, 6]]
     Out.data = [[1.0], [2.0], [3.0], [4.0], [5.0], [6.0]]
     Out.dims = [6, 1]
@@ -235,7 +235,6 @@ DECLARE_NO_NEED_BUFFER_VARS_INFERER(LoDResetGradNoNeedBufferVarInferer, "X");
 }  // namespace paddle
 
 namespace ops = paddle::operators;
-namespace plat = paddle::platform;
 REGISTER_OPERATOR(lod_reset,
                   ops::LoDResetOp,
                   ops::LoDResetOpMaker,
@@ -247,35 +246,3 @@ REGISTER_OPERATOR(lod_reset_grad,
                   ops::LoDResetGradOp,
                   ops::LoDResetGradNoNeedBufferVarInferer,
                   ops::LoDResetGradInplaceInferer);
-
-PD_REGISTER_STRUCT_KERNEL(lod_reset,
-                          CPU,
-                          ALL_LAYOUT,
-                          ops::LoDResetKernel,
-                          plat::float16,
-                          float,
-                          double,
-                          int,
-                          int64_t) {}
-
-#ifdef PADDLE_WITH_XPU
-PD_REGISTER_STRUCT_KERNEL(lod_reset,
-                          XPU,
-                          ALL_LAYOUT,
-                          ops::LoDResetKernel,
-                          plat::float16,
-                          float,
-                          double,
-                          int,
-                          int64_t) {}
-#endif
-
-PD_REGISTER_STRUCT_KERNEL(lod_reset_grad,
-                          CPU,
-                          ALL_LAYOUT,
-                          ops::LoDResetGradKernel,
-                          plat::float16,
-                          float,
-                          double,
-                          int,
-                          int64_t) {}

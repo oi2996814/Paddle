@@ -25,7 +25,7 @@
 #include "gtest/gtest.h"
 #include "paddle/fluid/imperative/basic_engine.h"
 #include "paddle/fluid/imperative/tracer.h"
-#include "paddle/fluid/memory/memcpy.h"
+#include "paddle/phi/core/memory/memcpy.h"
 #include "test/cpp/eager/performance_tests/benchmark_utils.h"
 #include "test/cpp/eager/test_utils.h"
 
@@ -35,31 +35,23 @@
 
 #include "paddle/phi/core/kernel_registry.h"
 
-PD_DECLARE_KERNEL(full, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(matmul, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(matmul_grad, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(add, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(add_grad, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(sum, CPU, ALL_LAYOUT);
-PD_DECLARE_KERNEL(sum_grad, CPU, ALL_LAYOUT);
-
 namespace paddle {
 namespace imperative {
 
 TEST(Benchmark, FluidScaleCPU) {
   // Prepare Device Contexts
-  platform::CPUPlace place;
+  phi::CPUPlace place;
   eager_test::InitEnv(place);
 
   for (const std::string mode : {"Accuracy", "Performance"}) {
     std::shared_ptr<imperative::VarBase> X(new imperative::VarBase(true, "X"));
-    X->SetOverridedStopGradient(false);
+    X->SetOverriddenStopGradient(false);
 
     std::vector<float> src_data(128, 5.0);
     std::vector<int64_t> dims = {2, 4, 4, 4};
 
     auto* x_tensor = X->MutableVar()->GetMutable<phi::DenseTensor>();
-    x_tensor->Resize(phi::make_ddim(dims));
+    x_tensor->Resize(common::make_ddim(dims));
     auto* mutable_x = x_tensor->mutable_data<float>(place);
     paddle::memory::Copy(place,
                          mutable_x,
@@ -68,15 +60,14 @@ TEST(Benchmark, FluidScaleCPU) {
                          sizeof(float) * src_data.size());
 
     if (mode == "Accuracy") {
-      benchmark_fluid_scale(
-          X, platform::Place(place), true /* accuracy_check */);
+      benchmark_fluid_scale(X, phi::Place(place), true /* accuracy_check */);
 
     } else if (mode == "Performance") {
       auto t_start = std::chrono::high_resolution_clock::now();
 #ifdef WITH_GPERFTOOLS
       ProfilerStart("fluid_scale_cpu.out");
 #endif
-      benchmark_fluid_scale(X, platform::Place(place));
+      benchmark_fluid_scale(X, phi::Place(place));
 
 #ifdef WITH_GPERFTOOLS
       ProfilerStop();
@@ -87,28 +78,28 @@ TEST(Benchmark, FluidScaleCPU) {
       std::cout << "Duration: " << elapsed_time_ms << " ms" << std::endl;
 
     } else {
-      PADDLE_THROW(paddle::platform::errors::Fatal("Unknown benchmark mode"));
+      PADDLE_THROW(common::errors::Fatal("Unknown benchmark mode"));
     }
   }
 }
 
 TEST(Benchmark, FluidMatmulCPU) {
   // Prepare Device Contexts
-  platform::CPUPlace place;
+  phi::CPUPlace place;
   eager_test::InitEnv(place);
 
   for (const std::string mode : {"Accuracy", "Performance"}) {
     std::shared_ptr<imperative::VarBase> X(new imperative::VarBase(true, "X"));
-    X->SetOverridedStopGradient(false);
+    X->SetOverriddenStopGradient(false);
     std::shared_ptr<imperative::VarBase> Y(new imperative::VarBase(true, "Y"));
-    Y->SetOverridedStopGradient(false);
+    Y->SetOverriddenStopGradient(false);
 
     std::vector<float> x_src_data(4, 1.0);
     std::vector<float> y_src_data(4, 2.0);
     std::vector<int64_t> dims = {2, 2};
 
     auto* x_tensor = X->MutableVar()->GetMutable<phi::DenseTensor>();
-    x_tensor->Resize(phi::make_ddim(dims));
+    x_tensor->Resize(common::make_ddim(dims));
     auto* mutable_x = x_tensor->mutable_data<float>(place);
     paddle::memory::Copy(place,
                          mutable_x,
@@ -117,7 +108,7 @@ TEST(Benchmark, FluidMatmulCPU) {
                          sizeof(float) * x_src_data.size());
 
     auto* y_tensor = Y->MutableVar()->GetMutable<phi::DenseTensor>();
-    y_tensor->Resize(phi::make_ddim(dims));
+    y_tensor->Resize(common::make_ddim(dims));
     auto* mutable_y = y_tensor->mutable_data<float>(place);
     paddle::memory::Copy(place,
                          mutable_y,
@@ -127,14 +118,14 @@ TEST(Benchmark, FluidMatmulCPU) {
 
     if (mode == "Accuracy") {
       benchmark_fluid_matmul(
-          X, Y, platform::Place(place), true /* accuracy_check */);
+          X, Y, phi::Place(place), true /* accuracy_check */);
 
     } else if (mode == "Performance") {
       auto t_start = std::chrono::high_resolution_clock::now();
 #ifdef WITH_GPERFTOOLS
       ProfilerStart("fluid_matmul_cpu.out");
 #endif
-      benchmark_fluid_matmul(X, Y, platform::Place(place));
+      benchmark_fluid_matmul(X, Y, phi::Place(place));
 
 #ifdef WITH_GPERFTOOLS
       ProfilerStop();
@@ -146,14 +137,14 @@ TEST(Benchmark, FluidMatmulCPU) {
       std::cout << "Duration: " << elapsed_time_ms << " ms" << std::endl;
 
     } else {
-      PADDLE_THROW(paddle::platform::errors::Fatal("Unknown benchmark mode"));
+      PADDLE_THROW(common::errors::Fatal("Unknown benchmark mode"));
     }
   }
 }
 
 TEST(Benchmark, FluidMLPCPU) {
   // Prepare Device Contexts
-  platform::CPUPlace place;
+  phi::CPUPlace place;
   eager_test::InitEnv(place);
 
   for (const std::string mode : {"Accuracy", "Performance"}) {
@@ -166,10 +157,10 @@ TEST(Benchmark, FluidMLPCPU) {
     std::vector<int64_t> b_dims = {MLP_K};
 
     std::shared_ptr<imperative::VarBase> X(new imperative::VarBase(true, "X"));
-    X->SetOverridedStopGradient(false);
+    X->SetOverriddenStopGradient(false);
 
     auto* x_tensor = X->MutableVar()->GetMutable<phi::DenseTensor>();
-    x_tensor->Resize(phi::make_ddim(x_dims));
+    x_tensor->Resize(common::make_ddim(x_dims));
     auto* mutable_x = x_tensor->mutable_data<float>(place);
     paddle::memory::Copy(place,
                          mutable_x,
@@ -182,13 +173,13 @@ TEST(Benchmark, FluidMLPCPU) {
     for (size_t i = 0; i < MLP_NUM_LINEAR; i++) {
       std::shared_ptr<imperative::VarBase> W(
           new imperative::VarBase(true, "W"));
-      W->SetOverridedStopGradient(false);
+      W->SetOverriddenStopGradient(false);
       std::shared_ptr<imperative::VarBase> B(
           new imperative::VarBase(true, "B"));
-      B->SetOverridedStopGradient(false);
+      B->SetOverriddenStopGradient(false);
 
       auto* w_tensor = W->MutableVar()->GetMutable<phi::DenseTensor>();
-      w_tensor->Resize(phi::make_ddim(w_dims));
+      w_tensor->Resize(common::make_ddim(w_dims));
       auto* mutable_w = w_tensor->mutable_data<float>(place);
       paddle::memory::Copy(place,
                            mutable_w,
@@ -197,7 +188,7 @@ TEST(Benchmark, FluidMLPCPU) {
                            sizeof(float) * w_src_data.size());
 
       auto* b_tensor = B->MutableVar()->GetMutable<phi::DenseTensor>();
-      b_tensor->Resize(phi::make_ddim(b_dims));
+      b_tensor->Resize(common::make_ddim(b_dims));
       auto* mutable_b = b_tensor->mutable_data<float>(place);
       paddle::memory::Copy(place,
                            mutable_b,
@@ -211,14 +202,14 @@ TEST(Benchmark, FluidMLPCPU) {
 
     if (mode == "Accuracy") {
       benchmark_fluid_mlp(
-          X, Ws, Bs, platform::Place(place), true /* accuracy_check */);
+          X, Ws, Bs, phi::Place(place), true /* accuracy_check */);
 
     } else if (mode == "Performance") {
       auto t_start = std::chrono::high_resolution_clock::now();
 #ifdef WITH_GPERFTOOLS
       ProfilerStart("fluid_mlp_cpu.out");
 #endif
-      benchmark_fluid_mlp(X, Ws, Bs, platform::Place(place));
+      benchmark_fluid_mlp(X, Ws, Bs, phi::Place(place));
 
 #ifdef WITH_GPERFTOOLS
       ProfilerStop();
@@ -230,15 +221,10 @@ TEST(Benchmark, FluidMLPCPU) {
       std::cout << "Duration: " << elapsed_time_ms << " ms" << std::endl;
 
     } else {
-      PADDLE_THROW(paddle::platform::errors::Fatal("Unknown benchmark mode"));
+      PADDLE_THROW(common::errors::Fatal("Unknown benchmark mode"));
     }
   }
 }
 
 }  // namespace imperative
 }  // namespace paddle
-
-USE_OP_ITSELF(scale);
-USE_OP_ITSELF(elementwise_add);
-USE_OP_ITSELF(matmul_v2);
-USE_OP_ITSELF(reduce_sum);

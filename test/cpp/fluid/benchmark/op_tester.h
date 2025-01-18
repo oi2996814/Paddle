@@ -19,9 +19,9 @@ limitations under the License. */
 #include <unordered_map>
 #include <vector>
 
+#include "paddle/common/ddim.h"
 #include "paddle/fluid/framework/op_desc.h"
 #include "paddle/fluid/framework/operator.h"
-#include "paddle/phi/core/ddim.h"
 #include "test/cpp/fluid/benchmark/op_tester_config.h"
 
 namespace paddle {
@@ -70,7 +70,7 @@ class OpTester {
   std::unordered_map<std::string, std::unique_ptr<framework::VarDesc>> vars_;
   std::unordered_map<std::string, OpInputConfig> inputs_;
   std::unique_ptr<framework::OperatorBase> op_;
-  platform::Place place_;
+  phi::Place place_;
   std::unique_ptr<framework::Scope> scope_;
 };
 

@@ -14,19 +14,15 @@ limitations under the License. */
 
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Scope;
 
-namespace proto {
+}  // namespace paddle::framework
+namespace paddle::framework::proto {
 class OpDesc;
-}  // namespace proto
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::proto
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 /*
  * OneHot Op
@@ -57,7 +53,7 @@ class OneHotOpConverter : public OpConverter {
         VLOG(3) << "trt not support float64, so it is converted to float32.";
       }
     } else {
-      PADDLE_THROW(platform::errors::Fatal("one_hot is not supported"));
+      PADDLE_THROW(common::errors::Fatal("one_hot is not supported"));
     }
 
     auto depth_name = op_desc.Input("depth_tensor");
@@ -79,16 +75,14 @@ class OneHotOpConverter : public OpConverter {
         engine_, OneHot, *indices_tensor, *values_tensor, *depth_tensor, -1);
 
     auto output_name = op_desc.Output("Out").front();
-    RreplenishLayerAndOutput(layer, "one_hot", {output_name}, test_mode);
+    ReplenishLayerAndOutput(layer, "one_hot", {output_name}, test_mode);
 #else
     VLOG(3) << "one_hot is not supported when TensorRT < 8.5.1";
 #endif
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(one_hot, OneHotOpConverter);
 REGISTER_TRT_OP_CONVERTER(one_hot_v2, OneHotOpConverter);

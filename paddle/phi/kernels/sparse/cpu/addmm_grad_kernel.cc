@@ -17,8 +17,7 @@ limitations under the License. */
 #include "paddle/phi/backends/cpu/cpu_context.h"
 #include "paddle/phi/core/kernel_registry.h"
 
-namespace phi {
-namespace sparse {
+namespace phi::sparse {
 
 template <typename T, typename Context>
 void AddmmCooDenseGradKernel(const Context& dev_ctx UNUSED,
@@ -31,7 +30,7 @@ void AddmmCooDenseGradKernel(const Context& dev_ctx UNUSED,
                              DenseTensor* dinput UNUSED,
                              SparseCooTensor* dx UNUSED,
                              DenseTensor* dy UNUSED) {
-  PADDLE_THROW(phi::errors::Unimplemented(
+  PADDLE_THROW(common::errors::Unimplemented(
       "Not support CPU backward kernel of 'sparse.addmm' now."));
 }
 
@@ -46,12 +45,11 @@ void AddmmCsrDenseGradKernel(const Context& dev_ctx UNUSED,
                              DenseTensor* dinput UNUSED,
                              SparseCsrTensor* dx UNUSED,
                              DenseTensor* dy UNUSED) {
-  PADDLE_THROW(phi::errors::Unimplemented(
+  PADDLE_THROW(common::errors::Unimplemented(
       "Not support CPU backward kernel of 'sparse.addmm' now."));
 }
 
-}  // namespace sparse
-}  // namespace phi
+}  // namespace phi::sparse
 
 PD_REGISTER_KERNEL(addmm_coo_dense_grad,
                    CPU,

@@ -22,16 +22,11 @@
 #ifdef PADDLE_WITH_TENSORRT
 #include "paddle/fluid/inference/tensorrt/helper.h"
 #endif
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Scope;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 
-namespace paddle {
-namespace framework {
-namespace ir {
-namespace patterns {
+namespace paddle::framework::ir::patterns {
 
 //     input_q input_kv
 //       |q     |k      v
@@ -207,7 +202,8 @@ PDNode* TrtCrossMultiHeadMatmulPattern::operator()() {
   return reshape2_qkv_out_var;
 }
 
-}  // namespace patterns
+}  // namespace paddle::framework::ir::patterns
+namespace paddle::framework::ir {
 
 TrtCrossMultiHeadMatmulFusePass::TrtCrossMultiHeadMatmulFusePass() {
   AddOpCompat(OpCompat("reshape2"))
@@ -274,7 +270,7 @@ int TrtCrossMultiHeadMatmulFusePass::BuildCrossFusion(
                                                              name_scope);
 
   multihead_pattern();
-  auto fuse_creater = [&](Node* input0,
+  auto fuse_creator = [&](Node* input0,
                           Node* input1,
                           Node* mul0,
                           Node* mul1,
@@ -291,7 +287,7 @@ int TrtCrossMultiHeadMatmulFusePass::BuildCrossFusion(
                           Node* scale_out) {
     // get Device context
     auto* dev_ctx = static_cast<phi::CPUContext*>(
-        platform::DeviceContextPool::Instance().Get(platform::CPUPlace()));
+        phi::DeviceContextPool::Instance().Get(phi::CPUPlace()));
 
     auto scale_attr = PADDLE_GET_CONST(float, scale->Op()->GetAttr("scale"));
 
@@ -327,7 +323,7 @@ int TrtCrossMultiHeadMatmulFusePass::BuildCrossFusion(
     auto* wv_data = wv_tensor->data<float>();
     // combined_w_dims = [in,2,out]
     auto combined_w_kv_dims =
-        phi::make_ddim({wk_tensor->dims()[0], 2, wk_tensor->dims()[1]});
+        common::make_ddim({wk_tensor->dims()[0], 2, wk_tensor->dims()[1]});
     VLOG(5) << "trt cross attention trt wk_dim in:" << wk_tensor->dims()[0]
             << "trt cross attention trt wk_dim out:" << wk_tensor->dims()[1];
     auto* combined_w_kv_desc = mul1_w->Var();
@@ -434,7 +430,7 @@ int TrtCrossMultiHeadMatmulFusePass::BuildCrossFusion(
     GET_IR_NODE_FROM_SUBGRAPH(
         transpose2_qkv_out, transpose2_qkv_out, multihead_pattern);
 
-    fuse_creater(input0,
+    fuse_creator(input0,
                  input1,
                  mul0,
                  mul1,
@@ -521,9 +517,7 @@ void TrtCrossMultiHeadMatmulFusePass::ApplyImpl(Graph* graph) const {
   AddStatis(fusion_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(trt_cross_multihead_matmul_fuse_pass,
               paddle::framework::ir::TrtCrossMultiHeadMatmulFusePass);

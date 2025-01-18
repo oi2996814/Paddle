@@ -20,7 +20,7 @@
 #include "glog/logging.h"
 
 #include "paddle/phi/backends/cpu/cpu_context.h"
-#include "paddle/phi/backends/device_memory_aligment.h"
+#include "paddle/phi/backends/device_memory_alignment.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/funcs/math_function.h"
@@ -84,7 +84,7 @@ void GetMemSizeAndDtype(const std::vector<const DenseTensor *> &lod_tensors,
         lod_tensors[i]->initialized() ? lod_tensors[i]->data() : nullptr;
     VLOG(4) << size << " " << len;
     ss << "input(" << i << "-th tensor) dim:(" << lod_tensors[i]->dims() << ") "
-       << " addres:" << ptr << " len: " << len << ", ";
+       << " address:" << ptr << " len: " << len << ", ";
     *numel += len;
   }
   VLOG(10) << ss.str();
@@ -118,7 +118,7 @@ void CoalesceTensorKernel(const Context &dev_ctx,
                         input.size(),
                         output.size()));
 
-  // Input & Output check: only support LoDTensor
+  // Input & Output check: only support DenseTensor
   bool has_not_init_in_vars = false;
   for (size_t i = 0; i < input.size(); ++i) {
     PADDLE_ENFORCE_NOT_NULL(
@@ -143,7 +143,7 @@ void CoalesceTensorKernel(const Context &dev_ctx,
     int64_t accumulated_ranks = 0;
     for (size_t i = 0; i < input.size(); ++i) {
       phi::DDim dims(concated_shapes.data() + accumulated_ranks,
-                     concated_ranks[i]);
+                     static_cast<int>(concated_ranks[i]));
       if (!input[i]->initialized()) {
         PADDLE_ENFORCE_EQ(
             input[i],
@@ -187,14 +187,14 @@ void CoalesceTensorKernel(const Context &dev_ctx,
   size_t numel = 0;
 
   if (size_of_dtype == -1) {
-    size_of_dtype = phi::SizeOf(dtype);
+    size_of_dtype = static_cast<int>(phi::SizeOf(dtype));
   }
   GetMemSizeAndDtype(
       input, &numel, size_of_dtype, dev_ctx.GetPlace(), use_align, align_size);
 
   // Alloc the continuous space
   void *fused_tensor_ptr = dev_ctx.Alloc(
-      &fused_output->Resize(phi::make_ddim({static_cast<int64_t>(numel)})),
+      &fused_output->Resize(common::make_ddim({static_cast<int64_t>(numel)})),
       dtype);
   VLOG(10) << "Fused tensor addr " << fused_tensor_ptr;
 
@@ -203,8 +203,9 @@ void CoalesceTensorKernel(const Context &dev_ctx,
   if (copy_data) {
     for (auto item : input) {
       size_t len = static_cast<size_t>(item->numel());
-      auto sub_tensor = fused_output->Slice(static_cast<int64_t>(offset),
-                                            static_cast<int64_t>(offset + len));
+      auto sub_tensor = fused_output->Slice(
+          static_cast<int64_t>(offset),
+          static_cast<int64_t>(offset) + static_cast<int64_t>(len));
       phi::Copy(dev_ctx, *item, dev_ctx.GetPlace(), false, &sub_tensor);
 
       offset += use_align
@@ -219,8 +220,9 @@ void CoalesceTensorKernel(const Context &dev_ctx,
   } else if (persist_output) {
     for (auto &item : output) {
       size_t len = static_cast<size_t>(item->numel());
-      auto sub_tensor = fused_output->Slice(static_cast<int64_t>(offset),
-                                            static_cast<int64_t>(offset + len));
+      auto sub_tensor = fused_output->Slice(
+          static_cast<int64_t>(offset),
+          static_cast<int64_t>(offset) + static_cast<int64_t>(len));
       // some var may not persistable, or persistable var may not init
       if (item->initialized()) {
         phi::Copy(dev_ctx, *item, dev_ctx.GetPlace(), false, &sub_tensor);
@@ -243,8 +245,9 @@ void CoalesceTensorKernel(const Context &dev_ctx,
     auto dim = output[i]->dims();
     VLOG(4) << len << " " << dim << " " << offset;
     output[i]
-        ->ShareDataWith(fused_output->Slice(static_cast<int64_t>(offset),
-                                            static_cast<int64_t>(offset + len)))
+        ->ShareDataWith(fused_output->Slice(
+            static_cast<int64_t>(offset),
+            static_cast<int64_t>(offset) + static_cast<int64_t>(len)))
         .Resize(dim);
     len = use_align ? phi::Alignment(
                           len * size_of_dtype, dev_ctx.GetPlace(), align_size) /

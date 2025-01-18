@@ -23,7 +23,7 @@ class TestAutoParallelGraph(unittest.TestCase):
         self.assertEqual(graph.attrs["name"], "foo")
 
         graph.add_node(1, weight=0)
-        # Overide the existing node attribute
+        # Override the existing node attribute
         graph.add_node(1, weight=1)
         graph.add_node(2, weight=2)
         graph.add_node(3, weight=3)

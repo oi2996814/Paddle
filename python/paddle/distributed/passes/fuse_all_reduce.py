@@ -152,6 +152,9 @@ def filter_all_collective_op_indices(block):
         "c_allreduce_min",
         "c_allgather",
         "c_broadcast",
+        "broadcast",
+        "all_gather",
+        "all_reduce",
     }
 
     match_op_indices = []
@@ -174,7 +177,7 @@ def find_all_fuse_all_reduce_groups(block):
             return False
         in_var = block._find_var_recursive(in_var_name)
         assert in_var is not None
-        if in_var.type != core.VarDesc.VarType.LOD_TENSOR:
+        if in_var.type != core.VarDesc.VarType.DENSE_TENSOR:
             return False
         shape = in_var.shape
         if any(s <= 0 for s in shape):

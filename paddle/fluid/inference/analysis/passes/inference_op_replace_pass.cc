@@ -16,11 +16,13 @@
 
 #include "paddle/fluid/inference/analysis/argument.h"
 
-namespace paddle {
-namespace inference {
-namespace analysis {
+namespace paddle::inference::analysis {
 
 void InferenceOpReplacePass::RunImpl(Argument* argument) {
+  if (argument->use_pir()) {
+    return;
+  }
+
   std::unordered_map<std::string, std::string> replaced_map{
       {"conditional_block", "conditional_block_infer"},
       {"merge_lod_tensor", "merge_lod_tensor_infer"},
@@ -43,6 +45,4 @@ std::string InferenceOpReplacePass::repr() const {
   return "inference_op_replace_pass";
 }
 
-}  // namespace analysis
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::analysis

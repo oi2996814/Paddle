@@ -12,12 +12,11 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include "paddle/fluid/operators/collective/partial_recv_op.h"
+#include "paddle/fluid/framework/data_type.h"
+#include "paddle/fluid/framework/lod_tensor.h"
+#include "paddle/fluid/framework/op_registry.h"
 
-#include <string>
-
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class PartialRecvOp : public framework::OperatorWithKernel {
  public:
@@ -34,26 +33,26 @@ class PartialRecvOp : public framework::OperatorWithKernel {
     PADDLE_ENFORCE_GE(
         peer,
         0,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The peer (%d) for partial_recv op must be non-negative.", peer));
     PADDLE_ENFORCE_GE(
         ring_id,
         0,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The ring_id (%d) for partial_recv op must be non-negative.",
             ring_id));
     PADDLE_ENFORCE_GE(num,
                       1,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The num (%d) for partial_send op must >=1", num));
     PADDLE_ENFORCE_EQ(
         (id >= 0 && id < num),
         true,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The id (%d) for partial_send op must >=0 and <num (%d)", id, num));
     PADDLE_ENFORCE_GE(out_shape.size(),
                       1,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The size of the output shape must be greater than 0 "
                           "but the value given is %d.",
                           out_shape.size()));
@@ -61,22 +60,22 @@ class PartialRecvOp : public framework::OperatorWithKernel {
     for (size_t i = 0; i < out_shape.size(); ++i) {
       PADDLE_ENFORCE_GE(out_shape[i],
                         1,
-                        platform::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "The shape attribute for partial_recv must be set "
                             "explicitly, but the %dth element is %d which "
                             "is less than 1.",
                             i,
                             out_shape[i]));
     }
-    auto out_dims = phi::make_ddim(out_shape);
-    int64_t numel = phi::product(out_dims);
+    auto out_dims = common::make_ddim(out_shape);
+    int64_t numel = common::product(out_dims);
     PADDLE_ENFORCE_EQ(
         (numel % num),
         0,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The output numel (%d) must be divisible by num(%d)", numel, num));
 
-    ctx->SetOutputDim("Out", phi::make_ddim(out_shape));
+    ctx->SetOutputDim("Out", common::make_ddim(out_shape));
   }
 
  protected:
@@ -101,10 +100,6 @@ class PartialRecvOpMaker : public framework::OpProtoAndCheckerMaker {
 
     AddAttr<std::vector<int>>("out_shape", "shape of the output tensor.")
         .SetDefault(std::vector<int>());
-    AddAttr<bool>(
-        "use_calc_stream",
-        "(bool default false) eject CUDA operations to calculation stream.")
-        .SetDefault(false);
     AddAttr<int>("num", "(int default 1) The number of Output to be cut.")
         .SetDefault(1);
     AddAttr<int>("id",
@@ -119,22 +114,10 @@ Reference: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/p2p.h
   }
 };
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
-namespace plat = paddle::platform;
 
 REGISTER_OP_WITHOUT_GRADIENT(partial_recv,
                              ops::PartialRecvOp,
                              ops::PartialRecvOpMaker);
-
-PD_REGISTER_STRUCT_KERNEL(partial_recv,
-                          CPU,
-                          ALL_LAYOUT,
-                          ops::PartialRecvOpCPUKernel,
-                          float,
-                          double,
-                          int,
-                          int64_t,
-                          plat::float16) {}

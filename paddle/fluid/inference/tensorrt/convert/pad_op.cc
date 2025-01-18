@@ -14,9 +14,7 @@ limitations under the License. */
 
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 /*
  * PadOp.
@@ -41,21 +39,19 @@ class PadOpConverter : public OpConverter {
     nvinfer1::DimsHW post_pad(paddings[pad_size - 3], paddings[pad_size - 1]);
 
     auto* layer = TRT_ENGINE_ADD_LAYER(engine_,
-                                       Padding,
+                                       PaddingNd,
                                        *const_cast<nvinfer1::ITensor*>(input),
                                        pre_pad,
                                        post_pad);
 
-    PADDLE_ENFORCE_NOT_NULL(layer,
-                            platform::errors::External(
-                                "add padding layer to tensorrt engine error"));
+    PADDLE_ENFORCE_NOT_NULL(
+        layer,
+        common::errors::External("add padding layer to tensorrt engine error"));
     auto output_name = op_desc.Output("Out")[0];
-    RreplenishLayerAndOutput(layer, "pad", {output_name}, test_mode);
+    ReplenishLayerAndOutput(layer, "pad", {output_name}, test_mode);
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(pad, PadOpConverter);

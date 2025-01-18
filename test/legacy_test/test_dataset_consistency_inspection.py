@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-TestCases for Dataset consistency insepection of use_var_list and data_generator.
+TestCases for Dataset consistency inspection of use_var_list and data_generator.
 """
 
 import math
@@ -21,12 +21,12 @@ import tempfile
 import unittest
 
 import paddle
-from paddle import fluid
+from paddle import base
 from paddle.distributed import fleet
 
 # paddle.enable_static()
-# fluid.disable_dygraph()
-fluid.disable_dygraph()
+# base.disable_dygraph()
+base.disable_dygraph()
 url_schema_len = 5
 query_schema = [
     'Q_query_basic',
@@ -106,10 +106,10 @@ class CTRDataset(fleet.MultiSlotDataGenerator):
                 pos_url_feas.append(pos_url_fea)
                 pos_click_feas.append(stat_fea)
 
-                query_serach = float(item[5])
-                if query_serach > 0.0:
-                    query_serach = min(math.log(query_serach), 10.0) / 10.0
-                pos_context_fea = [[query_serach], [query_len]]
+                query_search = float(item[5])
+                if query_search > 0.0:
+                    query_search = min(math.log(query_search), 10.0) / 10.0
+                pos_context_fea = [[query_search], [query_len]]
                 pos_context_feas.append(pos_context_fea)
 
             # negative url fea parse
@@ -145,10 +145,10 @@ class CTRDataset(fleet.MultiSlotDataGenerator):
                 neg_click_feas.append(stat_fea)
                 neg_url_feas.append(neg_url_fea)
 
-                query_serach = float(item[5])
-                if query_serach > 0.0:
-                    query_serach = min(math.log(query_serach), 10.0) / 10.0
-                neg_context_fea = [[query_serach], [query_len]]
+                query_search = float(item[5])
+                if query_search > 0.0:
+                    query_search = min(math.log(query_search), 10.0) / 10.0
+                neg_context_fea = [[query_search], [query_len]]
                 neg_context_feas.append(neg_context_fea)
 
             # make train data
@@ -163,14 +163,16 @@ class CTRDataset(fleet.MultiSlotDataGenerator):
                     pos_context_fea = pos_context_feas[p]
                     yield zip(
                         feature_name,
-                        [[1]]
-                        + sparse_query_feature
-                        + pos_url_fea
-                        + pos_click_fea
-                        + pos_context_fea
-                        + pos_url_fea
-                        + pos_click_fea
-                        + pos_context_fea,
+                        [
+                            [1],
+                            *sparse_query_feature,
+                            *pos_url_fea,
+                            *pos_click_fea,
+                            *pos_context_fea,
+                            *pos_url_fea,
+                            *pos_click_fea,
+                            *pos_context_fea,
+                        ],
                     )
                 for n in range(len(neg_url_feas)):
                     feature_name = ["click"]
@@ -181,14 +183,16 @@ class CTRDataset(fleet.MultiSlotDataGenerator):
                     neg_context_fea = neg_context_feas[n]
                     yield zip(
                         feature_name,
-                        [[0]]
-                        + sparse_query_feature
-                        + neg_url_fea
-                        + neg_click_fea
-                        + neg_context_fea
-                        + neg_url_fea
-                        + neg_click_fea
-                        + neg_context_fea,
+                        [
+                            [0],
+                            *sparse_query_feature,
+                            *neg_url_fea,
+                            *neg_click_fea,
+                            *neg_context_fea,
+                            *neg_url_fea,
+                            *neg_click_fea,
+                            *neg_context_fea,
+                        ],
                     )
             elif self.test == 0:
                 for p in range(len(pos_url_feas)):
@@ -215,14 +219,16 @@ class CTRDataset(fleet.MultiSlotDataGenerator):
                         yield list(
                             zip(
                                 feature_name,
-                                [[1]]
-                                + sparse_query_feature
-                                + pos_url_fea
-                                + pos_click_fea
-                                + pos_context_fea
-                                + neg_url_fea
-                                + neg_click_fea
-                                + neg_context_fea,
+                                [
+                                    [1],
+                                    *sparse_query_feature,
+                                    *pos_url_fea,
+                                    *pos_click_fea,
+                                    *pos_context_fea,
+                                    *neg_url_fea,
+                                    *neg_click_fea,
+                                    *neg_context_fea,
+                                ],
                             )
                         )
             elif self.test == 2:
@@ -250,14 +256,17 @@ class CTRDataset(fleet.MultiSlotDataGenerator):
                         yield list(
                             zip(
                                 feature_name,
-                                [[1], [2]]
-                                + sparse_query_feature
-                                + pos_url_fea
-                                + pos_click_fea
-                                + pos_context_fea
-                                + neg_url_fea
-                                + neg_click_fea
-                                + neg_context_fea,
+                                [
+                                    [1],
+                                    [2],
+                                    *sparse_query_feature,
+                                    *pos_url_fea,
+                                    *pos_click_fea,
+                                    *pos_context_fea,
+                                    *neg_url_fea,
+                                    *neg_click_fea,
+                                    *neg_context_fea,
+                                ],
                             )
                         )
             elif self.test == 3:
@@ -285,14 +294,17 @@ class CTRDataset(fleet.MultiSlotDataGenerator):
                         yield list(
                             zip(
                                 feature_name,
-                                [[1], [2.0]]
-                                + sparse_query_feature
-                                + pos_url_fea
-                                + pos_click_fea
-                                + pos_context_fea
-                                + neg_url_fea
-                                + neg_click_fea
-                                + neg_context_fea,
+                                [
+                                    [1],
+                                    [2.0],
+                                    *sparse_query_feature,
+                                    *pos_url_fea,
+                                    *pos_click_fea,
+                                    *pos_context_fea,
+                                    *neg_url_fea,
+                                    *neg_click_fea,
+                                    *neg_context_fea,
+                                ],
                             )
                         )
             elif self.test == 4:
@@ -320,14 +332,17 @@ class CTRDataset(fleet.MultiSlotDataGenerator):
                         yield list(
                             zip(
                                 feature_name,
-                                [[], [2.0]]
-                                + sparse_query_feature
-                                + pos_url_fea
-                                + pos_click_fea
-                                + pos_context_fea
-                                + neg_url_fea
-                                + neg_click_fea
-                                + neg_context_fea,
+                                [
+                                    [],
+                                    [2.0],
+                                    *sparse_query_feature,
+                                    *pos_url_fea,
+                                    *pos_click_fea,
+                                    *pos_context_fea,
+                                    *neg_url_fea,
+                                    *neg_click_fea,
+                                    *neg_context_fea,
+                                ],
                             )
                         )
             elif self.test == 5:
@@ -377,9 +392,9 @@ class TestDataset(unittest.TestCase):
         # epoch_num = 10
         # drop_last = False
 
-    def test_var_consistency_insepection(self):
+    def test_var_consistency_inspection(self):
         """
-        Testcase for InMemoryDataset of consistency insepection of use_var_list and data_generator.
+        Testcase for InMemoryDataset of consistency inspection of use_var_list and data_generator.
         """
 
         temp_dir = tempfile.TemporaryDirectory()
@@ -398,7 +413,6 @@ class TestDataset(unittest.TestCase):
             name="click",
             shape=[-1, 1],
             dtype="int64",
-            lod_level=0,
         )
         slot_data.append(label)
 
@@ -410,7 +424,6 @@ class TestDataset(unittest.TestCase):
                     name=str(feat_name),
                     shape=[-1, 1],
                     dtype='int64',
-                    lod_level=1,
                 )
             )
 
@@ -421,7 +434,6 @@ class TestDataset(unittest.TestCase):
                     name=str(feat_name),
                     shape=[-1, 1],
                     dtype='int64',
-                    lod_level=1,
                 )
             )
 
@@ -433,7 +445,7 @@ class TestDataset(unittest.TestCase):
                 )
             )
 
-        # context_feat_namess
+        # context_feat_names
         for feat_name in range(len_sparse_query + 16, len_sparse_query + 18):
             slot_data.append(
                 paddle.static.data(
@@ -448,7 +460,6 @@ class TestDataset(unittest.TestCase):
                     name=str(feat_name),
                     shape=[-1, 1],
                     dtype='int64',
-                    lod_level=1,
                 )
             )
 
@@ -460,7 +471,7 @@ class TestDataset(unittest.TestCase):
                 )
             )
 
-        # neg context_feat_namess
+        # neg context_feat_names
         for feat_name in range(len_sparse_query + 33, len_sparse_query + 35):
             slot_data.append(
                 paddle.static.data(

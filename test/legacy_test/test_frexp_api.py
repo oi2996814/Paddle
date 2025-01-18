@@ -16,7 +16,7 @@ import unittest
 import numpy as np
 
 import paddle
-import paddle.fluid
+import paddle.base
 
 
 class TestFrexpAPI(unittest.TestCase):
@@ -35,6 +35,7 @@ class TestFrexpAPI(unittest.TestCase):
         self.x_np = np.random.uniform(-3, 3, [10, 12]).astype('float32')
 
     # 静态图单测
+
     def test_static_api(self):
         # 开启静态图模式
         paddle.enable_static()

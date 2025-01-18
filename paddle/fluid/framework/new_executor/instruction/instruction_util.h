@@ -20,30 +20,53 @@
 #include <vector>
 
 #include "paddle/fluid/framework/new_executor/new_executor_defs.h"
-#include "paddle/fluid/platform/device_context.h"
-#include "paddle/fluid/platform/event.h"
-#include "paddle/ir/core/builtin_attribute.h"
-#include "paddle/ir/core/operation.h"
-#include "paddle/ir/core/value.h"
+#include "paddle/phi/api/profiler/event.h"
+#include "paddle/phi/core/platform/device_context.h"
+#include "paddle/pir/include/core/builtin_attribute.h"
+#include "paddle/pir/include/core/operation.h"
+#include "paddle/pir/include/core/value.h"
 namespace paddle {
 namespace framework {
 
-std::vector<int> GetValueIds(
-    ir::Value value,
-    Scope* inner_scope,
-    const std::unordered_map<::ir::Value, std::string>& value_2_var_name,
-    const std::map<std::string, int>& var_name_2_id,
-    const std::unordered_map<const paddle::framework::Variable*, std::string>&
-        variable_2_var_name);
+class ValueExecutionInfo;
 
-platform::DeviceContext* ParseDeviceContext(
-    ir::Operation* op,
-    platform::DeviceContext* origin_dev_ctx,
-    const platform::Place& place,
-    const std::string& execution_stream,
-    const int stream_priority);
+std::vector<int> GetValueIds(pir::Value value,
+                             const ValueExecutionInfo& value_exec_info);
 
-OpFuncType AnalyseOpFuncType(::ir::Operation* op, const platform::Place& place);
+phi::DeviceContext* ParseDeviceContext(pir::Operation* op,
+                                       phi::DeviceContext* origin_dev_ctx,
+                                       const phi::Place& place,
+                                       const std::string& execution_stream,
+                                       const int stream_priority);
 
+OpFuncType AnalyseOpFuncType(::pir::Operation* op, const phi::Place& place);
+
+void GetInputIds(pir::Operation* op,
+                 const ValueExecutionInfo& value_exec_info,
+                 std::unordered_map<pir::Value, std::vector<int>>* input_ids);
+
+std::vector<pir::Value> GetExternalInputs(
+    pir::Block* block,
+    const ValueExecutionInfo& value_exec_info,
+    std::unordered_map<pir::Value, std::vector<int>>* input_ids);
+
+void InsertTuplePushContainerToOuts(
+    pir::Block* block,
+    const ValueExecutionInfo& value_exec_info,
+    std::unordered_map<pir::Value, std::vector<int>>* outputs);
+
+void InsertInplacedExternalInputsToOuts(
+    pir::Block* block,
+    const std::vector<pir::Value>& external_inputs,
+    const ValueExecutionInfo& value_exec_info,
+    std::unordered_map<pir::Value, std::vector<int>>* outputs);
+
+bool GetCondData(const phi::DenseTensor& cond);
+
+void HandleForInplaceOp(pir::Operation* op,
+                        const ValueExecutionInfo* value_exe_info,
+                        InstructionBase* instr);
+
+void ShareVarBuffer(const Variable* src_var, Variable* dst_var);
 }  // namespace framework
 }  // namespace paddle

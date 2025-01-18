@@ -18,9 +18,7 @@
 #include "paddle/phi/backends/cpu/cpu_info.h"
 #include "paddle/phi/kernels/funcs/jit/registry.h"
 
-namespace phi {
-namespace jit {
-namespace gen {
+namespace phi::jit::gen {
 
 const float ALIGN32_BEG exp_float_consts[] ALIGN32_END = {  // NOLINT
     REPEAT_8TIMES(1.f),
@@ -74,7 +72,7 @@ void VActJitCode::genCode() {
     } else {
       vmovss(ptr[param2 + offset], xmm_dst);
     }
-    offset += sizeof(float) * block;
+    offset += sizeof(float) * block;  // NOLINT
     rest -= block;
   }
   ret();
@@ -149,9 +147,7 @@ size_t VTanhCreator::CodeSize(const int& d) const {
 
 #undef DECLARE_ACT_CREATOR
 
-}  // namespace gen
-}  // namespace jit
-}  // namespace phi
+}  // namespace phi::jit::gen
 
 namespace gen = phi::jit::gen;
 

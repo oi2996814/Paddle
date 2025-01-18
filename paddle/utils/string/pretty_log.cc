@@ -14,10 +14,4 @@
 
 #include "paddle/utils/string/pretty_log.h"
 
-#include "gflags/gflags.h"
-
-DEFINE_bool(color, true, "Whether to turn on pretty log");  // NOLINT
-
-namespace paddle {
-namespace string {}  // namespace string
-}  // namespace paddle
+#include "paddle/common/flags.h"

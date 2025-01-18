@@ -32,9 +32,9 @@
 #include "paddle/cinn/backends/llvm/ir_builder_mixin.h"
 #include "paddle/cinn/backends/llvm/llvm_util.h"
 #include "paddle/cinn/ir/intrinsic_ops.h"
+#include "paddle/cinn/ir/ir_visitor.h"
 #include "paddle/cinn/ir/lowered_func.h"
 #include "paddle/cinn/ir/module.h"
-#include "paddle/cinn/ir/utils/ir_visitor.h"
 
 namespace cinn {
 namespace backends {
@@ -48,14 +48,6 @@ class LLVMIRVisitor : public ir::IRVisitorRequireReImpl<llvm::Value *> {
   NODETY_FORALL(__m)
 #undef __m
 };
-
-/**
- * Tell whether a variable called \p \var_name will lowered to a pointer type in
- * LLVM.
- * @param var_name name of the variable.
- * @return a boolean.
- */
-bool LLVM_WillVarLowerAsPointer(const std::string &var_name);
 
 class SymbolTable {
  public:
@@ -72,17 +64,26 @@ class SymbolTable {
   }
 
   void Insert(const std::string &id, llvm::Value *value) {
-    CHECK(!scopes_.empty());
+    PADDLE_ENFORCE_EQ(
+        !scopes_.empty(),
+        true,
+        ::common::errors::InvalidArgument("sorry, scopes_ can't be empty"));
     scopes_.back().emplace(id, value);
   }
 
   void Erase(const std::string &id) {
-    CHECK(!scopes_.empty());
+    PADDLE_ENFORCE_EQ(
+        !scopes_.empty(),
+        true,
+        ::common::errors::InvalidArgument("sorry, scopes_ can't be empty"));
     scopes_.back().erase(id);
   }
 
   void PopScope() {
-    CHECK(!scopes_.empty());
+    PADDLE_ENFORCE_EQ(
+        !scopes_.empty(),
+        true,
+        ::common::errors::InvalidArgument("sorry, scopes_ can't be empty"));
     scopes_.pop_back();
   }
 
@@ -118,7 +119,7 @@ class CodeGenLLVM : public LLVMIRVisitor, public IrBuilderMixin<CodeGenLLVM> {
       llvm::Module *m,
       llvm::IRBuilder<> *b,
       const std::shared_ptr<SymbolTable> &symbol_table = nullptr,
-      const Target &target = common::DefaultHostTarget());
+      const Target &target = cinn::common::DefaultHostTarget());
 
   // Common llvm types
   // @{
@@ -178,6 +179,10 @@ class CodeGenLLVM : public LLVMIRVisitor, public IrBuilderMixin<CodeGenLLVM> {
   void Compile(const ir::Module &module);
 
   using LLVMIRVisitor::Visit;
+
+  virtual llvm::Value *Visit(const ir::_Module_ *op);
+
+  virtual llvm::Value *Visit(const ir::_LoweredFunc_ *op);
 
 #define __(op__) llvm::Value *Visit(const ir::op__ *) override;
   NODETY_FORALL(__)

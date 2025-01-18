@@ -14,12 +14,13 @@
 
 import unittest
 
-from paddle import static
+from paddle import base, static
 from paddle.distributed.passes import PassContext, new_pass
 
 
 class TestStandaloneExecutor1F1BPlan(unittest.TestCase):
     def test_standalone_executor_1f1b_plan_stage0(self):
+        base.set_flags({'FLAGS_enable_pir_api': 0})
         config = {"num_micro_batches": 8, "pp_stage": 0, "pp_degree": 4}
         pass_context = PassContext()
 
@@ -37,7 +38,6 @@ class TestStandaloneExecutor1F1BPlan(unittest.TestCase):
             job_type_list.append(job.type())
             micro_batch_id_list.append(job.micro_batch_id())
         expect_job_type_list = [
-            "lr",
             "forward",
             "forward",
             "forward",
@@ -57,7 +57,6 @@ class TestStandaloneExecutor1F1BPlan(unittest.TestCase):
             "optimizer",
         ]
         expect_micro_batch_id_list = [
-            0,
             0,
             1,
             2,
@@ -80,6 +79,7 @@ class TestStandaloneExecutor1F1BPlan(unittest.TestCase):
         self.assertEqual(micro_batch_id_list, expect_micro_batch_id_list)
 
     def test_standalone_executor_1f1b_plan_stage1(self):
+        base.set_flags({'FLAGS_enable_pir_api': 0})
         config = {"num_micro_batches": 8, "pp_stage": 1, "pp_degree": 4}
         pass_context = PassContext()
 
@@ -97,7 +97,6 @@ class TestStandaloneExecutor1F1BPlan(unittest.TestCase):
             job_type_list.append(job.type())
             micro_batch_id_list.append(job.micro_batch_id())
         expect_job_type_list = [
-            "lr",
             "forward",
             "forward",
             "forward",
@@ -117,7 +116,6 @@ class TestStandaloneExecutor1F1BPlan(unittest.TestCase):
             "optimizer",
         ]
         expect_micro_batch_id_list = [
-            0,
             0,
             1,
             2,
@@ -140,6 +138,7 @@ class TestStandaloneExecutor1F1BPlan(unittest.TestCase):
         self.assertEqual(micro_batch_id_list, expect_micro_batch_id_list)
 
     def test_standalone_executor_1f1b_plan_stage2(self):
+        base.set_flags({'FLAGS_enable_pir_api': 0})
         config = {"num_micro_batches": 8, "pp_stage": 2, "pp_degree": 4}
         pass_context = PassContext()
 
@@ -157,7 +156,6 @@ class TestStandaloneExecutor1F1BPlan(unittest.TestCase):
             job_type_list.append(job.type())
             micro_batch_id_list.append(job.micro_batch_id())
         expect_job_type_list = [
-            "lr",
             "forward",
             "forward",
             "backward",
@@ -177,7 +175,6 @@ class TestStandaloneExecutor1F1BPlan(unittest.TestCase):
             "optimizer",
         ]
         expect_micro_batch_id_list = [
-            0,
             0,
             1,
             0,
@@ -200,6 +197,7 @@ class TestStandaloneExecutor1F1BPlan(unittest.TestCase):
         self.assertEqual(micro_batch_id_list, expect_micro_batch_id_list)
 
     def test_standalone_executor_1f1b_plan_stage3(self):
+        base.set_flags({'FLAGS_enable_pir_api': 0})
         config = {"num_micro_batches": 8, "pp_stage": 3, "pp_degree": 4}
         pass_context = PassContext()
 
@@ -217,7 +215,6 @@ class TestStandaloneExecutor1F1BPlan(unittest.TestCase):
             job_type_list.append(job.type())
             micro_batch_id_list.append(job.micro_batch_id())
         expect_job_type_list = [
-            "lr",
             "forward",
             "backward",
             "forward",
@@ -237,7 +234,6 @@ class TestStandaloneExecutor1F1BPlan(unittest.TestCase):
             "optimizer",
         ]
         expect_micro_batch_id_list = [
-            0,
             0,
             0,
             1,

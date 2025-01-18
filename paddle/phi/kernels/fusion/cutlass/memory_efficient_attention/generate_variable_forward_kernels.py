@@ -22,14 +22,15 @@
 # Kernels are ordered (see `sort_index`), and when dispatching,
 # we select the first kernel in the list that supports the inputs
 
+from __future__ import annotations
+
 import argparse
 import collections
 import itertools
 import os
-import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, TypeVar
+from typing import TypeVar
 
 DEFAULT_ARCH = [50, 70, 75, 80]
 MAX_ARCH = 90
@@ -39,8 +40,8 @@ assert sorted(DEFAULT_ARCH) == DEFAULT_ARCH
 
 
 def find_arch_range(min_arch, max_arch):
-    assert min_arch >= DEFAULT_ARCH[0] and min_arch < MAX_ARCH
-    assert max_arch >= DEFAULT_ARCH[0] and max_arch < MAX_ARCH
+    assert min_arch >= DEFAULT_ARCH[0] and min_arch <= MAX_ARCH
+    assert max_arch >= DEFAULT_ARCH[0] and max_arch <= MAX_ARCH
     assert min_arch <= max_arch
     n = len(DEFAULT_ARCH)
 
@@ -93,6 +94,12 @@ def parse_args():
         type=convert_to_arch_list,
         default=convert_to_arch_list("All"),
         help="The CUDA architecture to be generated.",
+    )
+    parser.add_argument(
+        "--gen_dir",
+        type=str,
+        default="autogen_variable",
+        help="The directory to save the generated files.",
     )
     args = parser.parse_args()
     args.max_arch = find_max_arch(args.cuda_arch)
@@ -152,6 +159,7 @@ void  {NAME}({CPP_CLASS} default_fmha, Params &params, const phi::GPUContext& ct
       problem0_device,
       problem1_device,
       params.num_batches,
+      params.pre_cache_length,
       params.num_heads,
       params.head_size,
       params.value_head_size);
@@ -179,6 +187,7 @@ void  {NAME}({CPP_CLASS} default_fmha, Params &params, const phi::GPUContext& ct
       problem_count,
       threadblock_count,
       params.num_heads,
+      params.kv_num_heads,
       const_cast<scalar_t*>(reinterpret_cast<const scalar_t*>(params.query_ptr)),
       const_cast<scalar_t*>(reinterpret_cast<const scalar_t*>(params.key_ptr)),
       params.mask_ptr
@@ -200,6 +209,7 @@ void  {NAME}({CPP_CLASS} default_fmha, Params &params, const phi::GPUContext& ct
       params.ElementV,
       params.ElementO,
       params.causal,
+      params.mask_broadcast_head,
       params.scale,
       problem_sizes1.data());
 
@@ -207,16 +217,16 @@ void  {NAME}({CPP_CLASS} default_fmha, Params &params, const phi::GPUContext& ct
   cutlass::Status status;
   size_t workspace_size = fmha.get_workspace_size(args);
   phi::DenseTensor workspace;
-  workspace.Resize(phi::make_ddim({{static_cast<int64_t>(workspace_size)}}));
+  workspace.Resize(common::make_ddim({{static_cast<int64_t>(workspace_size)}}));
   ctx.template Alloc<uint8_t>(&workspace);
   status = fmha.initialize(args, workspace.data<uint8_t>());
   if (status != cutlass::Status::kSuccess) {{
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "Failed to initialize CUTLASS Grouped FMHA kernel."));
   }}
   status = fmha.run(ctx.stream());
   if (status != cutlass::Status::kSuccess) {{
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "Failed to run CUTLASS Grouped FMHA kernel."));
   }}
 }}
@@ -225,17 +235,16 @@ void  {NAME}({CPP_CLASS} default_fmha, Params &params, const phi::GPUContext& ct
 
 @dataclass(order=True)
 class FwdKernel:
-    sort_index: Tuple[int, ...] = field(init=False, repr=False)
+    sort_index: tuple[int, ...] = field(init=False, repr=False)
     aligned: bool
     mask_aligned: bool
     dtype: str
-    sm_range: Tuple[int, int]
+    sm_range: tuple[int, int]
     q: int
     k: int
     single_value_iter: bool
     support_mask: bool = True
-    mask_broadcast: bool = False
-    dispatch_cond: Optional[str] = None
+    dispatch_cond: str | None = None
 
     def __post_init__(self) -> None:
         # Set kernel selection priority
@@ -249,7 +258,6 @@ class FwdKernel:
             0 if self.single_value_iter else 1,
             self.q,
             0 if self.mask_aligned else 1,
-            0 if self.mask_broadcast else 1,
         )
 
     @property
@@ -263,10 +271,6 @@ class FwdKernel:
     @property
     def _mask_support_suffix(self) -> str:
         return "sm" if self.support_mask else "usm"
-
-    @property
-    def _mask_broadcast_suffix(self) -> str:
-        return "mb" if self.mask_broadcast else "mnb"
 
     @property
     def _single_value_suffix(self) -> str:
@@ -289,7 +293,6 @@ class FwdKernel:
                 "true" if self.single_value_iter else "false",
                 "cutlass::gemm::kernel::GroupScheduleMode::kDeviceOnly",
                 "true" if self.support_mask else "false",
-                "false",
             ]
         )
         return f"cutlass::gemm::kernel::DefaultFMHAGrouped<{template_args}>"
@@ -297,7 +300,7 @@ class FwdKernel:
     @property
     def impl_group(self) -> str:
         # Maps to file which will contain the implementation
-        return f"{self.dtype}_{self._aligned_suffix}_{self._mask_support_suffix}_{self._mask_aligned_suffix}_{self._mask_broadcast_suffix}_{self._single_value_suffix}_{self.q}x{self.k}"
+        return f"{self.dtype}_{self._aligned_suffix}_{self._mask_support_suffix}_{self._mask_aligned_suffix}_{self._single_value_suffix}_{self.q}x{self.k}"
 
     @property
     def cpp_impl(self) -> str:
@@ -306,8 +309,8 @@ class FwdKernel:
         )
 
     @classmethod
-    def get_all(cls) -> List["FwdKernel"]:
-        kernels: List[FwdKernel] = []
+    def get_all(cls) -> list[FwdKernel]:
+        kernels: list[FwdKernel] = []
         for aligned, dtype, (sm, sm_max) in itertools.product(
             [True, False], DTYPES.keys(), zip(SM, SM[1:] + [args.max_arch])
         ):
@@ -336,7 +339,6 @@ class FwdKernel:
                             single_value_iter=single_value_iter,
                             support_mask=support_mask,
                             mask_aligned=mask_aligned,
-                            mask_broadcast=False,
                         )
                     )
         return kernels
@@ -346,17 +348,17 @@ T = TypeVar("T", bound=FwdKernel)
 
 
 def write_decl_impl(
-    kernels: List[T], family_name: str, impl_file: str, enable_def: str
+    kernels: list[T], family_name: str, impl_file: str, enable_def: str
 ) -> None:
     cpp_file_header = """// This file is auto-generated. See "generate_variable_forward_kernels.py"
 """
 
     kernels.sort()
 
-    implfile_to_kernels: Dict[str, List[T]] = collections.defaultdict(list)
-    cat_to_kernels: Dict[
-        Tuple[str, int, int], List[T]
-    ] = collections.defaultdict(list)
+    implfile_to_kernels: dict[str, list[T]] = collections.defaultdict(list)
+    cat_to_kernels: dict[tuple[str, int, int], list[T]] = (
+        collections.defaultdict(list)
+    )
 
     dispatch_all = ""
     declarations = cpp_file_header + "#pragma once\n"
@@ -396,7 +398,7 @@ void dispatch_{family_name}(const ::phi::GPUContext &ctx, T cb) {{
     PADDLE_ENFORCE_GE(
         cc,
         70,
-        phi::errors::InvalidArgument("the Nvidia GPU's Compute Capability must be greater or equal than 70"));
+        common::errors::InvalidArgument("the Nvidia GPU's Compute Capability must be greater or equal than 70"));
 
     using DT = typename ::phi::CutlassTrait<PaddleT>::Type;
 {dispatch_all}
@@ -405,7 +407,7 @@ void dispatch_{family_name}(const ::phi::GPUContext &ctx, T cb) {{
     declarations += "} // namespace phi\n"
     declarations += f"#endif // {enable_def}\n"
 
-    autogen_dir = Path(args.dst_path) / "autogen_variable"
+    autogen_dir = Path(args.dst_path) / args.gen_dir
     os.makedirs(autogen_dir, exist_ok=True)
     declaration_path = autogen_dir / f"{family_name}.h"
     declaration_path.write_text(declarations)
@@ -425,10 +427,10 @@ void dispatch_{family_name}(const ::phi::GPUContext &ctx, T cb) {{
 
 
 def write_main_header():
-    main_header_content = '''
+    main_header_content = f'''
 #pragma once
 
-#ifdef {}
+#ifdef {ENABLE_MACRO}
 
 #include "paddle/phi/common/data_type.h"
 #include "paddle/phi/core/dense_tensor.h"
@@ -472,6 +474,7 @@ struct Params {{
   // Dimensions/strides
   int32_t num_batches;
   int32_t num_heads;
+  int32_t kv_num_heads;
   int32_t query_seq_len;
   int32_t key_value_seq_len;
   int32_t head_size;
@@ -490,7 +493,8 @@ struct Params {{
   int64_t ElementO;
 
   bool causal;
-  bool mask_broadcast_row;
+  bool mask_broadcast_head;
+  int pre_cache_length;
 }};
 
 __global__ static void get_problem_sizes(const int* seq_lens,
@@ -498,6 +502,7 @@ __global__ static void get_problem_sizes(const int* seq_lens,
                                          GemmCoord* problem_sizes0,
                                          GemmCoord* problem_sizes1,
                                          const int bs,
+                                         const int pre_cache_length,
                                          const int num_head,
                                          const int head_size,
                                          const int value_head_size) {{
@@ -506,7 +511,7 @@ __global__ static void get_problem_sizes(const int* seq_lens,
   if (bi < bs && hi < num_head) {{
     int id = bi * num_head + hi;
     int m = seq_lens[bi];
-    int mkv = kv_seq_lens[bi];
+    int mkv = kv_seq_lens[bi] + (m == 0 ? 0 : pre_cache_length);
     int k0 = head_size;
     int k1 = value_head_size;
     GemmCoord problem0(m, mkv, k0);
@@ -549,18 +554,14 @@ struct ToPhiDTypeTrait {{
 #include "./cutlass_forward.h"
 
 #endif
-'''.format(
-        ENABLE_MACRO
-    )
+'''
 
-    path = Path(args.dst_path) / "autogen_variable"
+    path = Path(args.dst_path) / args.gen_dir
     os.makedirs(path, exist_ok=True)
     path = Path(path) / "memory_efficient_variable_attention.h"
     path.write_text(main_header_content)
 
 
-if os.path.exists(Path(args.dst_path) / "autogen_variable"):
-    shutil.rmtree(Path(args.dst_path) / "autogen_variable")
 forward_impl = "paddle/phi/kernels/fusion/cutlass/memory_efficient_attention/autogen_variable/memory_efficient_variable_attention.h"
 
 write_main_header()

@@ -13,12 +13,11 @@
 # limitations under the License.
 
 import os
-
 from _collections import defaultdict
 
 import paddle
+from paddle.base import framework
 from paddle.distributed.passes.pass_base import PassBase, register_pass
-from paddle.fluid import framework
 from paddle.framework import core
 from paddle.static import Parameter, Program
 
@@ -405,7 +404,7 @@ class DistributedOpsPass(PassBase):
                 gpups_outputs.extend(outputs)
                 gpups_w_size.extend([w.shape[1]] * len(inputs))
                 gpups_min_distributed_idx = min(
-                    min(op_idxs), gpups_min_distributed_idx
+                    *op_idxs, gpups_min_distributed_idx
                 )
                 continue
 
@@ -565,11 +564,7 @@ class DeleteOptimizesPass(PassBase):
             set(remote_optimize_op_role_vars)
         )  # param + grad
         print(
-            "remote_optimize_vars: {}, remote_optimize_op_role_vars: {}, local_optimize_vars: {}".format(
-                remote_optimize_vars,
-                remote_optimize_op_role_vars,
-                local_optimize_vars,
-            )
+            f"remote_optimize_vars: {remote_optimize_vars}, remote_optimize_op_role_vars: {remote_optimize_op_role_vars}, local_optimize_vars: {local_optimize_vars}"
         )
         for var in remote_optimize_vars:
             if var in local_optimize_vars:
@@ -773,6 +768,9 @@ class PsGpuPass(PassBase):
         optimize_op_role_vars = []
         optimize_need_delete_vars = []
         for op in get_optimize_ops(program):
+            # print("op=%s, input_names=%s" % (op, op.input_names))
+            if "Param" not in op.input_names:
+                continue
             for name in op.input("Param"):
                 if name in embedding_w:
                     optimize_op_role_vars.extend(op.attr("op_role_var"))
@@ -842,10 +840,21 @@ class PsTranspilePass(PassBase):
         return True
 
     def _apply_single_impl(self, main_program, startup_program, pass_ctx):
-        from ..transpiler.collective import SingleProcessMultiThread
+        attrs = pass_ctx._attrs
+        if attrs['use_gpu_graph'] == 0:
+            from ..transpiler.collective import MultiThread
+
+            t = MultiThread()
+            print("ps_transpile_pass use MultiThread for non_gpu_graph mode")
+        else:
+            from ..transpiler.collective import SingleProcessMultiThread
+
+            t = SingleProcessMultiThread()
+            print(
+                "ps_transpile_pass use SingleProcessMultiThread for gpu_graph mode"
+            )
 
         attrs = pass_ctx._attrs
-        t = SingleProcessMultiThread()
         env = get_dist_env()
         t.transpile(
             startup_program=startup_program,
@@ -887,8 +896,8 @@ class SplitHeterWorkerOpsPass(PassBase):
         #         joint_var.0_1 -> slice -> reshape -> origin_var
         #         origin_var -> origin_program
         #         reshape -> concat -> joint_var.1_2
-        #     d) copy send op from origin program for var@grad which loacted in current heter block
-        #     e) re-check every op in current blcok if its device is not current heter devie
+        #     d) copy send op from origin program for var@grad which located in current heter block
+        #     e) re-check every op in current block if its device is not current heter device
         # 2. Create send op for step counter in last heter-block
         # 3. Create Listen&Serv OP and Send&Recv OP for distributed training
         # 4. update CompileTimeStrategy for heter_program
@@ -1005,7 +1014,7 @@ class SplitHeterWorkerOpsPass(PassBase):
             block_var_detail[stage_id - 1]["backward"]["persistables"],
         )
 
-        # add step conter
+        # add step counter
         send_input_vars = []
         dummy_output = []
         pserver_endpoints = get_ps_endpoints(role_maker)
@@ -1037,9 +1046,9 @@ class SplitHeterWorkerOpsPass(PassBase):
         3. create heter worker program, add listen&serv op
         """
         attrs = pass_ctx._attrs
-        default_deveice = "cpu"
+        default_device = "cpu"
         program, heter_ops, _, program_block_ops = find_heter_ops(
-            main_program, default_deveice
+            main_program, default_device
         )
         if len(heter_ops) == 0:
             warnings.warn(
@@ -1107,7 +1116,7 @@ class SplitTrainerOpsPass(PassBase):
                 outputs={"Out": []},
                 attrs={
                     "mode": "forward",
-                    "send_var_name": entrance_var + ["microbatch_id"],
+                    "send_var_name": [*entrance_var, "microbatch_id"],
                     "recv_var_name": [],
                     "message_name": comm_info["block_input_var_name"],
                     "next_endpoints": next_heter_worker_endpoints,
@@ -1377,8 +1386,10 @@ class SplitFlOpsPass(PassBase):
             outputs={'Out': []},
             attrs={
                 'mode': 'forward',  # mode 直接关联前向和反向 channel 选择
-                'send_var_name': self.partA_to_partB_tensor_name
-                + ["microbatch_id"],
+                'send_var_name': [
+                    *self.partA_to_partB_tensor_name,
+                    "microbatch_id",
+                ],
                 'recv_var_name': [],
                 'message_name': comm_info,
                 'next_endpoints': get_next_stage_trainers(
@@ -1391,7 +1402,6 @@ class SplitFlOpsPass(PassBase):
                 RPC_OP_ROLE_ATTR_NAME: RPC_OP_ROLE_ATTR_VALUE,
             },
         )
-        return
 
     def _insert_partB_communicate_op(self, block, idx):
         comm_info = f"backward_joint_{2}_{1}@fl_ps"
@@ -1402,8 +1412,10 @@ class SplitFlOpsPass(PassBase):
             outputs={'Out': []},
             attrs={
                 'mode': 'backward',
-                'send_var_name': self.partB_to_partA_grad_name
-                + ["microbatch_id"],
+                'send_var_name': [
+                    *self.partB_to_partA_grad_name,
+                    "microbatch_id",
+                ],
                 'recv_var_name': [],
                 'message_name': comm_info,
                 'next_endpoints': get_next_stage_trainers(
@@ -1416,7 +1428,6 @@ class SplitFlOpsPass(PassBase):
                 RPC_OP_ROLE_ATTR_NAME: RPC_OP_ROLE_ATTR_VALUE,
             },
         )
-        return
 
     def _create_var_for_block(self, vars, block):
         for var in vars:

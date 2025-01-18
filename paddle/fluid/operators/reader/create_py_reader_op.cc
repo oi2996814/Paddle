@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "paddle/fluid/operators/reader/py_reader.h"
+#include "paddle/common/ddim.h"
 #include "paddle/fluid/operators/reader/reader_op_registry.h"
-#include "paddle/phi/core/ddim.h"
+#include "paddle/phi/core/operators/reader/py_reader.h"
 
-namespace paddle {
-namespace operators {
-namespace reader {
+namespace paddle::operators::reader {
 
 class CreatePyReaderOp : public framework::OperatorBase {
  public:
@@ -26,7 +24,7 @@ class CreatePyReaderOp : public framework::OperatorBase {
 
  private:
   void RunImpl(const framework::Scope& scope,
-               const platform::Place& dev_place) const override {
+               const phi::Place& dev_place) const override {
     auto* out = scope.FindVar(Output("Out"))
                     ->template GetMutable<framework::ReaderHolder>();
     if (out->Get() != nullptr) return;
@@ -35,40 +33,42 @@ class CreatePyReaderOp : public framework::OperatorBase {
     auto* queue_holder_var = scope.FindVar(queue_name);
     PADDLE_ENFORCE_NOT_NULL(
         queue_holder_var,
-        platform::errors::NotFound(
-            "No LoDTensorBlockingQueueHolder variable with name %s found. This "
+        common::errors::NotFound(
+            "No DenseTensorBlockingQueueHolder variable with name %s found. "
+            "This "
             "may be because the DataLoader is defined in another Scope, "
             "which is different from the Scope when calling Executor.run.",
             queue_name));
-    std::shared_ptr<LoDTensorBlockingQueue> queue;
-    std::shared_ptr<OrderedMultiDeviceLoDTensorBlockingQueue> ordered_queue;
+    std::shared_ptr<DenseTensorBlockingQueue> queue;
+    std::shared_ptr<OrderedMultiDeviceDenseTensorBlockingQueue> ordered_queue;
     int dev_idx = -1;
-    if (queue_holder_var->IsType<LoDTensorBlockingQueueHolder>()) {
-      queue = queue_holder_var->Get<LoDTensorBlockingQueueHolder>().GetQueue();
-    } else if (queue_holder_var
-                   ->IsType<OrderedMultiDeviceLoDTensorBlockingQueueHolder>()) {
+    if (queue_holder_var->IsType<DenseTensorBlockingQueueHolder>()) {
+      queue =
+          queue_holder_var->Get<DenseTensorBlockingQueueHolder>().GetQueue();
+    } else if (queue_holder_var->IsType<
+                   OrderedMultiDeviceDenseTensorBlockingQueueHolder>()) {
       auto* queue_holder =
           queue_holder_var
-              ->GetMutable<OrderedMultiDeviceLoDTensorBlockingQueueHolder>();
+              ->GetMutable<OrderedMultiDeviceDenseTensorBlockingQueueHolder>();
       dev_idx = Attr<int>("device_index");
       ordered_queue = queue_holder->GetQueue();
       ordered_queue->SetDeviceCount(Attr<int>("device_count"));
       queue = ordered_queue->GetQueue(dev_idx);
     }
 
-    /* Coverting shape_concat and ranks into DDim of each data.
+    /* Converting shape_concat and ranks into DDim of each data.
      shape_concat and ranks are shapes and shape ranks of each data.E.g.
      shape_concat = [2,3,4,5,6], ranks = [3,2] means two data whose shapes are
      [2,3,4] and [5,6] respectively. */
     auto& shape_concat = Attr<std::vector<int>>("shape_concat");
     auto& ranks = Attr<std::vector<int>>("ranks");
     int shape_start_index = 0;
-    std::vector<framework::DDim> dims;
+    std::vector<phi::DDim> dims;
     for (auto rank : ranks) {
       int shape_end_index = shape_start_index + rank;
       auto shape = std::vector<int>(shape_concat.begin() + shape_start_index,
                                     shape_concat.begin() + shape_end_index);
-      dims.push_back(phi::make_ddim(shape));
+      dims.push_back(common::make_ddim(shape));
       shape_start_index = shape_end_index;
     }
 
@@ -99,7 +99,7 @@ class CreatePyReaderOpMaker : public FileReaderMakerBase {
  protected:
   void Apply() override {
     AddInput("blocking_queue",
-             "Name of the `LoDTensorBlockingQueueHolder` variable");
+             "Name of the `DenseTensorBlockingQueueHolder` variable");
 
     AddAttr<int>("device_index", "The device index this reader offers data")
         .SetDefault(0);
@@ -114,9 +114,7 @@ class CreatePyReaderOpMaker : public FileReaderMakerBase {
   }
 };
 
-}  // namespace reader
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators::reader
 
 namespace reader = ::paddle::operators::reader;
 

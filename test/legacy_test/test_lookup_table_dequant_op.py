@@ -16,12 +16,19 @@ import struct
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest
+from op_test import OpTest
+
+import paddle
+
+
+def api_wrapper(w, ids, padding_idx=-1):
+    return paddle._C_ops.lookup_table_dequant(w, ids, padding_idx)
 
 
 class TestLookupTableDequantOp(OpTest):
     def setUp(self):
         self.op_type = "lookup_table_dequant"
+        self.python_api = api_wrapper
         table = np.random.random((17, 32)).astype("float32")
         ids = np.random.randint(0, 17, 4).astype("int64")
         ids_expand = np.expand_dims(ids, axis=1)

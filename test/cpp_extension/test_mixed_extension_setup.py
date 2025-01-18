@@ -43,7 +43,7 @@ def custom_relu_static(
             out_v = exe.run(
                 static.default_main_program(),
                 feed={'X': np_x},
-                fetch_list=[out.name],
+                fetch_list=[out],
             )
 
     paddle.disable_static()
@@ -103,18 +103,18 @@ class TestCppExtensionSetupInstall(unittest.TestCase):
         cur_dir = os.path.dirname(os.path.abspath(__file__))
         # install mixed custom_op and extension
         # compile, install the custom op egg into site-packages under background
-        cmd = 'cd {} && {} mix_relu_and_extension_setup.py install'.format(
-            cur_dir, sys.executable
-        )
+        site_dir = site.getsitepackages()[0]
+        cmd = f'cd {cur_dir} && {sys.executable} mix_relu_and_extension_setup.py install'
+        if os.name != 'nt':
+            cmd += f' --install-lib={site_dir}'
         run_cmd(cmd)
 
-        site_dir = site.getsitepackages()[0]
         custom_egg_path = [
             x for x in os.listdir(site_dir) if 'mix_relu_extension' in x
         ]
-        assert len(custom_egg_path) == 1, "Matched egg number is %d." % len(
-            custom_egg_path
-        )
+        assert (
+            len(custom_egg_path) == 1
+        ), f"Matched egg number is {len(custom_egg_path)}."
         sys.path.append(os.path.join(site_dir, custom_egg_path[0]))
         #################################
 
@@ -169,9 +169,7 @@ class TestCppExtensionSetupInstall(unittest.TestCase):
             np.testing.assert_array_equal(
                 out,
                 pd_out,
-                err_msg='custom op out: {},\n paddle api out: {}'.format(
-                    out, pd_out
-                ),
+                err_msg=f'custom op out: {out},\n paddle api out: {pd_out}',
             )
 
     def _test_dynamic(self):
@@ -188,16 +186,12 @@ class TestCppExtensionSetupInstall(unittest.TestCase):
             np.testing.assert_array_equal(
                 out,
                 pd_out,
-                err_msg='custom op out: {},\n paddle api out: {}'.format(
-                    out, pd_out
-                ),
+                err_msg=f'custom op out: {out},\n paddle api out: {pd_out}',
             )
             np.testing.assert_array_equal(
                 x_grad,
                 pd_x_grad,
-                err_msg='custom op x grad: {},\n paddle api x grad: {}'.format(
-                    x_grad, pd_x_grad
-                ),
+                err_msg=f'custom op x grad: {x_grad},\n paddle api x grad: {pd_x_grad}',
             )
 
     def _test_double_grad_dynamic(self):
@@ -214,16 +208,12 @@ class TestCppExtensionSetupInstall(unittest.TestCase):
             np.testing.assert_array_equal(
                 out,
                 pd_out,
-                err_msg='custom op out: {},\n paddle api out: {}'.format(
-                    out, pd_out
-                ),
+                err_msg=f'custom op out: {out},\n paddle api out: {pd_out}',
             )
             np.testing.assert_array_equal(
                 dx_grad,
                 pd_dx_grad,
-                err_msg='custom op dx grad: {},\n paddle api dx grad: {}'.format(
-                    dx_grad, pd_dx_grad
-                ),
+                err_msg=f'custom op dx grad: {dx_grad},\n paddle api dx grad: {pd_dx_grad}',
             )
 
 

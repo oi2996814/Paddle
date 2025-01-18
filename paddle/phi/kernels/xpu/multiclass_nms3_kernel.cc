@@ -38,15 +38,17 @@ void MultiClassNMSKernel(const Context& ctx,
                          DenseTensor* out,
                          DenseTensor* index,
                          DenseTensor* nms_rois_num) {
-  using XPUT = typename XPUTypeTrait<T>::Type;
+  using XPUType = typename XPUTypeTrait<T>::Type;
 
-  const XPUT* bboxes_data = reinterpret_cast<const XPUT*>(bboxes.data<T>());
-  const XPUT* scores_data = reinterpret_cast<const XPUT*>(scores.data<T>());
+  const XPUType* bboxes_data =
+      reinterpret_cast<const XPUType*>(bboxes.data<T>());
+  const XPUType* scores_data =
+      reinterpret_cast<const XPUType*>(scores.data<T>());
 
   bool return_index = index != nullptr;
   bool has_rois_num = rois_num.get_ptr() != nullptr;
   bool return_rois_num = nms_rois_num != nullptr;
-  auto score_dims = phi::vectorize<int>(scores.dims());
+  auto score_dims = common::vectorize<int>(scores.dims());
   auto score_size = score_dims.size();
   bool is_lod = score_size == 2 ? true : false;
 
@@ -59,10 +61,32 @@ void MultiClassNMSKernel(const Context& ctx,
   rois_num_vec.clear();
   if (is_lod) {
     if (has_rois_num) {
-      n = rois_num.get_ptr()->numel();
-      for (int i = 0; i < n; i++) {
-        rois_num_vec.push_back(rois_num.get_ptr()->data<int>()[i]);
-        boxes_count += rois_num.get_ptr()->data<int>()[i];
+      phi::DenseTensor rois_num_host;
+      rois_num_host.Resize(rois_num.get_ptr()->dims());
+      if (rois_num.get_ptr()->dtype() == phi::DataType::INT64) {
+        ctx.template HostAlloc<int64_t>(&rois_num_host);
+        phi::Copy(ctx,
+                  *rois_num.get_ptr(),
+                  rois_num_host.place(),
+                  false,
+                  &rois_num_host);
+        n = rois_num.get_ptr()->numel();
+        for (int64_t i = 0; i < n; i++) {
+          rois_num_vec.push_back(rois_num_host.data<int64_t>()[i]);
+          boxes_count += rois_num_host.data<int64_t>()[i];
+        }
+      } else if (rois_num.get_ptr()->dtype() == phi::DataType::INT32) {
+        ctx.template HostAlloc<int>(&rois_num_host);
+        phi::Copy(ctx,
+                  *rois_num.get_ptr(),
+                  rois_num_host.place(),
+                  false,
+                  &rois_num_host);
+        n = rois_num.get_ptr()->numel();
+        for (int i = 0; i < n; i++) {
+          rois_num_vec.push_back(rois_num_host.data<int>()[i]);
+          boxes_count += rois_num_host.data<int>()[i];
+        }
       }
     } else {
       auto lod = bboxes.lod().back();
@@ -74,18 +98,18 @@ void MultiClassNMSKernel(const Context& ctx,
     }
     PADDLE_ENFORCE_EQ(boxes_count == bboxes.dims()[0],
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "boxes_count should equal boxes->dims()[0].",
                           "But received: (%d) and (%d)",
                           boxes_count,
                           bboxes.dims()[0]));
-    PADDLE_ENFORCE_EQ(
-        boxes_count == score_dims[0],
-        true,
-        phi::errors::InvalidArgument("boxes_count shuold equal score_dims[0].",
-                                     "But received: (%d) and (%d)",
-                                     boxes_count,
-                                     score_dims[0]));
+    PADDLE_ENFORCE_EQ(boxes_count == score_dims[0],
+                      true,
+                      common::errors::InvalidArgument(
+                          "boxes_count should equal score_dims[0].",
+                          "But received: (%d) and (%d)",
+                          boxes_count,
+                          score_dims[0]));
   } else {
     n = bboxes.dims()[0];
     b = bboxes.dims()[1];
@@ -187,7 +211,7 @@ void MultiClassNMSKernel(const Context& ctx,
     }
     phi::Copy(ctx, nms_rois_num_cpu, nms_rois_num->place(), true, nms_rois_num);
   }
-  LoD lod;
+  LegacyLoD lod;
   if (num_kept == 0) {
     batch_starts[batch_starts.size() - 1] = 1;
   }

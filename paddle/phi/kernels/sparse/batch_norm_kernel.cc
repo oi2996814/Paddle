@@ -17,8 +17,7 @@ limitations under the License. */
 #include "paddle/phi/kernels/batch_norm_kernel.h"
 #include "paddle/phi/kernels/sparse/empty_kernel.h"
 
-namespace phi {
-namespace sparse {
+namespace phi::sparse {
 
 template <typename T, typename Context>
 void BatchNormCooKernel(const Context& dev_ctx,
@@ -59,10 +58,10 @@ void BatchNormCooKernel(const Context& dev_ctx,
                                    saved_variance,
                                    reserve_space);
   y->SetIndicesDict(x.GetIndicesDict());
+  y->SetKmaps(x.GetKmaps());
 }
 
-}  // namespace sparse
-}  // namespace phi
+}  // namespace phi::sparse
 
 PD_REGISTER_KERNEL(batch_norm_coo,
                    CPU,

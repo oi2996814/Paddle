@@ -15,16 +15,17 @@
 import unittest
 
 import numpy as np
-from eager_op_test import OpTest, convert_float_to_uint16, skip_check_grad_ci
+from op_test import OpTest, convert_float_to_uint16, skip_check_grad_ci
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
+import paddle.static
+from paddle import base
+from paddle.base import core
 
 
 def broadcast_wrapper(shape=[1, 10, 12, 1]):
     def div_wrapper(x, y, axis=-1):
-        return paddle.divide(x, y.reshape(shape))
+        return paddle.divide(x, paddle.reshape(y, shape))
 
     return div_wrapper
 
@@ -69,6 +70,7 @@ class ElementwiseDivOp(OpTest):
         self.enable_cinn = True
 
     def init_args(self):
+        self.check_pir = True
         self.check_dygraph = True
         self.place = None
 
@@ -82,6 +84,7 @@ class ElementwiseDivOp(OpTest):
 
     def if_check_prim(self):
         self.check_prim = True
+        self.check_prim_pir = True
 
     def gen_data(self, shape):
         return np.random.uniform(0.1, 1, shape)
@@ -97,9 +100,15 @@ class ElementwiseDivOp(OpTest):
 
     def test_check_output(self):
         if self.place is None:
-            self.check_output()
+            self.check_output(
+                check_pir=self.check_pir, check_dygraph=self.check_dygraph
+            )
         else:
-            self.check_output_with_place(self.place)
+            self.check_output_with_place(
+                self.place,
+                check_pir=self.check_pir,
+                check_dygraph=self.check_dygraph,
+            )
 
     def test_check_gradient(self):
         check_list = []
@@ -124,12 +133,17 @@ class ElementwiseDivOp(OpTest):
                 'user_defined_grad_outputs': [self.grad_out],
                 'check_dygraph': self.check_dygraph,
                 'check_prim': self.check_prim,
+                'check_prim_pir': self.check_prim_pir,
             }
             if self.place is None:
-                self.check_grad(*check_args, **check_kwargs)
+                self.check_grad(
+                    *check_args, **check_kwargs, check_pir=self.check_pir
+                )
             else:
                 check_args.insert(0, self.place)
-                self.check_grad_with_place(*check_args, **check_kwargs)
+                self.check_grad_with_place(
+                    *check_args, **check_kwargs, check_pir=self.check_pir
+                )
 
 
 class TestElementwiseDivPrimOpFp32(ElementwiseDivOp):
@@ -181,7 +195,7 @@ class TestElementwiseDivOp_ZeroDim3(ElementwiseDivOp):
 )
 class TestElementwiseDivOpBF16(ElementwiseDivOp):
     def init_args(self):
-        # In due to output data type inconsistence of bfloat16 paddle op, we disable the dygraph check.
+        # In due to output data type inconsistency of bfloat16 paddle op, we disable the dygraph check.
         self.check_dygraph = False
         self.place = core.CUDAPlace(0)
 
@@ -213,15 +227,20 @@ class TestElementwiseDivOpBF16(ElementwiseDivOp):
             check_kwargs = {
                 'no_grad_set': check_option['no_grad'],
                 'check_dygraph': self.check_dygraph,
+                'check_prim': self.check_prim,
+                'check_prim_pir': self.check_prim_pir,
             }
             if self.place is None:
-                self.check_grad(*check_args, **check_kwargs)
+                self.check_grad(*check_args, **check_kwargs, check_pir=True)
             else:
                 check_args.insert(0, self.place)
-                self.check_grad_with_place(*check_args, **check_kwargs)
+                self.check_grad_with_place(
+                    *check_args, **check_kwargs, check_pir=True
+                )
 
     def if_check_prim(self):
         self.check_prim = True
+        self.check_prim_pir = True
 
     def if_enable_cinn(self):
         self.enable_cinn = False
@@ -270,10 +289,12 @@ class TestElementwiseDivOpNoPrim(ElementwiseDivOp):
                 'check_dygraph': self.check_dygraph,
             }
             if self.place is None:
-                self.check_grad(*check_args, **check_kwargs)
+                self.check_grad(*check_args, **check_kwargs, check_pir=True)
             else:
                 check_args.insert(0, self.place)
-                self.check_grad_with_place(*check_args, **check_kwargs)
+                self.check_grad_with_place(
+                    *check_args, **check_kwargs, check_pir=True
+                )
 
 
 class TestElementwiseDivOpBroadcast0(TestElementwiseDivOpNoPrim):
@@ -395,6 +416,15 @@ class TestElementwiseDivOpXsizeLessThanYsize(ElementwiseDivOp):
 
 
 class TestElementwiseDivOpInt(ElementwiseDivOp):
+    def init_args(self):
+        self.check_pir = False
+        self.check_dygraph = False
+        self.place = None
+
+    def if_check_prim(self):
+        self.check_prim = False
+        self.check_prim_pir = False
+
     def init_dtype(self):
         self.dtype = np.int32
         self.val_dtype = np.int32
@@ -403,7 +433,7 @@ class TestElementwiseDivOpInt(ElementwiseDivOp):
         return np.random.randint(1, 5, size=shape)
 
     def compute_output(self, x, y):
-        return x // y
+        return x / y
 
 
 def create_test_fp16_class(parent, max_relative_error=2e-3):
@@ -443,10 +473,16 @@ def create_test_fp16_class(parent, max_relative_error=2e-3):
                     'max_relative_error': max_relative_error,
                 }
                 if self.place is None:
-                    self.check_grad(*check_args, **check_kwargs)
+                    self.check_grad(*check_args, **check_kwargs, check_pir=True)
                 else:
                     check_args.insert(0, self.place)
-                    self.check_grad_with_place(*check_args, **check_kwargs)
+                    self.check_grad_with_place(
+                        *check_args,
+                        **check_kwargs,
+                        check_pir=True,
+                        check_prim=True,
+                        check_prim_pir=True,
+                    )
 
     cls_name = "{}_{}".format(parent.__name__, "Fp16")
     TestElementwiseDivFP16Op.__name__ = cls_name
@@ -471,30 +507,40 @@ create_test_fp16_class(TestElementwiseDivOpXsizeLessThanYsize)
 
 
 class TestElementwiseDivBroadcast(unittest.TestCase):
+
     def test_shape_with_batch_sizes(self):
-        with fluid.program_guard(fluid.Program()):
+        paddle.enable_static()
+        main_program = paddle.static.Program()
+        with paddle.static.program_guard(main_program):
             x_var = paddle.static.data(
                 name='x', dtype='float32', shape=[None, 3, None, None]
             )
             one = 2.0
             out = one / x_var
-            exe = fluid.Executor(fluid.CPUPlace())
+            exe = base.Executor(base.CPUPlace())
             x = np.random.uniform(0.1, 0.6, (1, 3, 32, 32)).astype("float32")
             (out_result,) = exe.run(feed={'x': x}, fetch_list=[out])
             self.assertEqual((out_result == (2 / x)).all(), True)
+        paddle.disable_static()
 
 
 class TestDivideOp(unittest.TestCase):
     def test_name(self):
-        with fluid.program_guard(fluid.Program()):
-            x = paddle.static.data(name="x", shape=[2, 3], dtype="float32")
-            y = paddle.static.data(name='y', shape=[2, 3], dtype='float32')
+        paddle.enable_static()
+        with paddle.pir_utils.OldIrGuard():
+            main_program = paddle.static.Program()
+            with paddle.static.program_guard(main_program):
+                x = paddle.static.data(name="x", shape=[2, 3], dtype="float32")
+                y = paddle.static.data(name='y', shape=[2, 3], dtype='float32')
 
-            y_1 = paddle.divide(x, y, name='div_res')
-            self.assertEqual(('div_res' in y_1.name), True)
+                y_1 = paddle.divide(x, y, name='div_res')
+
+                self.assertEqual(('div_res' in y_1.name), True)
+
+        paddle.disable_static()
 
     def test_dygraph(self):
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             np_x = np.array([2, 3, 4]).astype('float64')
             np_y = np.array([1, 5, 2]).astype('float64')
             x = paddle.to_tensor(np_x)
@@ -505,6 +551,7 @@ class TestDivideOp(unittest.TestCase):
             self.assertEqual((np_z == z_expected).all(), True)
 
 
+# new ir doesn't support complex right now, skip new ir op test
 class TestComplexElementwiseDivOp(OpTest):
     def setUp(self):
         self.op_type = "elementwise_div"
@@ -513,8 +560,8 @@ class TestComplexElementwiseDivOp(OpTest):
         self.init_input_output()
 
         self.inputs = {
-            'X': OpTest.np_dtype_to_fluid_dtype(self.x),
-            'Y': OpTest.np_dtype_to_fluid_dtype(self.y),
+            'X': OpTest.np_dtype_to_base_dtype(self.x),
+            'Y': OpTest.np_dtype_to_base_dtype(self.y),
         }
         self.attrs = {'axis': -1, 'use_mkldnn': False}
         self.outputs = {'Out': self.out}
@@ -532,26 +579,35 @@ class TestComplexElementwiseDivOp(OpTest):
         self.out = self.x / self.y
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True)
 
     def test_check_grad_normal(self):
         self.check_grad(
             ['X', 'Y'],
             'Out',
+            numeric_grad_delta=1e-5,
+            max_relative_error=1e-6,
+            check_pir=True,
         )
 
-    def test_check_grad_ingore_x(self):
+    def test_check_grad_ignore_x(self):
         self.check_grad(
             ['Y'],
             'Out',
             no_grad_set=set("X"),
+            numeric_grad_delta=1e-5,
+            max_relative_error=1e-6,
+            check_pir=True,
         )
 
-    def test_check_grad_ingore_y(self):
+    def test_check_grad_ignore_y(self):
         self.check_grad(
             ['X'],
             'Out',
             no_grad_set=set('Y'),
+            numeric_grad_delta=1e-5,
+            max_relative_error=1e-6,
+            check_pir=True,
         )
 
 
@@ -593,6 +649,52 @@ class TestElementwiseDivop(unittest.TestCase):
         np.testing.assert_allclose(actual_out, expect_out)
 
         paddle.enable_static()
+
+
+# The new ir and dynamic graphs are not consistent with the int division of the old ir.
+class TestElementwiseDivopInt(unittest.TestCase):
+    def test_dygraph_div(self):
+        paddle.disable_static()
+
+        np_a = np.random.randint(1, 5, size=(2, 3, 4)).astype(np.int32)
+        np_b = np.random.randint(1, 5, size=(2, 3, 4)).astype(np.int32)
+        expect_res = np_a / np_b
+        expect_a_grad = (1 / np_b).astype(np.int32)
+        expect_b_grad = (-np_a / np_b**2).astype(np.int32)
+
+        paddle_a = paddle.to_tensor(np_a, stop_gradient=False)
+        paddle_b = paddle.to_tensor(np_b, stop_gradient=False)
+        actual_res = paddle_a / paddle_b
+        actual_res.backward()
+        actual_a_grad = paddle_a.grad
+        actual_b_grad = paddle_b.grad
+        np.testing.assert_allclose(actual_res, expect_res)
+        np.testing.assert_allclose(expect_a_grad, actual_a_grad)
+        np.testing.assert_allclose(expect_b_grad, actual_b_grad)
+
+    def test_pir_div(self):
+        paddle.enable_static()
+        with paddle.pir_utils.IrGuard():
+            exe = paddle.static.Executor()
+            main_program = paddle.static.Program()
+            startup_program = paddle.static.Program()
+            with paddle.static.program_guard(main_program, startup_program):
+                np_a = np.random.randint(1, 5, size=(2, 3, 4)).astype(np.int32)
+                np_b = np.random.randint(1, 5, size=(2, 3, 4)).astype(np.int32)
+                expect_res = np_a / np_b
+                expect_a_grad = (1 / np_b).astype(np.int32)
+                expect_b_grad = (-np_a / np_b**2).astype(np.int32)
+
+                paddle_a = paddle.to_tensor(np_a, stop_gradient=False)
+                paddle_b = paddle.to_tensor(np_b, stop_gradient=False)
+                out = paddle_a / paddle_b
+                actual_grad = paddle.static.gradients(out, [paddle_a, paddle_b])
+                actual_res = exe.run(
+                    main_program, fetch_list=[out, actual_grad]
+                )
+                np.testing.assert_allclose(actual_res[0], expect_res)
+                np.testing.assert_allclose(actual_res[1], expect_a_grad)
+                np.testing.assert_allclose(actual_res[2], expect_b_grad)
 
 
 if __name__ == '__main__':

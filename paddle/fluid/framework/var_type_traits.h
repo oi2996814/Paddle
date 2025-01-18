@@ -21,12 +21,13 @@
 #include <unordered_map>
 #include <vector>
 
+#include "paddle/fluid/framework/dense_tensor_array.h"
 #include "paddle/fluid/framework/feed_fetch_type.h"
-#include "paddle/fluid/framework/lod_tensor_array.h"
-#include "paddle/fluid/framework/raw_tensor.h"
-#include "paddle/fluid/framework/string_array.h"
 #include "paddle/fluid/framework/tensor_ref_array.h"
-#include "paddle/fluid/platform/place.h"
+#include "paddle/phi/common/place.h"
+#include "paddle/phi/core/raw_tensor.h"
+#include "paddle/phi/core/vocab/string_array.h"
+#include "paddle/utils/test_macros.h"
 #ifdef PADDLE_WITH_CUDA
 #include <cudnn.h>
 #if defined(PADDLE_WITH_NCCL)
@@ -36,7 +37,7 @@
 #ifdef PADDLE_WITH_HIP
 #include <miopen/miopen.h>
 #ifdef PADDLE_WITH_RCCL
-#include <rccl.h>
+#include <rccl/rccl.h>
 #endif
 #endif
 
@@ -53,6 +54,9 @@ class DenseTensor;
 class SelectedRows;
 class SparseCooTensor;
 class SparseCsrTensor;
+namespace funcs {
+class CudnnRNNCache;
+}
 }  // namespace phi
 
 // Users should add forward declarations here
@@ -72,7 +76,6 @@ class BKCLCommunicator;
 }  // namespace platform
 
 namespace framework {
-class LoDRankTable;
 class Scope;
 class ReaderHolder;
 class Scope;
@@ -80,13 +83,11 @@ class Scope;
 
 namespace operators {
 
-class CudnnRNNCache;
-
 class CUDAGraphWithInOuts;
 
 namespace reader {
-class LoDTensorBlockingQueueHolder;
-class OrderedMultiDeviceLoDTensorBlockingQueueHolder;
+class DenseTensorBlockingQueueHolder;
+class OrderedMultiDeviceDenseTensorBlockingQueueHolder;
 }  // namespace reader
 }  // namespace operators
 
@@ -95,9 +96,9 @@ class OrderedMultiDeviceLoDTensorBlockingQueueHolder;
 namespace paddle {
 namespace framework {
 
-const char *ToTypeName(int var_id);
-const std::type_index &VarTraitIdToTypeIndex(int var_id);
-int TypeIndexToVarTraitId(const std::type_index &type);
+TEST_API const char *ToTypeName(int var_id);
+TEST_API const std::type_index &VarTraitIdToTypeIndex(int var_id);
+TEST_API int TypeIndexToVarTraitId(const std::type_index &type);
 
 namespace detail {
 
@@ -178,24 +179,23 @@ using VarTypeRegistry = detail::VarTypeRegistryImpl<
     phi::SparseCooTensor,
     phi::SparseCsrTensor,
     std::vector<Scope *>,
-    LoDRankTable,
     Strings,
-    LoDTensorArray,
-    platform::PlaceList,
+    phi::TensorArray,
+    phi::PlaceList,
     ReaderHolder,
     String,
     Scope *,
-    operators::reader::LoDTensorBlockingQueueHolder,
+    operators::reader::DenseTensorBlockingQueueHolder,
     FetchList,
     FeedList,
-    operators::reader::OrderedMultiDeviceLoDTensorBlockingQueueHolder,
+    operators::reader::OrderedMultiDeviceDenseTensorBlockingQueueHolder,
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
     ncclUniqueId,
     platform::Communicator,
     platform::NCCLCommunicator,
 #endif
-    operators::CudnnRNNCache,
+    phi::funcs::CudnnRNNCache,
 #endif
 #if defined(PADDLE_WITH_XPU_BKCL)
     BKCLUniqueId,
@@ -235,12 +235,11 @@ struct VarTypeTrait {
 
 // Users should set some of variable type ids to be what is defined in
 // framework.proto below
-REG_PROTO_VAR_TYPE_TRAIT(phi::DenseTensor, proto::VarType::LOD_TENSOR);
+REG_PROTO_VAR_TYPE_TRAIT(phi::DenseTensor, proto::VarType::DENSE_TENSOR);
 REG_PROTO_VAR_TYPE_TRAIT(phi::SelectedRows, proto::VarType::SELECTED_ROWS);
 REG_PROTO_VAR_TYPE_TRAIT(std::vector<Scope *>, proto::VarType::STEP_SCOPES);
-REG_PROTO_VAR_TYPE_TRAIT(LoDRankTable, proto::VarType::LOD_RANK_TABLE);
-REG_PROTO_VAR_TYPE_TRAIT(LoDTensorArray, proto::VarType::LOD_TENSOR_ARRAY);
-REG_PROTO_VAR_TYPE_TRAIT(platform::PlaceList, proto::VarType::PLACE_LIST);
+REG_PROTO_VAR_TYPE_TRAIT(phi::TensorArray, proto::VarType::DENSE_TENSOR_ARRAY);
+REG_PROTO_VAR_TYPE_TRAIT(phi::PlaceList, proto::VarType::PLACE_LIST);
 REG_PROTO_VAR_TYPE_TRAIT(ReaderHolder, proto::VarType::READER);
 REG_PROTO_VAR_TYPE_TRAIT(FeedList, proto::VarType::FEED_LIST);
 REG_PROTO_VAR_TYPE_TRAIT(FetchList, proto::VarType::FETCH_LIST);

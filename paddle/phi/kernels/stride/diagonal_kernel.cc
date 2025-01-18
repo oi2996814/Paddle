@@ -16,8 +16,11 @@
 
 #include "glog/logging.h"
 
+#include "paddle/common/flags.h"
 #include "paddle/phi/backends/all_context.h"
 #include "paddle/phi/core/kernel_registry.h"
+
+COMMON_DECLARE_bool(use_stride_kernel);
 
 namespace phi {
 
@@ -28,32 +31,39 @@ void DiagonalStridedKernel(const Context& dev_ctx,
                            int axis1,
                            int axis2,
                            DenseTensor* out) {
+  if (!FLAGS_use_stride_kernel) {
+    PADDLE_THROW(common::errors::Fatal(
+        "FLAGS_use_stride_kernel is closed. Strided kernel "
+        "be called, something wrong has happened!"));
+  }
   size_t x_rank = x.dims().size();
   if (axis1 < 0) {
-    axis1 += x_rank;
+    axis1 += static_cast<int>(x_rank);
   }
   if (axis2 < 0) {
-    axis2 += x_rank;
+    axis2 += static_cast<int>(x_rank);
   }
 
-  int64_t diag_size;
-  int64_t x_offset = x.offset();
+  int64_t diag_size = 0;
+  int64_t x_offset = static_cast<int64_t>(x.offset());
   if (offset >= 0) {
     diag_size = std::max<int64_t>(
         std::min(x.dims()[axis1], x.dims()[axis2] - offset), 0);
     if (diag_size != 0) {
-      x_offset += offset * x.strides()[axis2] * SizeOf(x.dtype());
+      x_offset +=
+          static_cast<int64_t>(offset * x.strides()[axis2] * SizeOf(x.dtype()));
     }
   } else {
     diag_size = std::max<int64_t>(
         std::min(x.dims()[axis1] + offset, x.dims()[axis2]), 0);
     if (diag_size != 0) {
-      x_offset -= offset * x.strides()[axis1] * SizeOf(x.dtype());
+      x_offset -=
+          static_cast<int64_t>(offset * x.strides()[axis1] * SizeOf(x.dtype()));
     }
   }
 
-  std::vector<int64_t> shape = phi::vectorize<int64_t>(x.dims());
-  std::vector<int64_t> stride = phi::vectorize<int64_t>(x.strides());
+  std::vector<int64_t> shape = common::vectorize<int64_t>(x.dims());
+  std::vector<int64_t> stride = common::vectorize<int64_t>(x.strides());
   shape.erase(shape.begin() + std::max(axis1, axis2));
   stride.erase(stride.begin() + std::max(axis1, axis2));
   shape.erase(shape.begin() + std::min(axis1, axis2));
@@ -62,22 +72,26 @@ void DiagonalStridedKernel(const Context& dev_ctx,
   stride.push_back(x.strides()[axis1] + x.strides()[axis2]);
 
   auto meta = out->meta();
-  auto tmp_dim = DDim(shape.data(), shape.size());
+  auto tmp_dim = DDim(shape.data(), static_cast<int>(shape.size()));
   // if (product(meta.dims) > 0 && meta.dims != tmp_dim) {
   //   PADDLE_THROW(
-  //       phi::errors::Fatal("Diagonal kernel stride compute diff, infer shape
+  //       common::errors::Fatal("Diagonal kernel stride compute diff, infer
+  //       shape
   //       "
   //                          "is %s, but compute is %s.",
   //                          meta.dims,
   //                          tmp_dim));
   // }
   meta.dims = tmp_dim;
-  meta.strides = DDim(stride.data(), stride.size());
+  meta.strides = DDim(stride.data(), static_cast<int>(stride.size()));
   meta.offset = x_offset;
   out->set_meta(meta);
   out->ResetHolder(x.Holder());
+  out->ShareInplaceVersionCounterWith(x);
 }
 
 }  // namespace phi
-PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE_EXCEPT_CUSTOM(
-    diagonal, STRIDED, phi::DiagonalStridedKernel) {}
+
+PD_REGISTER_KERNEL_FOR_ALL_BACKEND_DTYPE(diagonal,
+                                         STRIDED,
+                                         phi::DiagonalStridedKernel) {}

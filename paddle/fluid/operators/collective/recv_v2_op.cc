@@ -16,8 +16,7 @@ limitations under the License. */
 
 #include <string>
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class RecvOpV2 : public framework::OperatorWithKernel {
  public:
@@ -30,21 +29,21 @@ class RecvOpV2 : public framework::OperatorWithKernel {
     PADDLE_ENFORCE_GE(
         peer,
         0,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The peer (%d) for recv_v2 op must be non-negative.", peer));
     PADDLE_ENFORCE_GE(
         ring_id,
         0,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The ring_id (%d) for recv_v2 op must be non-negative.", ring_id));
 
     if (ctx->GetOutputsVarType("Out").front() ==
-        framework::proto::VarType::LOD_TENSOR) {
+        framework::proto::VarType::DENSE_TENSOR) {
       auto out_shape = ctx->Attrs().Get<std::vector<int>>("out_shape");
       PADDLE_ENFORCE_GE(
           out_shape.size(),
           1,
-          platform::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The size of the output shape must be greater than 0 "
               "but the value given is %d.",
               out_shape.size()));
@@ -55,7 +54,7 @@ class RecvOpV2 : public framework::OperatorWithKernel {
         for (size_t i = 0; i < out_shape.size(); ++i) {
           PADDLE_ENFORCE_GE(out_shape[i],
                             1,
-                            platform::errors::InvalidArgument(
+                            common::errors::InvalidArgument(
                                 "The shape attribute for recv_v2 must be set "
                                 "explicitly, but the %dth element is %d which "
                                 "is less than 1. Or dynamic_shape should be "
@@ -63,7 +62,7 @@ class RecvOpV2 : public framework::OperatorWithKernel {
                                 i,
                                 out_shape[i]));
         }
-        ctx->SetOutputDim("Out", phi::make_ddim(out_shape));
+        ctx->SetOutputDim("Out", common::make_ddim(out_shape));
       }
     }
   }
@@ -106,11 +105,9 @@ Reference: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/p2p.h
   }
 };
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
-namespace plat = paddle::platform;
 
 REGISTER_OP_WITHOUT_GRADIENT(recv_v2, ops::RecvOpV2, ops::RecvOpV2Maker);
 
@@ -122,4 +119,4 @@ PD_REGISTER_STRUCT_KERNEL(recv_v2,
                           double,
                           int,
                           int64_t,
-                          plat::float16) {}
+                          phi::dtype::float16) {}

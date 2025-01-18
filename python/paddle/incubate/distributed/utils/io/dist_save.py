@@ -12,23 +12,48 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import copy
 import re
 import sys
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 import paddle
 import paddle.distributed as dist
+from paddle.base.framework import dygraph_only
 from paddle.distributed import fleet
 from paddle.distributed.fleet.utils.log_util import logger
-from paddle.fluid.framework import dygraph_only
 
 from .save_for_auto import save_for_auto_inference
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from io import BytesIO
+
+    from typing_extensions import Unpack
+
+    from paddle import Tensor
+    from paddle._typing import NestedStructure
+    from paddle.nn.layer.layers import _StateDict
+    from paddle.static import Program
+
+    class _SaveConfig(TypedDict, total=False):
+        use_binary_format: bool
+        gather_to: int | Sequence[int] | None
+        state_type: Literal['params', 'opt']
+        max_grouped_size: str | int
+
 
 __all__ = ["save", "save_for_auto_inference"]
 
 
 @dygraph_only
-def save(state_dict, path, **configs):
+def save(
+    state_dict: dict[str, Any] | _StateDict | NestedStructure[Tensor] | Program,
+    path: str | BytesIO,
+    **configs: Unpack[_SaveConfig],
+) -> None:
     '''
     Save a state dict to the specified path in both distributed and single-card environment.
 
@@ -47,43 +72,51 @@ def save(state_dict, path, **configs):
     Args:
         obj(Object) : The object to be saved.
         path(str|BytesIO) : The path/buffer of the object to be saved.
-          If saved in the current directory, the input path string will be used as the file name.
+            If saved in the current directory, the input path string will be used as the file name.
         protocol(int, optional): The protocol version of pickle module must be greater than 1 and less than 5.
-                                 Default: 4
+            Default: 4.
         **configs(dict, optional): optional keyword arguments. The following options are currently supported:
-          (1)use_binary_format(bool):
-            To be used in paddle.save. When the saved object is static graph variable, you can specify ``use_binary_for_var``.
-            If True, save the file in the c++ binary format when saving a single static graph variable; otherwise, save it in pickle format.
-            Default: False
-          (2)gather_to(int|list|tuple|None):
-            To specify which global rank to save in.Defalut is None.
-            None value means distributed saving with no gathering to a single card.
-          (3)state_type(str):
-            Value can be 'params' or 'opt', specifying to save parametres or optimizer state.
-          (4)max_grouped_size(str|int):
-            To limit the max size(how many bits) a object group to be transfered a time.
-            If str, the format must be as num+'G/M/K', for example, 3G, 2K, 10M, etc. Default is 3G.
+
+            1. use_binary_format(bool):
+                To be used in paddle.save. When the saved object is static graph variable, you can specify ``use_binary_for_var``.
+                If True, save the file in the c++ binary format when saving a single static graph variable; otherwise, save it in pickle format.
+                Default: False.
+            2. gather_to(int|list|tuple|None):
+                To specify which global rank to save in.Default is None.
+                None value means distributed saving with no gathering to a single card.
+            3. state_type(str):
+                Value can be 'params' or 'opt', specifying to save parameters or optimizer state.
+            4. max_grouped_size(str|int):
+                To limit the max size(how many bits) a object group to be transfered a time.
+                If str, the format must be as num+'G/M/K', for example, 3G, 2K, 10M, etc. Default is 3G.
+
     Returns:
         None
+
     Examples:
-        import paddle
-        paddle.distributed.init_process_group(backend='nccl')
-        paddle.distributed.fleet.init(is_collective=True)
 
-        model = build_model()
-        optimizer = build_optimizer(model)
+        .. code-block:: python
 
-        dist_optimizer = paddle.distributed_optimizer(optimizer)
-        dist_model = paddle.distributed_optimizer(model)
+            >>> # doctest: +SKIP('TODO: the error will be fixed in the future')
+            >>> # type: ignore
+            >>> import paddle
+            >>> paddle.distributed.init_process_group(backend='nccl')
+            >>> paddle.distributed.fleet.init(is_collective=True)
 
-        # gather params to rank 0 and then save
-        paddle.incubate.distributed.utils.io.save(model.state_dict(), path="path/to/save.pdparams", gather_to=[0], state_type="params")
+            >>> model = build_model()
+            >>> optimizer = build_optimizer(model)
 
-        # save whoe params on all ranks
-        paddle.incubate.distributed.utils.io.save(model.state_dict(), path="path/to/save.pdparams", gather_to=[0,1], state_type="params")
+            >>> dist_optimizer = paddle.distributed_optimizer(optimizer)
+            >>> dist_model = paddle.distributed_optimizer(model)
 
-        # save optimizer state dict on rank 0
-        paddle.incubate.distributed.utils.io.save(optimizer.state_dict(), path="path/to/save.pdopt", gather=0, state_type="opt")
+            >>> # gather params to rank 0 and then save
+            >>> paddle.incubate.distributed.utils.io.save(model.state_dict(), path="path/to/save.pdparams", gather_to=[0], state_type="params")
+
+            >>> # save whole params on all ranks
+            >>> paddle.incubate.distributed.utils.io.save(model.state_dict(), path="path/to/save.pdparams", gather_to=[0,1], state_type="params")
+
+            >>> # save optimizer state dict on rank 0
+            >>> paddle.incubate.distributed.utils.io.save(optimizer.state_dict(), path="path/to/save.pdopt", gather=0, state_type="opt")
 
     '''
 
@@ -149,7 +182,7 @@ def save(state_dict, path, **configs):
             paddle.save(gathered_state_dict, path, **configs)
     except:
         raise RuntimeError(
-            f'''Saving failed. Follwing are some suggestions:
+            f'''Saving failed. Following are some suggestions:
     1) pass the param max_grouped_size to turn the grouped size smaller (current value of max_grouped_size is {max_size})
     2) if sharding stage is 1, use paddle.save rather than paddle.distributed.save
     3) Concat the developers
@@ -240,7 +273,7 @@ def _gather_state_dict(state_dict, dst, group, max_size="3G"):
         group(ProcessGroup):
             group across which the state dicts are gathered
         max_size(int|str):
-            The max limitation of the gathered tensor group size transformered a time. Default is 3G bits.
+            The max limitation of the gathered tensor group size transformed a time. Default is 3G bits.
             Each rank 's max tensor group before gathering is max_size // group.size
     Returns:
         Gathered state dict
@@ -299,10 +332,10 @@ def _grouped_gather_data_dict(state_data_dict, dst, group, max_size):
         group(ProcessGroup):
             group across which the state dicts are gathered
         max_size(int|str):
-            The max limitation of the gathered tensor group size transformered a time. Default is 3G bits.
+            The max limitation of the gathered tensor group size transformed a time. Default is 3G bits.
             Each rank 's max tensor group before gathering is max_size // group.size
     Returns:
-        Gatherd state_data_dict
+        Gathered state_data_dict
 
     """
     numpy_dict = {}
@@ -336,7 +369,7 @@ def _grouped_gather_data_dict(state_data_dict, dst, group, max_size):
             f"s list size: {sum(len(s) for s in s_list)} output: {len(output_state)}"
         )
 
-    # Because each size of groups may be different, here we should wait all objetcs gatherd.
+    # Because each size of groups may be different, here we should wait all objects gathered.
     # The while block breaks until all objects from every rank are empty, which means all of the objects transforming is done.
     while True:
         s_list = []
@@ -357,7 +390,7 @@ def _grouped_gather_data_dict(state_data_dict, dst, group, max_size):
     logger.debug("all gathered ...")
 
     if dist.get_rank() in dst:
-        # convert numpy.ndarray to Tensor in cpu palce
+        # convert numpy.ndarray to Tensor in cpu place
         place = paddle.CPUPlace()
         for k in output_state.keys():
             output_state[k] = paddle.to_tensor(output_state[k], place=place)
@@ -368,7 +401,7 @@ def _grouped_gather_data_dict(state_data_dict, dst, group, max_size):
 
 def _same_keys(state_dict, group):
     """
-    Check whther all keys in each dict in the group are the same.
+    Check whether all keys in each dict in the group are the same.
     Used in sharding strategy to determine whether a dict needs to be gathered.
     """
     keys = list(state_dict.keys())

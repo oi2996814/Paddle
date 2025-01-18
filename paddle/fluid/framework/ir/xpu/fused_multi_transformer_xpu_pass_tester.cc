@@ -42,7 +42,7 @@ void AddVarToScope(Scope* param_scope,
                    const DDim& dims) {
   auto* tensor = param_scope->Var(name)->GetMutable<phi::DenseTensor>();
   tensor->Resize(dims);
-  tensor->mutable_data<float>(platform::CPUPlace());
+  tensor->mutable_data<float>(phi::CPUPlace());
 }
 
 Scope* CreateParamScope() {
@@ -70,7 +70,7 @@ VarDesc* Data(paddle::framework::BlockDesc* block,
               bool is_persistable = false,
               proto::VarType::Type data_type = proto::VarType::FP32) {
   auto* var = block->Var(name);
-  var->SetType(proto::VarType::LOD_TENSOR);
+  var->SetType(proto::VarType::DENSE_TENSOR);
   var->SetDataType(data_type);
   var->SetShape(shape);
   var->SetPersistable(is_persistable);
@@ -111,11 +111,11 @@ TEST(RemoveAssignGather, basic) {
   auto gather_num = GetNumOpNodes(graph, "gather");
   PADDLE_ENFORCE_EQ(assign_num,
                     0,
-                    platform::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "assign op should be removed from the graph."));
   PADDLE_ENFORCE_EQ(gather_num,
                     0,
-                    platform::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "gather op should be removed from the graph."));
 }
 
@@ -162,7 +162,7 @@ TEST(FusedMultiTransformerXPUPass, context_stage) {
   PADDLE_ENFORCE_EQ(
       num_nodes_after,
       1,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "After the fuse_multi_transformer_layer_pass, "
           "The node num in graph should be 1, but the result is %d",
           num_nodes_after));
@@ -212,7 +212,7 @@ TEST(FusedMultiTransformerXPUPass, decoder_stage) {
   PADDLE_ENFORCE_EQ(
       num_nodes_after,
       1,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "After the fuse_multi_transformer_layer_pass, "
           "The node num in graph should be 1, but the result is %d",
           num_nodes_after));

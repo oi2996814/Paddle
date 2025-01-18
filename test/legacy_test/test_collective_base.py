@@ -24,9 +24,10 @@ from contextlib import closing
 
 import numpy as np
 
-import paddle.fluid.unique_name as nameGen
-from paddle import fluid
-from paddle.fluid import core
+import paddle.base.unique_name as nameGen
+from paddle import base
+from paddle.base import core
+from paddle.distributed.collective import _init_parallel_env
 
 
 class TestCollectiveRunnerBase:
@@ -104,22 +105,22 @@ class TestCollectiveRunnerBase:
         )
 
     def run_trainer(self, args):
-        train_prog = fluid.Program()
-        startup_prog = fluid.Program()
+        train_prog = base.Program()
+        startup_prog = base.Program()
         endpoints = args["endpoints"].split(",")
         rank = args["trainerid"]
         current_endpoint = args["currentendpoint"]
         nranks = 2
-        self.initCommunicator(
-            startup_prog, rank, nranks, True, current_endpoint, endpoints
-        )
+
+        _init_parallel_env("nccl")
+
         self.rank = rank
         result = self.get_model(train_prog, startup_prog)
         device_id = int(os.getenv("FLAGS_selected_gpus", "0"))
-        place = fluid.CUDAPlace(
+        place = base.CUDAPlace(
             device_id
-        )  # if args.use_gpu else fluid.CPUPlace()
-        exe = fluid.Executor(place)
+        )  # if args.use_gpu else base.CPUPlace()
+        exe = base.Executor(place)
         exe.run(startup_prog)
         np.random.seed(os.getpid())
         indata = np.random.random((10, 1000))
@@ -140,6 +141,7 @@ def runtime_main(test_class, col_type, sub_type):
     args["endpoints"] = os.getenv('PADDLE_TRAINER_ENDPOINTS')
     args["currentendpoint"] = os.getenv("PADDLE_CURRENT_ENDPOINT")
     args["col_type"] = col_type
+    args["dtype"] = os.getenv("DTYPE")
     model.run_trainer(args)
 
 
@@ -147,10 +149,7 @@ class TestDistBase(unittest.TestCase):
     def setUp(self):
         self._port_set = set()
         self._trainers = 2
-        self._ps_endpoints = "127.0.0.1:{},127.0.0.1:{}".format(
-            self._find_free_port(),
-            self._find_free_port(),
-        )
+        self._ps_endpoints = f"127.0.0.1:{self._find_free_port()},127.0.0.1:{self._find_free_port()}"
         self._python_interp = sys.executable
 
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -226,8 +225,8 @@ class TestDistBase(unittest.TestCase):
 
         tr0_out, tr0_err = tr0_proc.communicate()
         tr1_out, tr1_err = tr1_proc.communicate()
-        sys.stderr.write('trainer 0 stderr: %s\n' % tr0_err)
-        sys.stderr.write('trainer 1 stderr: %s\n' % tr1_err)
+        sys.stderr.write(f'trainer 0 stderr: {tr0_err}\n')
+        sys.stderr.write(f'trainer 1 stderr: {tr1_err}\n')
         # close trainer file
         tr0_pipe.close()
         tr1_pipe.close()
@@ -257,6 +256,7 @@ class TestDistBase(unittest.TestCase):
             "LD_PRELOAD": os.getenv("LD_PRELOAD", ""),
             "GLOG_v": "3",
             "NCCL_P2P_DISABLE": "1",
+            "DTYPE": "float32",
         }
         required_envs.update(need_envs)
         if check_error_log:

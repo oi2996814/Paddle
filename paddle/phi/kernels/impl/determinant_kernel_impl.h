@@ -57,7 +57,7 @@ inline int64_t GetBatchCount(const DDim dims) {
   PADDLE_ENFORCE_GE(
       dim_size,
       2,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "the input matrix dimension size should greater than 2."));
 
   // Cumulative multiplying each dimension until the last 2 to get the batch
@@ -102,10 +102,41 @@ struct DeterminantFunctor {
 };
 
 template <typename T, typename Context>
+struct DeterminantFunctor<phi::dtype::complex<T>, Context> {
+  void operator()(const Context& dev_ctx,
+                  const DenseTensor& input,
+                  int64_t rank,
+                  int64_t batch_count,
+                  DenseTensor* output) {
+    using MatrixType =
+        Eigen::Matrix<std::complex<T>, Eigen::Dynamic, Eigen::Dynamic>;
+    std::vector<phi::dtype::complex<T>> input_vec;
+    std::vector<phi::dtype::complex<T>> output_vec;
+    phi::TensorToVector(input, dev_ctx, &input_vec);
+    for (int64_t i = 0; i < batch_count; ++i) {  // maybe can be parallel
+      auto begin_iter = input_vec.begin() + i * rank * rank;
+      auto end_iter = input_vec.begin() + (i + 1) * rank * rank;
+      std::vector<phi::dtype::complex<T>> sub_vec(
+          begin_iter,
+          end_iter);  // get every square matrix data
+      MatrixType matrix(rank, rank);
+      for (int64_t i = 0; i < rank; ++i) {
+        for (int64_t j = 0; j < rank; ++j) {
+          matrix(i, j) = static_cast<std::complex<T>>(sub_vec[rank * i + j]);
+        }
+      }
+      output_vec.push_back(
+          static_cast<phi::dtype::complex<T>>(matrix.determinant()));
+    }
+    phi::TensorFromVector(output_vec, dev_ctx, output);
+  }
+};
+
+template <typename T, typename Context>
 void DeterminantKernel(const Context& dev_ctx,
                        const DenseTensor& x,
                        DenseTensor* out) {
-  auto input_dim = vectorize(x.dims());
+  auto input_dim = common::vectorize(x.dims());
   auto input_dim_size = input_dim.size();
 
   auto batch_count = detail::GetBatchCount(x.dims());
@@ -113,20 +144,20 @@ void DeterminantKernel(const Context& dev_ctx,
   PADDLE_ENFORCE_GE(
       input_dim_size,
       2,
-      phi::errors::InvalidArgument(
-          "the input matrix dimension size should greater than 2."));
+      common::errors::InvalidArgument("the input matrix dimension size should "
+                                      "greater than or equal to 2."));
   PADDLE_ENFORCE_EQ(input_dim[input_dim_size - 1],
                     input_dim[input_dim_size - 2],
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "the input matrix should be square matrix."));
   auto rank = input_dim[input_dim_size - 1];  // square matrix length
   DeterminantFunctor<T, Context>()(dev_ctx, x, rank, batch_count, out);
-  auto output_dims = phi::slice_ddim(x.dims(), 0, input_dim_size - 2);
+  auto output_dims = common::slice_ddim(x.dims(), 0, input_dim_size - 2);
   if (input_dim_size > 2) {
     out->Resize(output_dims);
   } else {
     // when input is a two-dimension matrix, The det value is a number.
-    out->Resize(phi::make_ddim({}));
+    out->Resize(common::make_ddim({}));
   }
   VLOG(10) << "output dim:" << out->dims();
 }

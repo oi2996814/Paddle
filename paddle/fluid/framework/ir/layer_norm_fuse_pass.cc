@@ -21,12 +21,10 @@
 #include "paddle/fluid/framework/op_version_registry.h"
 #include "paddle/fluid/framework/var_desc.h"
 #include "paddle/fluid/platform/enforce.h"
-#include "paddle/fluid/string/pretty_log.h"
-#include "paddle/fluid/string/printf.h"
+#include "paddle/utils/string/pretty_log.h"
+#include "paddle/utils/string/printf.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 // cpplint complaints (wrong!) for not included <string> header in below line.
 using string::PrettyLogDetail;  // NOLINT
@@ -216,14 +214,14 @@ LayerNormFusePass::LayerNormFusePass() {
 
 void LayerNormFusePass::ApplyImpl(Graph* graph) const {
   PADDLE_ENFORCE_NOT_NULL(graph,
-                          platform::errors::InvalidArgument(
+                          common::errors::InvalidArgument(
                               "The input graph of "
                               "LayerNormFusePass should not be nullptr."));
   FusePassBase::Init(scope_name_, graph);
 
   auto* scope = param_scope();
   PADDLE_ENFORCE_NOT_NULL(
-      scope, platform::errors::InvalidArgument("Scope cannot be nullptr."));
+      scope, common::errors::InvalidArgument("Scope cannot be nullptr."));
 
   GraphPatternDetector gpd;
   patterns::LayerNorm layer_norm_pattern(gpd.mutable_pattern(), scope_name_);
@@ -306,7 +304,8 @@ void LayerNormFusePass::ApplyImpl(Graph* graph) const {
     }
 
     int begin_norm_axis = mean_dim.front();
-    if (begin_norm_axis < 0) begin_norm_axis += x_shape.size();
+    if (begin_norm_axis < 0)
+      begin_norm_axis += static_cast<int>(x_shape.size());
     const auto& gamma_shape = gamma->Var()->GetShape();
     const auto& beta_shape = beta->Var()->GetShape();
 
@@ -336,7 +335,7 @@ void LayerNormFusePass::ApplyImpl(Graph* graph) const {
 
     // gamma/beta must be a 1-dimensional tensor of size on layer_norm
     auto layer_norm_x_mat_dims =
-        phi::flatten_to_2d(phi::make_ddim(x_shape), begin_norm_axis);
+        common::flatten_to_2d(common::make_ddim(x_shape), begin_norm_axis);
     auto* gamma_tensor =
         scope->FindVar(gamma->Name())->GetMutable<phi::DenseTensor>();
     VarDesc new_gamma_desc(patterns::PDNodeName("layer_norm_fuse", "Scale"));
@@ -348,9 +347,9 @@ void LayerNormFusePass::ApplyImpl(Graph* graph) const {
     auto* new_gamma_node = g->CreateVarNode(&new_gamma_desc);
     auto* new_gamma_tensor =
         scope->Var(new_gamma_node->Name())->GetMutable<phi::DenseTensor>();
-    new_gamma_tensor->Resize(phi::make_ddim({layer_norm_x_mat_dims[1]}));
-    memcpy(new_gamma_tensor->mutable_data<float>(platform::CPUPlace()),
-           gamma_tensor->mutable_data<float>(platform::CPUPlace()),
+    new_gamma_tensor->Resize(common::make_ddim({layer_norm_x_mat_dims[1]}));
+    memcpy(new_gamma_tensor->mutable_data<float>(phi::CPUPlace()),
+           gamma_tensor->mutable_data<float>(phi::CPUPlace()),
            layer_norm_x_mat_dims[1] * sizeof(float));
 
     auto* beta_tensor =
@@ -365,14 +364,14 @@ void LayerNormFusePass::ApplyImpl(Graph* graph) const {
     auto* new_beta_tensor =
         scope->Var(new_beta_node->Name())->GetMutable<phi::DenseTensor>();
 
-    new_beta_tensor->Resize(phi::make_ddim({layer_norm_x_mat_dims[1]}));
-    memcpy(new_beta_tensor->mutable_data<float>(platform::CPUPlace()),
-           beta_tensor->mutable_data<float>(platform::CPUPlace()),
+    new_beta_tensor->Resize(common::make_ddim({layer_norm_x_mat_dims[1]}));
+    memcpy(new_beta_tensor->mutable_data<float>(phi::CPUPlace()),
+           beta_tensor->mutable_data<float>(phi::CPUPlace()),
            layer_norm_x_mat_dims[1] * sizeof(float));
 
     // ------------------ op creation and placement ---------------------------
 
-    OpDesc ln_op_desc;
+    OpDesc ln_op_desc(x_mean->Op()->Block());
     ln_op_desc.SetType("layer_norm");
     ln_op_desc.SetInput("X", {x->Name()});
     ln_op_desc.SetInput("Scale", {new_gamma_node->Name()});
@@ -427,9 +426,7 @@ void LayerNormFusePass::ApplyImpl(Graph* graph) const {
                     found_layer_norm_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 #undef CHECK_TRUE
 #undef EXPECT_TRUE

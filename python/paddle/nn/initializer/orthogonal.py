@@ -11,13 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
-from paddle import _C_ops
+import paddle
+from paddle import _C_ops, pir
 from paddle.utils import unique_name
 
-from ...fluid import framework
-from ...fluid.data_feeder import check_variable_and_dtype
-from ...fluid.dygraph import no_grad
+from ...base import framework
+from ...base.data_feeder import check_variable_and_dtype
+from ...base.dygraph import no_grad
 from .initializer import Initializer
 
 __all__ = []
@@ -47,7 +49,7 @@ class Orthogonal(Initializer):
 
     Args:
         gain(float, optional): The multiplication coefficient for initialized tensor. Default: 1.0.
-        name(str, optional): The default value is None. Normally there is no need for user to set this
+        name(str|None, optional): The default value is None. Normally there is no need for user to set this
             property. For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
@@ -65,25 +67,28 @@ class Orthogonal(Initializer):
             >>> # linear.weight: X' * X = I
     """
 
-    def __init__(self, gain=1.0, name=None):
+    def __init__(self, gain: float = 1.0, name: str | None = None) -> None:
         assert gain is not None, 'gain should not be None'
         super().__init__()
         self._gain = gain
 
-    def __call__(self, var, block=None):
+    def __call__(self, var: paddle.Tensor, block: pir.Block | None = None):
         """Initialize the input tensor with orthogonal initializer.
 
         Args:
             var(Tensor): Tensor that needs to be initialized.
-            block(Block, optional): The block in which initialization ops
+            block(Block|None, optional): The block in which initialization ops
                    should be added. Used in static graph only, default None.
 
         Returns:
             The last initialization op, it contain 8 ops in orthogonal initializer.
         """
+        assert not (
+            isinstance(var, framework.EagerParamBase) and var.is_dist()
+        ), "Currently, orthogonal initializer not support lazy init for dist param."
         block = self._check_block(block)
-        assert isinstance(var, framework.Parameter)
-        assert isinstance(block, framework.Block)
+        assert isinstance(var, (framework.Variable, pir.core.ParameterMeta))
+        assert isinstance(block, (framework.Block, pir.Block))
         self._seed = block.program.random_seed
 
         shape = var.shape
@@ -122,6 +127,27 @@ class Orthogonal(Initializer):
                 tmp._share_underline_tensor_to(var)
 
                 return None
+        elif framework.in_pir_mode():
+            place = framework._current_expected_place()
+            normal_var = _C_ops.gaussian(
+                flatten_shape, 0.0, 1.0, self._seed, var.dtype, place
+            )
+            q, r = _C_ops.qr(normal_var, 'reduced')
+
+            r_diag = _C_ops.diag(r, 0, 0)
+
+            r_sign = _C_ops.sign(r_diag)
+
+            q = _C_ops.multiply(q, r_sign)
+
+            if row < col:
+                q = _C_ops.transpose(q, [1, 0])
+
+            q = _C_ops.reshape(q, var.shape)
+
+            tmp = _C_ops.scale(q, self._gain, 0.0, True)
+
+            return tmp
 
         # 'qr' op only support float32/float64 now
         check_variable_and_dtype(

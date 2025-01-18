@@ -13,7 +13,7 @@
 # limitations under the License.
 
 
-from paddle.fluid import core
+from paddle.base import core
 
 
 def get_nccl_version_str(ver):
@@ -27,9 +27,7 @@ def get_nccl_version_str(ver):
     NCCL_MINOR_VERSION = int(ver // 100)
     NCCL_PATCH_VERSION = int(ver % 100)
 
-    return "{}.{}.{}".format(
-        NCCL_MAJOR_VERSION, NCCL_MINOR_VERSION, NCCL_PATCH_VERSION
-    )
+    return f"{NCCL_MAJOR_VERSION}.{NCCL_MINOR_VERSION}.{NCCL_PATCH_VERSION}"
 
 
 def check_nccl_version_for_p2p():
@@ -38,12 +36,10 @@ def check_nccl_version_for_p2p():
     nccl_version_baseline = 2804
     assert nccl_version >= nccl_version_baseline, (
         "The version of NCCL is required to be at least v2.8.4 while training with "
-        "pipeline/MoE parallelism, but we found v{}. The previous version of NCCL has "
+        f"pipeline/MoE parallelism, but we found v{nccl_version_str}. The previous version of NCCL has "
         "some bugs in p2p communication, and you can see more detailed description "
         "about this issue from ReleaseNotes of NCCL v2.8.4 "
-        "(https://docs.nvidia.com/deeplearning/nccl/release-notes/rel_2-8-4.html#rel_2-8-4).".format(
-            nccl_version_str
-        )
+        "(https://docs.nvidia.com/deeplearning/nccl/release-notes/rel_2-8-4.html#rel_2-8-4)."
     )
 
 

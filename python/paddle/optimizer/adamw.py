@@ -11,20 +11,37 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import warnings
 from collections import defaultdict
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import paddle
+from paddle import pir
+from paddle.base.libpaddle import DataType
+from paddle.pir import Value
 
 from .. import _C_ops
-from ..fluid import core, framework
-from ..fluid.dygraph import base as imperative_base
-from ..fluid.framework import Parameter, Variable
+from ..base import core, framework
+from ..base.dygraph import base as imperative_base
+from ..base.framework import (
+    Parameter,
+    Variable,
+    in_dynamic_or_pir_mode,
+    in_pir_mode,
+)
 from ..nn.clip import GradientClipBase
 from .lr import LRScheduler
 from .optimizer import Optimizer
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from paddle import Tensor
+
+    from .adam import _AdamParameterConfig
 
 __all__ = []
 
@@ -37,48 +54,48 @@ class AdamW(Optimizer):
 
     .. math::
 
-        t & = t + 1
-
-        moment\_1\_out & = {\beta}_1 * moment\_1 + (1 - {\beta}_1) * grad
-
-        moment\_2\_out & = {\beta}_2 * moment\_2 + (1 - {\beta}_2) * grad * grad
-
-        learning\_rate & = learning\_rate *
-            \frac{\sqrt{1 - {\beta}_2^t}}{1 - {beta}_1^t}
-
-        param\_out & = param - learning\_rate * (\frac{moment\_1}{\sqrt{moment\_2} + \epsilon} + \lambda * param)
-
+        \begin{aligned}
+            &\hspace{5mm} t = t + 1 \\
+            &\hspace{5mm} moment\_1\_out = {\beta}_1 * moment\_1 + (1 - {\beta}_1) * grad \\
+            &\hspace{5mm} moment\_2\_out = {\beta}_2 * moment\_2 + (1 - {\beta}_2) * grad * grad \\
+            &\hspace{5mm} learning\_rate = learning\_rate * \frac{\sqrt{1 - {\beta}_2^t}}{1 - {\beta}_1^t} \\
+            &\hspace{5mm}\textbf{if} \: \textit{amsgrad}: \\
+            &\hspace{15mm} moment\_2\_max\_out = max(moment\_2\_out, moment\_2\_max) \\
+            &\hspace{15mm} param\_out = param - learning\_rate * (\frac{moment\_1\_out}{\sqrt{moment\_2\_max\_out} + \epsilon} + \lambda * param) \\
+            &\hspace{5mm}\textbf{else}: \: \\
+            &\hspace{15mm} param\_out = param - learning\_rate * (\frac{moment\_1\_out}{\sqrt{moment\_2\_out} + \epsilon} + \lambda * param) \\
+        \end{aligned}
 
     Args:
         learning_rate (float|LRScheduler, optional): The learning rate used to update ``Parameter``.
             It can be a float value or a LRScheduler. The default value is 0.001.
-        parameters (list|tuple, optional): List/Tuple of ``Tensor`` names to update to minimize ``loss``.
+        beta1 (float|Tensor, optional): The exponential decay rate for the 1st moment estimates.
+            It should be a float number or a 0-D Tensor with shape [] and data type as float32.
+            The default value is 0.9.
+        beta2 (float|Tensor, optional): The exponential decay rate for the 2nd moment estimates.
+            It should be a float number or a 0-D Tensor with shape [] and data type as float32.
+            The default value is 0.999.
+        epsilon (float|Tensor, optional): A small float value for numerical stability.
+            The default value is 1e-08.
+        parameters (list|tuple|None, optional): List/Tuple of ``Tensor`` names to update to minimize ``loss``.
             This parameter is required in dygraph mode. And you can specify different options for
             different parameter groups such as the learning rate, weight decay, etc,
             then the parameters are list of dict. Note that the learning_rate in parameter groups
             represents the scale of base learning_rate.
             The default value is None in static graph mode, at this time all parameters will be updated.
-        beta1 (float|Tensor, optional): The exponential decay rate for the 1st moment estimates.
-            It should be a float number or a Tensor with shape [1] and data type as float32.
-            The default value is 0.9.
-        beta2 (float|Tensor, optional): The exponential decay rate for the 2nd moment estimates.
-            It should be a float number or a Tensor with shape [1] and data type as float32.
-            The default value is 0.999.
-        epsilon (float, optional): A small float value for numerical stability.
-            The default value is 1e-08.
-        weight_decay (float|Tensor, optional): The weight decay coefficient, it can be float or Tensor. The default value is 0.01.
-        lr_ratio (function|None, optional): If it is not None,
+        weight_decay (int|float|Tensor, optional): The weight decay coefficient, it can be int, float or Tensor. The default value is 0.01.
+        lr_ratio (Callable|None, optional): If it is not None,
             the learning rate will be updated with layer-wise learning rate ratio.
             Otherwise, the learning rate is the original.
             Default: None.
-        apply_decay_param_fun (function|None, optional): If it is not None,
+        apply_decay_param_fun (Callable|None, optional): If it is not None,
             only tensors that makes apply_decay_param_fun(Tensor.name)==True
             will be updated with weight decay. It only works when we want to specify tensors.
             Default: None.
-        grad_clip (GradientClipBase, optional): Gradient clipping strategy, it's an instance of
+        grad_clip (GradientClipBase|None, optional): Gradient clipping strategy, it's an instance of
             some derived class of ``GradientClipBase`` . There are three clipping strategies
-            ( :ref:`api_fluid_clip_GradientClipByGlobalNorm` , :ref:`api_fluid_clip_GradientClipByNorm` ,
-            :ref:`api_fluid_clip_GradientClipByValue` ). Default None, meaning there is no gradient clipping.
+            ( :ref:`api_paddle_nn_ClipGradByGlobalNorm` , :ref:`api_paddle_nn_ClipGradByNorm` ,
+            :ref:`api_paddle_nn_ClipGradByValue` ). Default None, meaning there is no gradient clipping.
         lazy_mode (bool, optional): The official Adam algorithm has two moving-average accumulators.
             The accumulators are updated at every step. Every element of the two moving-average
             is updated in both dense mode and sparse mode. If the size of parameter is very large,
@@ -87,7 +104,9 @@ class AdamW(Optimizer):
             different semantics with the original Adam algorithm and may lead to different result.
             The default value is False.
         multi_precision (bool, optional): Whether to use multi-precision during weight updating. Default is false.
-        name (str, optional): Normally there is no need for user to set this property.
+        amsgrad (bool, optional): Whether to use the AMSGrad variant of this algorithm from the paper
+            `On the Convergence of Adam and Beyond <https://openreview.net/forum?id=ryQu7f-RZ>`_. Default is false.
+        name (str|None, optional): Normally there is no need for user to set this property.
             For more information, please refer to :ref:`api_guide_Name`.
             The default value is None.
     Notes:
@@ -106,11 +125,12 @@ class AdamW(Optimizer):
             >>> beta1 = paddle.to_tensor([0.9], dtype="float32")
             >>> beta2 = paddle.to_tensor([0.99], dtype="float32")
 
-            >>> opt = paddle.optimizer.AdamW(learning_rate=0.1,
-            ...         parameters=linear.parameters(),
-            ...         beta1=beta1,
-            ...         beta2=beta2,
-            ...         weight_decay=0.01
+            >>> opt = paddle.optimizer.AdamW(
+            ...     learning_rate=0.1,
+            ...     parameters=linear.parameters(),
+            ...     beta1=beta1,
+            ...     beta2=beta2,
+            ...     weight_decay=0.01
             ... )
             >>> loss.backward()
             >>> opt.step()
@@ -126,7 +146,7 @@ class AdamW(Optimizer):
             >>> loss = paddle.mean(out)
             >>> opt = paddle.optimizer.AdamW(
             ...     learning_rate=0.1,
-            ...     parameters=[{
+            ...     parameters=[{  # type: ignore
             ...         'params': linear_1.parameters()
             ...     }, {
             ...         'params': linear_2.parameters(),
@@ -143,45 +163,53 @@ class AdamW(Optimizer):
 
     """
 
+    helper: None
+    type: str
     _moment1_acc_str = "moment1"
     _moment2_acc_str = "moment2"
+    _moment2_acc_max_str = "moment2_max"
     _beta1_pow_acc_str = "beta1_pow_acc"
     _beta2_pow_acc_str = "beta2_pow_acc"
 
     def __init__(
         self,
-        learning_rate=0.001,
-        beta1=0.9,
-        beta2=0.999,
-        epsilon=1e-8,
-        parameters=None,
-        weight_decay=0.01,
-        lr_ratio=None,
-        apply_decay_param_fun=None,
-        grad_clip=None,
-        lazy_mode=False,
-        multi_precision=False,
-        name=None,
-    ):
+        learning_rate: float | LRScheduler = 0.001,
+        beta1: float | Tensor = 0.9,
+        beta2: float | Tensor = 0.999,
+        epsilon: float | Tensor = 1e-8,
+        parameters: (
+            Sequence[Tensor] | Sequence[_AdamParameterConfig] | None
+        ) = None,
+        weight_decay: float | Tensor = 0.01,
+        lr_ratio: Callable[[Tensor], float] | None = None,
+        apply_decay_param_fun: Callable[[str], bool] | None = None,
+        grad_clip: GradientClipBase | None = None,
+        lazy_mode: bool = False,
+        multi_precision: bool = False,
+        amsgrad: bool = False,
+        name: str | None = None,
+    ) -> None:
         assert learning_rate is not None
         assert beta1 is not None
         assert beta2 is not None
         assert epsilon is not None
-        if not 0 <= beta1 < 1:
-            raise ValueError("Invaild value of beta1, expect beta1 in [0,1).")
-        if not 0 <= beta2 < 1:
-            raise ValueError("Invaild value of beta2, expect beta2 in [0,1).")
-        if not 0 <= epsilon:
-            raise ValueError("Invaild value of epsilon, expect epsilon >= 0.")
-        if not isinstance(weight_decay, float) and not isinstance(
-            weight_decay, framework.Variable
+        if not isinstance(beta1, Value) and not 0 <= beta1 < 1:
+            raise ValueError("Invalid value of beta1, expect beta1 in [0,1).")
+        if not isinstance(beta2, Value) and not 0 <= beta2 < 1:
+            raise ValueError("Invalid value of beta2, expect beta2 in [0,1).")
+        if not isinstance(epsilon, Value) and not 0 <= epsilon:
+            raise ValueError("Invalid value of epsilon, expect epsilon >= 0.")
+        if not isinstance(weight_decay, (int, float)) and not isinstance(
+            weight_decay, (framework.Variable, Value)
         ):
-            raise TypeError("weight_decay should be float or Tensor.")
+            raise TypeError("weight_decay should be int, float or Tensor.")
         if lr_ratio is not None:
             assert isinstance(lr_ratio, Callable)
             if (
                 not core.is_compiled_with_cuda()
                 and not core.is_compiled_with_xpu()
+                and paddle.device.get_device().split(":")[0]
+                not in paddle.device.get_all_custom_device_type()
             ):
                 raise NotImplementedError("'lr_ratio' is unimplemented in CPU.")
 
@@ -189,12 +217,10 @@ class AdamW(Optimizer):
             # paddle.Tensor is also iterable, so here we don't check whether
             # the input is iterable, if the input is paddle.Tensor, the
             # list(paddle.Tensor) will be a error value
-            if isinstance(parameters, (paddle.Tensor, core.eager.Tensor)):
+            if isinstance(parameters, paddle.Tensor):
                 raise TypeError(
                     "`parameters` argument given to the optimizer should be "
-                    "an iterable of paddle Tensors, but got argument type is `{}`.".format(
-                        type(parameters)
-                    )
+                    f"an iterable of paddle Tensors, but got argument type is `{type(parameters)}`."
                 )
             if isinstance(parameters, dict):
                 raise TypeError(
@@ -215,8 +241,7 @@ class AdamW(Optimizer):
 
         if not isinstance(learning_rate, (float, LRScheduler)):
             raise TypeError(
-                "learning rate should be float or LRScheduler, got %s here"
-                % type(learning_rate)
+                f"learning rate should be float or LRScheduler, got {type(learning_rate)} here"
             )
         if grad_clip is not None:
             if not isinstance(grad_clip, GradientClipBase):
@@ -242,7 +267,7 @@ class AdamW(Optimizer):
         # Dictionary of accumulators. Some optimizer subclasses need to
         # allocate and manage extra tensors associated with the parameters
         # to train. These tensors are called accumulators.
-        # {accum_name : { paramter_name : accumulator_for_parameter, ...}, ...}
+        # {accum_name : { parameter_name : accumulator_for_parameter, ...}, ...}
         self._accumulators = defaultdict(lambda: {})
         self.helper = None
         self._opti_name_list = []
@@ -254,7 +279,7 @@ class AdamW(Optimizer):
         self._learning_rate = learning_rate
         self._params_name = set()
         self._apply_decay_param_fun = apply_decay_param_fun
-        self._weight_decay = weight_decay
+        self._weight_decay = float(weight_decay)
         self._grad_clip = grad_clip
         self._lr_ratio = lr_ratio
         self._beta1 = beta1
@@ -263,9 +288,11 @@ class AdamW(Optimizer):
         self._lazy_mode = lazy_mode
         self._multi_precision = multi_precision
         self._master_weights = {}
+        # whether to use AMSGrad
+        self._amsgrad = amsgrad
 
         self._default_dict = {
-            'weight_decay': weight_decay,
+            'weight_decay': float(weight_decay),
             'beta1': beta1,
             'beta2': beta2,
             'epsilon': epsilon,
@@ -283,9 +310,15 @@ class AdamW(Optimizer):
         self._use_multi_tensor = None
         self.regularization = None
         self._auxiliary_vars = {}
-        self._already_create_accumulater = set()
+        self._already_create_accumulator = set()
 
         self._create_master_grad_states()
+
+        self._use_fusion_storage = False
+        self._need_refuse = True
+        self.fusion_storage = None
+        self._fuse_buffer_version = 0
+        self.merged_model_params = None
 
     def _set_auxiliary_var(self, key, val):
         self._auxiliary_vars[key] = val
@@ -301,11 +334,11 @@ class AdamW(Optimizer):
         Add a param group to parameter_list.
 
         Args:
-            param_group (dict): The group of Tensors to be optimzed with
+            param_group (dict): The group of Tensors to be optimized with
             different optimization options.
         """
         params = param_group['params']
-        if isinstance(params, Parameter):
+        if isinstance(params, (Parameter, pir.core.ParameterMeta)):
             param_group['params'] = [params]
         elif isinstance(params, set):
             raise TypeError(
@@ -338,45 +371,82 @@ class AdamW(Optimizer):
     def _add_moments_pows(self, p):
         acc_dtype = p.dtype
         if self._is_dtype_fp16_or_bf16(acc_dtype):
-            acc_dtype = core.VarDesc.VarType.FP32
-        self._add_accumulator(self._moment1_acc_str, p, dtype=acc_dtype)
-        self._add_accumulator(self._moment2_acc_str, p, dtype=acc_dtype)
+            acc_dtype = (
+                DataType.FLOAT32 if in_pir_mode() else core.VarDesc.VarType.FP32
+            )
+        if core.is_compiled_with_xpu():
+            import os
+
+            xpu_adamw_moment_dtype = os.getenv(
+                "xpu_adamw_moment_dtype", default="fp32"
+            )
+            if xpu_adamw_moment_dtype == "fp16":
+                self._add_accumulator(
+                    self._moment1_acc_str, p, dtype=core.VarDesc.VarType.FP16
+                )
+                self._add_accumulator(
+                    self._moment2_acc_str, p, dtype=core.VarDesc.VarType.FP16
+                )
+                if self._amsgrad:
+                    self._add_accumulator(
+                        self._moment2_acc_max_str,
+                        p,
+                        dtype=core.VarDesc.VarType.FP16,
+                    )
+            else:
+                self._add_accumulator(self._moment1_acc_str, p, dtype=acc_dtype)
+                self._add_accumulator(self._moment2_acc_str, p, dtype=acc_dtype)
+                if self._amsgrad:
+                    self._add_accumulator(
+                        self._moment2_acc_max_str, p, dtype=acc_dtype
+                    )
+        else:
+            self._add_accumulator(self._moment1_acc_str, p, dtype=acc_dtype)
+            self._add_accumulator(self._moment2_acc_str, p, dtype=acc_dtype)
+            if self._amsgrad:
+                self._add_accumulator(
+                    self._moment2_acc_max_str, p, dtype=acc_dtype
+                )
         self._add_accumulator(
             name=self._beta1_pow_acc_str,
             param=p,
             dtype=acc_dtype,
-            fill_value=0.9
-            if isinstance(self._beta1, Variable)
-            else self._beta1,
+            fill_value=(
+                0.9
+                if isinstance(self._beta1, (Variable, Value))
+                else self._beta1
+            ),
             shape=[1],
-            type=core.VarDesc.VarType.LOD_TENSOR,
+            type=core.VarDesc.VarType.DENSE_TENSOR,
             device='cpu',
         )
         self._add_accumulator(
             name=self._beta2_pow_acc_str,
             param=p,
             dtype=acc_dtype,
-            fill_value=0.999
-            if isinstance(self._beta2, Variable)
-            else self._beta2,
+            fill_value=(
+                0.999
+                if isinstance(self._beta2, (Variable, Value))
+                else self._beta2
+            ),
             shape=[1],
-            type=core.VarDesc.VarType.LOD_TENSOR,
+            type=core.VarDesc.VarType.DENSE_TENSOR,
             device='cpu',
         )
 
     def _create_accumulators(self, block, parameters):
-        assert isinstance(block, framework.Block)
+        assert isinstance(block, (framework.Block, pir.Block))
         if isinstance(parameters, dict):
             parameters = self._update_param_group(parameters)
 
         # Create accumulator tensors for first and second moments
         for p in parameters:
-            if p.name in self._already_create_accumulater:
+            if p.name in self._already_create_accumulator:
                 continue
             if self._multi_precision and self._is_dtype_fp16_or_bf16(p.dtype):
                 master_p = self._create_master_weight(p)
                 self._add_moments_pows(master_p)
-                self._already_create_accumulater.add(p.name)
+                self._already_create_accumulator.add(p.name)
                 continue
             if (
                 self._is_dtype_fp16_or_bf16(p.dtype)
@@ -387,10 +457,10 @@ class AdamW(Optimizer):
                     "Consider using multi_precision=True option of the Adam optimizer."
                 )
             self._add_moments_pows(p)
-            self._already_create_accumulater.add(p.name)
+            self._already_create_accumulator.add(p.name)
 
     def _append_optimize_op(self, block, param_and_grad):
-        assert isinstance(block, framework.Block)
+        assert isinstance(block, (framework.Block, pir.Block))
         if isinstance(param_and_grad, dict):
             param_and_grad = self._update_param_group(param_and_grad)
         param, grad = param_and_grad
@@ -409,6 +479,13 @@ class AdamW(Optimizer):
         moment2 = self._get_accumulator_master(
             self._moment2_acc_str, param_and_grad[0]
         )
+        moment2_max = (
+            self._get_accumulator_master(
+                self._moment2_acc_max_str, param_and_grad[0]
+            )
+            if self._amsgrad
+            else None
+        )
         beta1_pow_acc = self._get_accumulator_master(
             self._beta1_pow_acc_str, param_and_grad[0]
         )
@@ -426,7 +503,7 @@ class AdamW(Optimizer):
         lr = self._create_param_lr(param_and_grad)
 
         # create the adamw optimize op
-        if framework.in_dygraph_mode():
+        if in_dynamic_or_pir_mode():
             lr_ratio_ = (
                 1.0
                 if self._lr_ratio is None
@@ -444,16 +521,21 @@ class AdamW(Optimizer):
                 else self._beta2.item(0)
             )
 
-            _, _, _, _, _, _ = _C_ops.adamw_(
+            found_inf = (
+                self._get_auxiliary_var('found_inf') if in_pir_mode() else None
+            )
+
+            _, _, _, _, _, _, _ = _C_ops.adamw_(
                 param_and_grad[0],
                 param_and_grad[1],
                 lr,
                 moment1,
                 moment2,
+                moment2_max,
                 beta1_pow_acc,
                 beta2_pow_acc,
                 master_weight,
-                None,
+                found_inf,
                 _beta1,
                 _beta2,
                 self._epsilon,
@@ -464,6 +546,7 @@ class AdamW(Optimizer):
                 1000,
                 find_master,
                 False,
+                self._amsgrad,
             )
             return None
         else:
@@ -496,9 +579,12 @@ class AdamW(Optimizer):
                 "multi_precision": find_master,
                 "with_decay": with_decay,
                 "coeff": self._weight_decay,
-                "lr_ratio": 1.0
-                if self._lr_ratio is None
-                else self._lr_ratio(param_and_grad[0]),
+                "lr_ratio": (
+                    1.0
+                    if self._lr_ratio is None
+                    else self._lr_ratio(param_and_grad[0])
+                ),
+                "amsgrad": self._amsgrad,
             }
 
             if isinstance(self._beta1, Variable):
@@ -513,6 +599,10 @@ class AdamW(Optimizer):
                 inputs['EpsilonTensor'] = self._epsilon
             else:
                 attrs['epsilon'] = self._epsilon
+
+            if self._amsgrad:
+                inputs["Moment2Max"] = [moment2_max]
+                outputs["Moment2MaxOut"] = [moment2_max]
 
             if find_master:
                 inputs["MasterParam"] = master_weight
@@ -533,7 +623,7 @@ class AdamW(Optimizer):
 
     @imperative_base.no_grad
     @framework.non_static_only
-    def step(self):
+    def step(self) -> None:
         """
         Execute the optimizer and update parameters once.
 
@@ -555,7 +645,7 @@ class AdamW(Optimizer):
                 >>> opt.step()
                 >>> opt.clear_grad()
         """
-        if paddle.fluid.dygraph.base.in_declarative_mode():
+        if paddle.base.dygraph.base.in_to_static_mode():
             self._declarative_step()
             return
 

@@ -32,7 +32,7 @@ template <typename T>
 void BackupTensor(const CPUContext& dev_ctx,
                   DenseTensor* dst,
                   DenseTensor* src) {
-  dst->Resize(src->dims());
+  dst->Resize(src->dims());  // NOLINT
   dev_ctx.Alloc<T>(dst);
   Copy(dev_ctx, *src, dev_ctx.GetPlace(), false, dst);
 }
@@ -82,9 +82,9 @@ struct GradCell {
     if (has_sequence_length) {
       auto& place = *dev_ctx.eigen_device();
       auto mask = EigenMatrix<T>::From(
-          mask_tensor, phi::make_ddim({mask_tensor.dims()[1], 1}));
-      auto mask_broadcast =
-          mask.broadcast(Eigen::DSizes<int, 2>(1, grad_pre_hidden->dims()[2]));
+          mask_tensor, common::make_ddim({mask_tensor.dims()[1], 1}));
+      auto mask_broadcast = mask.broadcast(Eigen::DSizes<int, 2>(
+          1, static_cast<int>(grad_pre_hidden->dims()[2])));
       auto pre_hidden_grad = EigenMatrix<T>::Reshape(
           *grad_pre_hidden, grad_pre_hidden->dims().size() - 1);
       auto pre_hidden_bak_grad = EigenMatrix<T>::Reshape(
@@ -250,7 +250,7 @@ struct GRUGradCell : GradCell<T> {
     gru_value.gate_weight = weight_hh->data<T>();
 
     gru_grad.gate_grad = grad_gate->data<T>();
-    gru_grad.reset_output_grad = grad_state->data<T>();
+    gru_grad.reset_output_grad = grad_state->data<T>();  // NOLINT
     gru_grad.prev_out_grad = grad_pre_hidden->data<T>();
     gru_grad.output_grad = grad_hidden->data<T>();
     gru_grad.gate_weight_grad = grad_weight_hh->data<T>();
@@ -314,9 +314,9 @@ struct LSTMGradCell : GradCell<T> {
     lstm_value.gate_value = gate_tensor->data<T>();
     lstm_value.state_value = state_tensor->data<T>();
     lstm_value.state_active_value = act_state_tensor->data<T>();
-    lstm_value.prev_state_value = pre_state->data<T>();
+    lstm_value.prev_state_value = pre_state->data<T>();  // NOLINT
 
-    lstm_grad.state_grad = grad_state->data<T>();
+    lstm_grad.state_grad = grad_state->data<T>();  // NOLINT
     lstm_grad.gate_grad = grad_gate->data<T>();
     lstm_grad.output_grad = grad_hidden->data<T>();
     lstm_grad.prev_state_grad = grad_pre_state->data<T>();
@@ -394,12 +394,12 @@ struct GradLayer {
     std::vector<DenseTensor> mask_tensor_list;
     int mask_min_length = time_step;
     if (has_sequence_length) {
-      mask_matrix.Resize(phi::make_ddim({time_step, input->dims()[1]}));
+      mask_matrix.Resize(common::make_ddim({time_step, input->dims()[1]}));
       CreateMaskMatrix<T>(
           dev_ctx, sequence_length, &mask_matrix, is_reverse, &mask_min_length);
       mask_tensor_list = Unbind(mask_matrix);
     }
-    // copy the last_h, last_c for swaping pointer
+    // copy the last_h, last_c for swapping pointer
     DenseTensor a, b;
     DenseTensor* dynamic_grad_last_h = &a;
     DenseTensor* dynamic_grad_last_c = &b;
@@ -598,9 +598,9 @@ struct GradLayer {
                        const std::string& mode) {
     auto& place = *dev_ctx.eigen_device();
     auto mask = EigenMatrix<T>::From(
-        mask_tensor, phi::make_ddim({mask_tensor.dims()[1], 1}));
-    auto mask_broadcast =
-        mask.broadcast(Eigen::DSizes<int, 2>(1, grad_output->dims()[2]));
+        mask_tensor, common::make_ddim({mask_tensor.dims()[1], 1}));
+    auto mask_broadcast = mask.broadcast(
+        Eigen::DSizes<int, 2>(1, static_cast<int>(grad_output->dims()[2])));
 
     auto last_h_grad =
         EigenMatrix<T>::Reshape(*grad_last_h, grad_last_h->dims().size() - 1);
@@ -691,6 +691,7 @@ struct SingleGradLayer : GradLayer<T, GradCellType> {
   explicit SingleGradLayer(const GradCellType& cell)
       : GradLayer<T, GradCellType>(cell) {}
   ~SingleGradLayer() override = default;
+  using GradLayer<T, GradCellType>::operator();
   void operator()(const CPUContext& dev_ctx,
                   const DenseTensor* input,
                   const DenseTensor* output,
@@ -716,8 +717,8 @@ struct SingleGradLayer : GradLayer<T, GradCellType> {
     phi::funcs::SetConstant<CPUContext, T> zero;
     zero(dev_ctx, input_grad, static_cast<T>(0.0));
 
-    int time_step = input->dims()[0];
-    int batch_size = input->dims()[1];
+    int time_step = static_cast<int>(input->dims()[0]);
+    int batch_size = static_cast<int>(input->dims()[1]);
     int direction_num = is_bidirec ? 2 : 1;
 
     // in this section, create the gate_state_grad for the postprocess calculate
@@ -803,6 +804,7 @@ struct BidirGradLayer : GradLayer<T, GradCellType> {
   explicit BidirGradLayer(const GradCellType& cell)
       : GradLayer<T, GradCellType>(cell) {}
   ~BidirGradLayer() override = default;
+  using GradLayer<T, GradCellType>::operator();
   void operator()(const CPUContext& dev_ctx,
                   const DenseTensor* input,
                   const DenseTensor* output,
@@ -825,8 +827,8 @@ struct BidirGradLayer : GradLayer<T, GradCellType> {
                   int hidden_size,
                   const std::string& mode,
                   int gate_num) {
-    int time_step = input->dims()[0];
-    int batch_size = input->dims()[1];
+    int time_step = static_cast<int>(input->dims()[0]);
+    int batch_size = static_cast<int>(input->dims()[1]);
     int direction_num = is_bidirec ? 2 : 1;
     // split the output two tensor to output_forward, output_backward
     phi::funcs::SetConstant<CPUContext, T> zero;
@@ -1009,8 +1011,8 @@ void RnnGradFunc(const CPUContext& dev_ctx,
   }
 
   // get the input_size, batch_size, time_step
-  const int time_step = x.dims()[0];
-  const int batch_size = x.dims()[1];
+  const int time_step = static_cast<int>(x.dims()[0]);
+  const int batch_size = static_cast<int>(x.dims()[1]);
   const int direction_num = is_bidirec ? 2 : 1;
 
   // allocate the memory and initization the x_grad
@@ -1121,8 +1123,8 @@ void RnnGradFunc(const CPUContext& dev_ctx,
   }
   // squeeze the hidden first dim
   for (auto& hidden_tensor : hidden_tensor_unbind) {
-    hidden_tensor.Resize(
-        phi::slice_ddim(hidden_tensor.dims(), 1, hidden_tensor.dims().size()));
+    hidden_tensor.Resize(common::slice_ddim(
+        hidden_tensor.dims(), 1, hidden_tensor.dims().size()));
   }
   // add the output tensor to the hidden vector
   DenseTensor tmp;
@@ -1215,7 +1217,7 @@ void RnnGradFunc(const CPUContext& dev_ctx,
             gate_num_tmp);
     }
 
-    // calcluate the dropout gradient for the layer_x_grad_holder
+    // calculate the dropout gradient for the layer_x_grad_holder
     // dropout_state save in the forward process
     if (i > 0) {
       if ((!is_test) && (dropout_prob != 0)) {
@@ -1311,7 +1313,7 @@ void RnnGradKernel(const Context& dev_ctx,
         pre_state_grad,
         weight_grad_list);
     // run gru
-  } else if (is_rnn_relu(mode)) {
+  } else if (is_rnn_relu(mode)) {  // NOLINT
     gate_num = 1;
     RnnGradFunc<SimpleRNNGradCell<T, funcs::ReluGradFunctor>,
                 SingleGradLayer,

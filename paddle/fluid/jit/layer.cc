@@ -14,21 +14,20 @@
 
 #include "paddle/fluid/jit/layer.h"
 
+#include "paddle/common/errors.h"
 #include "paddle/fluid/framework/variable.h"
 #include "paddle/phi/core/enforce.h"
-#include "paddle/phi/core/errors.h"
 
 #include "paddle/fluid/jit/compilation_unit.h"
 #include "paddle/fluid/jit/engine/base_engine.h"
 #include "paddle/fluid/jit/function.h"
 #include "paddle/fluid/jit/function_schema.h"
 
-namespace paddle {
-namespace jit {
+namespace paddle::jit {
 
 Layer::Layer(const std::shared_ptr<VariableMap>& params_map,
              const std::shared_ptr<VariableMap>& attrs_map,
-             const FunctionInfoMap& info_map,
+             const BaseFunctionInfoMap& info_map,
              const phi::Place& place)
     : params_map_(params_map),
       attrs_map_(attrs_map),
@@ -59,13 +58,13 @@ void Layer::SetEngine(const std::string& name,
   unit_->SetEngine(name, engine);
 }
 
-const std::shared_ptr<jit::FunctionInfo>& Layer::FunctionInfo(
+const std::shared_ptr<jit::BaseFunctionInfo>& Layer::FunctionInfo(
     const std::string& name) const {
   PADDLE_ENFORCE_EQ(
       info_map_.count(name),
       1,
-      phi::errors::InvalidArgument(
-          "FuncitonInfo named %s is not existed in info_map_.", name));
+      common::errors::InvalidArgument(
+          "FunctionInfo named %s is not existed in info_map_.", name));
   return info_map_.at(name);
 }
 
@@ -77,11 +76,11 @@ std::vector<std::string> Layer::FunctionNames() const {
   return names;
 }
 
-#define PD_SPECIALZE_ATTRIBUTE_TYPE(T)                                \
+#define PD_SPECIALIZE_ATTRIBUTE_TYPE(T)                               \
   template <>                                                         \
   T Layer::Attribute<T>(const std::string& name) const {              \
     if (attrs_map_->find(name) == attrs_map_->end()) {                \
-      PADDLE_THROW(phi::errors::NotFound(                             \
+      PADDLE_THROW(common::errors::NotFound(                          \
           "Attribute can not found %s, please check if it exists.")); \
       return T();                                                     \
     }                                                                 \
@@ -90,12 +89,12 @@ std::vector<std::string> Layer::FunctionNames() const {
     return ret;                                                       \
   }
 
-PD_SPECIALZE_ATTRIBUTE_TYPE(int)
-PD_SPECIALZE_ATTRIBUTE_TYPE(float)
-PD_SPECIALZE_ATTRIBUTE_TYPE(framework::String)
-PD_SPECIALZE_ATTRIBUTE_TYPE(std::vector<int>)
-PD_SPECIALZE_ATTRIBUTE_TYPE(std::vector<float>)
-PD_SPECIALZE_ATTRIBUTE_TYPE(std::vector<std::string>)
+PD_SPECIALIZE_ATTRIBUTE_TYPE(int)
+PD_SPECIALIZE_ATTRIBUTE_TYPE(float)
+PD_SPECIALIZE_ATTRIBUTE_TYPE(framework::String)
+PD_SPECIALIZE_ATTRIBUTE_TYPE(std::vector<int>)
+PD_SPECIALIZE_ATTRIBUTE_TYPE(std::vector<float>)
+PD_SPECIALIZE_ATTRIBUTE_TYPE(std::vector<std::string>)
 
 std::shared_ptr<Layer> Layer::Clone(void* stream) {
   std::shared_ptr<Layer> x =
@@ -104,5 +103,4 @@ std::shared_ptr<Layer> Layer::Clone(void* stream) {
   return x;
 }
 
-}  // namespace jit
-}  // namespace paddle
+}  // namespace paddle::jit

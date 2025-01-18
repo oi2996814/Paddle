@@ -18,8 +18,8 @@ import os
 import warnings
 from functools import reduce
 
+from paddle.base.framework import generate_control_dev_var_name
 from paddle.distributed.io import is_persistable
-from paddle.fluid.framework import generate_control_dev_var_name
 from paddle.framework import core
 
 # logging.basicConfig(
@@ -112,13 +112,13 @@ class TrainerRuntimeConfig:
         self.runtime_configs['communicator_send_queue_size'] = os.getenv(
             "FLAGS_communicator_send_queue_size", send_queue_size
         )
-        self.runtime_configs[
-            'communicator_independent_recv_thread'
-        ] = os.getenv("FLAGS_communicator_independent_recv_thread", "1")
-        self.runtime_configs[
-            'communicator_min_send_grad_num_before_recv'
-        ] = os.getenv(
-            "FLAGS_communicator_min_send_grad_num_before_recv", num_threads
+        self.runtime_configs['communicator_independent_recv_thread'] = (
+            os.getenv("FLAGS_communicator_independent_recv_thread", "1")
+        )
+        self.runtime_configs['communicator_min_send_grad_num_before_recv'] = (
+            os.getenv(
+                "FLAGS_communicator_min_send_grad_num_before_recv", num_threads
+            )
         )
         self.runtime_configs['communicator_thread_pool_size'] = os.getenv(
             "FLAGS_communicator_thread_pool_size", "5"
@@ -171,28 +171,24 @@ class TrainerRuntimeConfig:
             ]
             if max_merge_var_num != num_threads:
                 print(
-                    'WARNING: In {} mode, communicator_max_merge_var_num '
+                    f'WARNING: In {mode_str} mode, communicator_max_merge_var_num '
                     'must be equal to CPU_NUM. But received, '
-                    'communicator_max_merge_var_num = {}, CPU_NUM = '
-                    '{}. communicator_max_merge_var_num will be forced to {}.'.format(
-                        mode_str, max_merge_var_num, num_threads, num_threads
-                    )
+                    f'communicator_max_merge_var_num = {max_merge_var_num}, CPU_NUM = '
+                    f'{num_threads}. communicator_max_merge_var_num will be forced to {num_threads}.'
                 )
-                self.runtime_configs[
-                    'communicator_max_merge_var_num'
-                ] = num_threads
+                self.runtime_configs['communicator_max_merge_var_num'] = (
+                    num_threads
+                )
             if send_queue_size != num_threads:
                 print(
-                    'WARNING: In {} mode, communicator_send_queue_size '
+                    f'WARNING: In {mode_str} mode, communicator_send_queue_size '
                     'must be equal to CPU_NUM. But received, '
-                    'communicator_send_queue_size = {}, CPU_NUM = '
-                    '{}. communicator_send_queue_size will be forced to {}.'.format(
-                        mode_str, send_queue_size, num_threads, num_threads
-                    )
+                    f'communicator_send_queue_size = {send_queue_size}, CPU_NUM = '
+                    f'{num_threads}. communicator_send_queue_size will be forced to {num_threads}.'
                 )
-                self.runtime_configs[
-                    'communicator_send_queue_size'
-                ] = num_threads
+                self.runtime_configs['communicator_send_queue_size'] = (
+                    num_threads
+                )
 
         return {key: str(self.runtime_configs[key]) for key in need_keys}
 
@@ -391,7 +387,7 @@ def get_dense_send_context(
         aggregate = True
         # print("public get_dense_send_context dense_table:", grad_name,
         #      var_numel, origin_varnames)
-        from paddle.fluid.core import CommContext
+        from paddle.base.core import CommContext
 
         dense_ctx = CommContext(
             grad_name,
@@ -427,7 +423,7 @@ def get_dense_send_context(
         aggregate = True
         # print("public get_dense_send_context data_norm table:", grad_name,
         #      var_numel, origin_varnames)
-        from paddle.fluid.core import CommContext
+        from paddle.base.core import CommContext
 
         data_norm_ctx = CommContext(
             grad_name,
@@ -455,7 +451,7 @@ def get_dense_send_context(
             var_numel = reduce(lambda x, y: x * y, var.shape, 1)
             grad_name = origin_varname
             aggregate = True
-            from paddle.fluid.core import CommContext
+            from paddle.base.core import CommContext
 
             dense_ctx = CommContext(
                 grad_name,
@@ -481,15 +477,14 @@ def get_dense_send_context(
 def get_geo_trainer_send_context(attrs):
     if attrs['ps_mode'] != DistributedMode.GEO:
         raise ValueError(
-            "ps mode: {} not matched {}",
-            format(attrs['ps_mode'], "get_geo_trainer_send_context"),
+            f"ps mode: {attrs['ps_mode']} not matched get_geo_trainer_send_context",
         )
     send_ctx = {}
     trainer_id = get_role_id(attrs['role_maker'])
     origin_programs = attrs['origin_main_programs']
     idx = 0  # table idx
 
-    distibuted_varnames = get_sparse_tablenames(origin_programs, True)
+    distributed_varnames = get_sparse_tablenames(origin_programs, True)
     for i, program in enumerate(origin_programs):
         merged_sparse_pairs = attrs['merged_sparse_pairs'][i]
         for merged in merged_sparse_pairs:
@@ -500,11 +495,11 @@ def get_geo_trainer_send_context(attrs):
                 continue
 
             is_distributed = (
-                True if param_name in distibuted_varnames else False
+                True if param_name in distributed_varnames else False
             )
             var = program.global_block().vars[grad.merged_var.name]
             var_numel = reduce(lambda x, y: x * y, var.shape[1:], 1)
-            from paddle.fluid.core import CommContext
+            from paddle.base.core import CommContext
 
             print(
                 "public get_the_geo_send_context sparse: ", grad_name, var_numel
@@ -544,7 +539,7 @@ def _step_ctx(idx, role_maker):
     endpoints = get_ps_endpoints(role_maker)
     sections = [1] * len(endpoints)
     names = [name] * len(endpoints)
-    from paddle.fluid.core import CommContext
+    from paddle.base.core import CommContext
 
     ctx = CommContext(
         name,
@@ -574,8 +569,8 @@ def get_the_one_send_context(attrs, split_dense_table=False, ep_list=None):
     print(f"is_heter_ps_mode? {split_dense_table}")
 
     idx = 0
-    distibuted_varnames = get_sparse_tablenames(origin_programs, True)
-    # print("public distibuted_varnames:", distibuted_varnames)
+    distributed_varnames = get_sparse_tablenames(origin_programs, True)
+    # print("public distributed_varnames:", distributed_varnames)
     for i, program in enumerate(origin_programs):
         merged_sparse_pairs = attrs['merged_sparse_pairs'][i]
         for merged in merged_sparse_pairs:
@@ -592,7 +587,7 @@ def get_the_one_send_context(attrs, split_dense_table=False, ep_list=None):
                 splited_varname.append(f"{param_name}.block{i}")
 
             is_distributed = (
-                True if param_name in distibuted_varnames else False
+                True if param_name in distributed_varnames else False
             )
 
             var = program.global_block().vars[grad.merged_var.name]
@@ -602,7 +597,7 @@ def get_the_one_send_context(attrs, split_dense_table=False, ep_list=None):
 
             if grad_name in send_ctx:
                 continue
-            from paddle.fluid.core import CommContext
+            from paddle.base.core import CommContext
 
             print(
                 "public get_the_one_send_context sparse: ",
@@ -651,9 +646,7 @@ def get_the_one_send_context(attrs, split_dense_table=False, ep_list=None):
 def find_heter_ops(program, default_device="cpu"):
     if default_device not in DEVICE_LIST:
         raise ValueError(
-            "Given device {} is not in device list {}".format(
-                default_device, DEVICE_LIST
-            )
+            f"Given device {default_device} is not in device list {DEVICE_LIST}"
         )
 
     def _is_heter_op(op, current_heter_device, default_device="cpu"):
@@ -667,7 +660,7 @@ def find_heter_ops(program, default_device="cpu"):
             op_type in COMMUNICATE_OPS_TYPE
             and current_heter_device != default_device
         ):
-            # for distributed communciate ops: send & recv & barrier etc.
+            # for distributed communicate ops: send & recv & barrier etc.
             # Todo: need update this method
             # op._set_attr('op_device', current_heter_device)
             return True
@@ -690,7 +683,7 @@ def find_heter_ops(program, default_device="cpu"):
             heter_ops[op_device] = {}
         current_heter_block_ops.append(op)
 
-    origin_porgram = program.clone()
+    origin_program = program.clone()
     block = program.global_block()
     '''
        re-place sum op to fix bug for union forward backward op
@@ -830,7 +823,7 @@ def find_heter_ops(program, default_device="cpu"):
                     else:
                         var2idx[origin_var] = i
 
-    origin_porgram = program.clone()
+    origin_program = program.clone()
     block = program.global_block()
 
     program_block_ops = []
@@ -907,18 +900,16 @@ def find_heter_ops(program, default_device="cpu"):
         for _, heter_block in heter_block_dict.items():
             total_heter_ops += len(heter_block)
     print(
-        "There are {} OPs in your main_program, and contains {} heter-OPs which is made up of {} heter-blocks.".format(
-            len(block.ops), total_heter_ops, heter_blocks
-        )
+        f"There are {len(block.ops)} OPs in your main_program, and contains {total_heter_ops} heter-OPs which is made up of {heter_blocks} heter-blocks."
     )
 
-    return origin_porgram, heter_ops, default_ops, program_block_ops
+    return origin_program, heter_ops, default_ops, program_block_ops
 
 
 def union_forward_gradient_op(program_block_ops_list):
     """
     before analyzing the input & output of each block in program_block_list, we should
-    union the forward op and corresponding gradient op to elimincate the unnecessary variable
+    union the forward op and corresponding gradient op to eliminate the unnecessary variable
     transmit
     """
     """
@@ -1045,7 +1036,7 @@ def entrance_exit_check(
         )
 
         for var in backward_entrance:
-            if not ("@GRAD" in var) and not (var in forward_all):
+            if "@GRAD" not in var and var not in forward_all:
                 current_block_entrance.append(var)
 
         current_block_entrance.sort()
@@ -1153,12 +1144,12 @@ def get_communicate_var_info(
     input_var_reshape_name = []
 
     if type == "forward":
-        block_input_var_name = "forward_joint_{}_{}@Heter".format(
-            block_index - 1, block_index
+        block_input_var_name = (
+            f"forward_joint_{block_index - 1}_{block_index}@Heter"
         )
     else:
-        block_input_var_name = "backward_joint_{}_{}@Heter".format(
-            block_index + 1, block_index
+        block_input_var_name = (
+            f"backward_joint_{block_index + 1}_{block_index}@Heter"
         )
 
     entrance_var_list.sort()
@@ -1312,7 +1303,7 @@ def block_append_op(program, origin_program, block, op):
         new_op_desc.copy_from(op_desc)
         new_op_desc._set_attr(RPC_OP_ROLE_ATTR_NAME, backward)
 
-        # set device gard
+        # set device grad
         if op.desc.has_attr(device_attr_name):
             op_device = op_desc.attr(device_attr_name)
             new_op_desc._set_attr(device_attr_name, op_device)
@@ -1327,7 +1318,7 @@ def get_next_stage_trainers(role_maker):
 
 
 def insert_communicate_op(
-    orign_program,
+    origin_program,
     role_maker,
     heter_block,
     stage_id,
@@ -1343,7 +1334,7 @@ def insert_communicate_op(
         )
         entrance_var = block_var_detail[stage_id]["forward"]["entrance"]
         comm_info = get_communicate_var_info(
-            orign_program, stage_id + 1, entrance_var
+            origin_program, stage_id + 1, entrance_var
         )
 
     else:
@@ -1353,7 +1344,7 @@ def insert_communicate_op(
         )
         entrance_var = block_var_detail[stage_id - 1]["backward"]["exit"]
         comm_info = get_communicate_var_info(
-            orign_program, stage_id - 1, entrance_var, "backward"
+            origin_program, stage_id - 1, entrance_var, "backward"
         )
 
     heter_block._insert_op(
@@ -1363,7 +1354,7 @@ def insert_communicate_op(
         outputs={"Out": []},
         attrs={
             "mode": "forward" if is_forward else "backward",
-            "send_var_name": entrance_var + ["microbatch_id"],
+            "send_var_name": [*entrance_var, "microbatch_id"],
             "recv_var_name": [],
             "message_name": comm_info["block_input_var_name"],
             "next_endpoints": next_heter_worker_endpoints,
@@ -1576,6 +1567,8 @@ def get_param_grads(origin_program):
                     and CLIP_OP_NAME_SCOPE in op.attr(OP_NAME_SCOPE)
                 ):
                     op._set_attr("op_role", role_id)
+                    continue
+                if not op.has_attr(OP_ROLE_VAR_ATTR_NAME):
                     continue
                 if op.attr(OP_ROLE_VAR_ATTR_NAME):
                     param_name = op.attr(OP_ROLE_VAR_ATTR_NAME)[0]
@@ -1807,9 +1800,7 @@ def check_program(program):
             for var_name in input_var_names + output_var_names:
                 if not block._find_var_recursive(str(var_name)):
                     raise ValueError(
-                        'var: {} needed by op is not found in block: {}'.format(
-                            str(var_name), block_idx
-                        )
+                        f'var: {var_name} needed by op is not found in block: {block_idx}'
                     )
         block_idx += 1
     print('program checked valid')

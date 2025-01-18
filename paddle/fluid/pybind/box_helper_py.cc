@@ -26,17 +26,16 @@ limitations under the License. */
 #include <vector>
 
 #include "paddle/fluid/framework/data_feed.h"
-#include "paddle/fluid/framework/data_feed.pb.h"
 #include "paddle/fluid/framework/fleet/box_wrapper.h"
 #include "paddle/fluid/pybind/box_helper_py.h"
+#include "paddle/phi/core/framework/data_feed.pb.h"
 #ifdef PADDLE_WITH_BOX_PS
 #include <boxps_public.h>
 #endif
 
 namespace py = pybind11;
 
-namespace paddle {
-namespace pybind {
+namespace paddle::pybind {
 void BindBoxHelper(py::module* m) {
   py::class_<framework::BoxHelper, std::shared_ptr<framework::BoxHelper>>(
       *m, "BoxPS")
@@ -113,5 +112,4 @@ void BindBoxWrapper(py::module* m) {
 }  // end BoxWrapper
 #endif
 
-}  // end namespace pybind
-}  // end namespace paddle
+}  // namespace paddle::pybind

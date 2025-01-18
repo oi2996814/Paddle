@@ -20,7 +20,7 @@ import numpy as np
 
 class TunableVariable:
     """
-    Tunablevariable base class.
+    TunableVariable base class.
     """
 
     def __init__(self, name, default=None):
@@ -49,9 +49,7 @@ class Fixed(TunableVariable):
         self.name = name
         if not isinstance(default, (str, int, float, bool)):
             raise ValueError(
-                "Fixed must be an str, int, float or bool, but found {}".format(
-                    default
-                )
+                f"Fixed must be an str, int, float or bool, but found {default}"
             )
         self._default = default
 
@@ -79,9 +77,7 @@ class Boolean(TunableVariable):
         return rng.choice((True, False))
 
     def __repr__(self):
-        return 'Boolean(name: "{}", default: {})'.format(
-            self.name, self.default
-        )
+        return f'Boolean(name: "{self.name}", default: {self.default})'
 
 
 class Choice(TunableVariable):
@@ -91,9 +87,7 @@ class Choice(TunableVariable):
         types = {type(v) for v in values}
         if len(types) > 1:
             raise TypeError(
-                "Choice can contain only one type of value, but found values: {} with types: {}.".format(
-                    str(values), str(types)
-                )
+                f"Choice can contain only one type of value, but found values: {values} with types: {types}."
             )
         self._is_unknown_type = False
 
@@ -120,9 +114,7 @@ class Choice(TunableVariable):
 
         if default is not None and default not in values:
             raise ValueError(
-                "The default value should be one of the choices {}, but found {}".format(
-                    values, default
-                )
+                f"The default value should be one of the choices {values}, but found {default}"
             )
         self._default = default
 
@@ -148,9 +140,7 @@ class Choice(TunableVariable):
         return state
 
     def __repr__(self):
-        return 'Choice(name: "{}", values: {}, default: {})'.format(
-            self.name, self.values, self.default
-        )
+        return f'Choice(name: "{self.name}", values: {self.values}, default: {self.default})'
 
 
 class IntRange(TunableVariable):
@@ -195,13 +185,11 @@ class IntRange(TunableVariable):
     def _check_int(self, val):
         int_val = int(val)
         if int_val != val:
-            raise ValueError(f"Expects val is an int, but found: {str(val)}.")
+            raise ValueError(f"Expects val is an int, but found: {val}.")
         return int_val
 
     def __repr__(self):
-        return "IntRange(name: {}, start: {}, stop: {}, step: {}, default: {})".format(
-            self.name, self.start, self.stop, self.step, self.default
-        )
+        return f"IntRange(name: {self.name}, start: {self.start}, stop: {self.stop}, step: {self.step}, default: {self.default})"
 
 
 class FloatRange(TunableVariable):
@@ -249,11 +237,4 @@ class FloatRange(TunableVariable):
         return state
 
     def __repr__(self):
-        return "FloatRange(name: {}, start: {}, stop: {}, step: {}, default: {}, endpoint: {})".format(
-            self.name,
-            self.start,
-            self.stop,
-            self.step,
-            self.default,
-            self.endpoint,
-        )
+        return f"FloatRange(name: {self.name}, start: {self.start}, stop: {self.stop}, step: {self.step}, default: {self.default}, endpoint: {self.endpoint})"

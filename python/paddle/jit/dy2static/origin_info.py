@@ -13,13 +13,14 @@
 # limitations under the License.
 
 import inspect
+import textwrap
 from collections.abc import Sequence
 
-from paddle.fluid import core
-from paddle.fluid.framework import Program
+from paddle.base import core
+from paddle.framework import use_pir_api
 from paddle.utils import gast
 
-from .utils import ORIGI_INFO, unwrap
+from .utils import ORIGIN_INFO
 
 __all__ = []
 
@@ -41,9 +42,7 @@ class Location:
         self.col_offset = col_offset
 
     def __str__(self):
-        return "location: {}:{}:{}".format(
-            self.filepath, self.lineno, self.col_offset
-        )
+        return f"location: {self.filepath}:{self.lineno}:{self.col_offset}"
 
     @property
     def line_location(self):
@@ -67,19 +66,11 @@ class OriginInfo:
         self.source_code = source_code
 
     def __str__(self):
-        return "{} \nsource_code: {}  in function {}\n  ".format(
-            self.location, self.source_code, self.function_name
-        )
+        return f"{self.location} \nsource_code: {self.source_code}  in function {self.function_name}\n  "
 
-    def formated_message(self):
+    def formatted_message(self):
         flag_for_origin_info = "(* user code *)"
-        return '    File "{}", line {}, in {} {}\n\t{}'.format(
-            self.location.filepath,
-            self.location.lineno,
-            self.function_name,
-            flag_for_origin_info,
-            self.source_code.lstrip(),
-        )
+        return f'    File "{self.location.filepath}", line {self.location.lineno}, in {self.function_name} {flag_for_origin_info}\n\t{self.source_code.lstrip()}'
 
     def as_frame(self):
         return (
@@ -97,7 +88,7 @@ class OriginInfoAttacher(gast.NodeTransformer):
 
     def __init__(self, root, func):
         self.root = root
-        self.func = unwrap(func)
+        self.func = inspect.unwrap(func)
         self.filepath = inspect.getsourcefile(self.func)
         self.source_code = inspect.getsource(self.func)
         self.current_func = []
@@ -113,7 +104,7 @@ class OriginInfoAttacher(gast.NodeTransformer):
     def visit(self, node):
         if isinstance(node, gast.FunctionDef):
             self.current_func.append(node)
-        if hasattr(node, "lineno"):
+        if getattr(node, "lineno", None) is not None:
             self._attach_origin_info(node)
         self.generic_visit(node)
 
@@ -132,17 +123,9 @@ class OriginInfoAttacher(gast.NodeTransformer):
         code_line = self.source_lines[node.lineno - 1]
 
         origin_info = OriginInfo(loc, func_name, code_line)
-        setattr(node, ORIGI_INFO, origin_info)
+        setattr(node, ORIGIN_INFO, origin_info)
 
     def _abs_lineno(self, node):
-        # NOTE(liym27):
-        #   There are differences in ast_node.lineno between PY3.8+ and PY3.8-.
-        #   If the first gast.FunctionDef has decorator, the lineno of gast.FunctionDef is differs.
-        #       1. < PY3.8
-        #           its lineno equals to the lineno of the first decorator node, which is not right.
-        #       2. >= PY3.8
-        #           its lineno is the actual lineno, which is right.
-
         return self.lineno_offset + node.lineno
 
     def _abs_col_offset(self, node):
@@ -167,18 +150,16 @@ def create_and_update_origin_info_map(
     """
 
     origin_info_map = {}
-    static_source = inspect.getsource(static_func)
+    static_source = textwrap.dedent(inspect.getsource(static_func))
     static_node = gast.parse(static_source)
     static_node = attach_origin_info(static_node, static_func)
 
     for t_node, s_node in ast_walk(transformed_node, static_node):
         assert type(t_node) == type(
             s_node
-        ), "The node types should be the same, but received type(t_node) is {}, and type(s_node) is {}.".format(
-            type(t_node), type(s_node)
-        )
-        dygraph_info = getattr(t_node, ORIGI_INFO, None)
-        static_info = getattr(s_node, ORIGI_INFO, None)
+        ), f"The node types should be the same, but received type(t_node) is {type(t_node)}, and type(s_node) is {type(s_node)}."
+        dygraph_info = getattr(t_node, ORIGIN_INFO, None)
+        static_info = getattr(s_node, ORIGIN_INFO, None)
 
         if dygraph_info is None or static_info is None:
             continue
@@ -253,9 +234,7 @@ def ast_walk(transformed_node, static_node):
 
         assert type(t_node) == type(
             s_node
-        ), "The node types should be the same, but received type(t_node) is {}, and type(s_node) is {}.".format(
-            type(t_node), type(s_node)
-        )
+        ), f"The node types should be the same, but received type(t_node) is {type(t_node)}, and type(s_node) is {type(s_node)}."
 
         yield t_node, s_node
 
@@ -278,8 +257,6 @@ def update_op_callstack_with_origin_info(program):
     """
     Replaces op callstack information about transformed static code with original dygraph code.
     """
-
-    assert isinstance(program, Program)
 
     def get_new_op_callstack(callstack):
         """
@@ -311,28 +288,40 @@ def update_op_callstack_with_origin_info(program):
             if dygraph_func_info:
                 filepath, lineno, funcname, code = dygraph_func_info.as_frame()
 
-            callstack[i] = '  File "{}", line {}, in {}'.format(
-                filepath, lineno, funcname
-            )
+            callstack[i] = f'  File "{filepath}", line {lineno}, in {funcname}'
             callstack[i + 1] = f'    {code}'
 
         return callstack
 
+    def get_all_pir_block_ops(block):
+        ops = []
+        for op in block.ops:
+            ops.append(op)
+            for sub_block in op.blocks():
+                ops += get_all_pir_block_ops(sub_block)
+        return ops
+
     op_maker = core.op_proto_and_checker_maker
     callstack_var_name = op_maker.kOpCreationCallstackAttrName()
 
-    for block in program.blocks:
-        for i, op in enumerate(block.ops):
+    if use_pir_api():
+        global_block = program.global_block()
+        ops = get_all_pir_block_ops(global_block)
+        for op in ops:
             if op.has_attr(callstack_var_name):
-                callstack = op.attr(callstack_var_name)
+                op.callstack = get_new_op_callstack(op.callstack)
+    else:
+        for block in program.blocks:
+            for i, op in enumerate(block.ops):
+                if op.has_attr(callstack_var_name):
+                    callstack = op.attr(callstack_var_name)
 
-                callstack = get_new_op_callstack(callstack)
+                    callstack = get_new_op_callstack(callstack)
 
-                try:
-                    # (@xiongkun) In 2-order derivative for paddle science, there may exists `pow_grad`
-                    # which has op_proto == nullptr and causes _set_attr failed. so we add a try...except.
-                    op._set_attr(callstack_var_name, callstack)
-                except:
-                    pass
-
+                    try:
+                        # (@xiongkun) In 2-order derivative for paddle science, there may exists `pow_grad`
+                        # which has op_proto == nullptr and causes _set_attr failed. so we add a try...except.
+                        op._set_attr(callstack_var_name, callstack)
+                    except:
+                        pass
     return program

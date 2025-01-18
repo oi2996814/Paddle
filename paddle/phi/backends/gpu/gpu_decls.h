@@ -23,7 +23,7 @@ namespace phi {
 #define DECLARE_TYPE_FOR_GPU(GPU_TYPE, CUDA_TYPE, ROCM_TYPE) \
   using GPU_TYPE = ROCM_TYPE;
 
-#else  // PADDLE_WITH_CDUA
+#else  // PADDLE_WITH_CUDA
 
 #define DECLARE_TYPE_FOR_GPU(GPU_TYPE, CUDA_TYPE, ROCM_TYPE) \
   using GPU_TYPE = CUDA_TYPE;
@@ -60,9 +60,7 @@ DECLARE_TYPE_FOR_GPU(dnnHandle_t, cudnnHandle_t, miopenHandle_t);
 
 DECLARE_TYPE_FOR_GPU(blasHandle_t, cublasHandle_t, rocblas_handle);
 
-// TODO(Ming Huang): Since there is no blasLt handler,
-// use rocblas_handle for workround.
-DECLARE_TYPE_FOR_GPU(blasLtHandle_t, cublasLtHandle_t, rocblas_handle);
+DECLARE_TYPE_FOR_GPU(blasLtHandle_t, cublasLtHandle_t, hipblasLtHandle_t);
 
 DECLARE_TYPE_FOR_GPU(solverHandle_t, cusolverDnHandle_t, rocsolver_handle);
 

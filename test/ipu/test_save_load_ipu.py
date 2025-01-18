@@ -52,20 +52,24 @@ class TestBase(IPUOpTest):
 
     @IPUOpTest.static_graph
     def build_model(self):
-        generator = paddle.fluid.unique_name.UniqueNameGenerator()
-        with paddle.fluid.unique_name.guard(generator):
+        generator = paddle.base.unique_name.UniqueNameGenerator()
+        with paddle.base.unique_name.guard(generator):
             x = paddle.static.data(
                 name=self.feed_list[0],
                 shape=self.feed_shape[0],
                 dtype='float32',
             )
-            conv1 = paddle.static.nn.conv2d(
-                x, num_filters=3, filter_size=3, bias_attr=False, name='conv2d'
-            )
+            conv1 = paddle.nn.Conv2D(
+                in_channels=x.shape[1],
+                out_channels=3,
+                kernel_size=3,
+                bias_attr=False,
+            )(x)
+
             loss = paddle.mean(conv1)
             # apply optimizer
             self.optimizer().minimize(loss)
-            self.fetch_list = [loss.name]
+            self.fetch_list = [loss]
 
     def run_model(self, exec_mode, save_otherwise_load):
         self.build_model()

@@ -18,14 +18,13 @@
 #include "paddle/phi/core/utils/data_type.h"
 #include "paddle/phi/kernels/funcs/math_function.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 std::vector<int> GetAxis(const DataLayout& from, const DataLayout& to) {
   PADDLE_ENFORCE_NE(
       from,
       to,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Layout transform should transform between different layout."));
   if (from == DataLayout::kNCHW && to == DataLayout::kNHWC) {
     return {0, 2, 3, 1};
@@ -33,7 +32,7 @@ std::vector<int> GetAxis(const DataLayout& from, const DataLayout& to) {
     return {0, 3, 1, 2};
   } else {
     PADDLE_THROW(
-        platform::errors::InvalidArgument("Unsupported layout transform."));
+        common::errors::InvalidArgument("Unsupported layout transform."));
   }
 }
 
@@ -41,12 +40,12 @@ template <typename T>
 void CastDataLayout::apply() {
   auto place = ctx_->GetPlace();
 
-  if (platform::is_cpu_place(place)) {
+  if (phi::is_cpu_place(place)) {
     phi::funcs::Transpose<phi::CPUContext, T, 4> trans4;
     auto* context = static_cast<const phi::CPUContext*>(ctx_);
     trans4(*context, in_, out_, axis_);
   } else {
-    PADDLE_THROW(platform::errors::PreconditionNotMet(
+    PADDLE_THROW(common::errors::PreconditionNotMet(
         "Unsupported data layout cast from CPU to GPU."));
   }
 }
@@ -59,7 +58,7 @@ void TransDataLayout(const phi::KernelKey& kernel_type_for_var,
   PADDLE_ENFORCE(
       backends_are_same_class(kernel_type_for_var.backend(),
                               expected_kernel_type.backend()),
-      platform::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "TransDataLayout only support DataLayout transform on same place."));
 
   TransDataLayout(kernel_type_for_var.layout(),
@@ -77,11 +76,11 @@ void TransDataLayout(DataLayout from_layout,
   PADDLE_ENFORCE_EQ(
       arity(in.dims()),
       4,
-      platform::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Input dimension arity only can be 4, the input dimension is %s.",
           in.dims()));
 
-  auto& pool = platform::DeviceContextPool::Instance();
+  auto& pool = phi::DeviceContextPool::Instance();
 
   auto src_dim = in.dims();
   std::vector<int64_t> dst_dim;
@@ -92,7 +91,7 @@ void TransDataLayout(DataLayout from_layout,
     dst_dim[i] = src_dim[axis[i]];
   }
 
-  out->Resize(phi::make_ddim(dst_dim));
+  out->Resize(common::make_ddim(dst_dim));
   out->mutable_data(place, in.dtype());
 
   framework::VisitDataType(
@@ -102,5 +101,4 @@ void TransDataLayout(DataLayout from_layout,
   out->set_layout(to_layout);
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

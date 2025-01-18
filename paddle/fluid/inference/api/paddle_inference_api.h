@@ -46,7 +46,6 @@ namespace paddle_infer {
 
 using PrecisionType = paddle::AnalysisConfig::Precision;
 using Config = paddle::AnalysisConfig;
-using DistConfig = paddle::DistConfig;
 using XpuConfig = paddle::XpuConfig;
 
 ///
@@ -150,7 +149,7 @@ class PD_INFER_DECL Predictor {
   ///
   /// \brief Get the Output Tensor object
   ///
-  /// \param[in] name otuput name
+  /// \param[in] name output name
   /// \return output tensor
   ///
   std::unique_ptr<Tensor> GetOutputHandle(const std::string& name);
@@ -192,7 +191,7 @@ class PD_INFER_DECL Predictor {
 
   ///
   /// \brief Register a output hook function to operate the intermediate tensor
-  /// of op output. when using this function, memory reuse should be tured off.
+  /// of op output. when using this function, memory reuse should be turned off.
   /// The hook function signature is void(const std::string&, const
   /// std::string&, const Tensor&>). Here, the first parameter is op's
   /// type, the second param is output var name of the op, and the third
@@ -235,7 +234,7 @@ PD_INFER_DECL int GetNumBytesOfDataType(DataType dtype);
 PD_INFER_DECL std::string GetVersion();
 PD_INFER_DECL std::tuple<int, int, int> GetTrtCompileVersion();
 PD_INFER_DECL std::tuple<int, int, int> GetTrtRuntimeVersion();
-PD_INFER_DECL std::string UpdateDllFlag(const char* name, const char* value);
+PD_INFER_DECL void UpdateDllFlag(const char* name, const char* value);
 
 PD_INFER_DECL void ConvertToMixedPrecision(
     const std::string& model_file,
@@ -245,7 +244,8 @@ PD_INFER_DECL void ConvertToMixedPrecision(
     PrecisionType mixed_precision,
     PlaceType backend,
     bool keep_io_types = true,
-    std::unordered_set<std::string> black_list = {});
+    std::unordered_set<std::string> black_list = {},
+    std::unordered_set<std::string> white_list = {});
 
 namespace services {
 ///
@@ -266,7 +266,7 @@ class PD_INFER_DECL PredictorPool {
   explicit PredictorPool(const Config& config, size_t size = 1);
 
   /// \brief Get \param id-th predictor.
-  Predictor* Retrive(size_t idx);
+  Predictor* Retrieve(size_t idx);
 
  private:
   std::shared_ptr<Predictor> main_pred_;

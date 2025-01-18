@@ -12,15 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import hashlib
 import os
 import os.path as osp
 import shutil
-import subprocess
 import sys
 import tarfile
 import time
 import zipfile
+from typing import Literal
 
 import httpx
 
@@ -38,9 +40,7 @@ except:
             if self.total is None:
                 sys.stderr.write(f"\r{self.n:.1f} bytes")
             else:
-                sys.stderr.write(
-                    "\r{:.1f}%".format(100 * self.n / float(self.total))
-                )
+                sys.stderr.write(f"\r{100 * self.n / float(self.total):.1f}%")
             sys.stderr.flush()
 
         def __enter__(self):
@@ -61,7 +61,7 @@ WEIGHTS_HOME = osp.expanduser("~/.cache/paddle/hapi/weights")
 DOWNLOAD_RETRY_LIMIT = 3
 
 
-def is_url(path):
+def is_url(path: str) -> bool:
     """
     Whether path is URL.
     Args:
@@ -70,7 +70,7 @@ def is_url(path):
     return path.startswith('http://') or path.startswith('https://')
 
 
-def get_weights_path_from_url(url, md5sum=None):
+def get_weights_path_from_url(url: str, md5sum: str | None = None) -> str:
     """Get weights path from WEIGHT_HOME, if not exists,
     download it from url.
 
@@ -84,10 +84,10 @@ def get_weights_path_from_url(url, md5sum=None):
     Examples:
         .. code-block:: python
 
-            from paddle.utils.download import get_weights_path_from_url
+            >>> from paddle.utils.download import get_weights_path_from_url
 
-            resnet18_pretrained_weight_url = 'https://paddle-hapi.bj.bcebos.com/models/resnet18.pdparams'
-            local_weight_path = get_weights_path_from_url(resnet18_pretrained_weight_url)
+            >>> resnet18_pretrained_weight_url = 'https://paddle-hapi.bj.bcebos.com/models/resnet18.pdparams'
+            >>> local_weight_path = get_weights_path_from_url(resnet18_pretrained_weight_url)
 
     """
     path = get_path_from_url(url, WEIGHTS_HOME, md5sum)
@@ -117,8 +117,13 @@ def _get_unique_endpoints(trainer_endpoints):
 
 
 def get_path_from_url(
-    url, root_dir, md5sum=None, check_exist=True, decompress=True, method='get'
-):
+    url: str,
+    root_dir: str,
+    md5sum: str | None = None,
+    check_exist: bool = True,
+    decompress: bool = True,
+    method: Literal['wget', 'get'] = 'get',
+) -> str:
     """Download from given url to root_dir.
     if file or directory specified by url is exists under
     root_dir, return the path directly, otherwise download
@@ -128,9 +133,9 @@ def get_path_from_url(
         url (str): download url
         root_dir (str): root dir for downloading, it should be
                         WEIGHTS_HOME or DATASET_HOME
-        md5sum (str): md5 sum of download package
-        decompress (bool): decompress zip or tar file. Default is `True`
-        method (str): which download method to use. Support `wget` and `get`. Default is `get`.
+        md5sum (str|None, optional): md5 sum of download package
+        decompress (bool, optional): decompress zip or tar file. Default is `True`
+        method (str, optional): which download method to use. Support `wget` and `get`. Default is `get`.
 
     Returns:
         str: a local path to save downloaded models & weights & datasets.
@@ -172,8 +177,8 @@ def _get_download(url, fullname):
         ) as req:
             if req.status_code != 200:
                 raise RuntimeError(
-                    "Downloading from {} failed with code "
-                    "{}!".format(url, req.status_code)
+                    f"Downloading from {url} failed with code "
+                    f"{req.status_code}!"
                 )
 
             tmp_fullname = fullname + "_tmp"
@@ -192,42 +197,11 @@ def _get_download(url, fullname):
             return fullname
 
     except Exception as e:  # requests.exceptions.ConnectionError
-        logger.info(
-            "Downloading {} from {} failed with exception {}".format(
-                fname, url, str(e)
-            )
-        )
+        logger.info(f"Downloading {fname} from {url} failed with exception {e}")
         return False
 
 
-def _wget_download(url, fullname):
-    # using wget to download url
-    tmp_fullname = fullname + "_tmp"
-    # –user-agent
-    command = 'wget -O {} -t {} {}'.format(
-        tmp_fullname, DOWNLOAD_RETRY_LIMIT, url
-    )
-    subprc = subprocess.Popen(
-        command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
-    _ = subprc.communicate()
-
-    if subprc.returncode != 0:
-        raise RuntimeError(
-            '{} failed. Please make sure `wget` is installed or {} exists'.format(
-                command, url
-            )
-        )
-
-    shutil.move(tmp_fullname, fullname)
-
-    return fullname
-
-
-_download_methods = {
-    'get': _get_download,
-    'wget': _wget_download,
-}
+_download_methods = {'get': _get_download}
 
 
 def _download(url, path, md5sum=None, method='get'):
@@ -240,9 +214,7 @@ def _download(url, path, md5sum=None, method='get'):
     method (str): which download method to use. Support `wget` and `get`. Default is `get`.
 
     """
-    assert method in _download_methods, 'make sure `{}` implemented'.format(
-        method
-    )
+    assert method in _download_methods, f'make sure `{method}` implemented'
 
     if not osp.exists(path):
         os.makedirs(path)
@@ -258,7 +230,7 @@ def _download(url, path, md5sum=None, method='get'):
             retry_cnt += 1
         else:
             raise RuntimeError(
-                "Download from {} failed. " "Retry limit reached".format(url)
+                f"Download from {url} failed. " "Retry limit reached"
             )
 
         if not _download_methods[method](url, fullname):
@@ -281,8 +253,8 @@ def _md5check(fullname, md5sum=None):
 
     if calc_md5sum != md5sum:
         logger.info(
-            "File {} md5 check failed, {}(calc) != "
-            "{}(base)".format(fullname, calc_md5sum, md5sum)
+            f"File {fullname} md5 check failed, {calc_md5sum}(calc) != "
+            f"{md5sum}(base)"
         )
         return False
     return True
@@ -311,7 +283,10 @@ def _decompress(fname):
 
 def _uncompress_file_zip(filepath):
     with zipfile.ZipFile(filepath, 'r') as files:
-        file_list = files.namelist()
+        file_list_tmp = files.namelist()
+        file_list = []
+        for file in file_list_tmp:
+            file_list.append(file.replace("../", ""))
 
         file_dir = os.path.dirname(filepath)
 
@@ -340,7 +315,13 @@ def _uncompress_file_zip(filepath):
 
 def _uncompress_file_tar(filepath, mode="r:*"):
     with tarfile.open(filepath, mode) as files:
-        file_list = files.getnames()
+        file_list_tmp = files.getnames()
+        file_list = []
+        for file in file_list_tmp:
+            assert (
+                file[0] != "/"
+            ), f"uncompress file path {file} should not start with /"
+            file_list.append(file.replace("../", ""))
 
         file_dir = os.path.dirname(filepath)
 

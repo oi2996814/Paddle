@@ -14,8 +14,7 @@ limitations under the License. */
 
 #include "paddle/fluid/operators/collective/c_embedding_op.h"
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class CEmbeddingOp : public framework::OperatorWithKernel {
  public:
@@ -33,19 +32,19 @@ class CEmbeddingOp : public framework::OperatorWithKernel {
     VLOG(5) << "ids rank is " << ids_rank << std::endl;
     PADDLE_ENFORCE_EQ(table_dims.size(),
                       2,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimensions of the 'c_embedding' must be 2. "
                           "But received c_embedding's dimensions = %d, "
                           "c_embedding's shape = [%s].",
                           table_dims.size(),
                           table_dims));
 
-    auto output_dims = phi::vectorize(ids_dims);
+    auto output_dims = common::vectorize(ids_dims);
     output_dims.push_back(table_dims[1]);
-    ctx->SetOutputDim("Out", phi::make_ddim(output_dims));
+    ctx->SetOutputDim("Out", common::make_ddim(output_dims));
 
     if (ctx->GetOutputsVarType("Out")[0] ==
-        framework::proto::VarType::LOD_TENSOR) {
+        framework::proto::VarType::DENSE_TENSOR) {
       ctx->ShareLoD("Ids", /*->*/ "Out");
     }
 
@@ -57,7 +56,7 @@ class CEmbeddingOp : public framework::OperatorWithKernel {
     PADDLE_ENFORCE_EQ(
         (height > 0 && width > 0 && start_idx >= 0),
         true,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "height:%ld width:%ld start_idx:%ld must not have negative values",
             height,
             width,
@@ -87,6 +86,10 @@ class CEmbeddingOpMaker : public framework::OpProtoAndCheckerMaker {
                      "(int64, default 0), The starting index is indeed, "
                      "and the out-of-bounds will be set to 0 ")
         .SetDefault(0);
+    AddAttr<int64_t>("vocab_size",
+                     "(int64, default -1), The total vocabulary size to check"
+                     "the out-of-bounds ids. If it is -1, no check will be ")
+        .SetDefault(-1);
     AddComment(R"DOC(
 c_embedding Operator.
 
@@ -131,7 +134,7 @@ class CEmbeddingOpGrad : public framework::OperatorWithKernel {
     // check valid
     PADDLE_ENFORCE_EQ(table_dims.size(),
                       2,
-                      platform::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Only accept the dims of table_t == 2"));
 
     const int64_t start_idx = ctx->Attrs().Get<int64_t>("start_index");
@@ -141,7 +144,7 @@ class CEmbeddingOpGrad : public framework::OperatorWithKernel {
     PADDLE_ENFORCE_EQ(
         (height > 0 && width > 0 && start_idx >= 0),
         true,
-        platform::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "height:%ld width:%ld start_idx:%ld must not have negative values",
             height,
             width,
@@ -163,16 +166,15 @@ class CEmbeddingOpGradVarTypeInference : public framework::VarTypeInference {
     auto out_var_name = framework::GradVarName("W");
     VLOG(3) << "c_embedding_grad op " << framework::GradVarName("W")
             << " is set to phi::DenseTensor";
-    ctx->SetOutputType(out_var_name, framework::proto::VarType::LOD_TENSOR);
+    ctx->SetOutputType(out_var_name, framework::proto::VarType::DENSE_TENSOR);
     ctx->SetOutputDataType(out_var_name, ctx->GetInputDataType("W"));
   }
 };
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
-namespace plat = paddle::platform;
+
 REGISTER_OPERATOR(c_embedding,
                   ops::CEmbeddingOp,
                   ops::CEmbeddingOpMaker,
@@ -183,18 +185,3 @@ REGISTER_OPERATOR(c_embedding_grad,
                   ops::CEmbeddingOpGrad,
                   ops::CEmbeddingGradOpNoBufferVarsInferer,
                   ops::CEmbeddingOpGradVarTypeInference);
-
-PD_REGISTER_STRUCT_KERNEL(c_embedding,
-                          CPU,
-                          ALL_LAYOUT,
-                          ops::CEmbeddingOpCPUKernel,
-                          float,
-                          double,
-                          plat::float16) {}
-PD_REGISTER_STRUCT_KERNEL(c_embedding_grad,
-                          CPU,
-                          ALL_LAYOUT,
-                          ops::CEmbeddingGradOpCPUKernel,
-                          float,
-                          double,
-                          plat::float16) {}

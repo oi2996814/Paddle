@@ -16,9 +16,16 @@
 import unittest
 
 import numpy as np
+from dygraph_to_static_utils import (
+    Dy2StTestBase,
+    IrMode,
+    ToStaticMode,
+    disable_test_case,
+    test_ast_only,
+)
 
 import paddle
-from paddle import fluid
+from paddle import base
 
 SEED = 2020
 np.random.seed(SEED)
@@ -27,7 +34,7 @@ np.random.seed(SEED)
 # Situation 1: Test list append
 def test_list_append_without_control_flow(x):
     # Python list will not be transformed.
-    x = fluid.dygraph.to_variable(x)
+    x = paddle.assign(x)
     a = []
     # It's a plain python control flow which won't be transformed
     if 2 > 1:
@@ -36,23 +43,21 @@ def test_list_append_without_control_flow(x):
 
 
 def test_list_append_in_if(x):
-    x = fluid.dygraph.to_variable(x)
+    x = paddle.assign(x)
     a = []
     if x.numpy()[0] > 0:
         a.append(x)
     else:
-        a.append(
-            paddle.tensor.fill_constant(shape=[1, 2], value=9, dtype="int64")
-        )
-    # TODO(Aurelius84): Currently, run_program_op doesn't support output LoDTensorArray.
+        a.append(paddle.full(shape=[1, 2], fill_value=9, dtype="float32"))
+    # TODO(Aurelius84): Currently, run_program_op doesn't support output DenseTensorArray.
     return a[0]
 
 
 def test_list_append_in_for_loop(x, iter_num):
-    x = fluid.dygraph.to_variable(x)
-    # Use `fill_constant` so that static analysis can analyze the type of iter_num is Tensor
-    iter_num = paddle.tensor.fill_constant(
-        shape=[1], value=iter_num, dtype="int32"
+    x = paddle.assign(x)
+    # Use `full` so that static analysis can analyze the type of iter_num is Tensor
+    iter_num = paddle.full(
+        shape=[1], fill_value=iter_num, dtype="int32"
     )  # TODO(liym27): Delete it if the type of parameter iter_num can be resolved
     a = []
     for i in range(iter_num):
@@ -61,7 +66,7 @@ def test_list_append_in_for_loop(x, iter_num):
 
 
 def test_list_append_in_for_subscript(x):
-    x = fluid.dygraph.to_variable(x)
+    x = paddle.assign(x)
     iter_num = paddle.shape(x)[0]
     a = []
     for i in range(iter_num):
@@ -72,7 +77,7 @@ def test_list_append_in_for_subscript(x):
 
 
 def test_list_append_in_while_loop_subscript(x):
-    x = fluid.dygraph.to_variable(x)
+    x = paddle.assign(x)
     iter_num = paddle.shape(x)[0]
     a = []
     i = 0
@@ -85,11 +90,11 @@ def test_list_append_in_while_loop_subscript(x):
 
 
 def test_list_append_in_for_loop_with_concat(x, iter_num):
-    x = fluid.dygraph.to_variable(x)
+    x = paddle.assign(x)
     a = []
-    # Use `fill_constant` so that static analysis can analyze the type of iter_num is Tensor
-    iter_num = paddle.tensor.fill_constant(
-        shape=[1], value=iter_num, dtype="int32"
+    # Use `full` so that static analysis can analyze the type of iter_num is Tensor
+    iter_num = paddle.full(
+        shape=[1], fill_value=iter_num, dtype="int32"
     )  # TODO(liym27): Delete it if the type of parameter iter_num can be resolved
     for i in range(iter_num):
         a.append(x)
@@ -98,10 +103,8 @@ def test_list_append_in_for_loop_with_concat(x, iter_num):
 
 
 def test_list_append_in_while_loop(x, iter_num):
-    x = fluid.dygraph.to_variable(x)
-    iter_num = paddle.tensor.fill_constant(
-        shape=[1], value=iter_num, dtype="int32"
-    )
+    x = paddle.assign(x)
+    iter_num = paddle.full(shape=[1], fill_value=iter_num, dtype="int32")
     a = []
     i = 0
     while i < iter_num:
@@ -111,10 +114,8 @@ def test_list_append_in_while_loop(x, iter_num):
 
 
 def test_list_append_in_while_loop_with_stack(x, iter_num):
-    x = fluid.dygraph.to_variable(x)
-    iter_num = paddle.tensor.fill_constant(
-        shape=[1], value=iter_num, dtype="int32"
-    )
+    x = paddle.assign(x)
+    iter_num = paddle.full(shape=[1], fill_value=iter_num, dtype="int32")
     a = []
     i = 0
     while i < iter_num.numpy()[0]:
@@ -127,14 +128,14 @@ def test_list_append_in_while_loop_with_stack(x, iter_num):
 def test_tensor_array_slice(x, iter_num):
     a = []
     for i in range(paddle.to_tensor(3)):
-        a.append(paddle.to_tensor(i))
+        a.append(paddle.to_tensor(float(i)))
     t = a[1:3]
     return a[2]
 
 
 # Situation 2: Test list pop
 def test_list_pop_without_control_flow_1(x):
-    x = fluid.dygraph.to_variable(x)
+    x = paddle.assign(x)
     a = []
     if 2 > 1:
         a.append(x)
@@ -143,7 +144,7 @@ def test_list_pop_without_control_flow_1(x):
 
 
 def test_list_pop_without_control_flow_2(x):
-    x = fluid.dygraph.to_variable(x)
+    x = paddle.assign(x)
     a = []
     if 2 > 1:
         a.append(x)
@@ -153,26 +154,26 @@ def test_list_pop_without_control_flow_2(x):
 
 
 def test_list_pop_in_if(x):
-    x = fluid.dygraph.to_variable(x)
+    x = paddle.assign(x)
     a = []
     b = [x * 2 + (x + 1)]
     if x.numpy()[0] > 0:
         a.append(x)
         b.append(x + 1)
-        a.append(paddle.tensor.fill_constant(shape=[1], value=1, dtype="int64"))
+        a.append(paddle.full(shape=[1], fill_value=1, dtype="int64"))
     else:
         a.append(x + 1)
         b.append(x - 1)
-        a.append(paddle.tensor.fill_constant(shape=[2], value=2, dtype="int64"))
+        a.append(paddle.full(shape=[2], fill_value=2, dtype="int64"))
     item1 = a.pop(1)
     return item1, b[-1]
 
 
 def test_list_pop_in_for_loop(x, iter_num):
-    x = fluid.dygraph.to_variable(x)
-    # Use `fill_constant` so that static analysis can analyze the type of iter_num is Tensor
-    iter_num = paddle.tensor.fill_constant(
-        shape=[1], value=iter_num, dtype="int32"
+    x = paddle.assign(x)
+    # Use `full` so that static analysis can analyze the type of iter_num is Tensor
+    iter_num = paddle.full(
+        shape=[1], fill_value=iter_num, dtype="int32"
     )  # TODO(liym27): Delete it if the type of parameter iter_num can be resolved
 
     a = []
@@ -188,10 +189,8 @@ def test_list_pop_in_for_loop(x, iter_num):
 
 
 def test_list_pop_in_while_loop(x, iter_num):
-    x = fluid.dygraph.to_variable(x)
-    iter_num = paddle.tensor.fill_constant(
-        shape=[1], value=iter_num, dtype="int32"
-    )
+    x = paddle.assign(x)
+    iter_num = paddle.full(shape=[1], fill_value=iter_num, dtype="int32")
     a = []
     b = [x]
     b.append(x)
@@ -207,19 +206,19 @@ def test_list_pop_in_while_loop(x, iter_num):
     return a[0], b[2]
 
 
-class TestListWithoutControlFlow(unittest.TestCase):
+class TestListWithoutControlFlowConfig(Dy2StTestBase):
     def setUp(self):
         self.place = (
-            fluid.CUDAPlace(0)
-            if fluid.is_compiled_with_cuda()
-            else fluid.CPUPlace()
+            base.CUDAPlace(0)
+            if base.is_compiled_with_cuda()
+            else base.CPUPlace()
         )
 
         self.init_data()
         self.init_dygraph_func()
 
     def init_data(self):
-        self.input = np.random.random(3).astype('int32')
+        self.input = np.random.random(3).astype('float32')
 
     def init_dygraph_func(self):
         self.all_dygraph_funcs = [
@@ -242,14 +241,14 @@ class TestListWithoutControlFlow(unittest.TestCase):
         return self.train(to_static=False)
 
     def train(self, to_static=False):
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             if to_static:
                 res = paddle.jit.to_static(self.dygraph_func)(self.input)
             else:
                 res = self.dygraph_func(self.input)
             return self.result_to_numpy(res)
 
-    def test_transformed_static_result(self):
+    def compare_transformed_static_result(self):
         for dyfunc in self.all_dygraph_funcs:
             self.dygraph_func = dyfunc
             static_res_list = self.run_static_mode()
@@ -261,10 +260,13 @@ class TestListWithoutControlFlow(unittest.TestCase):
                     stat_res,
                     dy_res,
                     rtol=1e-05,
-                    err_msg='dygraph_res is {}\nstatic_res is {}'.format(
-                        dy_res, stat_res
-                    ),
+                    err_msg=f'dygraph_res is {dy_res}\nstatic_res is {stat_res}',
                 )
+
+
+class TestListWithoutControlFlow(TestListWithoutControlFlowConfig):
+    def test_transformed_static_result(self):
+        self.compare_transformed_static_result()
 
 
 class TestListInIf(TestListWithoutControlFlow):
@@ -272,9 +274,9 @@ class TestListInIf(TestListWithoutControlFlow):
         self.all_dygraph_funcs = [test_list_append_in_if]
 
 
-class TestListInWhileLoop(TestListWithoutControlFlow):
+class TestListInWhileLoop(TestListWithoutControlFlowConfig):
     def init_data(self):
-        self.input = np.random.random(3).astype('int32')
+        self.input = np.random.random(3).astype('float32')
         self.iter_num = 3
 
     def init_dygraph_func(self):
@@ -283,16 +285,20 @@ class TestListInWhileLoop(TestListWithoutControlFlow):
             test_list_pop_in_while_loop,
         ]
 
+    # TODO(zhangbo): Refine BuildOpFrom for op with sub_block
     def train(self, to_static=False):
-        with fluid.dygraph.guard():
+        with base.dygraph.guard():
             if to_static:
-                # print(paddle.jit.to_static(self.dygraph_func).code)
                 res = paddle.jit.to_static(self.dygraph_func)(
                     self.input, self.iter_num
                 )
             else:
                 res = self.dygraph_func(self.input, self.iter_num)
             return self.result_to_numpy(res)
+
+    @disable_test_case((ToStaticMode.AST, IrMode.PT))
+    def test_transformed_static_result(self):
+        self.compare_transformed_static_result()
 
 
 class TestListInWhileLoopWithStack(TestListInWhileLoop):
@@ -313,7 +319,7 @@ class TestListInForLoop(TestListInWhileLoop):
         ]
 
 
-class TestListInForLoopWithConcat(TestListInWhileLoopWithStack):
+class TestListInForLoopWithConcat(TestListInWhileLoop):
     def init_dygraph_func(self):
         self.all_dygraph_funcs = [
             test_list_append_in_for_loop_with_concat,
@@ -337,7 +343,6 @@ class ListWithCondNet(paddle.nn.Layer):
 
     # Add *args to test function.__self__ in FunctionSpec.
     # DO NOT remove *args.
-    @paddle.jit.to_static
     def forward(self, x, index, *args):
         y = paddle.nn.functional.relu(x)
         a = []
@@ -356,13 +361,29 @@ class ListWithCondNet(paddle.nn.Layer):
         return z
 
 
-class TestListWithCondGradInferVarType(unittest.TestCase):
+class TestListWithCondGradInferVarType(Dy2StTestBase):
     def test_to_static(self):
         net = ListWithCondNet()
         x = paddle.to_tensor([2, 3, 4], dtype='float32')
         index = paddle.to_tensor([1])
-        res = net(x, index)
+        res = paddle.jit.to_static(net)(x, index)
         self.assertEqual(res, 48.0)
+
+
+def tensor_array_dtype():
+    l = []
+    for i in range(paddle.to_tensor(3)):
+        l.append(i)
+    return l[0]
+
+
+class TestTensorArrayDtype(Dy2StTestBase):
+    @test_ast_only
+    def test_tensor_array_dtype(self):
+        fn = tensor_array_dtype
+        static_fn = paddle.jit.to_static(fn)
+        st_out = static_fn()
+        self.assertEqual(st_out.dtype, paddle.int64)
 
 
 if __name__ == '__main__':

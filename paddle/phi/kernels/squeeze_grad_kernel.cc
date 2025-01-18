@@ -21,12 +21,14 @@
 namespace phi {
 template <typename T, typename Context>
 void SqueezeGradKernel(const Context& dev_ctx,
-                       const DenseTensor& xshape,
+                       const DenseTensor& x,
                        const DenseTensor& dout,
                        const IntArray& axes UNUSED,
                        DenseTensor* dx) {
-  auto xshape_dims = xshape.dims();
-  auto x_dims = phi::slice_ddim(xshape_dims, 1, xshape_dims.size());
+  // NOTE: [Why not to use x.dims() ?]
+  // Because inplace strategy is different between old IR and PIR,
+  // we need fix it into x.dims() after cleaning old IR system.
+  auto x_dims = dx->dims();
 
   dev_ctx.template Alloc<T>(dx);
   phi::Copy(dev_ctx, dout, dev_ctx.GetPlace(), false, dx);
@@ -40,12 +42,14 @@ PD_REGISTER_KERNEL(squeeze_grad,
                    phi::SqueezeGradKernel,
                    float,
                    double,
-                   phi::dtype::bfloat16,
                    bool,
                    int,
                    uint8_t,
                    int8_t,
+                   int16_t,
                    int64_t,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16,
                    phi::dtype::complex<float>,
                    phi::dtype::complex<double>) {}
 
@@ -62,6 +66,7 @@ PD_REGISTER_KERNEL(squeeze_grad,
                    int,
                    uint8_t,
                    int8_t,
+                   int16_t,
                    int64_t,
                    phi::dtype::complex<float>,
                    phi::dtype::complex<double>) {}
@@ -76,6 +81,7 @@ PD_REGISTER_KERNEL(squeeze_grad,
                    float,
                    double,
                    phi::dtype::float16,
+                   phi::dtype::bfloat16,
                    bool,
                    int,
                    uint8_t,

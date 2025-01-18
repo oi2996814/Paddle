@@ -12,19 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
 
 import paddle
-from paddle import fluid
-
-np_minor_version = int((np.__version__).split('.')[1])
+from paddle import base
 
 
 def numpy_corr(np_arr, rowvar=True, dtype='float64'):
     # np.corrcoef support parameter 'dtype' since 1.20
-    if np_minor_version < 20:
+    if np.lib.NumpyVersion(np.__version__) < "1.20.0":
         return np.corrcoef(np_arr, rowvar=rowvar)
     return np.corrcoef(np_arr, rowvar=rowvar, dtype=dtype)
 
@@ -35,9 +34,15 @@ class Corr_Test(unittest.TestCase):
 
     def test_tensor_corr_default(self):
         typelist = ['float64', 'float32']
-        places = [fluid.CPUPlace()]
-        if fluid.core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
+        if base.core.is_compiled_with_cuda():
+            places.append(base.CUDAPlace(0))
         for idx, p in enumerate(places):
             if idx == 0:
                 paddle.set_device('cpu')
@@ -60,9 +65,15 @@ class Corr_Test(unittest.TestCase):
 
     def test_tensor_corr_rowvar(self):
         typelist = ['float64', 'float32']
-        places = [fluid.CPUPlace()]
-        if fluid.core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
+        if base.core.is_compiled_with_cuda():
+            places.append(base.CUDAPlace(0))
 
         for idx, p in enumerate(places):
             if idx == 0:

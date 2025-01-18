@@ -22,13 +22,14 @@ limitations under the License. */
 #include "glog/logging.h"
 #include "paddle/fluid/distributed/auto_parallel/dist_attr.h"
 #include "paddle/fluid/framework/attribute.h"
-#include "paddle/fluid/framework/framework.pb.h"
 #include "paddle/fluid/framework/type_defs.h"
+#include "paddle/phi/core/framework/framework.pb.h"
+#include "paddle/utils/test_macros.h"
 
 namespace paddle {
 namespace framework {
 
-using phi::distributed::auto_parallel::TensorDistAttr;
+using phi::distributed::TensorDistAttr;
 
 // convert between std::vector and protobuf repeated.
 template <typename T>
@@ -62,12 +63,12 @@ inline void VectorToRepeated(const std::vector<bool> &vec,
   }
 }
 
-class VarDesc {
+class TEST_API VarDesc {
  public:
   explicit VarDesc(const std::string &name) {
     desc_.set_name(name);
-    // TODO(paddle-dev): Why default to lodtensor.
-    desc_.mutable_type()->set_type(proto::VarType::LOD_TENSOR);
+    // TODO(paddle-dev): Why default to DenseTensor.
+    desc_.mutable_type()->set_type(proto::VarType::DENSE_TENSOR);
     need_updated_ = true;
   }
 
@@ -75,6 +76,8 @@ class VarDesc {
 
   // Explicitly implement the copy constructor for auto parallel
   VarDesc(const VarDesc &other);
+
+  ~VarDesc();
 
   VarDesc &operator=(const VarDesc &other) {
     desc_ = other.desc_;
@@ -131,6 +134,15 @@ class VarDesc {
   int32_t GetLoDLevel() const;
 
   std::vector<int32_t> GetLoDLevels() const;
+
+  void SetLegacyLoDLevel(int32_t legacy_lod_level);
+
+  void SetLegacyLoDLevels(
+      const std::vector<int32_t> &multiple_legacy_lod_level);
+
+  int32_t GetLegacyLoDLevel() const;
+
+  std::vector<int32_t> GetLegacyLoDLevels() const;
 
   proto::VarType::Type GetType() const;
 
@@ -210,7 +222,7 @@ class VarDesc {
   proto::VarType::TensorDesc *mutable_tensor_desc();
   std::vector<proto::VarType::TensorDesc *> mutable_tensor_descs();
 
-  // Is it really needed? Or just mantain a ptr from the block?
+  // Is it really needed? Or just maintain a ptr from the block?
   proto::VarDesc desc_;
   AttributeMap attrs_;
 

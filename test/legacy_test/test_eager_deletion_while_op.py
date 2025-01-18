@@ -21,25 +21,30 @@ import unittest
 import numpy
 
 import paddle
-from paddle import fluid
-from paddle.fluid import core
-from paddle.fluid.executor import Executor
+from paddle import base
+from paddle.base import core, in_pir_mode
+from paddle.base.executor import Executor
 
 paddle.enable_static()
-fluid.core._set_eager_deletion_mode(0.0, 1.0, True)
+base.core._set_eager_deletion_mode(0.0, 1.0, True)
 
 
 class TestEagerDeletionWhileOpBase(unittest.TestCase):
+
     def test_main(self):
-        places = [
-            core.CPUPlace(),
-        ]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(core.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(core.CUDAPlace(0))
 
         for p in places:
-            with fluid.program_guard(fluid.Program(), fluid.Program()):
-                with fluid.scope_guard(fluid.Scope()):
+            with base.program_guard(base.Program(), base.Program()):
+                with base.scope_guard(base.Scope()):
                     self.run_main(p)
 
     def run_main(self, place):
@@ -114,21 +119,21 @@ class TestEagerDeletionWhileOpBase(unittest.TestCase):
         sum_result.persistable = True
         tmp = paddle.unsqueeze(sum_result, axis=[0])
         tmp = paddle.expand(tmp, [10, -1])
-        fc = paddle.static.nn.fc(tmp, size=256)
         loss = paddle.mean(sum_result)
 
         optim = paddle.optimizer.Adam(learning_rate=1e-3)
         optim.minimize(loss)
 
-        gc_vars = core._get_eager_deletion_vars(
-            fluid.default_main_program().desc, [loss.name]
-        )
-        self.assertEqual(len(gc_vars), 3)
+        if not in_pir_mode():
+            gc_vars = core._get_eager_deletion_vars(
+                base.default_main_program().desc, [loss.name]
+            )
+            self.assertEqual(len(gc_vars), 3)
 
         exe = Executor(self.place)
-        exe.run(fluid.default_startup_program())
+        exe.run(paddle.static.default_startup_program())
 
-        prog = fluid.default_main_program()
+        prog = paddle.static.default_main_program()
 
         for _ in range(5):
             d = []

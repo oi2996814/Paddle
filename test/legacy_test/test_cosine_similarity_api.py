@@ -12,25 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
 
 import paddle
 import paddle.nn.functional as F
-from paddle import nn
-from paddle.fluid import (
-    Executor,
-    Program,
-    core,
-    default_main_program,
-    program_guard,
-)
+from paddle import nn, static
+from paddle.base import Executor, core
 
 
 class TestCosineSimilarityAPI(unittest.TestCase):
     def setUp(self):
-        self.places = [paddle.CPUPlace()]
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.places.append(paddle.CPUPlace())
         if core.is_compiled_with_cuda():
             self.places.append(paddle.CUDAPlace(0))
 
@@ -45,7 +46,11 @@ class TestCosineSimilarityAPI(unittest.TestCase):
     def check_static_result(self, place):
         paddle.enable_static()
 
-        with program_guard(Program(), Program()):
+        main_program = static.Program()
+        startup_program = static.Program()
+        with static.program_guard(
+            main_program=main_program, startup_program=startup_program
+        ):
             shape = [10, 15]
             axis = 1
             eps = 1e-8
@@ -58,7 +63,6 @@ class TestCosineSimilarityAPI(unittest.TestCase):
             result = F.cosine_similarity(x1, x2, axis=axis, eps=eps)
             exe = Executor(place)
             fetches = exe.run(
-                default_main_program(),
                 feed={"x1": np_x1, "x2": np_x2},
                 fetch_list=[result],
             )
@@ -81,9 +85,9 @@ class TestCosineSimilarityAPI(unittest.TestCase):
         np_x2 = np.random.rand(*shape).astype(np.float32)
         np_out = self._get_numpy_out(np_x1, np_x2, axis=axis, eps=eps)
 
-        tesnor_x1 = paddle.to_tensor(np_x1)
-        tesnor_x2 = paddle.to_tensor(np_x2)
-        y = F.cosine_similarity(tesnor_x1, tesnor_x2, axis=axis, eps=eps)
+        tensor_x1 = paddle.to_tensor(np_x1)
+        tensor_x2 = paddle.to_tensor(np_x2)
+        y = F.cosine_similarity(tensor_x1, tensor_x2, axis=axis, eps=eps)
 
         np.testing.assert_allclose(y.numpy(), np_out, rtol=1e-05)
 
@@ -98,9 +102,9 @@ class TestCosineSimilarityAPI(unittest.TestCase):
         np_x2 = np.random.rand(*shape).astype(np.float32)
         np_out = self._get_numpy_out(np_x1, np_x2, axis=axis, eps=eps)
 
-        tesnor_x1 = paddle.to_tensor(np_x1)
-        tesnor_x2 = paddle.to_tensor(np_x2)
-        y = F.cosine_similarity(tesnor_x1, tesnor_x2, axis=axis, eps=eps)
+        tensor_x1 = paddle.to_tensor(np_x1)
+        tensor_x2 = paddle.to_tensor(np_x2)
+        y = F.cosine_similarity(tensor_x1, tensor_x2, axis=axis, eps=eps)
 
         np.testing.assert_allclose(y.numpy(), np_out, rtol=1e-05)
 
@@ -116,9 +120,9 @@ class TestCosineSimilarityAPI(unittest.TestCase):
         np_x2 = np.random.rand(*shape2).astype(np.float32)
         np_out = self._get_numpy_out(np_x1, np_x2, axis=axis, eps=eps)
 
-        tesnor_x1 = paddle.to_tensor(np_x1)
-        tesnor_x2 = paddle.to_tensor(np_x2)
-        y = F.cosine_similarity(tesnor_x1, tesnor_x2, axis=axis, eps=eps)
+        tensor_x1 = paddle.to_tensor(np_x1)
+        tensor_x2 = paddle.to_tensor(np_x2)
+        y = F.cosine_similarity(tensor_x1, tensor_x2, axis=axis, eps=eps)
 
         np.testing.assert_allclose(y.numpy(), np_out, rtol=1e-05)
 
@@ -135,9 +139,9 @@ class TestCosineSimilarityAPI(unittest.TestCase):
         np_out = self._get_numpy_out(np_x1, np_x2, axis=axis, eps=eps)
 
         cos_sim_func = nn.CosineSimilarity(axis=axis, eps=eps)
-        tesnor_x1 = paddle.to_tensor(np_x1)
-        tesnor_x2 = paddle.to_tensor(np_x2)
-        y = cos_sim_func(tesnor_x1, tesnor_x2)
+        tensor_x1 = paddle.to_tensor(np_x1)
+        tensor_x2 = paddle.to_tensor(np_x2)
+        y = cos_sim_func(tensor_x1, tensor_x2)
 
         np.testing.assert_allclose(y.numpy(), np_out, rtol=1e-05)
 
